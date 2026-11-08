@@ -30,9 +30,18 @@ func New(cfg Config) http.Handler {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_ = indexTmpl.Execute(w, map[string]string{
 			"Version": cfg.Version,
+			"Short":   short(cfg.Version),
 			// set by tailscale serve for requests from a tailnet user
 			"User": cmp.Or(r.Header.Get("Tailscale-User-Name"), r.Header.Get("Tailscale-User-Login")),
 		})
 	})
 	return mux
+}
+
+// short is a commit id cut to 12 characters for display; anything shorter is kept whole.
+func short(v string) string {
+	if len(v) > 12 {
+		return v[:12]
+	}
+	return v
 }

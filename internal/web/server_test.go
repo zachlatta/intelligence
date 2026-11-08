@@ -88,3 +88,21 @@ func TestOnlyGETAndHEAD(t *testing.T) {
 		t.Fatalf("POST / status = %d, want 405", rec.Code)
 	}
 }
+
+func TestIndexShowsShortVersionWithFullInTooltip(t *testing.T) {
+	full := "8a578ee431111bbfa263522b95cae4a9c95ee5e2"
+	h := New(Config{Version: full})
+	want := `<footer title="` + full + `">version 8a578ee43111</footer>`
+	if page := get(t, h, "/", nil).Body.String(); !strings.Contains(page, want) {
+		t.Errorf("index misses %s:\n%s", want, page)
+	}
+	if !strings.Contains(get(t, h, "/healthz", nil).Body.String(), full) {
+		t.Errorf("/healthz must report the full version")
+	}
+}
+
+func TestShortVersionLeavesShortValuesAlone(t *testing.T) {
+	if got := short("dev"); got != "dev" {
+		t.Fatalf("short(dev) = %q", got)
+	}
+}
