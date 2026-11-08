@@ -119,3 +119,20 @@ func TestDevboxPaseoHome(t *testing.T) {
 		t.Errorf("PaseoHome = %q, want the override", c.PaseoHome)
 	}
 }
+
+func TestProbeConfig(t *testing.T) {
+	c := probeConfig(env(map[string]string{"PROBE_SERVER": "https://x", "PROBE_USER": "dev"}))
+	if c.Server != "https://x" || c.User != "dev" || c.Socket != "/run/intelligence/probe.sock" || !c.AutoUpdate {
+		t.Errorf("config = %+v", c)
+	}
+	if c := probeConfig(env(map[string]string{"PROBE_AUTOUPDATE": "off", "PROBE_SOCKET": "/s"})); c.AutoUpdate || c.Socket != "/s" {
+		t.Errorf("config = %+v", c)
+	}
+}
+
+func TestDevboxProbeSocketDefault(t *testing.T) {
+	c, err := devboxConfig(env(map[string]string{"DEVBOX_SERVER": "https://x", "DEVBOX_TOKEN": "t"}), func() (string, error) { return "b", nil })
+	if err != nil || c.ProbeSocket != "/run/intelligence/probe.sock" {
+		t.Errorf("probe socket = %q, %v", c.ProbeSocket, err)
+	}
+}

@@ -30,6 +30,7 @@
   .st-error, .attn { background: #c332; color: #c33; }
   .attn { font-size: .75rem; padding: 0 .45rem; border-radius: 1rem; }
   .warn { color: #c33; font-size: .85rem; margin: .1rem 0 .3rem 1.05rem; }
+  .res { margin: .1rem 0 .3rem 1.05rem; font-size: .85rem; opacity: .75; }
   .quiet { margin: .2rem 0 .2rem 1.05rem; font-size: .85rem; }
   .quiet summary { opacity: .6; }
   .quiet ul { margin: 0; padding-left: 1.6rem; }
@@ -65,6 +66,7 @@
     <a class="new" href="/devboxes/{{$box}}/workspaces/new" title="Make a workspace with an agent in it">+ workspace</a>
   </summary>
   <div class="children">
+  {{with index $.Hosts $box}}{{with hostLine .}}<p class="res"><a href="/hosts#{{$box}}">{{.}}</a></p>{{end}}{{end}}
   {{if not $p.Connected}}<p class="warn">Paseo not connected{{if $p.Error}}: {{$p.Error}}{{end}}</p>{{end}}
   {{if ne .Report.Version $.Version}}<p class="warn" title="{{.Report.Version}}">client {{short .Report.Version}} is not on the server's version</p>{{end}}
   {{range .Workspaces}}{{if .Agents}}
@@ -81,7 +83,7 @@
         <span class="status st-{{.Status}}">{{.Status}}</span>
         <a class="name grow" href="/devboxes/{{$box}}/agents/{{.ID}}" title="{{.ID}}">{{or .Title "(untitled)"}}</a>
         {{if .RequiresAttention}}<span class="attn" title="{{.AttentionReason}}">needs attention</span>{{end}}
-        <span class="meta">{{.Model}}{{if not .CreatedAt.IsZero}} · {{ago $.Now .CreatedAt}}{{end}}</span>
+        <span class="meta">{{.Model}}{{with agentMem (index $.Hosts $box) .ID}} · {{.}}{{end}}{{if not .CreatedAt.IsZero}} · {{ago $.Now .CreatedAt}}{{end}}</span>
       </li>
     {{end}}
     </ul>

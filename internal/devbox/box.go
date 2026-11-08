@@ -6,6 +6,8 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"github.com/zachlatta/intelligence/internal/host"
 )
 
 // Box is the dev box client: it follows the box's Paseo daemon (Watcher), holds its stream to the
@@ -21,6 +23,9 @@ type Box struct {
 	Update func(ctx context.Context, serverVersion string) error
 	// Usage reads the box's plans' usage and sends it up the stream (Run sets its Send); nil sends none.
 	Usage *UsageSync
+	// Host samples the host and its agents' processes and sends each minute up the stream (Run
+	// sets its Send, and its Reader's PaseoPID from the Watcher); nil sends none.
+	Host *host.Collector
 
 	StatusEvery time.Duration // re-read the daemon's status (a change is reported); default 15s
 	LiveEvery   time.Duration // copy running agents' transcripts; default 2s
@@ -62,6 +67,13 @@ func (b *Box) Run(ctx context.Context) error {
 	if b.Usage != nil {
 		b.Usage.Send = b.Link.Usage
 		runs = append(runs, b.Usage.Run)
+	}
+	if b.Host != nil {
+		b.Host.Send = b.Link.Host
+		if b.Host.Reader != nil && b.Host.Reader.PaseoPID == nil {
+			b.Host.Reader.PaseoPID = func() int { return b.Watcher.Snapshot().PID }
+		}
+		runs = append(runs, b.Host.Run)
 	}
 	var wg sync.WaitGroup
 	for _, run := range runs {

@@ -141,6 +141,8 @@ func receive(ctx context.Context, cfg Config, reg *fleet.Registry, box string, f
 		if errors.Is(err, fleet.ErrUnknownCommand) {
 			err = nil // nothing to record, and nothing the box can do about it
 		}
+	case f.Type == devbox.HostFrame && f.Host != nil:
+		err = reg.RecordHost(ctx, box, *f.Host, cfg.Now())
 	case f.Type == devbox.UsageFrame && f.Usage != nil:
 		err = reg.RecordUsage(ctx, box, *f.Usage, cfg.Now())
 	default:

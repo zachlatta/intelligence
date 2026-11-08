@@ -46,7 +46,7 @@ var indexTmpl = template.Must(template.Must(template.New("index").Funcs(template
 	"allAgents":      allAgents,
 	"idleWorkspaces": idleWorkspaces,
 	"openWorkspace":  openWorkspace,
-}).Funcs(usageFuncs).Parse(indexHTML)).Parse(planHTML))
+}).Funcs(usageFuncs).Funcs(hostFuncs).Parse(indexHTML)).Parse(planHTML))
 
 // New returns the app's HTTP handler.
 func New(cfg Config) http.Handler {
@@ -103,6 +103,8 @@ func New(cfg Config) http.Handler {
 		transcriptEntry(reg, w, r)
 	})
 	mux.HandleFunc("GET /usage", usagePage(cfg, reg))
+	mux.HandleFunc("GET /hosts", hostsPage(cfg, reg))
+	mux.HandleFunc("GET /api/hosts", hostsAPI(reg))
 	mux.HandleFunc("GET /api/usage", usageAPI(reg))
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		list, err := reg.List(r.Context())
@@ -115,12 +117,18 @@ func New(cfg Config) http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		hosts, err := reg.Hosts(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_ = indexTmpl.Execute(w, map[string]any{
 			"Version":  cfg.Version,
 			"Short":    short(cfg.Version),
 			"Boxes":    list,
 			"Plans":    plans,
+			"Hosts":    hosts,
 			"Now":      cfg.Now(),
 			"Operator": hasSession(cfg, r),
 		})

@@ -12,6 +12,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/zachlatta/intelligence/internal/host"
 	"github.com/zachlatta/intelligence/internal/usage"
 )
 
@@ -264,6 +265,20 @@ func TestLinkSendsUsage(t *testing.T) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.got) != 1 || s.got[0].Type != UsageFrame || s.got[0].Usage == nil || s.got[0].Usage.Sources[0].Accounts[0].Windows[0].UsedPct != 25 {
+		t.Fatalf("got %+v", s.got)
+	}
+}
+
+func TestLinkSendsHostMinutes(t *testing.T) {
+	s := newStreamServer(t)
+	l, _ := link(t, s)
+	connected(t, l)
+	if err := l.Host(context.Background(), host.Report{Minutes: []host.Minute{{Samples: 12}}}); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.got) != 1 || s.got[0].Type != HostFrame || s.got[0].Host == nil || s.got[0].Host.Minutes[0].Samples != 12 {
 		t.Fatalf("got %+v", s.got)
 	}
 }

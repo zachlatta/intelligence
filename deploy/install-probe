@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Install the eBPF probe on this Linux dev box, as a root systemd service. After that it keeps
+# itself on the server's version (self-update), like the dev box client, so this is needed once per
+# box. Run from a checkout of this repo, as the dev box user, after deploy/install-devbox:
+#
+#   deploy/install-probe
+#
+# It needs sudo. The probe reads the server's URL from the dev box's env file; it needs no token.
+set -euo pipefail
+
+repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
+env_file="$HOME/.config/intelligence/devbox.env"
+[ -f "$env_file" ] || { echo "no $env_file: run deploy/install-devbox first" >&2; exit 1; }
+server=$(sed -n 's/^DEVBOX_SERVER=//p' "$env_file")
+[ -n "$server" ] || { echo "no DEVBOX_SERVER in $env_file" >&2; exit 1; }
+
+rev=$(git -C "$repo" rev-parse HEAD)
+mkdir -p "$repo/.factory-scratch"
+tmp=$(mktemp -d "$repo/.factory-scratch/probe-XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+(cd "$repo" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.buildCommit=$rev" -o "$tmp/intelligence" ./cmd/intelligence)
+
+sudo install -d -m 755 /usr/local/lib/intelligence /etc/intelligence
+sudo install -m 755 "$tmp/intelligence" /usr/local/lib/intelligence/intelligence
+printf 'PROBE_SERVER=%s\nPROBE_USER=%s\n' "$server" "$(id -un)" | sudo tee /etc/intelligence/probe.env >/dev/null
+sudo chmod 644 /etc/intelligence/probe.env
+sudo install -m 644 "$repo/deploy/intelligence-probe.service" /etc/systemd/system/intelligence-probe.service
+sudo systemctl daemon-reload
+sudo systemctl enable intelligence-probe.service >/dev/null
+sudo systemctl restart intelligence-probe.service
+sudo systemctl --no-pager status intelligence-probe.service | head -5

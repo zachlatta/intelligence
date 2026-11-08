@@ -12,6 +12,7 @@ import (
 
 	"github.com/zachlatta/intelligence/internal/dbtest"
 	"github.com/zachlatta/intelligence/internal/devbox"
+	"github.com/zachlatta/intelligence/internal/host"
 	"github.com/zachlatta/intelligence/internal/usage"
 )
 
@@ -262,5 +263,20 @@ func TestANewStreamEndsTheOldOneOnAnyInstance(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if bs := boxes(t, d); len(bs) != 1 || !bs[0].Online {
 		t.Fatalf("after the old stream ended: %+v", bs)
+	}
+}
+
+func TestStreamStoresHostMinutes(t *testing.T) {
+	h, d := dbServer(t)
+	b := openStream(t, h, "devbox-1")
+	m := time.Now().UTC().Truncate(time.Minute)
+	rep := host.Report{Minutes: []host.Minute{{Minute: m, Samples: 12, MemTotal: 100, MemAvailableMin: 40}},
+		Agents: []host.AgentMinute{{AgentID: "a1", Minute: m, MemMax: 5}}, Probe: &host.ProbeStatus{Running: true}}
+	if ack := b.call(devbox.Frame{Type: devbox.HostFrame, Host: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	var n int
+	if err := d.Owner.QueryRow(context.Background(), "SELECT count(*) FROM host_minutes WHERE box = 'devbox-1'").Scan(&n); err != nil || n != 1 {
+		t.Errorf("host minutes = %d, %v", n, err)
 	}
 }

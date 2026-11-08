@@ -1,0 +1,24 @@
+[Unit]
+Description=Intelligence eBPF probe: charges each Paseo agent's CPU and records OOM kills
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# PROBE_SERVER (to follow the server's version), PROBE_USER (who may read the socket), optional
+# PROBE_SOCKET and PROBE_AUTOUPDATE. Root, so it can load eBPF programs; it updates itself in
+# /usr/local/lib/intelligence like the dev box client does in ~/.local/bin.
+EnvironmentFile=/etc/intelligence/probe.env
+ExecStart=/usr/local/lib/intelligence/intelligence probe
+Restart=always
+RestartSec=10
+RuntimeDirectory=intelligence
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/usr/local/lib/intelligence
+ProtectHome=yes
+PrivateTmp=yes
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_SYS_PTRACE CAP_DAC_READ_SEARCH CAP_CHOWN
+
+[Install]
+WantedBy=multi-user.target

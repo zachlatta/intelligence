@@ -2,6 +2,7 @@
 //
 //	intelligence [server]   serve the web app (the container's default)
 //	intelligence devbox     run on a dev box: stream its Paseo daemon and its plans' usage to the server, run the server's commands, and stay on its version
+//	intelligence probe      run as root on a Linux dev box: the eBPF probe that charges each agent's CPU and OOM kills
 //	intelligence version    print this binary's version
 package main
 
@@ -15,9 +16,11 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -26,7 +29,10 @@ import (
 
 	"github.com/zachlatta/intelligence/internal/db"
 	"github.com/zachlatta/intelligence/internal/devbox"
+	"github.com/zachlatta/intelligence/internal/fleet"
+	"github.com/zachlatta/intelligence/internal/host"
 	"github.com/zachlatta/intelligence/internal/paseo"
+	"github.com/zachlatta/intelligence/internal/probe"
 	"github.com/zachlatta/intelligence/internal/usage"
 	"github.com/zachlatta/intelligence/internal/web"
 )
@@ -47,10 +53,17 @@ func main() {
 		err = serve(ctx)
 	case "devbox":
 		err = runDevbox(ctx)
+	case "probe":
+		if len(os.Args) > 2 && os.Args[2] == "version" {
+			// a binary that can run the probe says so: the probe updates only to such a binary
+			fmt.Println(version(os.Getenv))
+			return
+		}
+		err = runProbe(ctx)
 	case "version":
 		fmt.Println(version(os.Getenv))
 	default:
-		err = fmt.Errorf("unknown command %q: want server, devbox or version", cmd)
+		err = fmt.Errorf("unknown command %q: want server, devbox, probe or version", cmd)
 	}
 	if err != nil {
 		log.Fatal(err)
@@ -128,6 +141,7 @@ func serve(ctx context.Context) error {
 			OperatorToken: os.Getenv("OPERATOR_TOKEN"), BinDir: c.BinDir}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	go pruneHosts(ctx, fleet.New(owner))
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -149,11 +163,20 @@ type devboxSettings struct {
 	Interval   time.Duration // DEVBOX_INTERVAL: how often to re-read the daemon's status; default 15s
 	PaseoHome  string        // DEVBOX_PASEO_HOME: the Paseo daemon's home; default ~/.paseo
 	AutoUpdate bool          // DEVBOX_AUTOUPDATE: "off" keeps this binary; default on
+	// DEVBOX_PROBE_SOCKET: the eBPF probe's socket; default /run/intelligence/probe.sock ("off": none)
+	ProbeSocket string
 }
 
 func devboxConfig(getenv func(string) string, hostname func() (string, error)) (devboxSettings, error) {
 	c := devboxSettings{Server: getenv("DEVBOX_SERVER"), Token: getenv("DEVBOX_TOKEN"), Name: getenv("DEVBOX_NAME"),
-		Interval: 15 * time.Second, PaseoHome: getenv("DEVBOX_PASEO_HOME"), AutoUpdate: getenv("DEVBOX_AUTOUPDATE") != "off"}
+		Interval: 15 * time.Second, PaseoHome: getenv("DEVBOX_PASEO_HOME"), AutoUpdate: getenv("DEVBOX_AUTOUPDATE") != "off",
+		ProbeSocket: getenv("DEVBOX_PROBE_SOCKET")}
+	switch c.ProbeSocket {
+	case "":
+		c.ProbeSocket = defaultProbeSocket
+	case "off":
+		c.ProbeSocket = ""
+	}
 	if c.PaseoHome == "" {
 		c.PaseoHome = filepath.Join(getenv("HOME"), ".paseo")
 	}
@@ -212,8 +235,133 @@ func runDevbox(ctx context.Context) error {
 	// every 5 minutes: each plan's usage, per login, from each provider's own meter
 	home, _ := os.UserHomeDir()
 	b.Usage = &devbox.UsageSync{Read: (&usage.Reader{Home: home}).Read}
+	// every minute: the host, each agent's processes, and the eBPF probe's CPU and OOM kills
+	probeSocket := c.ProbeSocket
+	if runtime.GOOS != "linux" {
+		probeSocket = ""
+	}
+	b.Host = &host.Collector{Reader: &host.Reader{Home: home}, Walker: &host.AgentWalker{}, ProbeSocket: probeSocket}
 	log.Printf("intelligence devbox %s streaming as %s to %s (self-update %v)", v, c.Name, c.Server, b.Update != nil)
 	return b.Run(ctx)
+}
+
+// hostRetention is how long host and agent minutes are kept (OOM kills are kept).
+const hostRetention = 90 * 24 * time.Hour
+
+func pruneHosts(ctx context.Context, reg *fleet.Registry) {
+	t := time.NewTicker(time.Hour)
+	defer t.Stop()
+	for {
+		if err := reg.PruneHosts(ctx, time.Now().Add(-hostRetention)); err != nil && ctx.Err() == nil {
+			log.Printf("prune host minutes: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+const defaultProbeSocket = "/run/intelligence/probe.sock"
+
+// probeSettings configure `intelligence probe`, from the environment (/etc/intelligence/probe.env).
+type probeSettings struct {
+	Server     string // PROBE_SERVER: the server's base URL, to follow its version; "" never updates
+	User       string // PROBE_USER: the dev box user, who may read the socket
+	Socket     string // PROBE_SOCKET: default /run/intelligence/probe.sock
+	AutoUpdate bool   // PROBE_AUTOUPDATE: "off" keeps this binary; default on
+}
+
+func probeConfig(getenv func(string) string) probeSettings {
+	c := probeSettings{Server: getenv("PROBE_SERVER"), User: getenv("PROBE_USER"), Socket: getenv("PROBE_SOCKET"),
+		AutoUpdate: getenv("PROBE_AUTOUPDATE") != "off"}
+	if c.Socket == "" {
+		c.Socket = defaultProbeSocket
+	}
+	return c
+}
+
+// runProbe loads the eBPF probe and serves its counters on a socket only the dev box user (and
+// root) can read. Like the dev box client it follows the server's version: every minute it asks
+// the server's version and, when it differs, downloads the server's binary, checks its sha256 and
+// that it runs and reports that version, replaces itself and re-executes.
+func runProbe(ctx context.Context) error {
+	if os.Geteuid() != 0 {
+		return errors.New("the probe loads eBPF programs: run it as root (deploy/install-probe)")
+	}
+	c := probeConfig(os.Getenv)
+	v := version(os.Getenv)
+	uid := -1
+	if c.User != "" {
+		u, err := user.Lookup(c.User)
+		if err != nil {
+			return fmt.Errorf("PROBE_USER: %w", err)
+		}
+		if uid, err = strconv.Atoi(u.Uid); err != nil {
+			return fmt.Errorf("PROBE_USER %s: uid %q", c.User, u.Uid)
+		}
+	}
+	p, err := probe.Start(ctx, v)
+	if err != nil {
+		return err
+	}
+	defer p.Close()
+	if err := os.MkdirAll(filepath.Dir(c.Socket), 0o755); err != nil {
+		return err
+	}
+	served := make(chan error, 1)
+	go func() { served <- probe.Serve(ctx, c.Socket, uid, p, nil) }()
+	log.Printf("intelligence probe %s: loaded; serving %s", v, c.Socket)
+	var up *devbox.Updater
+	if c.AutoUpdate && c.Server != "" {
+		dc := devboxSettings{Server: c.Server}
+		if up, err = newUpdater(dc, v); err != nil {
+			log.Printf("self-update off: %v", err)
+		} else {
+			// only to a binary that runs the probe: a server rolled back to before the probe keeps
+			// the probe on its own version instead of replacing it with one that cannot run
+			up.Verify = func(ctx context.Context, path string) (string, error) {
+				out, err := exec.CommandContext(ctx, path, "probe", "version").Output()
+				return string(out), err
+			}
+		}
+	}
+	t := time.NewTicker(devbox.UpdateEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case err := <-served:
+			return fmt.Errorf("socket: %w", err)
+		case <-t.C:
+			if up == nil {
+				continue
+			}
+			if sv, err := serverVersion(ctx, c.Server); err != nil {
+				log.Printf("server version: %v", err)
+			} else if err := up.Maybe(ctx, sv); err != nil {
+				log.Printf("self-update failed: %v", err)
+			}
+		}
+	}
+}
+
+// serverVersion asks the server its version: every response names it.
+func serverVersion(ctx context.Context, server string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(server, "/")+"/healthz", nil)
+	if err != nil {
+		return "", err
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	res.Body.Close()
+	return res.Header.Get(devbox.VersionHeader), nil
 }
 
 func newUpdater(c devboxSettings, current string) (*devbox.Updater, error) {

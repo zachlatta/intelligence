@@ -7,7 +7,7 @@ with read-only SQL.
 
 ## How it fits together
 
-One binary, three commands:
+One binary, four commands:
 
 - `intelligence` (or `intelligence server`): the web app. It runs in Coolify with a Postgres
   database, reachable only on the tailnet.
@@ -17,6 +17,9 @@ One binary, three commands:
   WebSocket stream to the server (below) for its reports, its agents' transcripts, its plans' usage
   and the server's commands, each handled on its own (`devbox.Box`), so a slow transcript upload
   holds up no report. The box dials out, so it needs no inbound port, and the server never dials a box.
+- `intelligence probe`: runs as root on each Linux dev box (a systemd system service): the eBPF
+  probe (`internal/probe`) that charges every process's CPU to its Paseo agent and records OOM kills.
+  The dev box client reads it over a Unix socket.
 - `intelligence version`: prints the commit the binary was built from.
 
 ### State and the read-only SQL contract
@@ -44,6 +47,8 @@ The hierarchy is devboxes > workspaces > agents:
   which Postgres cannot store, become U+FFFD.
 - `commands`: what the server asked a box to do (below): its kind, args, status, result or error,
   and when it was created, sent, started, finished and when it expires.
+- `host_minutes`, `agent_minutes`, `oom_kills` and `host_probes`: each box's resources over time
+  (below), with the views `host_current`, `host_days` and `agent_days`.
 - `usage_accounts`, `usage_readings`, `usage_active` and `usage_sources`: subscription plans' usage
   over time (below), with the views `usage_current`, `usage_pace`, `usage_cycles` and `usage_totals`.
 - `schema_migrations`.
@@ -62,7 +67,7 @@ open, dialing again 5 seconds after it drops. Each frame is a JSON `devbox.Frame
   version is in the dial's `X-Intelligence-Version` header.
 - box to server: `report` (on each new stream, and within a second of a change; the box re-reads
   the daemon's status every 15 seconds and reports it if it changed), `transcript` batches, `usage`
-  (every 5 minutes) and `command_update`s. Each carries an `id`, and the server answers each with an
+  (every 5 minutes), `host` (every minute) and `command_update`s. Each carries an `id`, and the server answers each with an
   `ack` once it is stored (or with why not), transcript batches on their own so a large one holds up
   nothing else.
 
@@ -135,6 +140,54 @@ has reset with no reading since, and `stale` after 15 minutes without one), `usa
 minus % of the window still to run: positive is under-spending), `usage_cycles` (the most of each
 window used before each reset, so how much of each week each login used) and `usage_totals`
 (logins, and weeks of quota left across them, per provider).
+
+### Host resources
+
+Every box measures itself (`internal/host`) and sends each finished minute up its stream as a
+`host` frame; minutes the server could not take are kept (up to three hours) and sent with the next.
+
+- The host, every 5 seconds: CPU (busy %, from `/proc/stat`), load, memory and swap
+  (`/proc/meminfo`), the home filesystem's space, pressure (`/proc/pressure`: the share of time
+  tasks waited for CPU, memory or I/O), the kernel's OOM kill count (`/proc/vmstat`) and the Paseo
+  daemon's cgroup (all its agents: memory less page cache, its peak, its OOM kills). A minute keeps
+  the average and peak CPU, the least memory and disk available, the most pressure, and the kills.
+  macOS boxes report CPU, load, memory, swap and disk (`sysctl`, `vm_stat`, `iostat`).
+- Each agent, every 15 seconds: its processes are those whose environment names it
+  (`PASEO_AGENT_ID`, which commands inherit); a minute keeps their most memory (proportional set
+  size, so shared pages count once) and how many there were.
+- Each agent's CPU and commands, and every OOM kill, from the eBPF probe where it runs (below);
+  otherwise CPU comes from the processes alive at each 15-second walk, which misses short-lived
+  commands (`cpu_source` says which).
+
+The server keeps 90 days of minutes (OOM kills are kept). `host_current` is each box's newest
+minute; `host_days` and `agent_days` sum days.
+
+### The eBPF probe
+
+`intelligence probe` runs as root on each Linux box (`deploy/install-probe`). It loads four small
+programs, written with `cilium/ebpf`'s assembler (no C toolchain), on kernel tracepoints whose field
+offsets it reads from the kernel at load time:
+
+- `sched_switch`: charges each CPU's time since its last switch to the process switched away from,
+  when that process belongs to an agent. Exact, and it counts every process, however short.
+- `sched_process_fork`: a new process or thread belongs to its parent's agent (and a pid reused by
+  a process with no agent is cleared).
+- `sched_process_exec`: counts each program an agent's process starts; a program started by a
+  process with no agent is passed to user space, which reads its environment for `PASEO_AGENT_ID`
+  (so an agent the Paseo daemon starts is found at once). A scan every 5 seconds catches the rest.
+- `oom:mark_victim`: each process the kernel chooses to kill for memory, its agent and its memory.
+
+So a process belongs to the agent whose process tree started it. The probe serves its counters on
+`/run/intelligence/probe.sock`, readable by the dev box user only; it holds no token. Checked on a
+dev box: an agent's 200 short commands and CPU burn were charged within 1% of the kernel's own
+accounting, and an OOM kill in a 64 MB scope was recorded with its agent.
+
+The probe follows the server's version like the dev box client: every minute it asks the server's
+version and, when it differs, downloads the server's binary, checks its sha256, checks that it runs
+the probe (`<binary> probe version`, so a server rolled back to before the probe never replaces
+it), replaces `/usr/local/lib/intelligence/intelligence` and re-executes. Its trust is the dev box
+client's: the client already runs the server's binary as the dev box user. The unit limits it to
+the capabilities it needs (BPF, perfmon, ptrace read of other processes' environment, memlock).
 
 ### Transcripts
 
@@ -211,6 +264,10 @@ approval before CI runs.
 - `GET /usage?days=7` (1 to 365): every login with a chart of each window's used % over the days,
   and its weekly peaks.
 - `GET /api/usage`: the logins and their windows, as JSON.
+- `GET /hosts?hours=24` (1 to 2160): each box's CPU and memory charts, its OOM kills and its agents
+  ranked by CPU, with their most memory and commands started. The home page shows each box's CPU,
+  memory, disk and pressure under its name, and each agent's memory beside it.
+- `GET /api/hosts`: each box's newest minute, probe and agents' memory, as JSON.
 - `GET /devboxes/{box}/workspaces/{ws}/agents/new`: the form that starts an agent in a workspace.
   `GET /devboxes/{box}/workspaces/new`: the form that makes a workspace with an agent in it, by
   default a new git worktree of one of the box's repositories (its workspaces' `project_root`s), or
@@ -279,6 +336,14 @@ Dev box (in `~/.config/intelligence/devbox.env`):
   changes); default `15s`.
 - `DEVBOX_PASEO_HOME`: optional Paseo home; default `~/.paseo`.
 - `DEVBOX_AUTOUPDATE`: `off` keeps the installed binary; default on.
+- `DEVBOX_PROBE_SOCKET`: the eBPF probe's socket; default `/run/intelligence/probe.sock`; `off` for none.
+
+Probe (in `/etc/intelligence/probe.env`, written by `deploy/install-probe`):
+
+- `PROBE_SERVER`: the server's base URL, to follow its version.
+- `PROBE_USER`: the dev box user, the only one who may read the socket.
+- `PROBE_SOCKET`: optional; default `/run/intelligence/probe.sock`.
+- `PROBE_AUTOUPDATE`: `off` keeps the installed binary; default on.
 
 ## Deploy
 
@@ -289,6 +354,8 @@ Dev box (in `~/.config/intelligence/devbox.env`):
 - Dev box: once per box, from a checkout of `main`, run `deploy/install-devbox` (the first run needs
   `DEVBOX_SERVER` and `DEVBOX_TOKEN` in the environment). After that the box updates itself.
   Logs: `journalctl --user -u intelligence-devbox`.
+- eBPF probe: once per Linux box, after the dev box client, run `deploy/install-probe` (it needs
+  sudo). After that the probe updates itself. Logs: `journalctl -u intelligence-probe`.
 
 ## License
 

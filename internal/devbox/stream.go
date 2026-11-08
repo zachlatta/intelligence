@@ -13,6 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/zachlatta/intelligence/internal/host"
 	"github.com/zachlatta/intelligence/internal/usage"
 )
 
@@ -31,6 +32,7 @@ type Frame struct {
 	Transcript *TranscriptBatch `json:"transcript,omitempty"` // transcript: box -> server
 	Update     *CommandUpdate   `json:"update,omitempty"`     // command_update: box -> server
 	Usage      *usage.Report    `json:"usage,omitempty"`      // usage: box -> server
+	Host       *host.Report     `json:"host,omitempty"`       // host: box -> server
 	Command    *Command         `json:"command,omitempty"`    // command: server -> box
 	Error      string           `json:"error,omitempty"`      // ack: refused, and why
 	Code       string           `json:"code,omitempty"`       // ack: AckResend or AckNotYet
@@ -43,6 +45,7 @@ const (
 	TranscriptFrame    = "transcript"
 	CommandUpdateFrame = "command_update"
 	UsageFrame         = "usage"
+	HostFrame          = "host"
 	CommandFrame       = "command"
 	AckFrame           = "ack"
 )
@@ -261,6 +264,11 @@ func (l *Link) Update(ctx context.Context, u CommandUpdate) error {
 // Usage sends a read of the box's plans' usage.
 func (l *Link) Usage(ctx context.Context, r usage.Report) error {
 	return l.call(ctx, Frame{Type: UsageFrame, Usage: &r})
+}
+
+// Host sends the box's finished minutes of host and agent resources.
+func (l *Link) Host(ctx context.Context, r host.Report) error {
+	return l.call(ctx, Frame{Type: HostFrame, Host: &r})
 }
 
 // TranscriptCursors are the server's transcript cursors from the current stream's hello.
