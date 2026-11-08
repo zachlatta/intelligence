@@ -24,5 +24,6 @@ All app state is readable with a read-only SQL query (`/api/sql`). So:
 
 ## Repo hygiene
 
-Never commit secrets, hostnames, tailnet names, IP addresses or home-directory paths.
+The repository is public. Never commit secrets, hostnames, tailnet names, IP addresses or
+home-directory paths; `internal/hygiene` and the CI gitleaks job check for them.
 Configuration comes from environment variables set in Coolify.

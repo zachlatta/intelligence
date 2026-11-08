@@ -90,6 +90,19 @@ Tests talk to a fake Paseo daemon (`internal/paseo/paseotest`). Database tests g
 database and read-only role (`internal/dbtest`) on the server in `TEST_DATABASE_URL`, which
 `make test` sets when it is empty.
 
+### Public repository
+
+This repository is public. Two gates keep private details out of it:
+
+- `internal/hygiene` (in `make test`, so in CI and the image build) fails on any file that holds a
+  private or tailnet address, a tailnet name, a home-directory path, an email outside `example.com`,
+  a private key or a token. Tests use `192.0.2.0/24`, `/home/someone` and `someone@example.com`.
+- CI runs gitleaks over every commit on every push and pull request.
+
+On GitHub, `main` cannot be force-pushed or deleted, secret scanning with push protection is on,
+workflows get a read-only token and no secrets, and pull requests from outside contributors need
+approval before CI runs.
+
 ## Routes
 
 - `GET /`: a collapsible tree of hosts > workspaces (with their project) > agents (with their status).
