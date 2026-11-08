@@ -163,10 +163,14 @@ func ago(now, t time.Time) string {
 	return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 }
 
-// agentSummary is agent counts as "2 running, 8 idle": running first, then the rest by name.
-func agentSummary(counts map[string]int) string {
-	if len(counts) == 0 {
+// agentSummary counts agents by status, as "2 running, 8 idle": running first, then the rest by name.
+func agentSummary(agents []devbox.Agent) string {
+	if len(agents) == 0 {
 		return "none"
+	}
+	counts := map[string]int{}
+	for _, a := range agents {
+		counts[a.Status]++
 	}
 	keys := make([]string, 0, len(counts))
 	for k := range counts {

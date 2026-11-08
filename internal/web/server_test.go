@@ -161,7 +161,11 @@ func reportJSON(t *testing.T, r devbox.Report) []byte {
 var sampleReport = devbox.Report{Name: "devbox-1", CollectedAt: t0, Version: "c1", Paseo: devbox.PaseoStatus{
 	Daemon: "running", Connected: "reachable", Version: "0.11.4", Hostname: "devbox-1", PID: 3029,
 	Providers: []devbox.Provider{{Name: "claude", Status: "available", Available: true}, {Name: "copilot", Status: "unavailable"}},
-	Agents:    map[string]int{"running": 2, "idle": 8},
+	Agents: []devbox.Agent{
+		{ID: "a1", ShortID: "a1short", Name: "Fix the <b>login</b> page", Provider: "claude/claude-opus-5-5", Thinking: "medium", Status: "running", Cwd: "~/dev/example/app"},
+		{ID: "a2", ShortID: "a2short", Name: "Write notes", Provider: "codex/gpt-6.1-sol", Thinking: "high", Status: "idle", Cwd: "~/dev/example/docs"},
+		{ID: "a3", ShortID: "a3short", Name: "Audit", Provider: "claude/claude-opus-5-5", Thinking: "medium", Status: "idle", Cwd: "~/dev/example/app"},
+	},
 }}
 
 func TestReportNeedsTheToken(t *testing.T) {
@@ -219,12 +223,13 @@ func TestReportedBoxIsListedInTheAPIAndOnTheHomePage(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 1 || list[0].Report.Name != "devbox-1" || !list[0].Online || list[0].Report.Paseo.Agents["running"] != 2 {
+	if len(list) != 1 || list[0].Report.Name != "devbox-1" || !list[0].Online || len(list[0].Report.Paseo.Agents) != 3 {
 		t.Fatalf("list = %+v", list)
 	}
 
 	page := get(t, h, "/", nil).Body.String()
-	for _, want := range []string{"devbox-1", "online", "running", "reachable", "0.11.4", "claude", "2 running", "8 idle"} {
+	for _, want := range []string{"devbox-1", "online", "running", "reachable", "0.11.4", "claude", "1 running, 2 idle",
+		"Fix the &lt;b&gt;login&lt;/b&gt; page", "a1short", "claude/claude-opus-5-5", "~/dev/example/docs", "Write notes"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("home page misses %q", want)
 		}
@@ -265,5 +270,28 @@ func TestHomePageShowsEachBoxClientVersion(t *testing.T) {
 	post(t, h, devbox.ReportPath, "secret", reportJSON(t, rep))
 	if strings.Contains(get(t, h, "/", nil).Body.String(), "not on the server's version") {
 		t.Errorf("a box on the server's version is not behind")
+	}
+}
+
+func TestHomePageListsAgentsRunningFirst(t *testing.T) {
+	h, _ := dbServer(t)
+	post(t, h, devbox.ReportPath, "secret", reportJSON(t, sampleReport))
+	page := get(t, h, "/", nil).Body.String()
+	run, idle := strings.Index(page, "a1short"), strings.Index(page, "a3short")
+	if run < 0 || idle < 0 || run > idle {
+		t.Fatalf("running agent a1short should come before idle a3short")
+	}
+	if strings.Contains(page, "<b>login</b>") {
+		t.Errorf("agent names must be escaped")
+	}
+}
+
+func TestHomePageSaysWhenABoxHasNoAgents(t *testing.T) {
+	h, _ := dbServer(t)
+	rep := sampleReport
+	rep.Paseo.Agents = nil
+	post(t, h, devbox.ReportPath, "secret", reportJSON(t, rep))
+	if page := get(t, h, "/", nil).Body.String(); !strings.Contains(page, "No agents") {
+		t.Errorf("a box with no agents should say so")
 	}
 }

@@ -39,9 +39,20 @@ type PaseoStatus struct {
 	Providers []Provider `json:"providers,omitempty"`
 	// ProvidersAt is when Providers was read. When paseo provider ls fails, the collector keeps the
 	// last list it read, with its time.
-	ProvidersAt time.Time      `json:"providersAt,omitzero"`
-	Agents      map[string]int `json:"agents,omitempty"`      // agent count by status, from paseo ls
-	AgentsError string         `json:"agentsError,omitempty"` // paseo ls could not be run or read
+	ProvidersAt time.Time `json:"providersAt,omitzero"`
+	Agents      []Agent   `json:"agentList,omitempty"`   // every unarchived agent on the daemon, from paseo ls -g
+	AgentsError string    `json:"agentsError,omitempty"` // paseo ls could not be run or read
+}
+
+// Agent is one Paseo agent on a dev box's daemon.
+type Agent struct {
+	ID       string `json:"id"`
+	ShortID  string `json:"shortId"`
+	Name     string `json:"name"`
+	Provider string `json:"provider"` // provider/model, such as claude/claude-opus-5-5
+	Thinking string `json:"thinking"`
+	Status   string `json:"status"` // running, idle, closed, error, ...
+	Cwd      string `json:"cwd"`
 }
 
 // Provider is one agent provider and whether the daemon can run it (paseo provider ls).
@@ -103,20 +114,13 @@ func (c *Collector) Paseo(ctx context.Context) PaseoStatus {
 	}
 	s.Providers, s.ProvidersAt = c.lastProviders, c.lastProvidersAt
 
-	var agents []struct {
-		Status string `json:"status"`
-	}
-	out, err = c.Run(ctx, bin, "ls", "--json")
+	// -g: every directory's agents, not only those under this process's working directory
+	out, err = c.Run(ctx, bin, "ls", "-g", "--json")
 	if err == nil {
-		err = json.Unmarshal(out, &agents)
+		err = json.Unmarshal(out, &s.Agents)
 	}
 	if err != nil {
-		s.AgentsError = "paseo ls: " + err.Error()
-		return s
-	}
-	s.Agents = map[string]int{}
-	for _, a := range agents {
-		s.Agents[a.Status]++
+		s.Agents, s.AgentsError = nil, "paseo ls: "+err.Error()
 	}
 	return s
 }

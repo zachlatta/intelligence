@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -64,12 +65,17 @@ func TestCollectReadsDaemonStatusProvidersAndAgents(t *testing.T) {
 	if !s.ProvidersAt.Equal(t0) {
 		t.Errorf("providersAt = %v, want %v", s.ProvidersAt, t0)
 	}
-	if s.Agents["running"] != 1 || s.Agents["idle"] != 2 || len(s.Agents) != 2 {
-		t.Errorf("agents = %v", s.Agents)
+	want := Agent{ID: "a1000000-0000-4000-8000-000000000001", ShortID: "a100000", Name: "Fix the login page",
+		Provider: "claude/claude-opus-5-5", Thinking: "medium", Status: "running", Cwd: "~/dev/example/app"}
+	if len(s.Agents) != 3 || s.Agents[0] != want || s.Agents[1].Status != "idle" || s.Agents[2].Name != "Audit dependencies" {
+		t.Errorf("agents = %+v", s.Agents)
 	}
 	for _, c := range f.calls {
 		if c[0] != "paseo" || c[len(c)-1] != "--json" {
 			t.Errorf("unexpected call %v", c)
+		}
+		if c[1] == "ls" && !slices.Contains(c, "-g") {
+			t.Errorf("paseo ls without -g lists only one directory's agents: %v", c)
 		}
 	}
 }

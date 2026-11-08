@@ -18,6 +18,14 @@
   dd { margin: 0; }
   .muted { opacity: .6; }
   .na { opacity: .45; text-decoration: line-through; }
+  table.agents { width: 100%; border-collapse: collapse; margin-top: .75rem; font-size: .9rem; }
+  table.agents th { text-align: left; font-weight: normal; opacity: .6; padding: .2rem .5rem .2rem 0; }
+  table.agents td { padding: .25rem .5rem .25rem 0; border-top: 1px solid #8882; vertical-align: top; }
+  table.agents .name { overflow-wrap: anywhere; }
+  .agents-wrap { overflow-x: auto; }
+  .st-running { background: #27c3; color: #27c; }
+  .st-error { background: #c332; color: #c33; }
+  code { font-size: .85em; }
   footer { margin-top: 3rem; opacity: .6; font-size: .85rem; }
 </style>
 </head>
@@ -45,6 +53,27 @@
       {{if $p.Providers}}<span class="muted">(as of {{ago $.Now $p.ProvidersAt}})</span>{{end}}</dd>
     {{if $p.Note}}<dt>Note</dt><dd class="muted">{{$p.Note}}</dd>{{end}}
   </dl>
+  {{if not $p.AgentsError}}
+  {{if $p.Agents}}
+  <div class="agents-wrap">
+  <table class="agents">
+    <thead><tr><th>Status</th><th>Agent</th><th>Model</th><th>Directory</th></tr></thead>
+    <tbody>
+    {{range $p.Agents}}
+    <tr>
+      <td><span class="pill st-{{.Status}}">{{.Status}}</span></td>
+      <td class="name">{{.Name}} <code class="muted" title="{{.ID}}">{{.ShortID}}</code></td>
+      <td>{{.Provider}}{{if .Thinking}} <span class="muted">· {{.Thinking}}</span>{{end}}</td>
+      <td><code>{{.Cwd}}</code></td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+  {{else}}
+  <p class="muted">No agents.</p>
+  {{end}}
+  {{end}}
   {{end}}
 </section>
 {{else}}

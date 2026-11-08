@@ -11,8 +11,8 @@ One binary, three commands:
 - `intelligence` (or `intelligence server`): the web app. It runs in Coolify with a Postgres
   database, reachable only on the tailnet.
 - `intelligence devbox`: runs on each dev box as a systemd user service. Every 15 seconds it reads
-  the local Paseo daemon (`paseo status --json`, `paseo provider ls --json`, `paseo ls --json`) and
-  POSTs a report to the server. The box dials out, so it needs no inbound port, and the server never
+  the local Paseo daemon (`paseo status --json`, `paseo provider ls --json`, `paseo ls -g --json`, every
+  directory's agents) and POSTs a report to the server. The box dials out, so it needs no inbound port, and the server never
   reaches into a box.
 - `intelligence version`: prints the commit the binary was built from.
 
@@ -25,7 +25,10 @@ in `public` and readable by that role, and the role cannot write. The image buil
 against a throwaway Postgres, so a broken contract fails the build and nothing deploys; the server
 checks it again against production when it starts.
 
-A box is online while it reported within the last minute (the `devbox_status` view).
+Tables: `devboxes` (each box's latest report), `devbox_agents` (every unarchived Paseo agent on
+each box, replaced by each report; none while the box's agent list fails, with the reason in
+`devboxes.agents_error`) and `schema_migrations`. The `devbox_status` view adds `online` (reported
+within the last minute), `agents` and `running_agents`.
 
 ### Self-update
 
@@ -49,7 +52,7 @@ database and read-only role (`internal/dbtest`) on the server in `TEST_DATABASE_
 
 ## Routes
 
-- `GET /`: dev boxes and their Paseo daemons. Refreshes every 15 seconds.
+- `GET /`: dev boxes, their Paseo daemons and agents (running first). Refreshes every 15 seconds.
 - `GET /api/devboxes`: the same, as JSON.
 - `POST /api/sql` with `{"query": "...", "limit": 1000}`, or `GET /api/sql?q=...&limit=`: one
   read-only query. Returns `{"columns": [{"name", "type"}], "rows": [[...]], "rowCount",

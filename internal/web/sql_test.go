@@ -46,14 +46,14 @@ func q(query string) string {
 func TestSQLReadsAppState(t *testing.T) {
 	h, _ := dbServer(t)
 	post(t, h, devbox.ReportPath, "secret", reportJSON(t, sampleReport))
-	code, r := sqlPost(t, h, q("SELECT name, daemon, online, agents->>'running' AS running FROM devbox_status"))
+	code, r := sqlPost(t, h, q("SELECT name, daemon, online, running_agents::text AS running FROM devbox_status"))
 	if code != http.StatusOK {
 		t.Fatalf("status %d: %s", code, r.Error)
 	}
 	if len(r.Columns) != 4 || r.Columns[0].Name != "name" || r.Columns[2].Type != "bool" {
 		t.Errorf("columns = %+v", r.Columns)
 	}
-	if r.RowCount != 1 || len(r.Rows) != 1 || r.Rows[0][0] != "devbox-1" || r.Rows[0][1] != "running" || r.Rows[0][2] != true || r.Rows[0][3] != "2" {
+	if r.RowCount != 1 || len(r.Rows) != 1 || r.Rows[0][0] != "devbox-1" || r.Rows[0][1] != "running" || r.Rows[0][2] != true || r.Rows[0][3] != "1" {
 		t.Errorf("rows = %+v", r.Rows)
 	}
 }
@@ -132,5 +132,14 @@ func TestEveryTableIsReadableThroughTheSQLAPI(t *testing.T) {
 		if code, r := sqlPost(t, h, q(`SELECT * FROM "`+tbl+`" LIMIT 1`)); code != http.StatusOK {
 			t.Errorf("%s: status %d %s", tbl, code, r.Error)
 		}
+	}
+}
+
+func TestSQLListsEachBoxsAgents(t *testing.T) {
+	h, _ := dbServer(t)
+	post(t, h, devbox.ReportPath, "secret", reportJSON(t, sampleReport))
+	code, r := sqlPost(t, h, q("SELECT box, short_id, status, provider FROM devbox_agents ORDER BY short_id"))
+	if code != http.StatusOK || r.RowCount != 3 || r.Rows[0][0] != "devbox-1" || r.Rows[0][1] != "a1short" || r.Rows[0][2] != "running" {
+		t.Fatalf("status %d rows %+v error %q", code, r.Rows, r.Error)
 	}
 }

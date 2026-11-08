@@ -1,5 +1,5 @@
 [
-  {"id": "a1", "shortId": "a1", "name": "one", "provider": "claude", "status": "running", "cwd": "/w", "created": "2026-11-08T10:00:00Z", "thinking": "medium"},
-  {"id": "a2", "shortId": "a2", "name": "two", "provider": "claude", "status": "idle", "cwd": "/w", "created": "2026-11-08T10:00:00Z", "thinking": "medium"},
-  {"id": "a3", "shortId": "a3", "name": "three", "provider": "codex", "status": "idle", "cwd": "/w", "created": "2026-11-08T10:00:00Z", "thinking": "medium"}
+  {"id": "a1000000-0000-4000-8000-000000000001", "shortId": "a100000", "name": "Fix the login page", "provider": "claude/claude-opus-5-5", "thinking": "medium", "status": "running", "cwd": "~/dev/example/app", "created": "17 minutes ago"},
+  {"id": "a2000000-0000-4000-8000-000000000002", "shortId": "a200000", "name": "Write the release notes", "provider": "codex/gpt-6.1-sol", "thinking": "high", "status": "idle", "cwd": "~/dev/example/docs", "created": "2 hours ago"},
+  {"id": "a3000000-0000-4000-8000-000000000003", "shortId": "a300000", "name": "Audit dependencies", "provider": "claude/claude-opus-5-5", "thinking": "medium", "status": "idle", "cwd": "~/dev/example/app", "created": "1 day ago"}
 ]
