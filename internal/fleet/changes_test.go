@@ -153,7 +153,7 @@ func TestAStreamNotSeenForAMinuteIsOffline(t *testing.T) {
 func online(t *testing.T, d dbtest.DB, box string) bool {
 	t.Helper()
 	var on bool
-	if err := d.Readonly.QueryRow(ctx, "SELECT online FROM devbox_status WHERE name = $1", box).Scan(&on); err != nil {
+	if err := dbtest.Reader(t, d, box).QueryRow(ctx, "SELECT online FROM devbox_status WHERE name = $1", box).Scan(&on); err != nil {
 		t.Fatal(err)
 	}
 	return on

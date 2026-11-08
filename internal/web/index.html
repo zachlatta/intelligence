@@ -59,7 +59,7 @@
 <main class="container page">
 <div class="page-head">
   <div><h1>Dev boxes</h1><p class="sub">Each box's Paseo daemon, its workspaces and their agents.</p></div>
-  <div class="actions">{{if .Operator}}<span class="meta">Signed in</span><button class="btn sm" id="sign-out">Sign out</button>{{else}}<a class="btn sm" href="/login">Sign in</a>{{end}}</div>
+  <div class="actions"><a class="meta" href="/account" title="Your account and its dev boxes">{{.Username}}</a><a class="btn sm" href="/account#add">Add a dev box</a><button class="btn sm" id="sign-out">Sign out</button></div>
 </div>
 <div id="tree">
 {{if or .Plans.Plans .Plans.Problems}}
@@ -116,7 +116,7 @@
   </div>
 </details>
 {{else}}
-<p class="empty-state">No dev boxes have reported yet.</p>
+<p class="empty-state">No dev boxes yet. <a href="/account#add">Add one</a>.</p>
 {{end}}
 </div>
 <footer title="{{.Version}}">version {{.Short}}</footer>
@@ -124,7 +124,7 @@
 <script>
 document.getElementById("sign-out")?.addEventListener("click", async () => {
   await fetch("/api/session", { method: "DELETE" });
-  location.reload();
+  location.href = "/login";
 });
 // Refresh the tree in place every 15 seconds, keeping whatever the reader opened or closed.
 setInterval(async () => {

@@ -58,7 +58,7 @@ func serve(t *testing.T, h http.Handler) *httptest.Server {
 
 func openStream(t *testing.T, h http.Handler, box string) *rawBox {
 	t.Helper()
-	b, _, err := dialStream(t, serve(t, h), box, "secret")
+	b, _, err := dialStream(t, serve(t, h), box, keyOf(t, h, box))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,13 +123,13 @@ func sendBatch(t *testing.T, h http.Handler, b devbox.TranscriptBatch) devbox.Fr
 	return s.call(devbox.Frame{Type: devbox.TranscriptFrame, Transcript: &b})
 }
 
-func TestStreamNeedsTheToken(t *testing.T) {
+func TestStreamNeedsTheBoxsOwnKey(t *testing.T) {
 	h, d := dbServer(t)
 	srv := serve(t, h)
-	for _, tok := range []string{"", "wrong"} {
-		_, resp, err := dialStream(t, srv, "devbox-1", tok)
+	for _, key := range []string{"", "wrong", keyOf(t, h, "devbox-2")} { // another box's key is no good
+		_, resp, err := dialStream(t, srv, "devbox-1", key)
 		if err == nil || resp == nil || resp.StatusCode != http.StatusUnauthorized {
-			t.Errorf("token %q: %v, want 401", tok, err)
+			t.Errorf("key %q: %v, want 401", key, err)
 		}
 		if resp != nil && resp.Header.Get(devbox.VersionHeader) != "v" {
 			t.Errorf("a refused stream must still name the server's version, for the box to update")
@@ -140,17 +140,9 @@ func TestStreamNeedsTheToken(t *testing.T) {
 	}
 }
 
-func TestStreamsRefusedWhenNoTokenIsConfigured(t *testing.T) {
-	d := dbtest.New(t)
-	srv := serve(t, New(Config{Context: t.Context(), Version: "v", DB: d.Owner, Readonly: d.Readonly}))
-	if _, resp, err := dialStream(t, srv, "devbox-1", ""); err == nil || resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("%v, want 503", err)
-	}
-}
-
 func TestStreamRefusesABadName(t *testing.T) {
 	h, _ := dbServer(t)
-	if _, resp, err := dialStream(t, serve(t, h), "Bad_Name", "secret"); err == nil || resp.StatusCode != http.StatusBadRequest {
+	if _, resp, err := dialStream(t, serve(t, h), "Bad_Name", keyOf(t, h, "devbox-1")); err == nil || resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("%v, want 400", err)
 	}
 }
@@ -246,8 +238,8 @@ func TestABoxIsOnlineWhileItsStreamIsOpen(t *testing.T) {
 // instance, takes over; the old stream ends without taking the box offline.
 func TestANewStreamEndsTheOldOneOnAnyInstance(t *testing.T) {
 	d := dbtest.New(t)
-	one := New(Config{Context: t.Context(), Version: "v", DB: d.Owner, Readonly: d.Readonly, DevboxToken: "secret"})
-	two := New(Config{Context: t.Context(), Version: "v", DB: dbtest.Pool(t, d), Readonly: d.Readonly, DevboxToken: "secret"})
+	one := newServer(t, d, d.Owner, "v")
+	two := newServer(t, d, dbtest.Pool(t, d), "v")
 	old := openStream(t, one, "devbox-1")
 	openStream(t, two, "devbox-1")
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)

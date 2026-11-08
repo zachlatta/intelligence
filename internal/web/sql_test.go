@@ -28,6 +28,7 @@ func sqlPost(t *testing.T, h http.Handler, body string) (int, sqlResult) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/api/sql", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
+	signedIn(h, req)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	var r sqlResult
@@ -95,7 +96,7 @@ func TestSQLCapsRows(t *testing.T) {
 
 func TestSQLTimesOut(t *testing.T) {
 	d := dbtest.New(t)
-	h := New(Config{Context: t.Context(), Version: "v", DB: d.Owner, Readonly: d.Readonly, DevboxToken: "secret", SQLTimeout: 200 * time.Millisecond})
+	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.SQLTimeout = 200 * time.Millisecond })
 	start := time.Now()
 	code, r := sqlPost(t, h, q("SELECT pg_sleep(5)"))
 	if code != http.StatusBadRequest || !strings.Contains(r.Error, "timeout") || time.Since(start) > 3*time.Second {
@@ -113,7 +114,7 @@ func TestSQLRejectsEmptyQuery(t *testing.T) {
 // The contract, through the API: every table and view in the app schema can be read with SQL.
 func TestEveryTableIsReadableThroughTheSQLAPI(t *testing.T) {
 	d := dbtest.New(t)
-	h := New(Config{Context: t.Context(), Version: "v", DB: d.Owner, Readonly: d.Readonly, DevboxToken: "secret"})
+	h := newServer(t, d, d.Owner, "v")
 	rows, err := d.Owner.Query(t.Context(), `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'`)
 	if err != nil {
 		t.Fatal(err)

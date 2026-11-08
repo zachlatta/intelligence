@@ -3,7 +3,6 @@ package web
 
 import (
 	"context"
-	"crypto/subtle"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -15,23 +14,31 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/zachlatta/intelligence/internal/accounts"
+	"github.com/zachlatta/intelligence/internal/db"
 	"github.com/zachlatta/intelligence/internal/devbox"
 	"github.com/zachlatta/intelligence/internal/fleet"
 )
 
-// Config is what the server needs. All app state is in DB, and Readonly reads it for the SQL API.
+// Config is what the server needs. All app state is in DB; each account reads it through its own
+// role, made with Readonly's settings (db.AccountRoles).
 type Config struct {
 	// Context is the server's lifetime: its listener for fleet changes stops when it ends. Default: never.
-	Context     context.Context
-	Version     string        // the deployed commit, shown on every page and by /healthz
-	DB          *pgxpool.Pool // the app's database, migrated (db.Migrate)
-	Readonly    *pgxpool.Pool // the same database as the read-only role (db.EnsureReadonlyRole)
-	DevboxToken string        // the bearer token dev boxes stream with; "" refuses every stream
-	// OperatorToken is the bearer token that may send dev boxes commands; "" refuses every command.
-	OperatorToken string
-	SQLTimeout    time.Duration // per SQL API query; default 5s
-	BinDir        string        // dev box binaries, intelligence-<os>-<arch>, served for self-update; "" = none
-	Now           func() time.Time
+	Context    context.Context
+	Version    string        // the deployed commit, shown on every page and by /healthz
+	DB         *pgxpool.Pool // the app's database, migrated (db.Migrate)
+	Readonly   *pgxpool.Pool // the same database as the read-only role (db.EnsureReadonlyRole)
+	SQLTimeout time.Duration // per SQL API query; default 5s
+	BinDir     string        // dev box binaries, intelligence-<os>-<arch>, served for self-update; "" = none
+	Now        func() time.Time
+}
+
+// app is the server's shared parts.
+type app struct {
+	cfg     Config
+	store   *accounts.Store
+	reg     *fleet.Registry // as the owner: for the dev box streams and for writes
+	changes *fleet.Changes
 }
 
 //go:embed index.html
@@ -62,6 +69,10 @@ func New(cfg Config) http.Handler {
 	reg := fleet.New(cfg.DB)
 	changes := fleet.NewChanges(cfg.DB)
 	go changes.Run(cfg.Context)
+	roles := db.NewAccountRoles(cfg.DB, cfg.Readonly)
+	context.AfterFunc(cfg.Context, roles.Close)
+	store := accounts.New(cfg.DB, roles)
+	a := &app{cfg: cfg, store: store, reg: reg, changes: changes}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
@@ -74,54 +85,81 @@ func New(cfg Config) http.Handler {
 		}
 		writeJSON(w, map[string]string{"status": "ok", "version": cfg.Version, "database": "ok"})
 	})
-	mux.HandleFunc("GET /api/devboxes", func(w http.ResponseWriter, r *http.Request) {
-		list, err := reg.List(r.Context())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		writeJSON(w, list)
-	})
-	mux.HandleFunc("GET "+devbox.StreamPath("{box}"), stream(cfg, reg, changes))
-	mux.HandleFunc("POST /api/devboxes/{box}/commands", enqueueCommand(cfg, reg))
-	mux.HandleFunc("GET /api/devboxes/{box}/commands/{id}", showCommand(reg, changes))
-	mux.HandleFunc("POST /api/session", signIn(cfg))
-	mux.HandleFunc("DELETE /api/session", signOut)
+	// accounts
+	mux.HandleFunc("POST /api/accounts", a.signUp)
+	mux.HandleFunc("POST /api/session", a.signIn)
+	mux.HandleFunc("DELETE /api/session", a.signOut)
+	mux.HandleFunc("PUT /api/account/password", a.write(a.changePassword))
 	mux.HandleFunc("GET /login", loginPage(cfg))
-	mux.HandleFunc("GET /devboxes/{box}/workspaces/new", newWorkspacePage(cfg, reg))
-	mux.HandleFunc("GET /devboxes/{box}/workspaces/{ws}/agents/new", newAgentPage(cfg, reg))
-	mux.HandleFunc("GET /api/sql", sqlHandler(cfg))
-	mux.HandleFunc("POST /api/sql", sqlHandler(cfg))
-	mux.Handle("GET /api/devbox/binary/{os}/{arch}", binaries(cfg.BinDir))
-	mux.HandleFunc("GET /devboxes/{box}/agents/{agent}", func(w http.ResponseWriter, r *http.Request) {
-		transcriptPage(cfg, reg, w, r)
-	})
-	mux.HandleFunc("GET /devboxes/{box}/agents/{agent}/blocks", func(w http.ResponseWriter, r *http.Request) {
-		transcriptBlocks(cfg, reg, w, r)
-	})
-	mux.HandleFunc("GET /devboxes/{box}/agents/{agent}/resources", func(w http.ResponseWriter, r *http.Request) {
-		transcriptResources(cfg, reg, w, r)
-	})
-	mux.HandleFunc("GET /devboxes/{box}/agents/{agent}/entries/{seq}", func(w http.ResponseWriter, r *http.Request) {
-		transcriptEntry(reg, w, r)
-	})
 	mux.HandleFunc("GET /ui.css", stylesheet)
-	mux.HandleFunc("GET /usage", usagePage(cfg, reg))
-	mux.HandleFunc("GET /hosts", hostsPage(cfg, reg))
-	mux.HandleFunc("GET /api/hosts", hostsAPI(reg))
-	mux.HandleFunc("GET /api/usage", usageAPI(reg))
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		list, err := reg.List(r.Context())
+	mux.HandleFunc("GET /account", a.page(func(v viewer) http.HandlerFunc { return accountPage(cfg, v) }))
+	// dev boxes: joining an account, and their streams
+	mux.HandleFunc("POST /api/devbox-enrollments", a.enroll)
+	mux.HandleFunc("POST /api/devbox-enrollments/{id}/key", a.collectKey)
+	mux.HandleFunc("POST /api/devbox-enrollments/claim", a.write(a.claimBox))
+	mux.HandleFunc("DELETE /api/devboxes/{box}", a.write(a.removeBox))
+	mux.HandleFunc("GET "+devbox.StreamPath("{box}"), stream(a))
+	mux.Handle("GET /api/devbox/binary/{os}/{arch}", binaries(cfg.BinDir))
+	// what a signed-in account reads: its own boxes, through its own role
+	mux.HandleFunc("GET /api/devboxes", a.read(func(v viewer) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			list, err := v.reg.List(r.Context())
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, list)
+		}
+	}))
+	mux.HandleFunc("POST /api/devboxes/{box}/commands", a.write(func(v viewer) http.HandlerFunc { return enqueueCommand(a, v) }))
+	mux.HandleFunc("GET /api/devboxes/{box}/commands/{id}", a.read(func(v viewer) http.HandlerFunc { return showCommand(a, v) }))
+	mux.HandleFunc("GET /api/sql", a.read(func(v viewer) http.HandlerFunc { return sqlHandler(cfg, v.pool) }))
+	mux.HandleFunc("POST /api/sql", a.read(func(v viewer) http.HandlerFunc { return sqlHandler(cfg, v.pool) }))
+	mux.HandleFunc("GET /api/hosts", a.read(func(v viewer) http.HandlerFunc { return hostsAPI(v.reg) }))
+	mux.HandleFunc("GET /api/usage", a.read(func(v viewer) http.HandlerFunc { return usageAPI(v.reg) }))
+	mux.HandleFunc("GET /devboxes/{box}/workspaces/new", a.page(func(v viewer) http.HandlerFunc { return newWorkspacePage(cfg, v.reg) }))
+	mux.HandleFunc("GET /devboxes/{box}/workspaces/{ws}/agents/new", a.page(func(v viewer) http.HandlerFunc { return newAgentPage(cfg, v.reg) }))
+	mux.HandleFunc("GET /devboxes/{box}/agents/{agent}", a.page(func(v viewer) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) { transcriptPage(cfg, v.reg, w, r) }
+	}))
+	mux.HandleFunc("GET /devboxes/{box}/agents/{agent}/blocks", a.read(func(v viewer) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) { transcriptBlocks(cfg, v.reg, w, r) }
+	}))
+	mux.HandleFunc("GET /devboxes/{box}/agents/{agent}/resources", a.read(func(v viewer) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) { transcriptResources(cfg, v.reg, w, r) }
+	}))
+	mux.HandleFunc("GET /devboxes/{box}/agents/{agent}/entries/{seq}", a.page(func(v viewer) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) { transcriptEntry(v.reg, w, r) }
+	}))
+	mux.HandleFunc("GET /usage", a.page(func(v viewer) http.HandlerFunc { return usagePage(cfg, v.reg) }))
+	mux.HandleFunc("GET /hosts", a.page(func(v viewer) http.HandlerFunc { return hostsPage(cfg, v.reg) }))
+	mux.HandleFunc("GET /{$}", a.page(func(v viewer) http.HandlerFunc { return homePage(cfg, v) }))
+	// every response names the server's version, so a dev box sees on any call that it should update
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(devbox.VersionHeader, cfg.Version)
+		mux.ServeHTTP(w, r)
+	})
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// homePage is the tree of the account's hosts > workspaces > agents, and its plans.
+func homePage(cfg Config, v viewer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		list, err := v.reg.List(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		plans, err := reg.Plans(r.Context())
+		plans, err := v.reg.Plans(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		hosts, err := reg.Hosts(r.Context())
+		hosts, err := v.reg.Hosts(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -134,39 +172,9 @@ func New(cfg Config) http.Handler {
 			"Plans":    plans,
 			"Hosts":    hosts,
 			"Now":      cfg.Now(),
-			"Operator": hasSession(cfg, r),
+			"Username": v.acct.Username,
 		})
-	})
-	// every response names the server's version, so a dev box sees on any call that it should update
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set(devbox.VersionHeader, cfg.Version)
-		mux.ServeHTTP(w, r)
-	})
-}
-
-// devboxAuthorized answers the request itself unless it carries the dev-box token.
-func devboxAuthorized(cfg Config, w http.ResponseWriter, r *http.Request) bool {
-	return bearerAuthorized(cfg.DevboxToken, "dev box streams are not configured on this server", "dev box", w, r)
-}
-
-// bearerAuthorized answers the request itself unless it carries token, refusing everything while
-// token is "".
-func bearerAuthorized(token, unset, who string, w http.ResponseWriter, r *http.Request) bool {
-	if token == "" {
-		http.Error(w, unset, http.StatusServiceUnavailable)
-		return false
 	}
-	tok, ok := bearerOf(r)
-	if !ok || subtle.ConstantTimeCompare([]byte(tok), []byte(token)) != 1 {
-		http.Error(w, "bad or missing "+who+" token", http.StatusUnauthorized)
-		return false
-	}
-	return true
-}
-
-func writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(v)
 }
 
 // short is a commit id cut to 12 characters for display; anything shorter is kept whole.

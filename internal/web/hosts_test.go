@@ -13,7 +13,7 @@ import (
 
 func seedHost(t *testing.T, d dbtest.DB) {
 	t.Helper()
-	sendReport(t, New(Config{Version: "v", DB: d.Owner, Readonly: d.Readonly, DevboxToken: "secret"}), sampleReport)
+	sendReport(t, newServer(t, d, d.Owner, "v"), sampleReport)
 	now := time.Now().UTC().Truncate(time.Minute)
 	f := func(v float64) *float64 { return &v }
 	u := func(v uint64) *uint64 { return &v }

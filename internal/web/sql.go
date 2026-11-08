@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // SQL API limits.
@@ -38,8 +39,9 @@ type sqlResponse struct {
 	Truncated bool        `json:"truncated"` // more rows matched than the limit
 }
 
-// sqlHandler runs one read-only query as the read-only role: POST {"query", "limit"} or GET ?q=&limit=.
-func sqlHandler(cfg Config) http.HandlerFunc {
+// sqlHandler runs one read-only query through p, the account's own role, which reads only the
+// account's rows: POST {"query", "limit"} or GET ?q=&limit=.
+func sqlHandler(cfg Config, p *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req sqlRequest
 		if r.Method == http.MethodGet {
@@ -57,7 +59,7 @@ func sqlHandler(cfg Config) http.HandlerFunc {
 			req.Limit = defaultSQLLimit
 		}
 		req.Limit = min(req.Limit, maxSQLLimit)
-		res, err := runReadonly(r.Context(), cfg, req)
+		res, err := runReadonly(r.Context(), cfg, p, req)
 		if err != nil {
 			sqlError(w, http.StatusBadRequest, err.Error())
 			return
@@ -66,10 +68,10 @@ func sqlHandler(cfg Config) http.HandlerFunc {
 	}
 }
 
-func runReadonly(ctx context.Context, cfg Config, req sqlRequest) (sqlResponse, error) {
+func runReadonly(ctx context.Context, cfg Config, p *pgxpool.Pool, req sqlRequest) (sqlResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, cfg.SQLTimeout+2e9)
 	defer cancel()
-	tx, err := cfg.Readonly.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	tx, err := p.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return sqlResponse{}, err
 	}

@@ -5,8 +5,9 @@
 #
 #   deploy/install-devbox
 #
-# The first run writes ~/.config/intelligence/devbox.env (mode 600) from DEVBOX_SERVER and
-# DEVBOX_TOKEN in the environment; later runs keep that file and only rebuild and restart.
+# The first run writes ~/.config/intelligence/devbox.env (mode 600) from DEVBOX_SERVER in the
+# environment; later runs keep that file and only rebuild and restart. A box with no key yet joins
+# an account: this prints its code, to enter on the server's account page.
 set -euo pipefail
 
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
@@ -15,10 +16,9 @@ unit_dir="$HOME/.config/systemd/user"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 
 if [ ! -f "$env_file" ]; then
-  : "${DEVBOX_SERVER:?set DEVBOX_SERVER (the server's base URL) for the first install}"
-  : "${DEVBOX_TOKEN:?set DEVBOX_TOKEN (the server's dev box token) for the first install}"
+  : "${DEVBOX_SERVER:?set DEVBOX_SERVER (the base URL of the server) for the first install}"
   mkdir -p "$(dirname "$env_file")"
-  (umask 077; printf 'DEVBOX_SERVER=%s\nDEVBOX_TOKEN=%s\n' "$DEVBOX_SERVER" "$DEVBOX_TOKEN" > "$env_file")
+  (umask 077; printf 'DEVBOX_SERVER=%s\n' "$DEVBOX_SERVER" > "$env_file")
   echo "wrote $env_file"
 fi
 
@@ -36,3 +36,14 @@ systemctl --user daemon-reload
 systemctl --user enable intelligence-devbox.service >/dev/null
 systemctl --user restart intelligence-devbox.service
 systemctl --user --no-pager status intelligence-devbox.service | head -5
+
+key_file="$HOME/.config/intelligence/devbox.key"
+if [ ! -s "$key_file" ]; then
+  echo "waiting for the box's code..."
+  for _ in $(seq 1 30); do
+    line=$(journalctl --user -u intelligence-devbox.service --since "-2min" --no-pager -o cat 2>/dev/null | grep "enter the code" | tail -1 || true)
+    if [ -n "$line" ]; then echo "$line"; break; fi
+    sleep 1
+  done
+  [ -n "${line:-}" ] || echo "no code yet: journalctl --user -u intelligence-devbox | grep 'enter the code'"
+fi

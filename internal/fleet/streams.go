@@ -34,3 +34,17 @@ func (r *Registry) Detach(ctx context.Context, box, stream string) error {
 	_, err := r.p.Exec(ctx, "UPDATE devboxes SET stream_id = NULL WHERE name = $1 AND stream_id = $2", box, stream)
 	return err
 }
+
+// Forget deletes everything box reported, in tx: it left its account.
+func Forget(ctx context.Context, tx pgx.Tx, box string) error {
+	for _, table := range []string{"devboxes", "host_minutes", "agent_minutes", "oom_kills", "host_probes", "usage_active", "usage_sources"} {
+		col := "box"
+		if table == "devboxes" { // its workspaces, agents, transcripts and commands go with it
+			col = "name"
+		}
+		if _, err := tx.Exec(ctx, "DELETE FROM "+table+" WHERE "+col+" = $1", box); err != nil {
+			return err
+		}
+	}
+	return nil
+}

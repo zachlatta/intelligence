@@ -22,7 +22,7 @@ func binServer(t *testing.T) (http.Handler, string) {
 		t.Fatal(err)
 	}
 	d := dbtest.New(t)
-	return New(Config{Context: t.Context(), Version: "c0ffee", DB: d.Owner, Readonly: d.Readonly, DevboxToken: "secret", BinDir: dir}), dir
+	return newServer(t, d, d.Owner, "c0ffee", func(c *Config) { c.BinDir = dir }), dir
 }
 
 func TestEveryResponseNamesTheServerVersion(t *testing.T) {

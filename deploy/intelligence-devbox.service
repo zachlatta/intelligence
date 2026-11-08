@@ -4,7 +4,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-# DEVBOX_SERVER and DEVBOX_TOKEN (and optional DEVBOX_NAME, DEVBOX_INTERVAL, DEVBOX_PASEO_HOME, DEVBOX_AUTOUPDATE)
+# DEVBOX_SERVER (and optional DEVBOX_KEY_FILE, DEVBOX_NAME, DEVBOX_INTERVAL, DEVBOX_PASEO_HOME, DEVBOX_AUTOUPDATE)
 EnvironmentFile=%h/.config/intelligence/devbox.env
 ExecStart=%h/.local/bin/intelligence devbox
 Restart=always

@@ -34,14 +34,14 @@ func TestTranscriptStoresEntriesWithReadableColumns(t *testing.T) {
 	storeT(t, r, devbox.TranscriptBatch{Box: "devbox-1", AgentID: "a1", Epoch: "ep1", Replace: true,
 		Entries: []devbox.TranscriptEntry{entry(1, 1, userMsg), entry(2, 4, asstMsg), entry(5, 5, toolCall)}})
 	var kind, tool, status, text string
-	if err := d.Readonly.QueryRow(ctx, `SELECT kind, tool, status, text FROM transcript_entries
+	if err := dbtest.Reader(t, d, "devbox-1").QueryRow(ctx, `SELECT kind, tool, status, text FROM transcript_entries
 		WHERE agent_id = 'a1' AND seq_start = 5`).Scan(&kind, &tool, &status, &text); err != nil {
 		t.Fatal(err)
 	}
 	if kind != "tool_call" || tool != "Bash" || status != "completed" || text != "" {
 		t.Errorf("tool call row: %q %q %q %q", kind, tool, status, text)
 	}
-	if err := d.Readonly.QueryRow(ctx, `SELECT kind, text FROM transcript_entries WHERE agent_id = 'a1' AND seq_start = 2`).
+	if err := dbtest.Reader(t, d, "devbox-1").QueryRow(ctx, `SELECT kind, text FROM transcript_entries WHERE agent_id = 'a1' AND seq_start = 2`).
 		Scan(&kind, &text); err != nil || kind != "assistant_message" || text != "on it" {
 		t.Errorf("message row: %q %q %v", kind, text, err)
 	}
@@ -148,7 +148,7 @@ func TestTranscriptStoresTextWithNULCharacters(t *testing.T) {
 	storeT(t, r, devbox.TranscriptBatch{Box: "devbox-1", AgentID: "a1", Epoch: "ep1", Replace: true, Entries: []devbox.TranscriptEntry{
 		entry(1, 1, `{"type": "assistant_message", "text": "a\u0000b \\u0000 c"}`)}})
 	var text string
-	if err := d.Readonly.QueryRow(ctx, "SELECT text FROM transcript_entries WHERE agent_id = 'a1'").Scan(&text); err != nil {
+	if err := dbtest.Reader(t, d, "devbox-1").QueryRow(ctx, "SELECT text FROM transcript_entries WHERE agent_id = 'a1'").Scan(&text); err != nil {
 		t.Fatal(err)
 	}
 	if text != "a�b \\u0000 c" {

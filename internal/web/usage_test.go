@@ -14,6 +14,7 @@ import (
 func seedUsage(t *testing.T, d dbtest.DB) time.Time {
 	t.Helper()
 	now := time.Now().UTC().Truncate(time.Second)
+	fixtureFor(t, d).keyFor(t, "devbox-1") // the box is the test account's
 	reg := fleet.New(d.Owner)
 	read := func(at time.Time, used float64, reset time.Time) {
 		rep := usage.Report{CollectedAt: at, Sources: []usage.Source{

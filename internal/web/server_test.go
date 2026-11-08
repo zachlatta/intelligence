@@ -20,6 +20,7 @@ func get(t *testing.T, h http.Handler, path string, header map[string]string) *h
 	for k, v := range header {
 		req.Header.Set(k, v)
 	}
+	signedIn(h, req)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
@@ -107,17 +108,17 @@ func TestShortVersionLeavesShortValuesAlone(t *testing.T) {
 
 var t0 = time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
 
-// dbServer is a server on its own test database, with the dev box token "secret".
+// dbServer is a server on its own test database, with an account signed in (testServer).
 func dbServer(t *testing.T) (http.Handler, dbtest.DB) {
 	t.Helper()
 	d := dbtest.New(t)
-	return New(Config{Context: t.Context(), Version: "v", DB: d.Owner, Readonly: d.Readonly, DevboxToken: "secret"}), d
+	return newServer(t, d, d.Owner, "v"), d
 }
 
 func dbServerVersion(t *testing.T, v string) (http.Handler, dbtest.DB) {
 	t.Helper()
 	d := dbtest.New(t)
-	return New(Config{Context: t.Context(), Version: v, DB: d.Owner, Readonly: d.Readonly, DevboxToken: "secret"}), d
+	return newServer(t, d, d.Owner, v), d
 }
 
 func boxes(t *testing.T, d dbtest.DB) []fleet.Box {
@@ -136,6 +137,7 @@ func post(t *testing.T, h http.Handler, path, token string, body []byte) *httpte
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
+	signedIn(h, req)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
@@ -189,6 +191,7 @@ func TestReportedBoxIsListedInTheAPIAndOnTheHomePage(t *testing.T) {
 
 func TestHomePageShowsSilentBoxOffline(t *testing.T) {
 	h, d := dbServer(t)
+	keyOf(t, h, "devbox-1") // the account's
 	if err := fleet.New(d.Owner).Record(t.Context(), sampleReport, time.Now().Add(-5*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +203,7 @@ func TestHomePageShowsSilentBoxOffline(t *testing.T) {
 
 func TestHomePageSaysWhenNoBoxHasReported(t *testing.T) {
 	h, _ := dbServer(t)
-	if page := get(t, h, "/", nil).Body.String(); !strings.Contains(page, "No dev boxes have reported yet") {
+	if page := get(t, h, "/", nil).Body.String(); !strings.Contains(page, "No dev boxes yet") {
 		t.Errorf("empty fleet message missing")
 	}
 }

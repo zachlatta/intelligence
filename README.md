@@ -3,7 +3,8 @@
 A web app, inspired by agent-factory, that will orchestrate coding agents through Paseo on a fleet
 of dev boxes. For now it shows each dev box's Paseo daemon and how much of each subscription plan
 (every Claude login, Codex, Muse, Antigravity) is used over time, and all of its state is readable
-with read-only SQL.
+with read-only SQL. People sign in to accounts with a password, and each account sees only its own
+dev boxes and everything they report.
 
 ## How it fits together
 
@@ -25,9 +26,25 @@ One binary, four commands:
 ### State and the read-only SQL contract
 
 All app state is in Postgres (`internal/db/migrations/`), in the `public` schema. `POST /api/sql`
-runs a query as a separate login role that can only SELECT, so every piece of state can be read
-and none written. Before each deploy the contract is checked (`db.CheckContract`): every relation is
-in `public` and readable by that role, and the role cannot write. The image build runs every test
+runs a query as the signed-in account's own login role, which can only SELECT, so every piece of
+the account's state can be read and none written.
+
+Each account reads only its own rows, and Postgres enforces it, not the app: every table has
+row-level security, and every view is `security_invoker`, so it reads as whoever queries it.
+Account *n*'s role is `<read-only role>_a<n>` (`db.AccountRoles`): a member of the read-only role
+(so it can SELECT what that role can), read-only by default, and the only role whose rows
+`current_account_id()` finds. That function reads `session_user`, which a query cannot change, so
+`SET ROLE`, `RESET ROLE` or a setting cannot read another account's rows. Its password is derived
+from the read-only role's, which only the server knows; the server sets it again on start. The
+shared read-only role itself reads as no account, so it sees no account's rows. An account owns
+the dev boxes it holds keys for (`devbox_keys`), and with them their workspaces, agents,
+transcripts, commands, resources, and the plan logins its boxes read. The page routes read through
+the same role, so a page shows an account only what its SQL would.
+
+Before each deploy the contract is checked (`db.CheckContract`): every relation is in `public` and
+readable by the read-only role, which cannot write or bypass row-level security; every table but
+`schema_migrations` has a row-level security policy; every view is `security_invoker`; and every
+account's role is read-only and bound by row-level security. The image build runs every test
 against a throwaway Postgres, so a broken contract fails the build and nothing deploys; the server
 checks it again against production when it starts.
 
@@ -51,6 +68,9 @@ The hierarchy is devboxes > workspaces > agents:
   (below), with the views `host_current`, `host_days` and `agent_days`.
 - `usage_accounts`, `usage_readings`, `usage_active` and `usage_sources`: subscription plans' usage
   over time (below), with the views `usage_current`, `usage_pace`, `usage_cycles` and `usage_totals`.
+- `accounts` (username, argon2id password hash, its role), `sessions` (signed-in browsers; a hash
+  of each cookie's token), `devbox_keys` (each box's account and a hash of its key) and
+  `devbox_enrollments` (boxes waiting for their code to be entered). An account reads only its own.
 - `schema_migrations`.
 
 Each report replaces its box's workspaces and agents. A box that cannot reach its daemon has none,
@@ -60,7 +80,7 @@ adds each workspace's agent counts.
 
 ### The stream
 
-A dev box dials `GET /api/devboxes/{box}/stream` (a WebSocket, with the dev box token) and keeps it
+A dev box dials `GET /api/devboxes/{box}/stream` (a WebSocket, with its own key) and keeps it
 open, dialing again 5 seconds after it drops. Each frame is a JSON `devbox.Frame`:
 
 - server to box: `hello` first (where its transcript copies end), then `command`s. The server's
@@ -79,6 +99,27 @@ server instance holds it.
 Server instances learn of each other's changes through Postgres `NOTIFY` on the `fleet` channel
 (`fleet.Changes`): a queued command, a command's update and a stream taking a box over. Nothing on
 the server polls.
+
+### Accounts and dev box keys
+
+An account is a username (lowercase letters, digits, `-` and `_`) and a password of at least 12
+characters, hashed with argon2id. Anyone who can reach the server can make one; an account starts
+with no dev boxes and sees nothing until one joins it. A signed-in browser holds a random session
+token in a cookie (HttpOnly, Secure, SameSite=Strict, 30 days); Postgres keeps only its hash.
+Signing out ends that session; changing the password ends all of them.
+
+There are no shared tokens. A dev box joins an account with a code:
+
+1. A box with no key (`~/.config/intelligence/devbox.key`) asks to join
+   (`POST /api/devbox-enrollments`), and logs a code such as `7KQ2-M9XD`, good for an hour.
+2. Someone signed in enters the code on `/account` (`POST /api/devbox-enrollments/claim`). A box
+   name another account holds cannot be claimed.
+3. The box, waiting on `POST /api/devbox-enrollments/{id}/key` with the secret only it holds, gets
+   its key at once (woken by the claim, not by polling), keeps it (mode 600) and streams with it.
+
+A key is good for its own box name only. Removing a box from its account (`/account`) deletes its
+key and everything it reported; the box's next dial is refused, so it forgets the key and asks to
+join again with a new code. A box that expires a code without its being entered asks for a new one.
 
 ### Commands
 
@@ -263,6 +304,10 @@ approval before CI runs.
 
 ## Routes
 
+Every page and read route needs a signed-in account and shows only its own boxes: a page sends a
+browser that is not signed in to `/login`, and an API route answers 401. Only `/healthz`, `/login`,
+the account and enrollment routes, the dev box binaries and the streams (with a box key) are open.
+
 - `GET /`: a collapsible tree of hosts > workspaces (with their project) > agents (with their status),
   with links to make a workspace on each host and start an agent in each workspace.
   Hosts start open, and so do workspaces with an agent running or needing attention; workspaces without
@@ -283,8 +328,10 @@ approval before CI runs.
   optional title, and the provider (those the box reports available), model, thinking and mode,
   which start as Opus 5.5, medium thinking, `bypassPermissions`. The page sends a command to the
   commands API, follows it through `/api/sql`, then opens the new agent's transcript; a failure
-  shows Paseo's reason. Both need a signed-in browser and send one to `/login` first.
-- `GET /login`: signs a browser in through the session API.
+  shows Paseo's reason.
+- `GET /login`: signs a browser in, or makes an account, through the account APIs.
+- `GET /account`: the account's dev boxes (online, when each joined and last used its key), how to
+  install one, the form that adds a box by its code, and the password form.
 - `GET /devboxes/{box}/agents/{id}`: one agent's transcript as turns: messages rendered as Markdown
   (raw HTML shown as text, unsafe links dropped, images named rather than loaded), thinking folded to
   a line, and runs of tool calls as a compact list that opens per call (commands with exit codes,
@@ -302,21 +349,34 @@ approval before CI runs.
   page (`X-Epoch`, `X-Agent-Status`).
 - `GET /devboxes/{box}/agents/{id}/entries/{seq}`: one entry whole.
 - `GET /api/devboxes/{box}/stream`: a dev box's stream (WebSocket). Needs `Authorization: Bearer
-  <DEVBOX_TOKEN>`; refused with 503 while the server has no token.
+  <the box's key>`, a key for that box name; else 401.
 - `POST /api/devboxes/{box}/commands` with `{"kind": "...", "args": {...}, "ttl": "10m"}`: queue a
-  command (kinds above; `ttl` from 1s to 24h). Needs `Authorization: Bearer <OPERATOR_TOKEN>`, or a
-  signed-in browser sending JSON from this origin (another site's request is refused with 403, a
-  non-JSON one with 415); refused with 503 while the server has no token. 202 with the command and
-  its `Location`; 400 for a kind or args that do not parse, 404 for a box that has never connected.
+  command (kinds above; `ttl` from 1s to 24h) for one of the account's boxes. 202 with the command
+  and its `Location`; 400 for a kind or args that do not parse, 404 for a box that is not the
+  account's.
 - `GET /api/devboxes/{box}/commands/{id}`, optionally `?wait=30s` (at most 1m): the command, after
-  waiting until it finishes or the wait is up (woken by its update, not polling).
+  waiting until it finishes or the wait is up (woken by its update, not polling). 404 for another
+  account's box.
 - `GET /api/devboxes`: the same, as JSON.
-- `POST /api/session` with `{"token"}`: signs a browser in with the operator token (204), as a
-  cookie holding a hash of the token (HttpOnly, Secure, SameSite=Strict, 30 days), so changing the
-  token signs every browser out. `DELETE /api/session` signs it out. Requests from another site are
-  refused.
+- `POST /api/accounts` with `{"username", "password"}`: makes an account and signs the browser in
+  (201); 409 for a taken username, 400 for one that cannot be used or a password under 12 characters.
+- `POST /api/session` with `{"username", "password"}`: signs a browser in (204, with the session
+  cookie); 401 for a wrong username or password. `DELETE /api/session` signs it out.
+- `PUT /api/account/password` with `{"current", "password"}`: changes the password, signs every
+  browser of the account out and this one in again (204).
+- `POST /api/devbox-enrollments` with `{"box"}` (from a dev box, no account): 201 with `{"id",
+  "code", "secret", "expiresAt"}`. `POST /api/devbox-enrollments/{id}/key?wait=50s` (at most 1m)
+  with `Authorization: Bearer <secret>`: 200 `{"key", "box"}` once the code is entered (once only),
+  202 while it is not, 404 once it expired.
+- `POST /api/devbox-enrollments/claim` with `{"code"}`: adds the box showing that code to the
+  account (200 `{"box"}`); 404 for no such code, 409 for a box name another account holds.
+- `DELETE /api/devboxes/{box}`: removes the box from the account, with everything it reported (204).
+
+Writes from a browser (everything but the dev box's own enrollment calls) must come from this
+origin (another site's request is refused with 403), and those with a body must send JSON (else
+415), which another site cannot send without the server's leave; the cookie is SameSite=Strict too.
 - `POST /api/sql` with `{"query": "...", "limit": 1000}`, or `GET /api/sql?q=...&limit=`: one
-  read-only query. Returns `{"columns": [{"name", "type"}], "rows": [[...]], "rowCount",
+  read-only query, as the account's own role, so it reads only the account's rows. Returns `{"columns": [{"name", "type"}], "rows": [[...]], "rowCount",
   "truncated"}`, or 400 with `{"error"}`. At most 10000 rows; 5 seconds per query.
 - `GET /api/devbox/binary/{os}/{arch}`: the dev box binary at the server's version.
 - `GET /ui.css`: the one stylesheet every page shares, with the top bar (`layout.html`) that links the
@@ -324,8 +384,7 @@ approval before CI runs.
 - `GET /healthz`: `{"status":"ok","version":"<commit>","database":"ok"}`, 503 when the database is
   unreachable.
 
-The read routes are open to the tailnet. Changing anything on a box needs the operator token, or a
-browser signed in with it. Pages read through SQL and write through the API (see `AGENTS.md`).
+Pages read through SQL and write through the API (see `AGENTS.md`).
 
 ## Configuration
 
@@ -333,10 +392,8 @@ Server:
 
 - `DATABASE_URL`: the app's database, as a role that owns its tables and can create roles.
 - `READONLY_DATABASE_URL`: the same database as the read-only role. The server creates or updates
-  that role (name and password from the URL) and its grants on every start.
-- `DEVBOX_TOKEN`: the token dev boxes stream with.
-- `OPERATOR_TOKEN`: the token that may send dev boxes commands, and signs a browser in. Unset,
-  commands and sign-in are refused.
+  that role (name and password from the URL) and its grants on every start. Each account's role
+  is named after it, and its password derived from its password (keep the name under 40 characters).
 - `PORT`: listen port, default `8080`.
 - `DEVBOX_BINARIES`: where the dev box binaries are; default `/usr/local/share/intelligence/devbox`.
 
@@ -346,7 +403,8 @@ argument); else `SOURCE_COMMIT` at run time, else Go's VCS stamp, else `dev`.
 Dev box (in `~/.config/intelligence/devbox.env`):
 
 - `DEVBOX_SERVER`: the server's base URL.
-- `DEVBOX_TOKEN`: the server's dev box token.
+- `DEVBOX_KEY_FILE`: optional; where the box keeps its key; default `~/.config/intelligence/devbox.key`.
+  With none there, the box joins an account (above).
 - `DEVBOX_NAME`: optional; default the lowercased hostname.
 - `DEVBOX_INTERVAL`: optional time between re-reads of the daemon's status (reported when it
   changes); default `15s`.
@@ -368,7 +426,8 @@ Probe (in `/etc/intelligence/probe.env`, written by `deploy/install-probe`):
   `tailscale serve` publishes it over HTTPS to the tailnet only. Host details are kept outside this
   repo.
 - Dev box: once per box, from a checkout of `main`, run `deploy/install-devbox` (the first run needs
-  `DEVBOX_SERVER` and `DEVBOX_TOKEN` in the environment). After that the box updates itself.
+  `DEVBOX_SERVER` in the environment). It prints the box's code: enter it on the server's `/account`
+  page. After that the box updates itself.
   Logs: `journalctl --user -u intelligence-devbox`.
 - eBPF probe: once per Linux box, after the dev box client, run `deploy/install-probe` (it needs
   sudo). After that the probe updates itself. Logs: `journalctl -u intelligence-probe`.

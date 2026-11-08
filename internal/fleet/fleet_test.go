@@ -188,14 +188,14 @@ func TestStatusViewsCountWork(t *testing.T) {
 	attach(t, New(d.Owner), "devbox-1", time.Now())
 	var online bool
 	var nw, na, nr int
-	if err := d.Readonly.QueryRow(ctx, "SELECT online, workspaces, agents, running_agents FROM devbox_status").Scan(&online, &nw, &na, &nr); err != nil {
+	if err := dbtest.Reader(t, d, "devbox-1").QueryRow(ctx, "SELECT online, workspaces, agents, running_agents FROM devbox_status").Scan(&online, &nw, &na, &nr); err != nil {
 		t.Fatal(err)
 	}
 	if !online || nw != 3 || na != 3 || nr != 1 {
 		t.Errorf("devbox_status: online %v workspaces %d agents %d running %d", online, nw, na, nr)
 	}
 	var wa, wr int
-	if err := d.Readonly.QueryRow(ctx, "SELECT agents, running_agents FROM workspace_status WHERE id = 'w1'").Scan(&wa, &wr); err != nil {
+	if err := dbtest.Reader(t, d, "devbox-1").QueryRow(ctx, "SELECT agents, running_agents FROM workspace_status WHERE id = 'w1'").Scan(&wa, &wr); err != nil {
 		t.Fatal(err)
 	}
 	if wa != 2 || wr != 1 {

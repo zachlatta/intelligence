@@ -27,6 +27,7 @@ func call(t *testing.T, h http.Handler, method, path, body string, header map[st
 	for _, c := range cookies {
 		req.AddCookie(c)
 	}
+	signedIn(h, req)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
@@ -34,44 +35,95 @@ func call(t *testing.T, h http.Handler, method, path, body string, header map[st
 
 var sameOriginFetch = map[string]string{"Sec-Fetch-Site": "same-origin"}
 
-// signInAs signs in with the operator token "op" and returns the session cookie.
+// signInAs signs the test account in through the session API and returns its cookie.
 func signInAs(t *testing.T, h http.Handler) *http.Cookie {
 	t.Helper()
-	rec := call(t, h, http.MethodPost, "/api/session", `{"token":"op"}`, sameOriginFetch)
+	rec := call(t, anon(h), http.MethodPost, "/api/session", `{"username":"someone","password":"`+testPassword+`"}`, sameOriginFetch)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("sign in: %d %s", rec.Code, rec.Body)
 	}
+	return cookieOf(t, rec)
+}
+
+func cookieOf(t *testing.T, rec *httptest.ResponseRecorder) *http.Cookie {
+	t.Helper()
 	for _, c := range rec.Result().Cookies() {
 		if c.Name == sessionCookie {
 			return c
 		}
 	}
-	t.Fatal("sign in set no session cookie")
+	t.Fatalf("no session cookie: %d %s", rec.Code, rec.Body)
 	return nil
 }
 
-func TestSessionAPISignsABrowserInWithTheOperatorToken(t *testing.T) {
+func TestSignUpSignInAndSignOut(t *testing.T) {
 	h, _ := cmdServer(t)
-	for _, tok := range []string{"", "wrong", "secret"} { // the dev box token is not the operator's
-		rec := call(t, h, http.MethodPost, "/api/session", `{"token":"`+tok+`"}`, sameOriginFetch)
-		if rec.Code != http.StatusUnauthorized || len(rec.Result().Cookies()) > 0 {
-			t.Errorf("token %q: %d, cookies %v", tok, rec.Code, rec.Result().Cookies())
+	h = anon(h)
+	up := call(t, h, http.MethodPost, "/api/accounts", `{"username":"Ann","password":"ann's long password"}`, sameOriginFetch)
+	if up.Code != http.StatusCreated || !strings.Contains(up.Body.String(), `"username":"ann"`) {
+		t.Fatalf("sign up: %d %s", up.Code, up.Body)
+	}
+	c := cookieOf(t, up)
+	if !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteStrictMode || c.MaxAge <= 0 || c.Path != "/" || strings.Contains(c.Value, "password") {
+		t.Errorf("cookie = %+v", c)
+	}
+	if page := call(t, h, http.MethodGet, "/", "", nil, c); page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "ann") {
+		t.Errorf("home page after sign up: %d", page.Code)
+	}
+	for body, want := range map[string]int{
+		`{"username":"ann","password":"ann's long password"}`:     http.StatusConflict,
+		`{"username":"bob","password":"short"}`:                   http.StatusBadRequest,
+		`{"username":"no spaces","password":"a long enough one"}`: http.StatusBadRequest,
+		`{"username":"bob"}`:                                      http.StatusBadRequest,
+		`{"token":"anything"}`:                                    http.StatusBadRequest,
+	} {
+		if rec := call(t, h, http.MethodPost, "/api/accounts", body, sameOriginFetch); rec.Code != want || len(rec.Result().Cookies()) > 0 {
+			t.Errorf("sign up %s: %d, want %d", body, rec.Code, want)
 		}
 	}
-	if rec := call(t, h, http.MethodPost, "/api/session", `{"token":"op"}`, map[string]string{"Sec-Fetch-Site": "cross-site"}); rec.Code != http.StatusForbidden {
+	cross := map[string]string{"Sec-Fetch-Site": "cross-site"}
+	if rec := call(t, h, http.MethodPost, "/api/accounts", `{"username":"eve","password":"eve's long password"}`, cross); rec.Code != http.StatusForbidden {
+		t.Errorf("cross-site sign up: %d", rec.Code)
+	}
+	for _, body := range []string{`{"username":"ann","password":"not ann's password"}`, `{"username":"nobody","password":"ann's long password"}`} {
+		if rec := call(t, h, http.MethodPost, "/api/session", body, sameOriginFetch); rec.Code != http.StatusUnauthorized || len(rec.Result().Cookies()) > 0 {
+			t.Errorf("sign in %s: %d", body, rec.Code)
+		}
+	}
+	if rec := call(t, h, http.MethodPost, "/api/session", `{"username":"ann","password":"ann's long password"}`, cross); rec.Code != http.StatusForbidden {
 		t.Errorf("cross-site sign in: %d", rec.Code)
 	}
-	c := signInAs(t, h)
-	if !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteStrictMode || c.MaxAge <= 0 || c.Path != "/" || strings.Contains(c.Value, "op") {
-		t.Errorf("cookie = %+v: it holds a hash of the token, never the token", c)
-	}
-	out := call(t, h, http.MethodDelete, "/api/session", "", sameOriginFetch, c)
-	if out.Code != http.StatusNoContent || len(out.Result().Cookies()) == 0 || out.Result().Cookies()[0].MaxAge >= 0 {
+	in := call(t, h, http.MethodPost, "/api/session", `{"username":"ANN","password":"ann's long password"}`, sameOriginFetch)
+	c2 := cookieOf(t, in)
+	out := call(t, h, http.MethodDelete, "/api/session", "", sameOriginFetch, c2)
+	if out.Code != http.StatusNoContent || out.Result().Cookies()[0].MaxAge >= 0 {
 		t.Errorf("sign out: %d %v", out.Code, out.Result().Cookies())
 	}
-	nobody, _ := dbServer(t) // no OPERATOR_TOKEN
-	if rec := call(t, nobody, http.MethodPost, "/api/session", `{"token":""}`, sameOriginFetch); rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("no OPERATOR_TOKEN: %d, want 503", rec.Code)
+	if rec := call(t, h, http.MethodGet, "/", "", nil, c2); rec.Code != http.StatusSeeOther {
+		t.Errorf("a signed-out cookie still reads: %d", rec.Code)
+	}
+	if rec := call(t, h, http.MethodGet, "/", "", nil, c); rec.Code != http.StatusOK {
+		t.Errorf("signing one browser out signed out another: %d", rec.Code)
+	}
+}
+
+func TestChangingThePasswordSignsOutOtherBrowsers(t *testing.T) {
+	h, _ := cmdServer(t)
+	other := signInAs(t, h)
+	this := signInAs(t, h)
+	path := "/api/account/password"
+	if rec := call(t, anon(h), http.MethodPut, path, `{"current":"wrong","password":"a brand new password"}`, sameOriginFetch, this); rec.Code != http.StatusUnauthorized {
+		t.Errorf("wrong current password: %d", rec.Code)
+	}
+	rec := call(t, anon(h), http.MethodPut, path, `{"current":"`+testPassword+`","password":"a brand new password"}`, sameOriginFetch, this)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("change: %d %s", rec.Code, rec.Body)
+	}
+	if got := call(t, anon(h), http.MethodGet, "/", "", nil, cookieOf(t, rec)); got.Code != http.StatusOK {
+		t.Errorf("this browser's new session: %d", got.Code)
+	}
+	if got := call(t, anon(h), http.MethodGet, "/", "", nil, other); got.Code != http.StatusSeeOther {
+		t.Errorf("another browser stayed signed in: %d", got.Code)
 	}
 }
 
@@ -87,10 +139,10 @@ func TestTheCommandsAPITakesABrowserSession(t *testing.T) {
 		"Origin": "https://box.example"}, c); rec.Code != http.StatusAccepted {
 		t.Errorf("same-origin behind a proxy: %d %s", rec.Code, rec.Body)
 	}
-	if rec := call(t, h, http.MethodPost, path, archiveA1, sameOriginFetch); rec.Code != http.StatusUnauthorized {
+	if rec := call(t, anon(h), http.MethodPost, path, archiveA1, sameOriginFetch); rec.Code != http.StatusUnauthorized {
 		t.Errorf("no session: %d", rec.Code)
 	}
-	forged := &http.Cookie{Name: sessionCookie, Value: "op"}
+	forged := &http.Cookie{Name: sessionCookie, Value: "made-up"}
 	if rec := call(t, h, http.MethodPost, path, archiveA1, sameOriginFetch, forged); rec.Code != http.StatusUnauthorized {
 		t.Errorf("forged session: %d", rec.Code)
 	}
@@ -114,21 +166,21 @@ func TestTheCommandsAPITakesABrowserSession(t *testing.T) {
 	if rec.Code != http.StatusUnsupportedMediaType {
 		t.Errorf("text/plain with a session: %d, want 415", rec.Code)
 	}
-	if rec := call(t, h, http.MethodPost, path, archiveA1, nil); rec.Code != http.StatusUnauthorized {
-		t.Errorf("neither token nor session: %d", rec.Code)
+	if rec := call(t, anon(h), http.MethodPost, path, archiveA1, map[string]string{"Authorization": "Bearer " + keyOf(t, h, "devbox-1")}); rec.Code != http.StatusUnauthorized {
+		t.Errorf("a dev box's key is no session: %d", rec.Code)
 	}
 }
 
 func TestSpawnPagesNeedASession(t *testing.T) {
 	h, _ := cmdServer(t)
 	for _, p := range []string{newAgentPath, "/devboxes/devbox-1/workspaces/new"} {
-		rec := get(t, h, p, nil)
+		rec := get(t, anon(h), p, nil)
 		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login?next="+url.QueryEscape(p) {
 			t.Errorf("%s with no session: %d %q", p, rec.Code, rec.Header().Get("Location"))
 		}
 	}
 	login := get(t, h, "/login?next="+url.QueryEscape(newAgentPath), nil).Body.String()
-	for _, want := range []string{`type="password"`, "/api/session", `"` + newAgentPath + `"`} {
+	for _, want := range []string{`type="password"`, "/api/session", "/api/accounts", `"` + newAgentPath + `"`} {
 		if !strings.Contains(login, want) {
 			t.Errorf("login page misses %s", want)
 		}
@@ -196,7 +248,7 @@ func TestHomePageLinksToSpawning(t *testing.T) {
 	h, _ := cmdServer(t)
 	home := get(t, h, "/", nil).Body.String()
 	for _, want := range []string{`href="` + newAgentPath + `"`, `href="/devboxes/devbox-1/workspaces/w-idle/agents/new"`,
-		`href="/devboxes/devbox-1/workspaces/new"`, `href="/login"`} {
+		`href="/devboxes/devbox-1/workspaces/new"`, `href="/account#add"`} {
 		if !strings.Contains(home, want) {
 			t.Errorf("home page misses %s", want)
 		}
@@ -211,7 +263,7 @@ func TestHomePageLinksToSpawning(t *testing.T) {
 func TestCommandProgressIsReadableThroughSQL(t *testing.T) {
 	h, _ := cmdServer(t)
 	b := openStream(t, h, "devbox-1")
-	_, cmd, _ := enqueue(t, h, "devbox-1", "op", `{"kind":"create_workspace","args":{"cwd":"/w/app","worktree":true,
+	_, cmd, _ := enqueue(t, h, "devbox-1", "", `{"kind":"create_workspace","args":{"cwd":"/w/app","worktree":true,
 		"agent":{"provider":"claude","prompt":"go"}}}`)
 	progress := func() []any {
 		t.Helper()

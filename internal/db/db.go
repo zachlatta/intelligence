@@ -115,7 +115,10 @@ func EnsureReadonlyRole(ctx context.Context, p *pgxpool.Pool, role, password str
 
 // CheckContract verifies that all app state is readable, and only readable, by the read-only pool:
 // no table or view outside the public schema, every relation in it readable by SELECT, and no write
-// possible. It returns every failure it finds.
+// possible. And that each account reads only its own rows: every table has row-level security
+// (schema_migrations, which holds no account's rows, aside), every view reads as whoever queries
+// it, and every account's role is read-only and bound by row-level security. It returns every
+// failure it finds.
 func CheckContract(ctx context.Context, owner, readonly *pgxpool.Pool) error {
 	var problems []string
 	rows, err := owner.Query(ctx, `SELECT n.nspname, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -151,6 +154,7 @@ func CheckContract(ctx context.Context, owner, readonly *pgxpool.Pool) error {
 			problems = append(problems, fmt.Sprintf("read-only role cannot read %s: %v", rel[1], err))
 		}
 	}
+	problems = append(problems, scopeProblems(ctx, owner)...)
 	// a write must fail even when attempted: roll back whatever happens
 	tx, err := readonly.Begin(ctx)
 	if err != nil {
@@ -161,13 +165,16 @@ func CheckContract(ctx context.Context, owner, readonly *pgxpool.Pool) error {
 	if werr == nil {
 		problems = append(problems, "read-only role can write: an insert into schema_migrations succeeded")
 	}
-	var super, readOnlyDefault bool
-	if err := readonly.QueryRow(ctx, "SELECT rolsuper, current_setting('default_transaction_read_only') = 'on' FROM pg_roles WHERE rolname = current_user").
-		Scan(&super, &readOnlyDefault); err != nil {
+	var super, bypass, readOnlyDefault bool
+	if err := readonly.QueryRow(ctx, "SELECT rolsuper, rolbypassrls, current_setting('default_transaction_read_only') = 'on' FROM pg_roles WHERE rolname = current_user").
+		Scan(&super, &bypass, &readOnlyDefault); err != nil {
 		return err
 	}
 	if super {
 		problems = append(problems, "read-only role is a superuser, so it can write")
+	}
+	if bypass {
+		problems = append(problems, "read-only role bypasses row-level security, so it reads every account's rows")
 	}
 	if !readOnlyDefault {
 		problems = append(problems, "read-only role's sessions are not read-only by default, so it could write")
@@ -176,4 +183,69 @@ func CheckContract(ctx context.Context, owner, readonly *pgxpool.Pool) error {
 		return fmt.Errorf("read-only SQL contract broken:\n- %s", strings.Join(problems, "\n- "))
 	}
 	return nil
+}
+
+// unscopedTables may hold rows every account reads: they hold no account's state.
+var unscopedTables = []string{"schema_migrations"}
+
+// scopeProblems is how an account could read rows that are not its own.
+func scopeProblems(ctx context.Context, owner *pgxpool.Pool) []string {
+	var problems []string
+	rows, err := owner.Query(ctx, `SELECT c.relname, c.relkind::text, c.relrowsecurity,
+		EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid AND p.polcmd IN ('r', '*')),
+		coalesce('security_invoker=true' = ANY (c.reloptions) OR 'security_invoker=on' = ANY (c.reloptions), false)
+		FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f') ORDER BY 1`)
+	if err != nil {
+		return []string{"cannot list relations: " + err.Error()}
+	}
+	type rel struct {
+		name, kind             string
+		rls, policy, asInvoker bool
+	}
+	rels, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (rel, error) {
+		var v rel
+		return v, r.Scan(&v.name, &v.kind, &v.rls, &v.policy, &v.asInvoker)
+	})
+	if err != nil {
+		return []string{"cannot list relations: " + err.Error()}
+	}
+	for _, r := range rels {
+		switch {
+		case slices.Contains(unscopedTables, r.name):
+		case r.kind == "v" && !r.asInvoker:
+			problems = append(problems, fmt.Sprintf("view %s reads as its owner, past row-level security: set security_invoker", r.name))
+		case r.kind == "m" || r.kind == "f":
+			problems = append(problems, fmt.Sprintf("%s cannot be scoped to an account with row-level security: use a table or a view", r.name))
+		case (r.kind == "r" || r.kind == "p") && (!r.rls || !r.policy):
+			problems = append(problems, fmt.Sprintf("table %s has no row-level security policy, so every account would read all of it", r.name))
+		}
+	}
+	rows, err = owner.Query(ctx, `SELECT a.role_name, r.rolname IS NOT NULL, coalesce(r.rolsuper OR r.rolbypassrls OR r.rolcreaterole, false),
+		EXISTS (SELECT 1 FROM pg_db_role_setting s WHERE s.setrole = r.oid AND 'default_transaction_read_only=on' = ANY (s.setconfig))
+		FROM accounts a LEFT JOIN pg_roles r ON r.rolname = a.role_name ORDER BY a.id`)
+	if err != nil {
+		return append(problems, "cannot list account roles: "+err.Error())
+	}
+	type role struct {
+		name                       string
+		exists, powerful, readOnly bool
+	}
+	roles, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (role, error) {
+		var v role
+		return v, r.Scan(&v.name, &v.exists, &v.powerful, &v.readOnly)
+	})
+	if err != nil {
+		return append(problems, "cannot list account roles: "+err.Error())
+	}
+	for _, r := range roles {
+		switch {
+		case !r.exists: // made when its account first reads
+		case r.powerful:
+			problems = append(problems, fmt.Sprintf("account role %s is a superuser, bypasses row-level security or creates roles", r.name))
+		case !r.readOnly:
+			problems = append(problems, fmt.Sprintf("account role %s's sessions are not read-only by default, so it could write", r.name))
+		}
+	}
+	return problems
 }

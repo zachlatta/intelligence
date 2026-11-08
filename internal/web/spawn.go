@@ -1,26 +1,12 @@
 package web
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
 	_ "embed"
-	"encoding/hex"
-	"encoding/json"
 	"html/template"
-	"mime"
 	"net/http"
-	"net/url"
 	"strings"
-	"time"
 
 	"github.com/zachlatta/intelligence/internal/fleet"
-)
-
-// The browser holds the operator's session in sessionCookie: a hash of the operator token, so the
-// cookie is no use where the token is wanted, and changing the token signs every browser out.
-const (
-	sessionCookie = "intelligence_operator"
-	sessionMaxAge = 30 * 24 * time.Hour
 )
 
 // commandProgressSQL is how the spawn pages follow their command, through the read-only SQL API
@@ -40,93 +26,11 @@ var thinkingLevels = []string{"low", "medium", "high", "xhigh", "max"}
 //go:embed spawn.html
 var spawnHTML string
 
-var spawnTmpl = template.Must(template.New("spawn").Funcs(template.FuncMap{"short": short}).Parse(spawnHTML + layoutHTML))
+//go:embed account.html
+var accountHTML string
 
-func sessionValue(token string) string {
-	sum := sha256.Sum256([]byte("intelligence operator session\x00" + token))
-	return hex.EncodeToString(sum[:])
-}
-
-// hasSession says whether r carries the operator's session cookie.
-func hasSession(cfg Config, r *http.Request) bool {
-	if cfg.OperatorToken == "" {
-		return false
-	}
-	c, err := r.Cookie(sessionCookie)
-	return err == nil && subtle.ConstantTimeCompare([]byte(c.Value), []byte(sessionValue(cfg.OperatorToken))) == 1
-}
-
-// sameOrigin refuses a browser request another site started. The cookie is SameSite=Strict as
-// well; this also stops a sibling site (same-site, another origin). Sec-Fetch-Site, which the
-// browser sets, decides when present: behind a proxy the Host seen here need not be the one the
-// browser used. Without it, Origin (if any) must name this host.
-func sameOrigin(r *http.Request) bool {
-	if s := r.Header.Get("Sec-Fetch-Site"); s != "" {
-		return s == "same-origin" || s == "none"
-	}
-	if o := r.Header.Get("Origin"); o != "" {
-		u, err := url.Parse(o)
-		return err == nil && u.Host != "" && (u.Host == r.Host || u.Host == r.Header.Get("X-Forwarded-Host"))
-	}
-	return true
-}
-
-// operatorOrSession answers the request itself unless it carries the operator token, or is a
-// same-origin JSON request from a signed-in browser. JSON is required of a browser because another
-// site cannot send it without the server's leave.
-func operatorOrSession(cfg Config, w http.ResponseWriter, r *http.Request) bool {
-	if _, ok := bearerOf(r); ok || !hasSession(cfg, r) {
-		return operatorAuthorized(cfg, w, r)
-	}
-	if !sameOrigin(r) {
-		http.Error(w, "cross-site request refused", http.StatusForbidden)
-		return false
-	}
-	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/json" {
-		http.Error(w, "send JSON", http.StatusUnsupportedMediaType)
-		return false
-	}
-	return true
-}
-
-// signIn is POST /api/session {"token"}: it signs a browser in with the operator token.
-func signIn(cfg Config) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if cfg.OperatorToken == "" {
-			http.Error(w, "this server has no operator token (OPERATOR_TOKEN)", http.StatusServiceUnavailable)
-			return
-		}
-		if !sameOrigin(r) {
-			http.Error(w, "cross-site request refused", http.StatusForbidden)
-			return
-		}
-		var req struct {
-			Token string `json:"token"`
-		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
-			http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-		if subtle.ConstantTimeCompare([]byte(req.Token), []byte(cfg.OperatorToken)) != 1 {
-			http.Error(w, "that is not the operator token", http.StatusUnauthorized)
-			return
-		}
-		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: sessionValue(cfg.OperatorToken), Path: "/",
-			MaxAge: int(sessionMaxAge.Seconds()), HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
-		w.WriteHeader(http.StatusNoContent)
-	}
-}
-
-// signOut is DELETE /api/session.
-func signOut(w http.ResponseWriter, r *http.Request) {
-	if !sameOrigin(r) {
-		http.Error(w, "cross-site request refused", http.StatusForbidden)
-		return
-	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Path: "/", MaxAge: -1, HttpOnly: true, Secure: true,
-		SameSite: http.SameSiteStrictMode})
-	w.WriteHeader(http.StatusNoContent)
-}
+var spawnTmpl = template.Must(template.New("spawn").Funcs(template.FuncMap{"short": short, "ago": ago}).
+	Parse(spawnHTML + layoutHTML + accountHTML))
 
 // localPath is next if it is a path on this site, else "/".
 func localPath(next string) string {
@@ -141,22 +45,6 @@ func render(w http.ResponseWriter, name string, data map[string]any) {
 	if err := spawnTmpl.ExecuteTemplate(w, name, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
-}
-
-func loginPage(cfg Config) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		render(w, "login", map[string]any{"Version": cfg.Version, "Next": localPath(r.URL.Query().Get("next")),
-			"Configured": cfg.OperatorToken != ""})
-	}
-}
-
-// needSession sends a browser with no session to sign in, and back here after.
-func needSession(cfg Config, w http.ResponseWriter, r *http.Request) bool {
-	if hasSession(cfg, r) {
-		return true
-	}
-	http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.Path), http.StatusSeeOther)
-	return false
 }
 
 // boxNamed is the box called name, or false.
@@ -189,9 +77,6 @@ func spawnData(cfg Config, b fleet.Box) map[string]any {
 // newAgentPage is the form that starts an agent in a workspace.
 func newAgentPage(cfg Config, reg *fleet.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !needSession(cfg, w, r) {
-			return
-		}
 		b, ok, err := boxNamed(reg, r, r.PathValue("box"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -220,9 +105,6 @@ type repository struct{ Root, Project string }
 // repositories by default, with an agent in it.
 func newWorkspacePage(cfg Config, reg *fleet.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !needSession(cfg, w, r) {
-			return
-		}
 		b, ok, err := boxNamed(reg, r, r.PathValue("box"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

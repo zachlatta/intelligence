@@ -25,14 +25,23 @@ const streamPing = 20 * time.Second
 // stream serves a box's stream: hello, then the box's frames, each acked, while commands go down.
 // The stream takes the box over from any stream it had, on this server instance or another, and
 // ends when a newer one does.
-func stream(cfg Config, reg *fleet.Registry, changes *fleet.Changes) http.HandlerFunc {
+// A box streams with its own key (accounts.Store.Collect), which is good for its name only.
+func stream(a *app) http.HandlerFunc {
+	cfg, reg, changes := a.cfg, a.reg, a.changes
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !devboxAuthorized(cfg, w, r) {
-			return
-		}
 		box := r.PathValue("box")
 		if !devbox.ValidName(box) {
 			http.Error(w, "bad dev box name", http.StatusBadRequest)
+			return
+		}
+		key, _ := bearerOf(r)
+		ok, err := a.store.BoxKey(r.Context(), box, key)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !ok {
+			http.Error(w, "bad or missing dev box key: join an account (POST /api/devbox-enrollments)", http.StatusUnauthorized)
 			return
 		}
 		cursors, err := reg.TranscriptCursors(r.Context(), box)
@@ -209,10 +218,11 @@ const maxCommand = 1 << 20
 // maxCommandTTL is the longest a command may wait for its box.
 const maxCommandTTL = 24 * time.Hour
 
-// enqueueCommand queues a command for a box: {"kind", "args", "ttl"}. It needs the operator token.
-func enqueueCommand(cfg Config, reg *fleet.Registry) http.HandlerFunc {
+// enqueueCommand queues a command for one of v's boxes: {"kind", "args", "ttl"}.
+func enqueueCommand(a *app, v viewer) http.HandlerFunc {
+	cfg, reg := a.cfg, a.reg
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !operatorOrSession(cfg, w, r) {
+		if !a.owned(v, w, r, r.PathValue("box")) {
 			return
 		}
 		var req struct {
@@ -259,9 +269,14 @@ func enqueueCommand(cfg Config, reg *fleet.Registry) http.HandlerFunc {
 // maxCommandWait bounds ?wait= on a command read.
 const maxCommandWait = time.Minute
 
-// showCommand returns a command; with ?wait=30s it waits up to that long for it to finish.
-func showCommand(reg *fleet.Registry, changes *fleet.Changes) http.HandlerFunc {
+// showCommand returns a command to one of v's boxes; with ?wait=30s it waits up to that long for
+// it to finish.
+func showCommand(a *app, v viewer) http.HandlerFunc {
+	reg, changes := a.reg, a.changes
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !a.owned(v, w, r, r.PathValue("box")) {
+			return
+		}
 		var wait time.Duration
 		if v := r.URL.Query().Get("wait"); v != "" {
 			d, err := time.ParseDuration(v)
@@ -296,11 +311,6 @@ func showCommand(reg *fleet.Registry, changes *fleet.Changes) http.HandlerFunc {
 			}
 		}
 	}
-}
-
-// operatorAuthorized answers the request itself unless it carries the operator token.
-func operatorAuthorized(cfg Config, w http.ResponseWriter, r *http.Request) bool {
-	return bearerAuthorized(cfg.OperatorToken, "commands are not configured on this server (no OPERATOR_TOKEN)", "operator", w, r)
 }
 
 func bearerOf(r *http.Request) (string, bool) {

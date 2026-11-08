@@ -77,11 +77,15 @@ const MaxFrame = 16 << 20
 // Link is a dev box's stream to the server. Run keeps it connected; the send methods fail with
 // ErrNotConnected while it is not, and the caller tries again later.
 type Link struct {
-	Server, Token, Box string
-	HTTP               *http.Client  // for the dial
-	RetryEvery         time.Duration // between dials; default 5s
-	AckTimeout         time.Duration // a frame not acked in this long drops the stream; default 30s
-	PingEvery          time.Duration // ping the server this often; one not answered in AckTimeout drops the stream; default 30s
+	Server, Box string
+	// Keys is where the box's key comes from (joining an account when it has none); a key the
+	// server refuses is forgotten there. Token is a fixed key instead, when Keys is nil.
+	Keys       *Keys
+	Token      string
+	HTTP       *http.Client  // for the dial
+	RetryEvery time.Duration // between dials; default 5s
+	AckTimeout time.Duration // a frame not acked in this long drops the stream; default 30s
+	PingEvery  time.Duration // ping the server this often; one not answered in AckTimeout drops the stream; default 30s
 	// ServerVersion is called with the server's version after every dial, also a refused one, so
 	// a box can update to the server it cannot talk to.
 	ServerVersion func(v string)
@@ -161,14 +165,27 @@ func (l *Link) url() string {
 
 // session is one stream: dial, read the hello, then dispatch frames until it ends.
 func (l *Link) session(ctx context.Context) error {
+	key := l.Token
+	if l.Keys != nil {
+		if l.Keys.ServerVersion == nil {
+			l.Keys.ServerVersion = l.ServerVersion
+		}
+		var err error
+		if key, err = l.Keys.Key(ctx); err != nil {
+			return fmt.Errorf("no key: %w", err)
+		}
+	}
 	dialCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	conn, resp, err := websocket.Dial(dialCtx, l.url(), &websocket.DialOptions{HTTPClient: l.HTTP,
-		HTTPHeader: http.Header{"Authorization": {"Bearer " + l.Token}}})
+		HTTPHeader: http.Header{"Authorization": {"Bearer " + key}}})
 	if resp != nil && l.ServerVersion != nil {
 		l.ServerVersion(resp.Header.Get(VersionHeader))
 	}
 	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusUnauthorized && l.Keys != nil {
+			l.Keys.Refused(key) // removed from its account, or never in one: join again
+		}
 		if resp != nil && resp.StatusCode != http.StatusSwitchingProtocols {
 			return fmt.Errorf("stream refused: %s", resp.Status)
 		}

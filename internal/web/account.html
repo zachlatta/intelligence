@@ -1,0 +1,111 @@
+{{define "login"}}{{template "head" "Sign in"}}
+<div class="page-head"><div><h1>Sign in</h1>
+<p class="sub">An account sees only the dev boxes added to it. This browser stays signed in for 30 days.</p></div></div>
+<form id="login" class="card form" data-next="{{.Next}}">
+  <label for="username">Username</label>
+  <input id="username" name="username" autocomplete="username" autocapitalize="none" autofocus required>
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" required>
+  <div class="form-actions"><button class="btn primary">Sign in</button></div>
+  <p id="login-progress" class="progress"></p>
+</form>
+<h2 class="section-title">New here?</h2>
+<form id="signup" class="card form" data-next="{{.Next}}">
+  <label for="new-username">Username <span class="meta">(lowercase letters, digits, - and _)</span></label>
+  <input id="new-username" name="username" autocomplete="username" autocapitalize="none" pattern="[a-zA-Z0-9][a-zA-Z0-9_\-]{0,31}" required>
+  <label for="new-password">Password <span class="meta">(at least 12 characters)</span></label>
+  <input id="new-password" name="password" type="password" autocomplete="new-password" minlength="12" required>
+  <div class="form-actions"><button class="btn">Create account</button></div>
+  <p id="signup-progress" class="progress"></p>
+</form>
+<style>.progress.warn { padding: .55rem .8rem; border-radius: var(--radius); border: 1px solid var(--red-line); background: var(--red-bg); white-space: pre-wrap; font-size: 13px; }</style>
+<script>
+for (const [id, path] of [["login", "/api/session"], ["signup", "/api/accounts"]]) {
+  document.getElementById(id).addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.target, out = document.getElementById(id + "-progress");
+    const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: form.username.value, password: form.password.value }) });
+    if (res.ok) { location.href = form.dataset.next; return; }
+    out.className = "progress warn";
+    out.textContent = await res.text();
+  });
+}
+</script>
+{{template "foot" .}}{{end}}
+
+{{define "account"}}{{template "head" "Account"}}
+<div class="page-head"><div><h1>{{.Username}}</h1>
+<p class="sub">Your account sees only its own dev boxes, and everything they report.</p></div>
+  <div class="actions"><button class="btn sm" id="sign-out">Sign out</button></div></div>
+
+<h2 class="section-title" id="boxes">Dev boxes</h2>
+{{if .Boxes}}<div class="card"><table class="table">
+  <thead><tr><th>Box</th><th>Status</th><th>Joined</th><th>Key last used</th><th></th></tr></thead>
+  <tbody>{{range .Boxes}}<tr><td><b>{{.Box}}</b></td><td>{{if .Online}}<span class="badge">online</span>{{else}}<span class="meta">offline</span>{{end}}</td>
+    <td class="meta">{{ago $.Now .Joined}}</td><td class="meta">{{with .Used}}{{ago $.Now .}}{{else}}never{{end}}</td>
+    <td><button class="btn ghost sm remove" data-box="{{.Box}}">Remove</button></td></tr>{{end}}</tbody>
+</table></div>
+{{else}}<p class="empty-state">No dev boxes yet.</p>{{end}}
+
+<h2 class="section-title" id="add">Add a dev box</h2>
+<form id="claim" class="card form">
+  <p class="meta">On the box, from a checkout of the repository, run:</p>
+  <pre>DEVBOX_SERVER={{.Server}} deploy/install-devbox</pre>
+  <p class="meta">It prints a code (also in <code>journalctl --user -u intelligence-devbox</code>). Enter it here within the hour.</p>
+  <label for="code">Code</label>
+  <input id="code" name="code" placeholder="ABCD-1234" autocomplete="off" autocapitalize="characters" required>
+  <div class="form-actions"><button class="btn primary">Add the box</button></div>
+  <p id="claim-progress" class="progress"></p>
+</form>
+
+<h2 class="section-title">Password</h2>
+<form id="password" class="card form">
+  <input type="text" name="username" value="{{.Username}}" autocomplete="username" hidden>
+  <label for="current">Current password</label>
+  <input id="current" name="current" type="password" autocomplete="current-password" required>
+  <label for="new">New password <span class="meta">(at least 12 characters; signs out every other browser)</span></label>
+  <input id="new" name="new" type="password" autocomplete="new-password" minlength="12" required>
+  <div class="form-actions"><button class="btn">Change password</button></div>
+  <p id="password-progress" class="progress"></p>
+</form>
+<style>
+  .progress.warn { padding: .55rem .8rem; border-radius: var(--radius); border: 1px solid var(--red-line); background: var(--red-bg); white-space: pre-wrap; font-size: 13px; }
+  pre { overflow-x: auto; padding: .5rem .7rem; border: 1px solid var(--line, #8884); border-radius: var(--radius); font-size: 13px; }
+</style>
+<script>
+const json = { "Content-Type": "application/json" };
+async function send(method, path, body, out, done) {
+  const res = await fetch(path, { method, headers: body ? json : {}, body: body ? JSON.stringify(body) : undefined });
+  if (res.ok) { done(res); return; }
+  if (out) { out.className = "progress warn"; out.textContent = await res.text(); } else { alert(await res.text()); }
+}
+document.getElementById("sign-out").addEventListener("click", () =>
+  send("DELETE", "/api/session", null, null, () => { location.href = "/login"; }));
+for (const b of document.querySelectorAll("button.remove")) {
+  b.addEventListener("click", () => {
+    if (!confirm("Remove " + b.dataset.box + "? Its key stops working, and what it reported is deleted. It asks to join again with a new code.")) return;
+    send("DELETE", "/api/devboxes/" + encodeURIComponent(b.dataset.box), null, null, () => location.reload());
+  });
+}
+document.getElementById("claim").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const out = document.getElementById("claim-progress");
+  send("POST", "/api/devbox-enrollments/claim", { code: e.target.code.value }, out, async (res) => {
+    const { box } = await res.json();
+    out.className = "progress meta";
+    out.textContent = box + " joined. It connects within a few seconds.";
+    setTimeout(() => location.reload(), 3000);
+  });
+});
+document.getElementById("password").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const out = document.getElementById("password-progress");
+  send("PUT", "/api/account/password", { current: e.target.current.value, password: e.target.new.value }, out, () => {
+    e.target.reset();
+    out.className = "progress meta";
+    out.textContent = "Password changed.";
+  });
+});
+</script>
+{{template "foot" .}}{{end}}

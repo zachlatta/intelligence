@@ -25,32 +25,6 @@
 </html>
 {{end}}
 
-{{define "login"}}{{template "head" "Sign in"}}
-<body>
-<div class="page-head"><div><h1>Sign in</h1>
-<p class="sub">Starting workspaces and agents needs the operator token. This browser stays signed in for 30 days.</p></div></div>
-{{if not .Configured}}<p class="banner">This server has no operator token (OPERATOR_TOKEN), so nobody can sign in.</p>
-{{else}}
-<form id="login" class="card form" data-next="{{.Next}}">
-  <label for="token">Operator token</label>
-  <input id="token" name="token" type="password" autocomplete="current-password" autofocus required>
-  <div class="form-actions"><button class="btn primary">Sign in</button></div>
-  <p id="progress"></p>
-</form>
-<script>
-document.getElementById("login").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const form = e.target, out = document.getElementById("progress");
-  const res = await fetch("/api/session", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token: form.token.value }) });
-  if (res.ok) { location.href = form.dataset.next; return; }
-  out.className = "warn";
-  out.textContent = await res.text();
-});
-</script>
-{{end}}
-{{template "foot" .}}{{end}}
-
 {{define "agentfields"}}
   <label for="prompt">What should the agent do?</label>
   <textarea id="prompt" name="prompt" required autofocus></textarea>

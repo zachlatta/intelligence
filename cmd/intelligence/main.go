@@ -129,16 +129,14 @@ func serve(ctx context.Context) error {
 	if err := db.CheckContract(ctx, owner, ro); err != nil {
 		return err
 	}
-	if os.Getenv("DEVBOX_TOKEN") == "" {
-		log.Printf("DEVBOX_TOKEN is not set: dev box streams are refused")
-	}
-	if os.Getenv("OPERATOR_TOKEN") == "" {
-		log.Printf("OPERATOR_TOKEN is not set: commands to dev boxes are refused")
+	for _, gone := range []string{"DEVBOX_TOKEN", "OPERATOR_TOKEN"} {
+		if os.Getenv(gone) != "" {
+			log.Printf("%s is set but no longer used: accounts sign in with passwords, and each dev box has its own key", gone)
+		}
 	}
 	srv := &http.Server{
-		Addr: addr(os.Getenv),
-		Handler: web.New(web.Config{Version: v, DB: owner, Readonly: ro, DevboxToken: os.Getenv("DEVBOX_TOKEN"),
-			OperatorToken: os.Getenv("OPERATOR_TOKEN"), BinDir: c.BinDir}),
+		Addr:              addr(os.Getenv),
+		Handler:           web.New(web.Config{Context: ctx, Version: v, DB: owner, Readonly: ro, BinDir: c.BinDir}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go pruneHosts(ctx, fleet.New(owner))
@@ -158,7 +156,7 @@ func serve(ctx context.Context) error {
 // devboxSettings configure `intelligence devbox`, from the environment.
 type devboxSettings struct {
 	Server     string        // DEVBOX_SERVER: the server's base URL
-	Token      string        // DEVBOX_TOKEN: the server's dev-box token
+	KeyFile    string        // DEVBOX_KEY_FILE: where the box keeps its key; default ~/.config/intelligence/devbox.key
 	Name       string        // DEVBOX_NAME: this box's name; default the lowercased hostname
 	Interval   time.Duration // DEVBOX_INTERVAL: how often to re-read the daemon's status; default 15s
 	PaseoHome  string        // DEVBOX_PASEO_HOME: the Paseo daemon's home; default ~/.paseo
@@ -168,7 +166,7 @@ type devboxSettings struct {
 }
 
 func devboxConfig(getenv func(string) string, hostname func() (string, error)) (devboxSettings, error) {
-	c := devboxSettings{Server: getenv("DEVBOX_SERVER"), Token: getenv("DEVBOX_TOKEN"), Name: getenv("DEVBOX_NAME"),
+	c := devboxSettings{Server: getenv("DEVBOX_SERVER"), KeyFile: getenv("DEVBOX_KEY_FILE"), Name: getenv("DEVBOX_NAME"),
 		Interval: 15 * time.Second, PaseoHome: getenv("DEVBOX_PASEO_HOME"), AutoUpdate: getenv("DEVBOX_AUTOUPDATE") != "off",
 		ProbeSocket: getenv("DEVBOX_PROBE_SOCKET")}
 	switch c.ProbeSocket {
@@ -180,11 +178,11 @@ func devboxConfig(getenv func(string) string, hostname func() (string, error)) (
 	if c.PaseoHome == "" {
 		c.PaseoHome = filepath.Join(getenv("HOME"), ".paseo")
 	}
-	switch {
-	case c.Server == "":
+	if c.KeyFile == "" {
+		c.KeyFile = filepath.Join(getenv("HOME"), ".config", "intelligence", "devbox.key")
+	}
+	if c.Server == "" {
 		return c, errors.New("DEVBOX_SERVER is not set: the server's base URL")
-	case c.Token == "":
-		return c, errors.New("DEVBOX_TOKEN is not set: the server's dev box token")
 	}
 	if v := getenv("DEVBOX_INTERVAL"); v != "" {
 		d, err := time.ParseDuration(v)
@@ -224,7 +222,8 @@ func runDevbox(ctx context.Context) error {
 			}
 			return paseo.Dial(ctx, t)
 		}},
-		Link: &devbox.Link{Server: c.Server, Token: c.Token, Box: c.Name}}
+		// with no key yet, the box joins an account: it logs a code to enter on the server's account page
+		Link: &devbox.Link{Server: c.Server, Box: c.Name, Keys: &devbox.Keys{File: c.KeyFile, Server: c.Server, Box: c.Name}}}
 	if c.AutoUpdate {
 		if up, err := newUpdater(c, v); err != nil {
 			log.Printf("self-update off: %v", err)

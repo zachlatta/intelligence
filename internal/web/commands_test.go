@@ -17,7 +17,7 @@ import (
 	"github.com/zachlatta/intelligence/internal/paseo/paseotest"
 )
 
-// cmdServer takes commands with the operator token "op".
+// cmdServer has devbox-1 reported, in the signed-in account.
 func cmdServer(t *testing.T) (http.Handler, dbtest.DB) {
 	t.Helper()
 	d := dbtest.New(t)
@@ -28,7 +28,7 @@ func cmdServer(t *testing.T) (http.Handler, dbtest.DB) {
 
 // instance is one server instance on d's database, through p.
 func instance(t *testing.T, d dbtest.DB, p *pgxpool.Pool) http.Handler {
-	return New(Config{Context: t.Context(), Version: "v", DB: p, Readonly: d.Readonly, DevboxToken: "secret", OperatorToken: "op"})
+	return newServer(t, d, p, "v")
 }
 
 // TestCommandsCrossServerInstances: during a deploy two instances run. A command queued on one
@@ -39,7 +39,7 @@ func TestCommandsCrossServerInstances(t *testing.T) {
 	other := instance(t, d, dbtest.Pool(t, d))
 	b := openStream(t, h, "devbox-1")
 	start := time.Now()
-	_, c, _ := enqueue(t, other, "devbox-1", "op", archiveA1)
+	_, c, _ := enqueue(t, other, "devbox-1", "", archiveA1)
 	if got := b.command(); got.ID != c.ID {
 		t.Fatalf("command = %+v", got)
 	}
@@ -87,16 +87,25 @@ func showCmd(t *testing.T, h http.Handler, box, id, query string) (int, fleet.Co
 
 const archiveA1 = `{"kind":"archive_agent","args":{"agentId":"a1"}}`
 
-func TestCommandsNeedTheOperatorToken(t *testing.T) {
+// TestCommandsGoOnlyToTheAccountsOwnBoxes: another account can neither queue a command for a box
+// that is not its own nor read one.
+func TestCommandsGoOnlyToTheAccountsOwnBoxes(t *testing.T) {
 	h, _ := cmdServer(t)
-	for _, tok := range []string{"", "wrong", "secret"} { // the dev box token is not the operator's
-		if code, _, _ := enqueue(t, h, "devbox-1", tok, archiveA1); code != http.StatusUnauthorized {
-			t.Errorf("token %q: %d, want 401", tok, code)
-		}
+	_, c, _ := enqueue(t, h, "devbox-1", "", archiveA1)
+	ts := h.(*testServer)
+	bob, err := ts.store.Create(t.Context(), "bob", testPassword)
+	if err != nil {
+		t.Fatal(err)
 	}
-	nobody, _ := dbServer(t) // no operator token configured
-	if code, _, _ := enqueue(t, nobody, "devbox-1", "", archiveA1); code != http.StatusServiceUnavailable {
-		t.Errorf("no OPERATOR_TOKEN: %d, want 503", code)
+	asBob := sessionFor(t, ts.store, bob)
+	if rec := call(t, h, http.MethodPost, "/api/devboxes/devbox-1/commands", archiveA1, nil, asBob); rec.Code != http.StatusNotFound {
+		t.Errorf("bob queues for someone's box: %d", rec.Code)
+	}
+	if rec := call(t, h, http.MethodGet, "/api/devboxes/devbox-1/commands/"+c.ID, "", nil, asBob); rec.Code != http.StatusNotFound {
+		t.Errorf("bob reads someone's command: %d", rec.Code)
+	}
+	if rec := call(t, anon(h), http.MethodGet, "/api/devboxes/devbox-1/commands/"+c.ID, "", nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("no one reads a command: %d", rec.Code)
 	}
 }
 
@@ -110,11 +119,11 @@ func TestCommandsAreChecked(t *testing.T) {
 		`{"kind":"archive_agent","args":{"agentId":"a1"},"extra":1}`:   http.StatusBadRequest,
 		`not json`: http.StatusBadRequest,
 	} {
-		if code, _, msg := enqueue(t, h, "devbox-1", "op", body); code != want {
+		if code, _, msg := enqueue(t, h, "devbox-1", "", body); code != want {
 			t.Errorf("%s: %d %s, want %d", body, code, msg, want)
 		}
 	}
-	if code, _, _ := enqueue(t, h, "nobody", "op", archiveA1); code != http.StatusNotFound {
+	if code, _, _ := enqueue(t, h, "nobody", "", archiveA1); code != http.StatusNotFound {
 		t.Errorf("unknown box: %d, want 404", code)
 	}
 	if code, _ := showCmd(t, h, "devbox-1", "not-an-id", ""); code != http.StatusNotFound {
@@ -125,7 +134,7 @@ func TestCommandsAreChecked(t *testing.T) {
 func TestACommandGoesDownTheStreamAtOnceAndItsResultComesBack(t *testing.T) {
 	h, _ := cmdServer(t)
 	b := openStream(t, h, "devbox-1")
-	code, c, msg := enqueue(t, h, "devbox-1", "op", `{"kind":"create_agent","args":{"cwd":"/w/app","provider":"claude","prompt":"go"},"ttl":"1m"}`)
+	code, c, msg := enqueue(t, h, "devbox-1", "", `{"kind":"create_agent","args":{"cwd":"/w/app","provider":"claude","prompt":"go"},"ttl":"1m"}`)
 	if code != http.StatusAccepted || c.Status != devbox.CommandQueued || !c.ExpiresAt.Equal(c.CreatedAt.Add(time.Minute)) {
 		t.Fatalf("enqueue: %d %s", code, msg)
 	}
@@ -162,12 +171,16 @@ func TestACommandGoesDownTheStreamAtOnceAndItsResultComesBack(t *testing.T) {
 func TestQueuedCommandsWaitForTheBoxAndUnfinishedOnesAreResent(t *testing.T) {
 	d := dbtest.New(t)
 	h := instance(t, d, d.Owner)
+	key := keyOf(t, h, "devbox-1")                                                           // the account's
 	if err := fleet.New(d.Owner).Record(t.Context(), sampleReport, time.Now()); err != nil { // known, with no stream
 		t.Fatal(err)
 	}
-	_, c, _ := enqueue(t, h, "devbox-1", "op", archiveA1)
+	code, c, msg := enqueue(t, h, "devbox-1", "", archiveA1)
+	if code != http.StatusAccepted {
+		t.Fatalf("enqueue: %d %s", code, msg)
+	}
 	srv := serve(t, h)
-	first, _, err := dialStream(t, srv, "devbox-1", "secret")
+	first, _, err := dialStream(t, srv, "devbox-1", key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +188,7 @@ func TestQueuedCommandsWaitForTheBoxAndUnfinishedOnesAreResent(t *testing.T) {
 		t.Fatalf("on connect: %+v", got)
 	}
 	first.conn.CloseNow() // dropped before a result
-	second, _, err := dialStream(t, srv, "devbox-1", "secret")
+	second, _, err := dialStream(t, srv, "devbox-1", key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +202,7 @@ func TestQueuedCommandsWaitForTheBoxAndUnfinishedOnesAreResent(t *testing.T) {
 
 func TestShowCommandWaitIsBounded(t *testing.T) {
 	h, _ := cmdServer(t)
-	_, c, _ := enqueue(t, h, "devbox-1", "op", archiveA1)
+	_, c, _ := enqueue(t, h, "devbox-1", "", archiveA1)
 	if code, _ := showCmd(t, h, "devbox-1", c.ID, "?wait=2h"); code != http.StatusBadRequest {
 		t.Errorf("wait 2h: %d, want 400", code)
 	}
@@ -216,7 +229,7 @@ func TestADevBoxRunsTheServersCommands(t *testing.T) {
 		Watcher: &devbox.Watcher{RetryEvery: 20 * time.Millisecond, Dial: func(ctx context.Context) (*paseo.Client, error) {
 			return paseo.Dial(ctx, paseo.Target{URL: daemon.URL(), Token: "tok", ClientID: "test"})
 		}},
-		Link: &devbox.Link{Server: srv.URL, Token: "secret", Box: "devbox-1", RetryEvery: 20 * time.Millisecond}}
+		Link: &devbox.Link{Server: srv.URL, Token: keyOf(t, h, "devbox-1"), Box: "devbox-1", RetryEvery: 20 * time.Millisecond}}
 	stopped := make(chan struct{})
 	go func() { box.Run(ctx); close(stopped) }()
 	t.Cleanup(func() { cancel(); <-stopped })
@@ -230,7 +243,7 @@ func TestADevBoxRunsTheServersCommands(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	_, c, _ := enqueue(t, h, "devbox-1", "op", `{"kind":"create_agent","args":{"workspaceId":"w-app","provider":"claude","prompt":"fix it"}}`)
+	_, c, _ := enqueue(t, h, "devbox-1", "", `{"kind":"create_agent","args":{"workspaceId":"w-app","provider":"claude","prompt":"fix it"}}`)
 	_, done := showCmd(t, h, "devbox-1", c.ID, "?wait=10s")
 	var res devbox.CommandResult
 	json.Unmarshal(done.Result, &res)
@@ -242,8 +255,11 @@ func TestADevBoxRunsTheServersCommands(t *testing.T) {
 		t.Errorf("daemon got %v", req)
 	}
 	var status string
-	if err := d.Readonly.QueryRow(context.Background(), "SELECT status FROM commands WHERE id = $1", c.ID).Scan(&status); err != nil ||
-		status != devbox.CommandSucceeded {
-		t.Errorf("read-only SQL sees %q (%v)", status, err)
+	_, res2 := sqlPost(t, h, `{"query": "SELECT status FROM commands WHERE id = '`+c.ID+`'"}`)
+	if len(res2.Rows) == 1 {
+		status, _ = res2.Rows[0][0].(string)
+	}
+	if status != devbox.CommandSucceeded {
+		t.Errorf("the account's SQL sees %q (%+v)", status, res2)
 	}
 }

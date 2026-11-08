@@ -38,23 +38,28 @@ func TestAddrDefaultsToPort8080(t *testing.T) {
 	}
 }
 
-func TestDevboxConfigNeedsServerAndToken(t *testing.T) {
+func TestDevboxConfigNeedsOnlyTheServer(t *testing.T) {
 	host := func() (string, error) { return "devbox-1", nil }
-	if _, err := devboxConfig(env(map[string]string{"DEVBOX_TOKEN": "t"}), host); err == nil || !strings.Contains(err.Error(), "DEVBOX_SERVER") {
+	if _, err := devboxConfig(env(map[string]string{}), host); err == nil || !strings.Contains(err.Error(), "DEVBOX_SERVER") {
 		t.Errorf("err = %v, want DEVBOX_SERVER missing", err)
 	}
-	if _, err := devboxConfig(env(map[string]string{"DEVBOX_SERVER": "https://x"}), host); err == nil || !strings.Contains(err.Error(), "DEVBOX_TOKEN") {
-		t.Errorf("err = %v, want DEVBOX_TOKEN missing", err)
+	// a box installed before accounts still has DEVBOX_TOKEN in its env file: it starts, and joins
+	if _, err := devboxConfig(env(map[string]string{"DEVBOX_SERVER": "https://x", "DEVBOX_TOKEN": "old"}), host); err != nil {
+		t.Errorf("an old env file: %v", err)
 	}
 }
 
 func TestDevboxConfigDefaults(t *testing.T) {
-	c, err := devboxConfig(env(map[string]string{"DEVBOX_SERVER": "https://x", "DEVBOX_TOKEN": "t"}), func() (string, error) { return "Devbox-1", nil })
+	c, err := devboxConfig(env(map[string]string{"DEVBOX_SERVER": "https://x", "HOME": "/home/someone"}), func() (string, error) { return "Devbox-1", nil })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Name != "devbox-1" || c.Interval != 15*time.Second || c.Server != "https://x" || c.Token != "t" {
+	if c.Name != "devbox-1" || c.Interval != 15*time.Second || c.Server != "https://x" || c.KeyFile != "/home/someone/.config/intelligence/devbox.key" {
 		t.Errorf("config = %+v", c)
+	}
+	c, _ = devboxConfig(env(map[string]string{"DEVBOX_SERVER": "https://x", "DEVBOX_KEY_FILE": "/etc/box.key"}), func() (string, error) { return "h", nil })
+	if c.KeyFile != "/etc/box.key" {
+		t.Errorf("DEVBOX_KEY_FILE: %q", c.KeyFile)
 	}
 }
 

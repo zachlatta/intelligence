@@ -138,3 +138,9 @@ func signal(ch chan struct{}) {
 // notifySQL announces a topic; run it in the transaction that makes the change, so the wake
 // comes after the change commits and never without it.
 const notifySQL = "SELECT pg_notify('" + channel + "', $1)"
+
+// NotifySQL announces a topic ($1), for changes made outside the registry.
+const NotifySQL = notifySQL
+
+// EnrollmentTopic: the dev box enrollment with id was claimed.
+func EnrollmentTopic(id string) string { return "enrollment:" + id }
