@@ -41,6 +41,7 @@ var indexHTML string
 var indexTmpl = template.Must(template.New("index").Funcs(template.FuncMap{
 	"ago":    ago,
 	"agents": agentSummary,
+	"short":  short,
 }).Parse(indexHTML))
 
 // New returns the app's HTTP handler.

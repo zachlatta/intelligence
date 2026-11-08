@@ -31,6 +31,7 @@
   <h3>{{.Report.Name}}
     {{if .Online}}<span class="pill online">online</span>{{else}}<span class="pill offline">offline</span>{{end}}
     <span class="muted" style="font-size:.8rem">reported {{ago $.Now .LastSeen}}</span>
+    <span class="muted" style="font-size:.8rem">client <span title="{{.Report.Version}}">{{short .Report.Version}}</span>{{if ne .Report.Version $.Version}} · not on the server's version{{end}}</span>
   </h3>
   {{if $p.Error}}
   <p class="pill bad">{{$p.Error}}</p>

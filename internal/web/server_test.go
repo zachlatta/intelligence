@@ -248,3 +248,22 @@ func TestHomePageSaysWhenNoBoxHasReported(t *testing.T) {
 		t.Errorf("empty fleet message missing")
 	}
 }
+
+func TestHomePageShowsEachBoxClientVersion(t *testing.T) {
+	h, _ := dbServerVersion(t, "0123456789abcdef")
+	rep := sampleReport
+	rep.Version = "fedcba9876543210"
+	post(t, h, devbox.ReportPath, "secret", reportJSON(t, rep))
+	page := get(t, h, "/", nil).Body.String()
+	if !strings.Contains(page, `title="fedcba9876543210">fedcba987654</span>`) {
+		t.Errorf("box's client version missing:\n%s", page)
+	}
+	if !strings.Contains(page, "not on the server's version") {
+		t.Errorf("a box on another version than the server should say so")
+	}
+	rep.Version = "0123456789abcdef"
+	post(t, h, devbox.ReportPath, "secret", reportJSON(t, rep))
+	if strings.Contains(get(t, h, "/", nil).Body.String(), "not on the server's version") {
+		t.Errorf("a box on the server's version is not behind")
+	}
+}
