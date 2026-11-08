@@ -236,8 +236,8 @@ func TestLocalTargetReadsThePaseoHome(t *testing.T) {
 	if tgt.URL != "ws://127.0.0.1:6767/ws" || tgt.Token != token || tgt.ClientID != "intelligence-devbox" {
 		t.Errorf("target = %+v (an all-interfaces listen is dialed on loopback)", tgt)
 	}
-	write("paseo.pid", `{"pid": 1, "listen": "100.64.0.9:7000"}`, 0o644)
-	if tgt, _ := LocalTarget(home, "x"); tgt.URL != "ws://100.64.0.9:7000/ws" {
+	write("paseo.pid", `{"pid": 1, "listen": "192.0.2.9:7000"}`, 0o644)
+	if tgt, _ := LocalTarget(home, "x"); tgt.URL != "ws://192.0.2.9:7000/ws" {
 		t.Errorf("url = %q", tgt.URL)
 	}
 	write("paseo.pid", `{"pid": 1, "listen": "/run/paseo.sock"}`, 0o644)
