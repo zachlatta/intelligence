@@ -2,7 +2,6 @@
 package web
 
 import (
-	"cmp"
 	"context"
 	"crypto/subtle"
 	_ "embed"
@@ -116,10 +115,8 @@ func New(cfg Config) http.Handler {
 		_ = indexTmpl.Execute(w, map[string]any{
 			"Version": cfg.Version,
 			"Short":   short(cfg.Version),
-			// set by tailscale serve for requests from a tailnet user
-			"User":  cmp.Or(r.Header.Get("Tailscale-User-Name"), r.Header.Get("Tailscale-User-Login")),
-			"Boxes": list,
-			"Now":   cfg.Now(),
+			"Boxes":   list,
+			"Now":     cfg.Now(),
 		})
 	})
 	// every response names the server's version, so a dev box sees on any call that it should update

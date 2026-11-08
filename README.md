@@ -116,8 +116,7 @@ database and read-only role (`internal/dbtest`) on the server in `TEST_DATABASE_
 - `GET /healthz`: `{"status":"ok","version":"<commit>","database":"ok"}`, 503 when the database is
   unreachable.
 
-The read routes are open to the tailnet. `tailscale serve` sets `Tailscale-User-Name` for requests
-from people, which the home page shows; it is for display only, not for authorization.
+The read routes are open to the tailnet.
 
 ## Configuration
 

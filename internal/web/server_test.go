@@ -62,19 +62,11 @@ func TestIndexShowsNameAndVersion(t *testing.T) {
 	}
 }
 
-func TestIndexGreetsTailnetUser(t *testing.T) {
+func TestIndexHasNoGreeting(t *testing.T) {
 	h, _ := dbServer(t)
-	rec := get(t, h, "/", map[string]string{"Tailscale-User-Login": "someone@example.com", "Tailscale-User-Name": "Some One"})
-	if !strings.Contains(rec.Body.String(), "Some One") {
-		t.Errorf("index does not greet the tailnet user: %s", rec.Body.String())
-	}
-}
-
-func TestIndexEscapesTailnetUser(t *testing.T) {
-	h, _ := dbServer(t)
-	rec := get(t, h, "/", map[string]string{"Tailscale-User-Name": "<script>x</script>"})
-	if strings.Contains(rec.Body.String(), "<script>x</script>") {
-		t.Errorf("user name is not escaped")
+	page := get(t, h, "/", map[string]string{"Tailscale-User-Name": "Some One"}).Body.String()
+	if strings.Contains(page, "Hi") || strings.Contains(page, "Some One") {
+		t.Errorf("the home page should open on the dev boxes, with no greeting")
 	}
 }
 
