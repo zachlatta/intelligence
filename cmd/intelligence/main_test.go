@@ -49,7 +49,7 @@ func TestDevboxConfigNeedsServerAndToken(t *testing.T) {
 }
 
 func TestDevboxConfigDefaults(t *testing.T) {
-	c, err := devboxConfig(env(map[string]string{"DEVBOX_SERVER": "https://x", "DEVBOX_TOKEN": "t"}), func() (string, error) { return "Mew-Dev", nil })
+	c, err := devboxConfig(env(map[string]string{"DEVBOX_SERVER": "https://x", "DEVBOX_TOKEN": "t"}), func() (string, error) { return "Devbox-1", nil })
 	if err != nil {
 		t.Fatal(err)
 	}
