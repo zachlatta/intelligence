@@ -222,6 +222,9 @@ func TestCommandProgressIsReadableThroughSQL(t *testing.T) {
 		}
 		return res.Rows[0]
 	}
+	if got := b.command(); got.ID != cmd.ID { // sending is asynchronous: wait until the box has it
+		t.Fatalf("box got %+v", got)
+	}
 	if row := progress(); row[0] != "sent" || row[4] != false {
 		t.Errorf("sent: %v", row)
 	}
