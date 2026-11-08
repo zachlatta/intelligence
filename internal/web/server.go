@@ -39,9 +39,13 @@ const maxReport = 1 << 20
 var indexHTML string
 
 var indexTmpl = template.Must(template.New("index").Funcs(template.FuncMap{
-	"ago":    ago,
-	"agents": agentSummary,
-	"short":  short,
+	"ago":            ago,
+	"agents":         agentSummary,
+	"short":          short,
+	"shortID":        func(id string) string { return id[:min(7, len(id))] }, // the prefix the paseo CLI accepts
+	"plural":         plural,
+	"allAgents":      allAgents,
+	"idleWorkspaces": idleWorkspaces,
 }).Parse(indexHTML))
 
 // New returns the app's HTTP handler.
@@ -190,4 +194,32 @@ func agentSummary(agents []devbox.Agent) string {
 		parts[i] = fmt.Sprintf("%d %s", counts[k], k)
 	}
 	return strings.Join(parts, ", ")
+}
+
+// plural is "1 workspace", "3 workspaces".
+func plural(n int, word string) string {
+	if n == 1 {
+		return "1 " + word
+	}
+	return fmt.Sprintf("%d %ss", n, word)
+}
+
+// allAgents is every agent on box b, across its workspaces.
+func allAgents(b fleet.Box) []devbox.Agent {
+	var out []devbox.Agent
+	for _, w := range b.Workspaces {
+		out = append(out, w.Agents...)
+	}
+	return out
+}
+
+// idleWorkspaces are b's workspaces with no agents.
+func idleWorkspaces(b fleet.Box) []fleet.WorkspaceAgents {
+	var out []fleet.WorkspaceAgents
+	for _, w := range b.Workspaces {
+		if len(w.Agents) == 0 {
+			out = append(out, w)
+		}
+	}
+	return out
 }

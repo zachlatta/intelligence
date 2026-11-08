@@ -159,12 +159,22 @@ func reportJSON(t *testing.T, r devbox.Report) []byte {
 }
 
 var sampleReport = devbox.Report{Name: "devbox-1", CollectedAt: t0, Version: "c1", Paseo: devbox.PaseoStatus{
-	Daemon: "running", Connected: "reachable", Version: "0.11.4", Hostname: "devbox-1", PID: 3029,
-	Providers: []devbox.Provider{{Name: "claude", Status: "available", Available: true}, {Name: "copilot", Status: "unavailable"}},
+	Connected: true, Version: "0.15.3", Hostname: "devbox-1", PID: 3029, Listen: "0.0.0.0:6767",
+	Providers: []devbox.Provider{{Name: "claude", Available: true}, {Name: "copilot"}},
+	Workspaces: []devbox.Workspace{
+		{ID: "w-app", Name: "Login fix", Kind: "worktree", Status: "running", Directory: "/w/app-login", Project: "example/app",
+			Branch: "fix-login", Dirty: true, Additions: 12, Deletions: 3},
+		{ID: "w-docs", Name: "Docs", Kind: "directory", Status: "done", Directory: "/w/docs", Project: "docs"},
+		{ID: "w-idle", Name: "Quiet checkout", Kind: "local_checkout", Status: "done", Directory: "/w/quiet"},
+	},
 	Agents: []devbox.Agent{
-		{ID: "a1", ShortID: "a1short", Name: "Fix the <b>login</b> page", Provider: "claude/claude-opus-5-5", Thinking: "medium", Status: "running", Cwd: "~/dev/example/app"},
-		{ID: "a2", ShortID: "a2short", Name: "Write notes", Provider: "codex/gpt-6.1-sol", Thinking: "high", Status: "idle", Cwd: "~/dev/example/docs"},
-		{ID: "a3", ShortID: "a3short", Name: "Audit", Provider: "claude/claude-opus-5-5", Thinking: "medium", Status: "idle", Cwd: "~/dev/example/app"},
+		{ID: "a1000000-0000-4000-8000-000000000001", WorkspaceID: "w-app", Title: "Fix the <b>login</b> page", Provider: "claude",
+			Model: "claude-opus-5-5", Thinking: "medium", Status: "running", Cwd: "/w/app-login", CreatedAt: t0.Add(-time.Hour)},
+		{ID: "a2000000-0000-4000-8000-000000000002", WorkspaceID: "w-docs", Title: "Write notes", Provider: "codex",
+			Model: "gpt-6.1-sol", Thinking: "high", Status: "idle", Cwd: "/w/docs", CreatedAt: t0.Add(-2 * time.Hour)},
+		{ID: "a3000000-0000-4000-8000-000000000003", WorkspaceID: "w-app", Title: "Audit", Provider: "claude",
+			Model: "claude-opus-5-5", Thinking: "medium", Status: "idle", Cwd: "/w/app-login", CreatedAt: t0.Add(-3 * time.Hour),
+			RequiresAttention: true, AttentionReason: "finished"},
 	},
 }}
 
@@ -223,13 +233,15 @@ func TestReportedBoxIsListedInTheAPIAndOnTheHomePage(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 1 || list[0].Report.Name != "devbox-1" || !list[0].Online || len(list[0].Report.Paseo.Agents) != 3 {
+	if len(list) != 1 || list[0].Report.Name != "devbox-1" || !list[0].Online || len(list[0].Workspaces) != 3 ||
+		len(list[0].Workspaces[0].Agents) != 2 {
 		t.Fatalf("list = %+v", list)
 	}
 
 	page := get(t, h, "/", nil).Body.String()
-	for _, want := range []string{"devbox-1", "online", "running", "reachable", "0.11.4", "claude", "1 running, 2 idle",
-		"Fix the &lt;b&gt;login&lt;/b&gt; page", "a1short", "claude/claude-opus-5-5", "~/dev/example/docs", "Write notes"} {
+	for _, want := range []string{"devbox-1", "online", "connected", "0.15.3", "claude", "1 running, 2 idle", "3 workspaces",
+		"Login fix", "worktree", "fix-login", "+12", "−3", "example/app", "Fix the &lt;b&gt;login&lt;/b&gt; page", "a100000",
+		"claude-opus-5-5", "Write notes", "needs attention"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("home page misses %q", want)
 		}
@@ -273,25 +285,36 @@ func TestHomePageShowsEachBoxClientVersion(t *testing.T) {
 	}
 }
 
-func TestHomePageListsAgentsRunningFirst(t *testing.T) {
+func TestHomePageNestsAgentsInTheirWorkspaces(t *testing.T) {
 	h, _ := dbServer(t)
 	post(t, h, devbox.ReportPath, "secret", reportJSON(t, sampleReport))
 	page := get(t, h, "/", nil).Body.String()
-	run, idle := strings.Index(page, "a1short"), strings.Index(page, "a3short")
-	if run < 0 || idle < 0 || run > idle {
-		t.Fatalf("running agent a1short should come before idle a3short")
+	app, run, audit, docs, notes := strings.Index(page, "Login fix"), strings.Index(page, "a100000"),
+		strings.Index(page, "a300000"), strings.Index(page, "Docs"), strings.Index(page, "a200000")
+	if !(app >= 0 && app < run && run < audit && audit < docs && docs < notes) {
+		t.Fatalf("want Login fix (running a1, then a3) before Docs (a2): %d %d %d %d %d", app, run, audit, docs, notes)
 	}
 	if strings.Contains(page, "<b>login</b>") {
 		t.Errorf("agent names must be escaped")
 	}
 }
 
-func TestHomePageSaysWhenABoxHasNoAgents(t *testing.T) {
+func TestHomePageFoldsWorkspacesWithoutAgents(t *testing.T) {
 	h, _ := dbServer(t)
-	rep := sampleReport
-	rep.Paseo.Agents = nil
-	post(t, h, devbox.ReportPath, "secret", reportJSON(t, rep))
-	if page := get(t, h, "/", nil).Body.String(); !strings.Contains(page, "No agents") {
-		t.Errorf("a box with no agents should say so")
+	post(t, h, devbox.ReportPath, "secret", reportJSON(t, sampleReport))
+	page := get(t, h, "/", nil).Body.String()
+	fold, quiet := strings.Index(page, "1 workspace without agents"), strings.Index(page, "Quiet checkout")
+	if fold < 0 || quiet < fold {
+		t.Errorf("a workspace with no agents should be folded away under a count")
+	}
+}
+
+func TestHomePageShowsADisconnectedBox(t *testing.T) {
+	h, _ := dbServer(t)
+	post(t, h, devbox.ReportPath, "secret", reportJSON(t, devbox.Report{Name: "devbox-2",
+		Paseo: devbox.PaseoStatus{Error: "connect ws://127.0.0.1:6767/ws: refused"}}))
+	page := get(t, h, "/", nil).Body.String()
+	if !strings.Contains(page, "not connected") || !strings.Contains(page, "refused") {
+		t.Errorf("a box that cannot reach its daemon should say so and why")
 	}
 }

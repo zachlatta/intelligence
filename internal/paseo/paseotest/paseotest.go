@@ -1,0 +1,268 @@
+// Package paseotest is a fake Paseo daemon that speaks the protocol's daemon side, for tests.
+package paseotest
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/coder/websocket"
+)
+
+// Daemon speaks the Paseo daemon's side of the protocol: hello, the three reads, paging,
+// subscriptions and pushed updates. Everything it was sent is recorded.
+type Daemon struct {
+	t     *testing.T
+	token string
+	srv   *httptest.Server
+
+	mu         sync.Mutex
+	hellos     []map[string]any
+	requests   []map[string]any
+	conns      []*websocket.Conn
+	agents     []map[string]any
+	workspaces []map[string]any
+	statusErr  string // daemon.get_status answers rpc_error with this
+	silent     bool   // never answers requests
+	accepted   int
+}
+
+// SetAgents sets the agent snapshots fetch_agents serves (see Agent).
+func (f *Daemon) SetAgents(a ...map[string]any) { f.mu.Lock(); f.agents = a; f.mu.Unlock() }
+
+// SetWorkspaces sets the workspace descriptors fetch_workspaces serves (see Workspace).
+func (f *Daemon) SetWorkspaces(w ...map[string]any) { f.mu.Lock(); f.workspaces = w; f.mu.Unlock() }
+
+// FailStatus makes daemon.get_status answer rpc_error with msg ("" answers normally).
+func (f *Daemon) FailStatus(msg string) { f.mu.Lock(); f.statusErr = msg; f.mu.Unlock() }
+
+// Silence makes the daemon read requests and never answer them.
+func (f *Daemon) Silence() { f.mu.Lock(); f.silent = true; f.mu.Unlock() }
+
+// Hellos are the hello messages received.
+func (f *Daemon) Hellos() []map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]map[string]any(nil), f.hellos...)
+}
+
+// Connections is how many connections the daemon has accepted.
+func (f *Daemon) Connections() int { f.mu.Lock(); defer f.mu.Unlock(); return f.accepted }
+
+func New(t *testing.T, token string) *Daemon {
+	t.Helper()
+	f := &Daemon{t: t, token: token}
+	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
+	t.Cleanup(f.srv.Close)
+	return f
+}
+
+func (f *Daemon) URL() string { return "ws" + strings.TrimPrefix(f.srv.URL, "http") + "/ws" }
+
+func (f *Daemon) serve(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/ws" {
+		http.NotFound(w, r)
+		return
+	}
+	c, err := websocket.Accept(w, r, nil)
+	if err != nil {
+		return
+	}
+	c.SetReadLimit(1 << 20)
+	ctx := r.Context()
+	f.mu.Lock()
+	f.conns = append(f.conns, c)
+	f.accepted++
+	f.mu.Unlock()
+	helloed := false
+	for {
+		_, b, err := c.Read(ctx)
+		if err != nil {
+			return
+		}
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			c.Close(4000, "bad json")
+			return
+		}
+		if m["type"] == "hello" {
+			f.mu.Lock()
+			f.hellos = append(f.hellos, m)
+			f.mu.Unlock()
+			auth, _ := m["auth"].(map[string]any)
+			if auth["kind"] != "localCredential" || auth["token"] != f.token {
+				f.write(c, map[string]any{"type": "hello.rejected", "reason": "incorrect_password"})
+				c.Close(4001, "Incorrect password")
+				return
+			}
+			helloed = true
+			f.write(c, session("status", map[string]any{"status": "server_info", "serverId": "srv_test", "hostname": "devbox-1",
+				"version": "0.15.3", "protocolVersion": 1}))
+			continue
+		}
+		if !helloed {
+			c.Close(4002, "Session message before hello")
+			return
+		}
+		msg, _ := m["message"].(map[string]any)
+		f.mu.Lock()
+		f.requests = append(f.requests, msg)
+		silent := f.silent
+		f.mu.Unlock()
+		if silent {
+			continue
+		}
+		f.answer(c, msg)
+	}
+}
+
+func (f *Daemon) answer(c *websocket.Conn, msg map[string]any) {
+	id, _ := msg["requestId"].(string)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !validFetch(msg) {
+		// the daemon validates every request against its schema and answers a bad one this way
+		f.write(c, session("rpc_error", map[string]any{"requestId": id, "error": "Unknown request, try upgrading the daemon"}))
+		return
+	}
+	switch msg["type"] {
+	case "daemon.get_status.request":
+		if f.statusErr != "" {
+			f.write(c, session("rpc_error", map[string]any{"requestId": id, "error": f.statusErr, "code": "boom"}))
+			return
+		}
+		f.write(c, session("daemon.get_status.response", map[string]any{"requestId": id, "listen": "0.0.0.0:6767", "pid": 42,
+			"serverId": "srv_test", "startedAt": "2026-11-08T07:00:00.000Z", "version": "0.15.3",
+			"providers": []any{map[string]any{"provider": "claude", "available": true, "error": nil},
+				map[string]any{"provider": "pi", "available": false, "error": "not installed"}}}))
+	case "fetch_agents_request":
+		entries, page := pageOf(f.agents, msg)
+		for i := range entries {
+			entries[i] = map[string]any{"agent": entries[i], "project": map[string]any{}}
+		}
+		f.write(c, session("fetch_agents_response", map[string]any{"requestId": id, "entries": entries, "pageInfo": page}))
+	case "fetch_workspaces_request":
+		entries, page := pageOf(f.workspaces, msg)
+		f.write(c, session("fetch_workspaces_response", map[string]any{"requestId": id, "entries": entries, "pageInfo": page,
+			"emptyProjects": []any{}}))
+	default:
+		f.write(c, session("rpc_error", map[string]any{"requestId": id, "error": "unknown request"}))
+	}
+}
+
+// pageOf serves items in pages of the request's limit, with the next index as the cursor.
+func pageOf(items []map[string]any, msg map[string]any) ([]map[string]any, map[string]any) {
+	page, _ := msg["page"].(map[string]any)
+	limit := len(items)
+	if l, ok := page["limit"].(float64); ok && int(l) > 0 {
+		limit = int(l)
+	}
+	start := 0
+	if c, ok := page["cursor"].(string); ok {
+		start, _ = strconv.Atoi(c)
+	}
+	end := min(start+limit, len(items))
+	out := append([]map[string]any(nil), items[start:end]...)
+	info := map[string]any{"hasMore": end < len(items), "nextCursor": nil, "prevCursor": nil}
+	if end < len(items) {
+		info["nextCursor"] = strconv.Itoa(end)
+	}
+	return out, info
+}
+
+func (f *Daemon) write(c *websocket.Conn, v any) {
+	b, _ := json.Marshal(v)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = c.Write(ctx, websocket.MessageText, b)
+}
+
+// Push sends a session message (agent_update, workspace_update, ...) to every connection.
+func (f *Daemon) Push(typ string, payload map[string]any) {
+	f.mu.Lock()
+	conns := append([]*websocket.Conn(nil), f.conns...)
+	f.mu.Unlock()
+	for _, c := range conns {
+		f.write(c, session(typ, payload))
+	}
+}
+
+// DropAll closes every connection, as a daemon restart does.
+func (f *Daemon) DropAll() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, c := range f.conns {
+		c.Close(websocket.StatusGoingAway, "restarting")
+	}
+	f.conns = nil
+}
+
+// Requests are the session requests of one type received, in order.
+func (f *Daemon) Requests(typ string) []map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []map[string]any
+	for _, r := range f.requests {
+		if r["type"] == typ {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func session(typ string, payload map[string]any) map[string]any {
+	return map[string]any{"type": "session", "message": map[string]any{"type": typ, "payload": payload}}
+}
+
+// Agent is an agent snapshot as the daemon sends it, in workspace, with a field (persistence
+// metadata) a reader must never copy.
+func Agent(id, workspace, status string) map[string]any {
+	return map[string]any{"id": id, "title": "Agent " + id, "provider": "claude", "model": "claude-opus-5-5",
+		"runtimeInfo": map[string]any{"model": nil, "provider": "claude"}, "thinkingOptionId": "medium",
+		"effectiveThinkingOptionId": "medium", "status": status, "cwd": "/w/" + workspace, "workspaceId": workspace,
+		"createdAt": "2026-11-08T10:00:00.000Z", "updatedAt": "2026-11-08T11:00:00.000Z",
+		"lastUserMessageAt": "2026-11-08T10:30:00.000Z", "archivedAt": nil, "requiresAttention": false,
+		"attentionReason": nil, "labels": map[string]any{"paseo.parent-agent-id": "parent-1", "secret-looking": "x"},
+		"persistence": map[string]any{"metadata": map[string]any{"daemonAppendSystemPrompt": "never copied"}}}
+}
+
+// Workspace is a workspace descriptor as the daemon sends it.
+func Workspace(id, kind, status string) map[string]any {
+	return map[string]any{"id": id, "name": "ws " + id, "title": nil, "workspaceKind": kind, "status": status,
+		"workspaceDirectory": "/w/" + id, "projectDisplayName": "example/app", "projectRootPath": "/w/app",
+		"createdAt": "2026-11-08T09:00:00.000Z", "activityAt": nil, "lastUserMessageAt": "2026-11-08T10:30:00.000Z",
+		"archivingAt": nil, "background": false,
+		"gitRuntime": map[string]any{"currentBranch": "feature/x", "isDirty": true}, "diffStat": map[string]any{"additions": 12, "deletions": 3}}
+}
+
+// validFetch checks a fetch request's sort keys and page limit as the daemon's schema does.
+func validFetch(msg map[string]any) bool {
+	keys := map[string][]string{
+		"fetch_agents_request":     {"status_priority", "created_at", "updated_at", "title"},
+		"fetch_workspaces_request": {"status_priority", "activity_at", "name", "project_id"},
+	}[fmt.Sprint(msg["type"])]
+	if keys == nil {
+		return true
+	}
+	sorts, _ := msg["sort"].([]any)
+	for _, s := range sorts {
+		k := fmt.Sprint(s.(map[string]any)["key"])
+		if !slices.Contains(keys, k) {
+			return false
+		}
+	}
+	if page, ok := msg["page"].(map[string]any); ok {
+		if l, _ := page["limit"].(float64); l > 200 || l < 1 {
+			return false
+		}
+	}
+	return true
+}

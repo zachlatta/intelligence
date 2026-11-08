@@ -107,3 +107,15 @@ func TestDevboxAutoUpdateCanBeTurnedOff(t *testing.T) {
 		t.Errorf("DEVBOX_AUTOUPDATE=off should turn it off")
 	}
 }
+
+func TestDevboxPaseoHome(t *testing.T) {
+	base := map[string]string{"DEVBOX_SERVER": "https://x", "DEVBOX_TOKEN": "t", "HOME": "/home/someone"}
+	c, err := devboxConfig(env(base), func() (string, error) { return "h", nil })
+	if err != nil || c.PaseoHome != "/home/someone/.paseo" {
+		t.Errorf("PaseoHome = %q (err %v), want ~/.paseo", c.PaseoHome, err)
+	}
+	base["DEVBOX_PASEO_HOME"] = "/srv/paseo"
+	if c, _ := devboxConfig(env(base), func() (string, error) { return "h", nil }); c.PaseoHome != "/srv/paseo" {
+		t.Errorf("PaseoHome = %q, want the override", c.PaseoHome)
+	}
+}

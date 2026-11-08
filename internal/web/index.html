@@ -18,7 +18,7 @@
   dd { margin: 0; }
   .muted { opacity: .6; }
   .na { opacity: .45; text-decoration: line-through; }
-  table.agents { width: 100%; border-collapse: collapse; margin-top: .75rem; font-size: .9rem; }
+  table.agents { width: 100%; border-collapse: collapse; margin-top: .4rem; font-size: .9rem; }
   table.agents th { text-align: left; font-weight: normal; opacity: .6; padding: .2rem .5rem .2rem 0; }
   table.agents td { padding: .25rem .5rem .25rem 0; border-top: 1px solid #8882; vertical-align: top; }
   table.agents .name { overflow-wrap: anywhere; }
@@ -26,6 +26,14 @@
   .st-running { background: #27c3; color: #27c; }
   .st-error { background: #c332; color: #c33; }
   code { font-size: .85em; }
+  .ws { margin-top: 1rem; padding-top: .5rem; border-top: 1px solid #8883; }
+  .ws-head { display: flex; flex-wrap: wrap; gap: .4rem; align-items: baseline; }
+  .ws-head .dir { flex-basis: 100%; font-size: .8rem; overflow-wrap: anywhere; }
+  .ws-running { background: #27c3; color: #27c; }
+  .ws-attention { background: #c832; color: #c83; }
+  .diff .add { color: #2a7; } .diff .del { color: #c33; }
+  .ws-idle { margin-top: 1rem; }
+  .ws-idle ul { margin: .25rem 0; padding-left: 1.2rem; font-size: .85rem; }
   footer { margin-top: 3rem; opacity: .6; font-size: .85rem; }
 </style>
 </head>
@@ -41,38 +49,49 @@
     <span class="muted" style="font-size:.8rem">reported {{ago $.Now .LastSeen}}</span>
     <span class="muted" style="font-size:.8rem">client <span title="{{.Report.Version}}">{{short .Report.Version}}</span>{{if ne .Report.Version $.Version}} · not on the server's version{{end}}</span>
   </h3>
-  {{if $p.Error}}
-  <p class="pill bad">{{$p.Error}}</p>
+  {{if not $p.Connected}}
+  <p><span class="pill bad">Paseo not connected</span> <span class="muted">{{$p.Error}}</span></p>
   {{else}}
   <dl>
-    <dt>Paseo daemon</dt><dd>{{$p.Daemon}}, {{$p.Connected}}{{if $p.Version}} · v{{$p.Version}}{{end}}</dd>
+    <dt>Paseo daemon</dt><dd>connected{{if $p.Version}} · v{{$p.Version}}{{end}}{{if $p.Listen}} · {{$p.Listen}}{{end}}</dd>
     {{if not $p.StartedAt.IsZero}}<dt>Up since</dt><dd title="{{$p.StartedAt}}">{{ago $.Now $p.StartedAt}} · pid {{$p.PID}}</dd>{{end}}
-    <dt>Listening</dt><dd>{{$p.Listen}}</dd>
-    <dt>Agents</dt><dd>{{if $p.AgentsError}}<span class="bad">{{$p.AgentsError}}</span>{{else}}{{agents $p.Agents}}{{end}}</dd>
-    <dt>Providers</dt><dd>{{range $i, $pr := $p.Providers}}{{if $i}}, {{end}}<span class="{{if not $pr.Available}}na{{end}}" title="{{$pr.Status}}">{{$pr.Name}}</span>{{else}}<span class="muted">unknown</span>{{end}}
+    <dt>Agents</dt><dd>{{agents (allAgents .)}} <span class="muted">in {{plural (len .Workspaces) "workspace"}}</span></dd>
+    <dt>Providers</dt><dd>{{range $i, $pr := $p.Providers}}{{if $i}}, {{end}}<span class="{{if not $pr.Available}}na{{end}}" title="{{if $pr.Available}}available{{else}}unavailable{{end}}{{if $pr.Error}}: {{$pr.Error}}{{end}}">{{$pr.Name}}</span>{{else}}<span class="muted">unknown</span>{{end}}
       {{if $p.Providers}}<span class="muted">(as of {{ago $.Now $p.ProvidersAt}})</span>{{end}}</dd>
-    {{if $p.Note}}<dt>Note</dt><dd class="muted">{{$p.Note}}</dd>{{end}}
+    {{if $p.StatusError}}<dt>Status</dt><dd class="muted">last read failed: {{$p.StatusError}}</dd>{{end}}
   </dl>
-  {{if not $p.AgentsError}}
-  {{if $p.Agents}}
-  <div class="agents-wrap">
-  <table class="agents">
-    <thead><tr><th>Status</th><th>Agent</th><th>Model</th><th>Directory</th></tr></thead>
-    <tbody>
-    {{range $p.Agents}}
-    <tr>
-      <td><span class="pill st-{{.Status}}">{{.Status}}</span></td>
-      <td class="name">{{.Name}} <code class="muted" title="{{.ID}}">{{.ShortID}}</code></td>
-      <td>{{.Provider}}{{if .Thinking}} <span class="muted">· {{.Thinking}}</span>{{end}}</td>
-      <td><code>{{.Cwd}}</code></td>
-    </tr>
-    {{end}}
-    </tbody>
-  </table>
+  {{range .Workspaces}}{{if .Agents}}
+  <div class="ws">
+    <div class="ws-head">
+      <strong>{{if .Listed}}{{or .Name .ID}}{{else}}{{.ID}}{{end}}</strong>
+      {{if .Listed}}<span class="pill">{{.Kind}}</span> <span class="pill ws-{{.Status}}">{{.Status}}</span>{{else}}<span class="pill" title="Paseo did not list this workspace: it is archived or in the background">not listed by Paseo</span>{{end}}
+      {{if .Project}}<span class="muted">{{.Project}}</span>{{end}}
+      {{if .Branch}}<code>{{.Branch}}</code>{{end}}
+      {{if or .Additions .Deletions}}<span class="diff"><span class="add">+{{.Additions}}</span> <span class="del">−{{.Deletions}}</span></span>{{end}}
+      {{if .Dirty}}<span class="muted" title="uncommitted changes">· dirty</span>{{end}}
+      <div class="muted dir"><code>{{.Directory}}</code></div>
+    </div>
+    <div class="agents-wrap">
+    <table class="agents">
+      <tbody>
+      {{range .Agents}}
+      <tr>
+        <td><span class="pill st-{{.Status}}">{{.Status}}</span>{{if .RequiresAttention}} <span class="pill st-error" title="{{.AttentionReason}}">needs attention</span>{{end}}</td>
+        <td class="name">{{or .Title "(untitled)"}} <code class="muted" title="{{.ID}}">{{shortID .ID}}</code>{{if .ParentID}} <span class="muted" title="started by {{.ParentID}}">· sub-agent</span>{{end}}</td>
+        <td>{{.Provider}}{{if .Model}}/{{.Model}}{{end}}{{if .Thinking}} <span class="muted">· {{.Thinking}}</span>{{end}}</td>
+        <td class="muted">{{if not .CreatedAt.IsZero}}started {{ago $.Now .CreatedAt}}{{end}}</td>
+      </tr>
+      {{end}}
+      </tbody>
+    </table>
+    </div>
   </div>
-  {{else}}
-  <p class="muted">No agents.</p>
-  {{end}}
+  {{end}}{{end}}
+  {{$idle := idleWorkspaces .}}{{if $idle}}
+  <details class="ws-idle">
+    <summary class="muted">{{plural (len $idle) "workspace"}} without agents</summary>
+    <ul>{{range $idle}}<li>{{or .Name .ID}} <span class="muted">· {{.Kind}} · {{.Status}}{{if .Branch}} · {{.Branch}}{{end}}</span> <code class="muted">{{.Directory}}</code></li>{{end}}</ul>
+  </details>
   {{end}}
   {{end}}
 </section>

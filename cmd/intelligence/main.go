@@ -26,6 +26,7 @@ import (
 
 	"github.com/zachlatta/intelligence/internal/db"
 	"github.com/zachlatta/intelligence/internal/devbox"
+	"github.com/zachlatta/intelligence/internal/paseo"
 	"github.com/zachlatta/intelligence/internal/web"
 )
 
@@ -142,13 +143,16 @@ type devboxSettings struct {
 	Token      string        // DEVBOX_TOKEN: the server's dev-box token
 	Name       string        // DEVBOX_NAME: this box's name; default the lowercased hostname
 	Interval   time.Duration // DEVBOX_INTERVAL: time between reports; default 15s
-	Paseo      string        // DEVBOX_PASEO: the paseo executable; default paseo on PATH
+	PaseoHome  string        // DEVBOX_PASEO_HOME: the Paseo daemon's home; default ~/.paseo
 	AutoUpdate bool          // DEVBOX_AUTOUPDATE: "off" keeps this binary; default on
 }
 
 func devboxConfig(getenv func(string) string, hostname func() (string, error)) (devboxSettings, error) {
 	c := devboxSettings{Server: getenv("DEVBOX_SERVER"), Token: getenv("DEVBOX_TOKEN"), Name: getenv("DEVBOX_NAME"),
-		Interval: 15 * time.Second, Paseo: getenv("DEVBOX_PASEO"), AutoUpdate: getenv("DEVBOX_AUTOUPDATE") != "off"}
+		Interval: 15 * time.Second, PaseoHome: getenv("DEVBOX_PASEO_HOME"), AutoUpdate: getenv("DEVBOX_AUTOUPDATE") != "off"}
+	if c.PaseoHome == "" {
+		c.PaseoHome = filepath.Join(getenv("HOME"), ".paseo")
+	}
 	switch {
 	case c.Server == "":
 		return c, errors.New("DEVBOX_SERVER is not set: the server's base URL")
@@ -175,17 +179,24 @@ func devboxConfig(getenv func(string) string, hostname func() (string, error)) (
 	return c, nil
 }
 
-// runDevbox reports this box to the server every interval until ctx ends. After each call it updates
-// itself to the server's version when they differ (at most once a minute).
+// runDevbox follows the box's Paseo daemon over its protocol and reports it to the server: within
+// a second of a change, and every interval (which also re-reads the daemon's status). After each
+// report it updates itself to the server's version when they differ (at most once a minute).
 func runDevbox(ctx context.Context) error {
 	c, err := devboxConfig(os.Getenv, os.Hostname)
 	if err != nil {
 		return err
 	}
 	v := version(os.Getenv)
-	col := &devbox.Collector{Now: time.Now, Bin: c.Paseo, Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		return exec.CommandContext(ctx, name, args...).Output()
+	w := &devbox.Watcher{Dial: func(ctx context.Context) (*paseo.Client, error) {
+		// re-read each time: the daemon's listen address and credential change when it restarts
+		t, err := paseo.LocalTarget(c.PaseoHome, "intelligence-devbox")
+		if err != nil {
+			return nil, err
+		}
+		return paseo.Dial(ctx, t)
 	}}
+	go w.Run(ctx)
 	client := &http.Client{Timeout: 20 * time.Second}
 	var up *devbox.Updater
 	if c.AutoUpdate {
@@ -193,12 +204,35 @@ func runDevbox(ctx context.Context) error {
 			log.Printf("self-update off: %v", err)
 		}
 	}
-	log.Printf("intelligence devbox %s reporting as %s to %s every %s (self-update %v)", v, c.Name, c.Server, c.Interval, up != nil)
-	failing := false
+	log.Printf("intelligence devbox %s reporting as %s to %s every %s and on change (self-update %v)", v, c.Name, c.Server, c.Interval, up != nil)
+	heartbeat := time.NewTicker(c.Interval)
+	defer heartbeat.Stop()
+	failing, lastErr := false, ""
 	for {
-		readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		rep := devbox.Report{Name: c.Name, Version: v, Paseo: col.Paseo(readCtx), CollectedAt: time.Now()}
-		serverVersion, err := devbox.SendReport(readCtx, client, c.Server, c.Token, rep)
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-heartbeat.C:
+			w.RefreshStatus(ctx)
+		case <-w.Changed():
+			// a burst of updates (an agent's turn starting, its workspace moving) goes in one report
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(time.Second):
+			}
+		}
+		rep := devbox.Report{Name: c.Name, Version: v, Paseo: w.Snapshot(), CollectedAt: time.Now()}
+		if rep.Paseo.Error != lastErr {
+			if rep.Paseo.Error != "" {
+				log.Printf("paseo daemon: %s", rep.Paseo.Error)
+			} else {
+				log.Printf("paseo daemon: connected")
+			}
+			lastErr = rep.Paseo.Error
+		}
+		sendCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		serverVersion, err := devbox.SendReport(sendCtx, client, c.Server, c.Token, rep)
 		cancel()
 		switch {
 		case err != nil && ctx.Err() == nil:
@@ -212,11 +246,6 @@ func runDevbox(ctx context.Context) error {
 			if err := up.Maybe(ctx, serverVersion); err != nil {
 				log.Printf("self-update failed: %v", err)
 			}
-		}
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-time.After(c.Interval):
 		}
 	}
 }

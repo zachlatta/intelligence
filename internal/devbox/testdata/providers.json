@@ -1,6 +1,0 @@
-[
-  {"provider": "claude", "label": "Claude", "status": "available", "enabled": "Enabled", "defaultMode": "auto", "modes": "Bypass"},
-  {"provider": "codex", "label": "Codex", "status": "available", "enabled": "Enabled", "defaultMode": "auto", "modes": "Auto"},
-  {"provider": "copilot", "label": "Copilot", "status": "unavailable", "enabled": "Enabled", "defaultMode": "auto", "modes": ""},
-  {"provider": "antigravity", "label": "Antigravity", "status": "error", "enabled": "Enabled", "defaultMode": "auto", "modes": ""}
-]

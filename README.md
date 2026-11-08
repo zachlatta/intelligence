@@ -10,10 +10,11 @@ One binary, three commands:
 
 - `intelligence` (or `intelligence server`): the web app. It runs in Coolify with a Postgres
   database, reachable only on the tailnet.
-- `intelligence devbox`: runs on each dev box as a systemd user service. Every 15 seconds it reads
-  the local Paseo daemon (`paseo status --json`, `paseo provider ls --json`, `paseo ls -g --json`, every
-  directory's agents) and POSTs a report to the server. The box dials out, so it needs no inbound port, and the server never
-  reaches into a box.
+- `intelligence devbox`: runs on each dev box as a systemd user service. It keeps one connection to
+  the local Paseo daemon over the daemon's own WebSocket protocol (`internal/paseo`), reads its
+  status, workspaces and agents, then follows the updates the daemon pushes. It POSTs a report to
+  the server within a second of a change and every 15 seconds (which also re-reads the daemon's
+  status). The box dials out, so it needs no inbound port, and the server never reaches into a box.
 - `intelligence version`: prints the commit the binary was built from.
 
 ### State and the read-only SQL contract
@@ -25,10 +26,31 @@ in `public` and readable by that role, and the role cannot write. The image buil
 against a throwaway Postgres, so a broken contract fails the build and nothing deploys; the server
 checks it again against production when it starts.
 
-Tables: `devboxes` (each box's latest report), `devbox_agents` (every unarchived Paseo agent on
-each box, replaced by each report; none while the box's agent list fails, with the reason in
-`devboxes.agents_error`) and `schema_migrations`. The `devbox_status` view adds `online` (reported
-within the last minute), `agents` and `running_agents`.
+The hierarchy is devboxes > workspaces > agents:
+
+- `devboxes`: each box's latest report: whether it is connected to its daemon (`connected`, else
+  why in `paseo_error`), the daemon's version, listen address, pid, start and providers.
+- `workspaces`: each box's Paseo workspaces: a directory, local checkout or git worktree that agents
+  run in (`kind`), with its status, project, branch, diff and directory. `listed = false` is a
+  workspace Paseo no longer lists (archived or background) that still has an agent in it.
+- `agents`: every unarchived agent, in its workspace (`box`, `workspace_id`), with its model,
+  thinking level, status, attention, parent (for sub-agents) and times.
+- `schema_migrations`.
+
+Each report replaces its box's workspaces and agents. A box that cannot reach its daemon has none,
+so nothing stale reads as current. The `devbox_status` view adds `online` (reported within the last
+minute) and counts; `workspace_status` adds each workspace's agent counts.
+
+### Talking to Paseo
+
+`internal/paseo` speaks the daemon's protocol directly: a WebSocket at `ws://<listen>/ws` from
+`~/.paseo/paseo.pid`, a hello authenticated with `~/.paseo/local-credential`, then
+`daemon.get_status`, `fetch_workspaces` and `fetch_agents` requests (paged, the first page
+subscribing), and pushed `workspace_update` and `agent_update` messages. The hello opts in to
+explicit subscriptions; without that the daemon streams every running agent's timeline. It decodes
+only the fields stored here: agent records can carry credentials in other fields. The protocol is
+not published as stable; `internal/paseo/paseotest` is a fake daemon that validates requests the
+way Paseo 0.15 does, and the client was checked against a live daemon.
 
 ### Self-update
 
@@ -46,13 +68,14 @@ make test   # gofmt, go vet, go test -race against a throwaway Postgres in Docke
 make run    # http://localhost:8080 (needs DATABASE_URL and READONLY_DATABASE_URL)
 ```
 
-Tests fake `paseo` with captured output in `internal/devbox/testdata/`. Database tests get their own
+Tests talk to a fake Paseo daemon (`internal/paseo/paseotest`). Database tests get their own
 database and read-only role (`internal/dbtest`) on the server in `TEST_DATABASE_URL`, which
 `make test` sets when it is empty.
 
 ## Routes
 
-- `GET /`: dev boxes, their Paseo daemons and agents (running first). Refreshes every 15 seconds.
+- `GET /`: dev boxes, their workspaces with agents (running first), and their Paseo daemons. Workspaces
+  without agents are folded under a count. Refreshes every 15 seconds.
 - `GET /api/devboxes`: the same, as JSON.
 - `POST /api/sql` with `{"query": "...", "limit": 1000}`, or `GET /api/sql?q=...&limit=`: one
   read-only query. Returns `{"columns": [{"name", "type"}], "rows": [[...]], "rowCount",
@@ -86,7 +109,7 @@ Dev box (in `~/.config/intelligence/devbox.env`):
 - `DEVBOX_TOKEN`: the server's dev box token.
 - `DEVBOX_NAME`: optional; default the lowercased hostname.
 - `DEVBOX_INTERVAL`: optional; default `15s`.
-- `DEVBOX_PASEO`: optional paseo executable; default `paseo` on PATH.
+- `DEVBOX_PASEO_HOME`: optional Paseo home; default `~/.paseo`.
 - `DEVBOX_AUTOUPDATE`: `off` keeps the installed binary; default on.
 
 ## Deploy

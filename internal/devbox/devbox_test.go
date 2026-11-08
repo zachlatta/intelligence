@@ -3,122 +3,15 @@ package devbox
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
 )
 
 var t0 = time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
-
-// fakePaseo answers `paseo status --json` and `paseo ls --json` from testdata files (or errors).
-type fakePaseo struct {
-	status, ls, providers string // testdata file names; "" = the command fails
-	calls                 [][]string
-}
-
-func (f *fakePaseo) run(_ context.Context, name string, args ...string) ([]byte, error) {
-	f.calls = append(f.calls, append([]string{name}, args...))
-	file := ""
-	switch {
-	case len(args) > 0 && args[0] == "status":
-		file = f.status
-	case len(args) > 0 && args[0] == "ls":
-		file = f.ls
-	case len(args) > 1 && args[0] == "provider" && args[1] == "ls":
-		file = f.providers
-	}
-	if file == "" {
-		return nil, errors.New("exec: \"paseo\": executable file not found in $PATH")
-	}
-	return os.ReadFile(filepath.Join("testdata", file))
-}
-
-func collector(f *fakePaseo) *Collector {
-	now := t0
-	return &Collector{Run: f.run, Now: func() time.Time { return now }}
-}
-
-func TestCollectReadsDaemonStatusProvidersAndAgents(t *testing.T) {
-	f := &fakePaseo{status: "status-full.json", ls: "ls.json", providers: "providers.json"}
-	s := collector(f).Paseo(context.Background())
-	if s.Error != "" {
-		t.Fatalf("error = %q", s.Error)
-	}
-	if s.Daemon != "running" || s.Connected != "reachable" || s.Version != "0.11.4" || s.PID != 3029 ||
-		s.Hostname != "devbox-1" || s.Listen != "0.0.0.0:6767" {
-		t.Errorf("daemon fields = %+v", s)
-	}
-	if want := time.Date(2026, 11, 8, 7, 37, 56, 968e6, time.UTC); !s.StartedAt.Equal(want) {
-		t.Errorf("startedAt = %v, want %v", s.StartedAt, want)
-	}
-	if len(s.Providers) != 4 || s.Providers[0] != (Provider{Name: "claude", Status: "available", Available: true}) ||
-		s.Providers[2] != (Provider{Name: "copilot", Status: "unavailable"}) || s.Providers[3] != (Provider{Name: "antigravity", Status: "error"}) {
-		t.Errorf("providers = %+v", s.Providers)
-	}
-	if !s.ProvidersAt.Equal(t0) {
-		t.Errorf("providersAt = %v, want %v", s.ProvidersAt, t0)
-	}
-	want := Agent{ID: "a1000000-0000-4000-8000-000000000001", ShortID: "a100000", Name: "Fix the login page",
-		Provider: "claude/claude-opus-5-5", Thinking: "medium", Status: "running", Cwd: "~/dev/example/app"}
-	if len(s.Agents) != 3 || s.Agents[0] != want || s.Agents[1].Status != "idle" || s.Agents[2].Name != "Audit dependencies" {
-		t.Errorf("agents = %+v", s.Agents)
-	}
-	for _, c := range f.calls {
-		if c[0] != "paseo" || c[len(c)-1] != "--json" {
-			t.Errorf("unexpected call %v", c)
-		}
-		if c[1] == "ls" && !slices.Contains(c, "-g") {
-			t.Errorf("paseo ls without -g lists only one directory's agents: %v", c)
-		}
-	}
-}
-
-func TestCollectKeepsLastProvidersWhenProviderListFails(t *testing.T) {
-	f := &fakePaseo{status: "status-full.json", ls: "ls.json", providers: "providers.json"}
-	c := collector(f)
-	c.Paseo(context.Background())
-	later := t0.Add(15 * time.Second)
-	c.Now = func() time.Time { return later }
-	f.providers = ""
-	s := c.Paseo(context.Background())
-	if len(s.Providers) != 4 {
-		t.Fatalf("providers = %+v, want the last known 4", s.Providers)
-	}
-	if !s.ProvidersAt.Equal(t0) {
-		t.Errorf("providersAt = %v, want the earlier read %v", s.ProvidersAt, t0)
-	}
-}
-
-func TestCollectKeepsPaseoNote(t *testing.T) {
-	s := collector(&fakePaseo{status: "status-timeout.json", ls: "ls.json", providers: "providers.json"}).Paseo(context.Background())
-	if !strings.Contains(s.Note, "DAEMON_REQUEST_TIMEOUT") || len(s.Providers) != 4 {
-		t.Errorf("note = %q, providers = %d", s.Note, len(s.Providers))
-	}
-}
-
-func TestCollectReportsMissingPaseo(t *testing.T) {
-	s := collector(&fakePaseo{}).Paseo(context.Background())
-	if !strings.Contains(s.Error, "executable file not found") {
-		t.Fatalf("error = %q", s.Error)
-	}
-}
-
-func TestCollectReportsAgentListFailureSeparately(t *testing.T) {
-	s := collector(&fakePaseo{status: "status-full.json", providers: "providers.json"}).Paseo(context.Background())
-	if s.Error != "" || s.Daemon != "running" {
-		t.Fatalf("daemon status lost: %+v", s)
-	}
-	if s.AgentsError == "" || s.Agents != nil {
-		t.Errorf("agents = %v, agentsError = %q", s.Agents, s.AgentsError)
-	}
-}
 
 func TestSendPostsReportWithBearerToken(t *testing.T) {
 	var got Report
@@ -130,14 +23,14 @@ func TestSendPostsReportWithBearerToken(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.Close()
-	r := Report{Name: "devbox-1", CollectedAt: t0, Version: "v1", Paseo: PaseoStatus{Daemon: "running"}}
+	r := Report{Name: "devbox-1", CollectedAt: t0, Version: "v1", Paseo: PaseoStatus{Connected: true, Version: "0.15.3"}}
 	if _, err := SendReport(context.Background(), srv.Client(), srv.URL+"/", "secret", r); err != nil {
 		t.Fatal(err)
 	}
 	if path != ReportPath || auth != "Bearer secret" || !strings.HasPrefix(ctype, "application/json") {
 		t.Errorf("path %q auth %q content type %q", path, auth, ctype)
 	}
-	if got.Name != "devbox-1" || got.Paseo.Daemon != "running" || !got.CollectedAt.Equal(t0) {
+	if got.Name != "devbox-1" || !got.Paseo.Connected || got.Paseo.Version != "0.15.3" || !got.CollectedAt.Equal(t0) {
 		t.Errorf("server got %+v", got)
 	}
 }
