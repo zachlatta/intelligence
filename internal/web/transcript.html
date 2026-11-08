@@ -38,20 +38,13 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   .pill.running, .pill.initializing { background: var(--accent-bg); border-color: var(--accent-line); color: var(--accent); }
 
-  /* While the agent works: a strip above the chat box, always on screen, with a moving bar along its top edge. */
-  .working { position: relative; display: flex; align-items: center; gap: .5rem; margin: 0 0 .45rem; padding: .35rem .65rem;
-    border-radius: var(--radius); border: 1px solid var(--accent-line); background: var(--accent-bg); color: var(--accent);
-    font-size: .8rem; font-weight: 500; overflow: hidden; }
+  /* While the agent works: a small spinner and timer in the chat bar, on the line the hints already use. */
+  .working { flex: none; display: inline-flex; align-items: center; gap: .3rem; font-size: .75rem; color: var(--accent);
+    font-variant-numeric: tabular-nums; }
   .working[hidden] { display: none; }
-  .working::before { content: ""; position: absolute; left: 0; top: 0; height: 2px; width: 35%; background: var(--accent);
-    animation: sweep 1.4s ease-in-out infinite; }
-  @keyframes sweep { from { left: -35%; } to { left: 100%; } }
-  .working .wtext::after { content: "…"; display: inline-block; width: 1em; animation: ellipsis 1.2s steps(4) infinite;
-    overflow: hidden; vertical-align: bottom; }
-  @keyframes ellipsis { from { width: 0; } to { width: 1.25em; } }
-  .working .wfor { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
+  .working .spinner { width: .6rem; height: .6rem; border-width: 1.5px; }
   @media (prefers-reduced-motion: reduce) {
-    .spinner, .working::before, .working .wtext::after, .dot.live { animation: none; }
+    .spinner, .dot.live { animation: none; }
   }
 
   .toolbar { display: flex; gap: .4rem; align-items: center; }
@@ -209,12 +202,12 @@
 
 <form id="chat" class="chat" data-commands="{{.Chat.Commands}}" data-agent="{{.Agent.ID}}" data-host="{{.Host}}"
   data-pending-sql="{{.Chat.PendingSQL}}" data-queue-ttl="{{.Chat.QueueTTL}}" data-status="{{.Agent.Status}}"><div class="wrap">
-  <div id="working" class="working"{{if not (working .Agent.Status)}} hidden{{end}}><span class="spinner"></span><span class="wtext">Agent is working</span>
-    <span class="wfor" id="working-for"{{if not .Agent.LastUserMessageAt.IsZero}} data-since="{{iso .Agent.LastUserMessageAt}}"{{end}}></span></div>
   <ul id="pending" class="pending" aria-label="Messages not yet delivered" hidden></ul>
   <textarea name="text" rows="2" aria-label="Message this agent"
     placeholder="Message this agent. Enter steers its turn; Shift+Enter for a new line"></textarea>
   <div class="chatbar">
+    <span id="working" class="working" title="The agent is working"{{if not (working .Agent.Status)}} hidden{{end}}><span class="spinner"></span>working<span
+      id="working-for"{{if not .Agent.LastUserMessageAt.IsZero}} data-since="{{iso .Agent.LastUserMessageAt}}"{{end}}></span></span>
     <span id="chat-hint" class="hint">Enter steers · ⌥ Enter queues · ⌘/Ctrl Enter interrupts</span>
     <button type="submit" data-behavior="queue" title="Send once the current turn (and anything queued before) ends (⌥ Enter)">Queue</button>
     <button type="submit" data-behavior="interrupt" title="Stop the current turn and send this now (⌘/Ctrl Enter)">Interrupt</button>
@@ -248,20 +241,20 @@ const isWorking = st => st === 'running' || st === 'initializing';
   setStatus(form.dataset.status);
   document.addEventListener('agentstatus', e => setStatus(e.detail));
 
-  // The working strip and the tab title follow the agent's status; the strip counts the turn's time.
-  const strip = document.getElementById('working'), since = document.getElementById('working-for');
+  // The working indicator and the tab title follow the agent's status; the indicator counts the turn's time.
+  const indicator = document.getElementById('working'), since = document.getElementById('working-for');
   const baseTitle = document.title.replace(/^● /, '');
   const elapsed = s => s < 60 ? s + 's' : s < 3600 ? Math.floor(s / 60) + 'm ' + (s % 60) + 's' :
     Math.floor(s / 3600) + 'h ' + Math.floor(s % 3600 / 60) + 'm';
   const tick = () => {
     const t = Date.parse(since.dataset.since || '');
-    since.textContent = strip.hidden || isNaN(t) ? '' : 'for ' + elapsed(Math.max(0, Math.floor((Date.now() - t) / 1000)));
+    since.textContent = indicator.hidden || isNaN(t) ? '' : '· ' + elapsed(Math.max(0, Math.floor((Date.now() - t) / 1000)));
   };
   const showWorking = st => {
     const on = isWorking(st);
-    if (on && strip.hidden) since.dataset.since ||= new Date().toISOString();
+    if (on && indicator.hidden) since.dataset.since ||= new Date().toISOString();
     if (!on) delete since.dataset.since;
-    strip.hidden = !on;
+    indicator.hidden = !on;
     document.title = (on ? '● ' : '') + baseTitle;
     tick();
   };

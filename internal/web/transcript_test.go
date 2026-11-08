@@ -85,7 +85,7 @@ func TestTranscriptPageShowsWhenTheAgentIsWorking(t *testing.T) {
 	sendReport(t, h, rep)
 
 	page := get(t, h, "/hosts/host-1/agents/"+agentA1, nil).Body.String()
-	for _, want := range []string{`<div id="working" class="working">`, `data-since="` + t0.Add(-3*time.Minute).UTC().Format(time.RFC3339) + `"`,
+	for _, want := range []string{`<span id="working" class="working" title="The agent is working">`, `data-since="` + t0.Add(-3*time.Minute).UTC().Format(time.RFC3339) + `"`,
 		`<title>● Fix the`, `class="spinner"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("a running agent's page misses %q", want)
@@ -93,7 +93,7 @@ func TestTranscriptPageShowsWhenTheAgentIsWorking(t *testing.T) {
 	}
 
 	idle := get(t, h, "/hosts/host-1/agents/"+rep.Paseo.Agents[1].ID, nil).Body.String()
-	if !strings.Contains(idle, `<div id="working" class="working" hidden>`) || strings.Contains(idle, "<title>●") {
+	if !strings.Contains(idle, `<span id="working" class="working" title="The agent is working" hidden>`) || strings.Contains(idle, "<title>●") {
 		t.Errorf("an idle agent's page should hide the working indicator")
 	}
 }
