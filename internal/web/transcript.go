@@ -13,41 +13,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/zachlatta/intelligence/internal/devbox"
 	"github.com/zachlatta/intelligence/internal/fleet"
 )
-
-// maxTranscriptBatch bounds one transcript upload; dev boxes send at most a few MB at a time.
-const maxTranscriptBatch = 32 << 20
-
-func storeTranscript(cfg Config, reg *fleet.Registry, w http.ResponseWriter, r *http.Request) {
-	if !devboxAuthorized(cfg, w, r) {
-		return
-	}
-	var b devbox.TranscriptBatch
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxTranscriptBatch)).Decode(&b); err != nil {
-		if errors.As(err, new(*http.MaxBytesError)) {
-			http.Error(w, "transcript batch too large", http.StatusRequestEntityTooLarge)
-			return
-		}
-		http.Error(w, "bad transcript batch: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	if !devbox.ValidName(b.Box) || b.AgentID == "" || b.Epoch == "" {
-		http.Error(w, "bad transcript batch: box, agentId and epoch are required", http.StatusBadRequest)
-		return
-	}
-	switch err := reg.StoreTranscript(r.Context(), b, cfg.Now()); {
-	case errors.Is(err, fleet.ErrEpochChanged):
-		http.Error(w, err.Error(), http.StatusConflict)
-	case errors.Is(err, fleet.ErrUnknownAgent):
-		http.Error(w, err.Error(), http.StatusNotFound)
-	case err != nil:
-		http.Error(w, "could not store the transcript: "+err.Error(), http.StatusInternalServerError)
-	default:
-		w.WriteHeader(http.StatusNoContent)
-	}
-}
 
 //go:embed transcript.html
 var transcriptHTML string

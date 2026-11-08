@@ -1,22 +1,13 @@
 // Package devbox is the dev-box side of Intelligence: it watches the local Paseo daemon over its
-// own protocol (Watcher) and reports it to the server (SendReport). A dev box dials out to the
-// server, so it needs no inbound port.
+// own protocol (Watcher), holds one stream to the server (Link) for its reports, transcripts and
+// the server's commands (Runner), and keeps itself on the server's version (Updater). A dev box
+// dials out to the server, so it needs no inbound port.
 package devbox
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
 	"regexp"
-	"strings"
 	"time"
 )
-
-// ReportPath is where a dev box POSTs its reports.
-const ReportPath = "/api/devboxes/report"
 
 // Report is one dev box's state at one moment.
 type Report struct {
@@ -82,32 +73,6 @@ type Agent struct {
 	CreatedAt         time.Time `json:"createdAt,omitzero"`
 	UpdatedAt         time.Time `json:"updatedAt,omitzero"`
 	LastUserMessageAt time.Time `json:"lastUserMessageAt,omitzero"`
-}
-
-// SendReport POSTs r to the server at base with the dev-box token. It returns the server's version
-// (VersionHeader), also when the server refuses the report, so a box can update to a fixed server.
-func SendReport(ctx context.Context, client *http.Client, base, token string, r Report) (string, error) {
-	body, err := json.Marshal(r)
-	if err != nil {
-		return "", err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(base, "/")+ReportPath, bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	v := resp.Header.Get(VersionHeader)
-	if resp.StatusCode/100 != 2 {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return v, fmt.Errorf("report refused: %s: %s", resp.Status, strings.TrimSpace(string(msg)))
-	}
-	return v, nil
 }
 
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)

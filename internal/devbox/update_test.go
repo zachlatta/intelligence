@@ -164,27 +164,3 @@ func TestUpdateRefusesABinaryThatDoesNotRun(t *testing.T) {
 		t.Fatalf("binary replaced or execed though it does not run")
 	}
 }
-
-func TestSendReturnsTheServerVersion(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set(VersionHeader, "srv1")
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer srv.Close()
-	v, err := SendReport(context.Background(), srv.Client(), srv.URL, "t", Report{Name: "x"})
-	if err != nil || v != "srv1" {
-		t.Fatalf("version %q err %v", v, err)
-	}
-}
-
-func TestSendReturnsTheServerVersionEvenWhenRefused(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set(VersionHeader, "srv2")
-		http.Error(w, "nope", http.StatusBadRequest)
-	}))
-	defer srv.Close()
-	v, err := SendReport(context.Background(), srv.Client(), srv.URL, "t", Report{Name: "x"})
-	if err == nil || v != "srv2" {
-		t.Fatalf("version %q err %v: a refused report must still let the client update to a fixed server", v, err)
-	}
-}

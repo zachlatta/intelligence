@@ -130,7 +130,7 @@ func renderBlocksForTest(t *testing.T, entries []fleet.Entry) string {
 
 func TestTranscriptLiveUpdateSendsBlocksFromASeq(t *testing.T) {
 	h := reported(t)
-	postJSON(t, h, devbox.TranscriptPath, "secret", batch(true, "ep1",
+	sendBatch(t, h, batch(true, "ep1",
 		tentry(1, `{"type":"user_message","text":"go"}`),
 		tentry(2, `{"type":"tool_call","callId":"c","name":"Bash","status":"completed","detail":{"type":"shell","command":"ls","output":"a"},"error":null}`),
 		tentry(3, `{"type":"assistant_message","text":"half"}`)))
@@ -147,7 +147,7 @@ func TestTranscriptLiveUpdateSendsBlocksFromASeq(t *testing.T) {
 		t.Errorf("headers = %v", rec.Header())
 	}
 	// the streamed message grew: the same block comes back whole
-	postJSON(t, h, devbox.TranscriptPath, "secret", batch(false, "ep1", tentry(3, `{"type":"assistant_message","text":"half and whole"}`)))
+	sendBatch(t, h, batch(false, "ep1", tentry(3, `{"type":"assistant_message","text":"half and whole"}`)))
 	if body := get(t, h, base+"/blocks?from=3", nil).Body.String(); !strings.Contains(body, "half and whole") {
 		t.Errorf("grown block not sent: %s", body)
 	}
@@ -155,7 +155,7 @@ func TestTranscriptLiveUpdateSendsBlocksFromASeq(t *testing.T) {
 
 func TestTranscriptEntryShowsTheWholeItem(t *testing.T) {
 	h := reported(t)
-	postJSON(t, h, devbox.TranscriptPath, "secret", batch(true, "ep1",
+	sendBatch(t, h, batch(true, "ep1",
 		tentry(1, `{"type":"tool_call","callId":"c","name":"Bash","status":"completed","detail":{"type":"shell","command":"cat <big>","output":"`+strings.Repeat("y", 9000)+`"},"error":null}`)))
 	rec := get(t, h, "/devboxes/devbox-1/agents/"+agentA1+"/entries/1", nil)
 	if rec.Code != http.StatusOK || strings.Count(rec.Body.String(), "y") < 9000 || !strings.Contains(rec.Body.String(), "cat &lt;big&gt;") {
@@ -168,7 +168,7 @@ func TestTranscriptEntryShowsTheWholeItem(t *testing.T) {
 
 func TestTranscriptPageHasTheToolbarAndOtherAgents(t *testing.T) {
 	h := reported(t)
-	postJSON(t, h, devbox.TranscriptPath, "secret", batch(true, "ep1", tentry(1, `{"type":"user_message","text":"go"}`)))
+	sendBatch(t, h, batch(true, "ep1", tentry(1, `{"type":"user_message","text":"go"}`)))
 	page := get(t, h, "/devboxes/devbox-1/agents/"+agentA1, nil).Body.String()
 	for _, want := range []string{`id="search"`, `data-toggle="reasoning"`, `data-toggle="tools"`,
 		"Audit", // the other agent in the same workspace

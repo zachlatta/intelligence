@@ -141,15 +141,6 @@ func post(t *testing.T, h http.Handler, path, token string, body []byte) *httpte
 	return rec
 }
 
-func reportJSON(t *testing.T, r devbox.Report) []byte {
-	t.Helper()
-	b, err := json.Marshal(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return b
-}
-
 var sampleReport = devbox.Report{Name: "devbox-1", CollectedAt: t0, Version: "c1", Paseo: devbox.PaseoStatus{
 	Connected: true, Version: "0.15.3", Hostname: "devbox-1", PID: 3029, Listen: "0.0.0.0:6767",
 	Providers: []devbox.Provider{{Name: "claude", Available: true}, {Name: "copilot"}},
@@ -170,52 +161,9 @@ var sampleReport = devbox.Report{Name: "devbox-1", CollectedAt: t0, Version: "c1
 	},
 }}
 
-func TestReportNeedsTheToken(t *testing.T) {
-	h, d := dbServer(t)
-	body := reportJSON(t, sampleReport)
-	for _, tok := range []string{"", "wrong"} {
-		if rec := post(t, h, devbox.ReportPath, tok, body); rec.Code != http.StatusUnauthorized {
-			t.Errorf("token %q: status = %d, want 401", tok, rec.Code)
-		}
-	}
-	if len(boxes(t, d)) != 0 {
-		t.Fatalf("an unauthorized report was recorded")
-	}
-}
-
-func TestReportsRefusedWhenNoTokenIsConfigured(t *testing.T) {
-	d := dbtest.New(t)
-	h := New(Config{Version: "v", DB: d.Owner, Readonly: d.Readonly})
-	if rec := post(t, h, devbox.ReportPath, "", reportJSON(t, sampleReport)); rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503", rec.Code)
-	}
-	if len(boxes(t, d)) != 0 {
-		t.Fatalf("report recorded with no token configured")
-	}
-}
-
-func TestReportRejectsBadNamesAndBodies(t *testing.T) {
-	h, _ := dbServer(t)
-	bad := sampleReport
-	bad.Name = "<script>"
-	if rec := post(t, h, devbox.ReportPath, "secret", reportJSON(t, bad)); rec.Code != http.StatusBadRequest {
-		t.Errorf("bad name: status = %d, want 400", rec.Code)
-	}
-	if rec := post(t, h, devbox.ReportPath, "secret", []byte("{not json")); rec.Code != http.StatusBadRequest {
-		t.Errorf("bad JSON: status = %d, want 400", rec.Code)
-	}
-	huge := append([]byte(`{"name":"x","pad":"`), bytes.Repeat([]byte("a"), 2<<20)...)
-	huge = append(huge, []byte(`"}`)...)
-	if rec := post(t, h, devbox.ReportPath, "secret", huge); rec.Code != http.StatusRequestEntityTooLarge {
-		t.Errorf("huge body: status = %d, want 413", rec.Code)
-	}
-}
-
 func TestReportedBoxIsListedInTheAPIAndOnTheHomePage(t *testing.T) {
 	h, _ := dbServer(t)
-	if rec := post(t, h, devbox.ReportPath, "secret", reportJSON(t, sampleReport)); rec.Code != http.StatusNoContent {
-		t.Fatalf("report status = %d (%s), want 204", rec.Code, rec.Body)
-	}
+	sendReport(t, h, sampleReport)
 
 	rec := get(t, h, "/api/devboxes", nil)
 	if rec.Code != http.StatusOK {
@@ -261,13 +209,13 @@ func TestHomePageFlagsABoxNotOnTheServersVersion(t *testing.T) {
 	h, _ := dbServerVersion(t, "0123456789abcdef")
 	rep := sampleReport
 	rep.Version = "fedcba9876543210"
-	post(t, h, devbox.ReportPath, "secret", reportJSON(t, rep))
+	sendReport(t, h, rep)
 	page := get(t, h, "/", nil).Body.String()
 	if !strings.Contains(page, `title="fedcba9876543210">client fedcba987654 is not on the server's version`) {
 		t.Errorf("a box on another version than the server should say so, with its version:\n%s", page)
 	}
 	rep.Version = "0123456789abcdef"
-	post(t, h, devbox.ReportPath, "secret", reportJSON(t, rep))
+	sendReport(t, h, rep)
 	if strings.Contains(get(t, h, "/", nil).Body.String(), "not on the server's version") {
 		t.Errorf("a box on the server's version is not behind")
 	}
@@ -275,7 +223,7 @@ func TestHomePageFlagsABoxNotOnTheServersVersion(t *testing.T) {
 
 func TestHomePageNestsAgentsInTheirWorkspaces(t *testing.T) {
 	h, _ := dbServer(t)
-	post(t, h, devbox.ReportPath, "secret", reportJSON(t, sampleReport))
+	sendReport(t, h, sampleReport)
 	page := get(t, h, "/", nil).Body.String()
 	app, run, audit, docs, notes := strings.Index(page, "Login fix"), strings.Index(page, "a100000"),
 		strings.Index(page, "a300000"), strings.Index(page, "Docs"), strings.Index(page, "a200000")
@@ -289,7 +237,7 @@ func TestHomePageNestsAgentsInTheirWorkspaces(t *testing.T) {
 
 func TestHomePageFoldsWorkspacesWithoutAgents(t *testing.T) {
 	h, _ := dbServer(t)
-	post(t, h, devbox.ReportPath, "secret", reportJSON(t, sampleReport))
+	sendReport(t, h, sampleReport)
 	page := get(t, h, "/", nil).Body.String()
 	fold, quiet := strings.Index(page, "1 workspace without agents"), strings.Index(page, "Quiet checkout")
 	if fold < 0 || quiet < fold {
@@ -299,8 +247,7 @@ func TestHomePageFoldsWorkspacesWithoutAgents(t *testing.T) {
 
 func TestHomePageShowsADisconnectedBox(t *testing.T) {
 	h, _ := dbServer(t)
-	post(t, h, devbox.ReportPath, "secret", reportJSON(t, devbox.Report{Name: "devbox-2",
-		Paseo: devbox.PaseoStatus{Error: "connect ws://127.0.0.1:6767/ws: refused"}}))
+	sendReport(t, h, devbox.Report{Name: "devbox-2", Paseo: devbox.PaseoStatus{Error: "connect ws://127.0.0.1:6767/ws: refused"}})
 	page := get(t, h, "/", nil).Body.String()
 	if !strings.Contains(page, "not connected") || !strings.Contains(page, "refused") {
 		t.Errorf("a box that cannot reach its daemon should say so and why")
@@ -326,7 +273,7 @@ func detailsTag(page, id string) string {
 
 func TestHomePageIsATreeOfHostsWorkspacesAndAgents(t *testing.T) {
 	h, _ := dbServer(t)
-	post(t, h, devbox.ReportPath, "secret", reportJSON(t, sampleReport))
+	sendReport(t, h, sampleReport)
 	page := get(t, h, "/", nil).Body.String()
 
 	host := detailsTag(page, "host-devbox-1")

@@ -6,7 +6,6 @@ import (
 	"crypto/subtle"
 	_ "embed"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -25,14 +24,14 @@ type Config struct {
 	Version     string        // the deployed commit, shown on every page and by /healthz
 	DB          *pgxpool.Pool // the app's database, migrated (db.Migrate)
 	Readonly    *pgxpool.Pool // the same database as the read-only role (db.EnsureReadonlyRole)
-	DevboxToken string        // the bearer token dev boxes report with; "" refuses every report
-	SQLTimeout  time.Duration // per SQL API query; default 5s
-	BinDir      string        // dev box binaries, intelligence-<os>-<arch>, served for self-update; "" = none
-	Now         func() time.Time
+	DevboxToken string        // the bearer token dev boxes stream with; "" refuses every stream
+	// OperatorToken is the bearer token that may send dev boxes commands; "" refuses every command.
+	OperatorToken string
+	CommandPoll   time.Duration // how often a stream looks for commands queued elsewhere; default 5s
+	SQLTimeout    time.Duration // per SQL API query; default 5s
+	BinDir        string        // dev box binaries, intelligence-<os>-<arch>, served for self-update; "" = none
+	Now           func() time.Time
 }
-
-// maxReport bounds a report body; a real one is a few KB.
-const maxReport = 1 << 20
 
 //go:embed index.html
 var indexHTML string
@@ -56,7 +55,11 @@ func New(cfg Config) http.Handler {
 	if cfg.SQLTimeout == 0 {
 		cfg.SQLTimeout = 5 * time.Second
 	}
+	if cfg.CommandPoll == 0 {
+		cfg.CommandPoll = 5 * time.Second
+	}
 	reg := fleet.New(cfg.DB)
+	streams := &hub{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
@@ -77,26 +80,12 @@ func New(cfg Config) http.Handler {
 		}
 		writeJSON(w, list)
 	})
-	mux.HandleFunc("POST "+devbox.ReportPath, func(w http.ResponseWriter, r *http.Request) {
-		report(cfg, reg, w, r)
-	})
+	mux.HandleFunc("GET "+devbox.StreamPath("{box}"), stream(cfg, reg, streams))
+	mux.HandleFunc("POST /api/devboxes/{box}/commands", enqueueCommand(cfg, reg, streams))
+	mux.HandleFunc("GET /api/devboxes/{box}/commands/{id}", showCommand(reg))
 	mux.HandleFunc("GET /api/sql", sqlHandler(cfg))
 	mux.HandleFunc("POST /api/sql", sqlHandler(cfg))
 	mux.Handle("GET /api/devbox/binary/{os}/{arch}", binaries(cfg.BinDir))
-	mux.HandleFunc("POST "+devbox.TranscriptPath, func(w http.ResponseWriter, r *http.Request) {
-		storeTranscript(cfg, reg, w, r)
-	})
-	mux.HandleFunc("GET /api/devboxes/{box}/transcripts", func(w http.ResponseWriter, r *http.Request) {
-		if !devboxAuthorized(cfg, w, r) {
-			return
-		}
-		cur, err := reg.TranscriptCursors(r.Context(), r.PathValue("box"))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		writeJSON(w, cur)
-	})
 	mux.HandleFunc("GET /devboxes/{box}/agents/{agent}", func(w http.ResponseWriter, r *http.Request) {
 		transcriptPage(cfg, reg, w, r)
 	})
@@ -129,41 +118,22 @@ func New(cfg Config) http.Handler {
 
 // devboxAuthorized answers the request itself unless it carries the dev-box token.
 func devboxAuthorized(cfg Config, w http.ResponseWriter, r *http.Request) bool {
-	if cfg.DevboxToken == "" {
-		http.Error(w, "dev box reports are not configured on this server", http.StatusServiceUnavailable)
+	return bearerAuthorized(cfg.DevboxToken, "dev box streams are not configured on this server", "dev box", w, r)
+}
+
+// bearerAuthorized answers the request itself unless it carries token, refusing everything while
+// token is "".
+func bearerAuthorized(token, unset, who string, w http.ResponseWriter, r *http.Request) bool {
+	if token == "" {
+		http.Error(w, unset, http.StatusServiceUnavailable)
 		return false
 	}
-	tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if !ok || subtle.ConstantTimeCompare([]byte(tok), []byte(cfg.DevboxToken)) != 1 {
-		http.Error(w, "bad or missing dev box token", http.StatusUnauthorized)
+	tok, ok := bearerOf(r)
+	if !ok || subtle.ConstantTimeCompare([]byte(tok), []byte(token)) != 1 {
+		http.Error(w, "bad or missing "+who+" token", http.StatusUnauthorized)
 		return false
 	}
 	return true
-}
-
-// report records a dev box's report, if it carries the dev-box token.
-func report(cfg Config, reg *fleet.Registry, w http.ResponseWriter, r *http.Request) {
-	if !devboxAuthorized(cfg, w, r) {
-		return
-	}
-	var rep devbox.Report
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxReport)).Decode(&rep); err != nil {
-		if errors.As(err, new(*http.MaxBytesError)) {
-			http.Error(w, "report too large", http.StatusRequestEntityTooLarge)
-			return
-		}
-		http.Error(w, "bad report: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	if !devbox.ValidName(rep.Name) {
-		http.Error(w, "bad dev box name", http.StatusBadRequest)
-		return
-	}
-	if err := reg.Record(r.Context(), rep, cfg.Now()); err != nil {
-		http.Error(w, "could not store the report: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

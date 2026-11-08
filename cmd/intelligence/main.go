@@ -1,7 +1,7 @@
 // Command intelligence is the Intelligence server and its dev-box client.
 //
 //	intelligence [server]   serve the web app (the container's default)
-//	intelligence devbox     run on a dev box: report its Paseo daemon to the server, and stay on its version
+//	intelligence devbox     run on a dev box: stream its Paseo daemon to the server, run the server's commands, and stay on its version
 //	intelligence version    print this binary's version
 package main
 
@@ -116,12 +116,15 @@ func serve(ctx context.Context) error {
 		return err
 	}
 	if os.Getenv("DEVBOX_TOKEN") == "" {
-		log.Printf("DEVBOX_TOKEN is not set: dev box reports are refused")
+		log.Printf("DEVBOX_TOKEN is not set: dev box streams are refused")
+	}
+	if os.Getenv("OPERATOR_TOKEN") == "" {
+		log.Printf("OPERATOR_TOKEN is not set: commands to dev boxes are refused")
 	}
 	srv := &http.Server{
 		Addr: addr(os.Getenv),
 		Handler: web.New(web.Config{Version: v, DB: owner, Readonly: ro, DevboxToken: os.Getenv("DEVBOX_TOKEN"),
-			BinDir: c.BinDir}),
+			OperatorToken: os.Getenv("OPERATOR_TOKEN"), BinDir: c.BinDir}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
@@ -179,10 +182,11 @@ func devboxConfig(getenv func(string) string, hostname func() (string, error)) (
 	return c, nil
 }
 
-// runDevbox follows the box's Paseo daemon over its protocol and reports it to the server: within
-// a second of a change, and every interval (which also re-reads the daemon's status). After each
-// report it syncs the transcripts of loaded agents that changed, then updates itself to the
-// server's version when they differ (at most once a minute).
+// runDevbox follows the box's Paseo daemon over its protocol and holds one stream to the server.
+// Up the stream go reports (within a second of a change, and every interval, which also re-reads
+// the daemon's status), the transcripts of loaded agents that changed (every 2 seconds while one
+// is running) and command results; down it come the server's commands, which run against the
+// daemon. The box updates itself to the server's version when they differ (at most once a minute).
 func runDevbox(ctx context.Context) error {
 	c, err := devboxConfig(os.Getenv, os.Hostname)
 	if err != nil {
@@ -198,24 +202,54 @@ func runDevbox(ctx context.Context) error {
 		return paseo.Dial(ctx, t)
 	}}
 	go w.Run(ctx)
-	client := &http.Client{Timeout: 20 * time.Second}
-	transcripts := &devbox.TranscriptSync{Server: c.Server, Token: c.Token, Box: c.Name,
-		HTTP: &http.Client{Timeout: 2 * time.Minute}, Timeline: w.Timeline}
-	lastSyncErr := ""
 	var up *devbox.Updater
 	if c.AutoUpdate {
 		if up, err = newUpdater(c, v); err != nil {
 			log.Printf("self-update off: %v", err)
 		}
 	}
-	log.Printf("intelligence devbox %s reporting as %s to %s every %s and on change (self-update %v)", v, c.Name, c.Server, c.Interval, up != nil)
+	versions := make(chan string, 1)
+	link := &devbox.Link{Server: c.Server, Token: c.Token, Box: c.Name, ServerVersion: func(sv string) {
+		select {
+		case versions <- sv:
+		default:
+		}
+	}}
+	go link.Run(ctx)
+	runner := &devbox.Runner{Exec: w.Execute, Report: link.Update}
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case cmd := <-link.Commands():
+				log.Printf("command %s: %s", cmd.ID, cmd.Kind)
+				runner.Handle(ctx, cmd)
+			}
+		}
+	}()
+	transcripts := &devbox.TranscriptSync{Box: c.Name, Timeline: w.Timeline, Cursors: link.TranscriptCursors, Send: link.Transcript}
+	log.Printf("intelligence devbox %s streaming as %s to %s (self-update %v)", v, c.Name, c.Server, up != nil)
 	heartbeat := time.NewTicker(c.Interval)
 	defer heartbeat.Stop()
-	failing, lastErr := false, ""
+	live := time.NewTicker(2 * time.Second)
+	defer live.Stop()
+	lastErr, lastLinkErr, lastSyncErr := "", "", ""
 	for {
+		report := true
 		select {
 		case <-ctx.Done():
 			return nil
+		case sv := <-versions:
+			if up != nil {
+				if err := up.Maybe(ctx, sv); err != nil {
+					log.Printf("self-update failed: %v", err)
+				}
+			}
+			continue
+		case <-link.Connected():
+			log.Printf("stream to %s: connected", c.Server)
+			transcripts.Reset() // the server's copies may have changed while the stream was down
 		case <-heartbeat.C:
 			w.RefreshStatus(ctx)
 		case <-w.Changed():
@@ -225,30 +259,37 @@ func runDevbox(ctx context.Context) error {
 				return nil
 			case <-time.After(time.Second):
 			}
+		case <-live.C:
+			report = false // between reports, keep running agents' transcripts current
 		}
-		rep := devbox.Report{Name: c.Name, Version: v, Paseo: w.Snapshot(), CollectedAt: time.Now()}
-		if rep.Paseo.Error != lastErr {
-			if rep.Paseo.Error != "" {
-				log.Printf("paseo daemon: %s", rep.Paseo.Error)
+		snap := w.Snapshot()
+		if snap.Error != lastErr {
+			if snap.Error != "" {
+				log.Printf("paseo daemon: %s", snap.Error)
 			} else {
 				log.Printf("paseo daemon: connected")
 			}
-			lastErr = rep.Paseo.Error
+			lastErr = snap.Error
 		}
-		sendCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		serverVersion, err := devbox.SendReport(sendCtx, client, c.Server, c.Token, rep)
-		cancel()
-		switch {
-		case err != nil && ctx.Err() == nil:
-			log.Printf("report failed: %v", err)
-			failing = true
-		case err == nil && failing:
-			log.Printf("reporting again")
-			failing = false
+		if !report && !anyRunning(snap.Agents) {
+			continue
 		}
-		if rep.Paseo.Connected && err == nil {
+		var err error
+		if report {
+			sendCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			err = link.Report(sendCtx, devbox.Report{Name: c.Name, Version: v, Paseo: snap, CollectedAt: time.Now()})
+			cancel()
+			if msg := fmt.Sprint(err); err != nil && msg != lastLinkErr && ctx.Err() == nil {
+				log.Printf("report failed: %v (stream: %s)", err, link.Err())
+				lastLinkErr = msg
+			} else if err == nil && lastLinkErr != "" {
+				log.Printf("reporting again")
+				lastLinkErr = ""
+			}
+		}
+		if snap.Connected && err == nil {
 			syncCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-			serr := transcripts.Sync(syncCtx, rep.Paseo.Agents)
+			serr := transcripts.Sync(syncCtx, snap.Agents)
 			cancel()
 			if msg := fmt.Sprint(serr); serr != nil && msg != lastSyncErr && ctx.Err() == nil {
 				log.Printf("transcript sync: %v", serr)
@@ -257,12 +298,16 @@ func runDevbox(ctx context.Context) error {
 				lastSyncErr = ""
 			}
 		}
-		if up != nil && ctx.Err() == nil {
-			if err := up.Maybe(ctx, serverVersion); err != nil {
-				log.Printf("self-update failed: %v", err)
-			}
+	}
+}
+
+func anyRunning(agents []devbox.Agent) bool {
+	for _, a := range agents {
+		if a.Status == "running" {
+			return true
 		}
 	}
+	return false
 }
 
 func newUpdater(c devboxSettings, current string) (*devbox.Updater, error) {

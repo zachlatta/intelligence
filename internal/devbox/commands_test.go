@@ -1,0 +1,196 @@
+package devbox
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+func TestParseCommandChecksEachKind(t *testing.T) {
+	good := map[string]string{
+		CreateWorkspaceKind:  `{"cwd":"/w/app","worktree":true,"branch":"fix","base":"main","title":"Fix"}`,
+		CreateAgentKind:      `{"workspaceId":"w1","provider":"claude","prompt":"go"}`,
+		ArchiveWorkspaceKind: `{"workspaceId":"w1"}`,
+		RenameWorkspaceKind:  `{"workspaceId":"w1","title":"New"}`,
+		ArchiveAgentKind:     `{"agentId":"a1"}`,
+		CancelAgentKind:      `{"agentId":"a1"}`,
+		RenameAgentKind:      `{"agentId":"a1","title":"New"}`,
+		SendMessageKind:      `{"agentId":"a1","text":"hi"}`,
+	}
+	for kind, args := range good {
+		if _, err := ParseCommand(kind, json.RawMessage(args)); err != nil {
+			t.Errorf("%s %s: %v", kind, args, err)
+		}
+	}
+	bad := map[string]string{
+		CreateWorkspaceKind + " no cwd":        `{}`,
+		CreateWorkspaceKind + " branch":        `{"cwd":"/w","branch":"x"}`,
+		CreateAgentKind + " no provider":       `{"cwd":"/w"}`,
+		CreateAgentKind + " nowhere":           `{"provider":"claude"}`,
+		CreateAgentKind + " unknown field":     `{"provider":"claude","cwd":"/w","env":{"X":"1"}}`,
+		ArchiveWorkspaceKind + " no id":        `{}`,
+		ArchiveAgentKind + " text":             `{"agentId":"a1","text":"x"}`,
+		RenameAgentKind + " no title":          `{"agentId":"a1"}`,
+		SendMessageKind + " no text":           `{"agentId":"a1"}`,
+		"delete_everything x":                  `{}`,
+		CreateWorkspaceKind + " not an object": `[1]`,
+	}
+	for name, args := range bad {
+		kind, _, _ := strings.Cut(name, " ")
+		if _, err := ParseCommand(kind, json.RawMessage(args)); err == nil {
+			t.Errorf("%s %s: no error", name, args)
+		}
+	}
+}
+
+func execute(t *testing.T, w *Watcher, kind, args string) (CommandResult, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return w.Execute(ctx, Command{ID: "cmd-" + kind, Kind: kind, Args: json.RawMessage(args)})
+}
+
+func TestExecuteCreatesAnAgentInAWorkspacesDirectory(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	res, err := execute(t, w, CreateAgentKind, `{"workspaceId":"w1","provider":"claude","prompt":"go","labels":{"team":"x"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.AgentID == "" || res.WorkspaceID != "w1" {
+		t.Errorf("result = %+v", res)
+	}
+	req := d.Requests("agent.create.request")[0]
+	if cwd := req["config"].(map[string]any)["cwd"]; cwd != "/w/w1" {
+		t.Errorf("cwd = %v, want the workspace's directory", cwd)
+	}
+	labels := req["labels"].(map[string]any)
+	if labels["intelligence.command"] != "cmd-create_agent" || labels["team"] != "x" || req["idempotencyKey"] != "cmd-create_agent" {
+		t.Errorf("request = %v: the command id is the idempotency key and a label", req)
+	}
+	eventually(t, w, "the new agent", func(s PaseoStatus) bool { return len(s.Agents) == 3 })
+}
+
+func TestExecuteEveryOtherKind(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	res, err := execute(t, w, CreateWorkspaceKind, `{"cwd":"/w/app","title":"Docs"}`)
+	if err != nil || !strings.HasPrefix(res.WorkspaceID, "wks_") {
+		t.Fatalf("create workspace = %+v, %v", res, err)
+	}
+	for _, c := range [][2]string{
+		{RenameWorkspaceKind, `{"workspaceId":"w1","title":"Login"}`},
+		{RenameAgentKind, `{"agentId":"a1","title":"Fixer"}`},
+		{SendMessageKind, `{"agentId":"a1","text":"more"}`},
+		{CancelAgentKind, `{"agentId":"a1"}`},
+		{ArchiveAgentKind, `{"agentId":"a2"}`},
+		{ArchiveWorkspaceKind, `{"workspaceId":"w2"}`},
+	} {
+		if _, err := execute(t, w, c[0], c[1]); err != nil {
+			t.Errorf("%s: %v", c[0], err)
+		}
+	}
+	if r := d.Requests("send_agent_message_request")[0]; r["messageId"] != "cmd-send_message" {
+		t.Errorf("message id = %v, want the command id", r["messageId"])
+	}
+	eventually(t, w, "archived ones gone", func(s PaseoStatus) bool {
+		return len(s.Agents) == 1 && len(s.Workspaces) == 2 // w1 and the new one
+	})
+}
+
+func TestExecuteReportsTheDaemonsRefusal(t *testing.T) {
+	w := watcher(t, daemon(t))
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	if _, err := execute(t, w, ArchiveWorkspaceKind, `{"workspaceId":"nope"}`); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("err = %v", err)
+	}
+	if _, err := execute(t, w, CreateAgentKind, `{"workspaceId":"nope","provider":"claude"}`); err == nil {
+		t.Errorf("an agent in an unknown workspace: no error")
+	}
+}
+
+type updates struct {
+	mu   sync.Mutex
+	got  []CommandUpdate
+	fail int // fail this many reports first
+}
+
+func (u *updates) report(ctx context.Context, x CommandUpdate) error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.fail > 0 {
+		u.fail--
+		return errors.New("not connected")
+	}
+	u.got = append(u.got, x)
+	return nil
+}
+
+func (u *updates) statuses() []string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	var s []string
+	for _, x := range u.got {
+		s = append(s, x.ID+":"+x.Status)
+	}
+	return s
+}
+
+func TestRunnerRunsACommandOnceAndAnswersRedeliveries(t *testing.T) {
+	var runs int
+	var mu sync.Mutex
+	u := &updates{}
+	r := &Runner{Exec: func(ctx context.Context, c Command) (CommandResult, error) {
+		mu.Lock()
+		runs++
+		mu.Unlock()
+		return CommandResult{AgentID: "a9"}, nil
+	}, Report: u.report, Retry: time.Millisecond}
+	ctx := context.Background()
+	r.Handle(ctx, Command{ID: "c1", Kind: CreateAgentKind})
+	r.Wait()
+	r.Handle(ctx, Command{ID: "c1", Kind: CreateAgentKind}) // the result's ack was lost; the server sent it again
+	r.Wait()
+	if runs != 1 {
+		t.Errorf("ran %d times, want once", runs)
+	}
+	got := strings.Join(u.statuses(), " ")
+	if got != "c1:running c1:succeeded c1:succeeded" {
+		t.Errorf("updates = %s", got)
+	}
+	if string(u.got[1].Result) != `{"agentId":"a9"}` {
+		t.Errorf("result = %s", u.got[1].Result)
+	}
+}
+
+func TestRunnerRetriesTheResultUntilTheServerHasIt(t *testing.T) {
+	u := &updates{fail: 3}
+	r := &Runner{Exec: func(ctx context.Context, c Command) (CommandResult, error) {
+		return CommandResult{}, errors.New("boom")
+	},
+		Report: u.report, Retry: time.Millisecond}
+	r.Handle(context.Background(), Command{ID: "c1"})
+	r.Wait()
+	if got := u.statuses(); len(got) != 1 || got[0] != "c1:failed" || u.got[0].Error != "boom" {
+		t.Errorf("updates = %v (the running update is best effort; the failure must arrive)", u.got)
+	}
+}
+
+func TestRunnerDoesNotStartAnExpiredCommand(t *testing.T) {
+	u := &updates{}
+	r := &Runner{Exec: func(ctx context.Context, c Command) (CommandResult, error) {
+		t.Error("ran an expired command")
+		return CommandResult{}, nil
+	}, Report: u.report, Now: func() time.Time { return t0 }}
+	r.Handle(context.Background(), Command{ID: "c1", ExpiresAt: t0.Add(-time.Second)})
+	r.Wait()
+	if got := u.statuses(); len(got) != 1 || got[0] != "c1:failed" {
+		t.Errorf("updates = %v", got)
+	}
+}

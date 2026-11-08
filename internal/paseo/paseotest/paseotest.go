@@ -34,6 +34,8 @@ type Daemon struct {
 	silent     bool   // never answers requests
 	accepted   int
 	timelines  map[string]timeline
+	created    map[string]map[string]any // what each creation idempotency key made
+	nextID     int
 }
 
 type timeline struct {
@@ -187,7 +189,150 @@ func (f *Daemon) answer(c *websocket.Conn, msg map[string]any) {
 		f.write(c, session("fetch_workspaces_response", map[string]any{"requestId": id, "entries": entries, "pageInfo": page,
 			"emptyProjects": []any{}}))
 	default:
+		if f.change(c, id, msg) {
+			return
+		}
 		f.write(c, session("rpc_error", map[string]any{"requestId": id, "error": "unknown request"}))
+	}
+}
+
+// change answers the requests that change the daemon, as Paseo 0.15 does; false for any other.
+// Created and archived workspaces and agents are pushed to every connection. Called with f.mu held.
+func (f *Daemon) change(c *websocket.Conn, id string, msg map[string]any) bool {
+	str := func(k string) string { s, _ := msg[k].(string); return s }
+	key := str("idempotencyKey")
+	switch msg["type"] {
+	case "workspace.create.request":
+		if w, ok := f.created[key]; ok && key != "" {
+			f.write(c, session("workspace.create.response", map[string]any{"requestId": id, "workspace": w, "setupTerminalId": nil, "error": nil}))
+			return true
+		}
+		src, _ := msg["source"].(map[string]any)
+		dir, _ := src["path"].(string)
+		kind := "directory"
+		if src["kind"] == "worktree" {
+			cwd, _ := src["cwd"].(string)
+			branch, _ := src["branchName"].(string)
+			dir, kind = cwd+"-worktrees/"+branch, "worktree"
+		}
+		if dir == "" {
+			f.write(c, session("workspace.create.response", map[string]any{"requestId": id, "workspace": nil, "setupTerminalId": nil,
+				"error": "A source path is required"}))
+			return true
+		}
+		f.nextID++
+		w := Workspace(fmt.Sprintf("wks_%016x", f.nextID), kind, "done")
+		w["workspaceDirectory"] = dir
+		if t := str("title"); t != "" {
+			w["name"], w["title"] = t, t
+		}
+		f.workspaces = append(f.workspaces, w)
+		f.remember(key, w)
+		f.pushLocked("workspace_update", map[string]any{"kind": "upsert", "workspace": w})
+		f.write(c, session("workspace.create.response", map[string]any{"requestId": id, "workspace": w, "setupTerminalId": nil, "error": nil}))
+	case "agent.create.request":
+		if a, ok := f.created[key]; ok && key != "" {
+			f.write(c, session("agent.create.response", map[string]any{"requestId": id, "agent": a, "error": nil}))
+			return true
+		}
+		cfg, _ := msg["config"].(map[string]any)
+		provider, _ := cfg["provider"].(string)
+		cwd, _ := cfg["cwd"].(string)
+		if _, ok := msg["labels"].(map[string]any); !ok || cwd == "" {
+			f.write(c, session("rpc_error", map[string]any{"requestId": id, "error": "Invalid message"}))
+			return true
+		}
+		if !slices.Contains([]string{"claude", "codex", "opencode", "pi"}, provider) {
+			f.write(c, session("agent.create.response", map[string]any{"requestId": id, "agent": nil,
+				"error": "Unknown provider: " + provider}))
+			return true
+		}
+		f.nextID++
+		ws := str("workspaceId")
+		if ws == "" {
+			ws = "wks_for_" + cwd
+		}
+		a := Agent(fmt.Sprintf("agent-%d", f.nextID), ws, "running")
+		a["cwd"], a["provider"], a["labels"] = cwd, provider, msg["labels"]
+		if t, _ := cfg["title"].(string); t != "" {
+			a["title"] = t
+		}
+		if m, _ := cfg["model"].(string); m != "" {
+			a["model"] = m
+		}
+		f.agents = append(f.agents, a)
+		f.remember(key, a)
+		f.pushLocked("agent_update", map[string]any{"kind": "upsert", "agent": a, "project": map[string]any{}})
+		f.write(c, session("agent.create.response", map[string]any{"requestId": id, "agent": a, "error": nil}))
+	case "archive_workspace_request":
+		ws := str("workspaceId")
+		i := f.find(f.workspaces, ws)
+		if i < 0 {
+			f.write(c, session("archive_workspace_response", map[string]any{"requestId": id, "workspaceId": ws, "archivedAt": nil,
+				"error": "Workspace not found: " + ws}))
+			return true
+		}
+		f.workspaces = slices.Delete(f.workspaces, i, i+1)
+		f.pushLocked("workspace_update", map[string]any{"kind": "remove", "id": ws})
+		f.write(c, session("archive_workspace_response", map[string]any{"requestId": id, "workspaceId": ws,
+			"archivedAt": "2026-11-08T12:00:00.000Z", "error": nil}))
+	case "workspace.title.set.request":
+		ws := str("workspaceId")
+		i := f.find(f.workspaces, ws)
+		if i < 0 {
+			f.write(c, session("workspace.title.set.response", map[string]any{"requestId": id, "workspaceId": ws, "accepted": false,
+				"title": nil, "error": "Workspace not found"}))
+			return true
+		}
+		f.workspaces[i]["title"] = msg["title"]
+		f.pushLocked("workspace_update", map[string]any{"kind": "upsert", "workspace": f.workspaces[i]})
+		f.write(c, session("workspace.title.set.response", map[string]any{"requestId": id, "workspaceId": ws, "accepted": true,
+			"title": msg["title"], "error": nil}))
+	case "update_agent_request", "send_agent_message_request", "cancel_agent_request", "archive_agent_request":
+		ag := str("agentId")
+		i := f.find(f.agents, ag)
+		if i < 0 {
+			// the daemon throws for an unknown agent, which reaches the client as an rpc_error
+			f.write(c, session("rpc_error", map[string]any{"requestId": id, "requestType": msg["type"],
+				"error": "Request failed: Agent not found: " + ag, "code": "handler_error"}))
+			return true
+		}
+		switch msg["type"] {
+		case "update_agent_request":
+			f.agents[i]["title"] = msg["name"]
+			f.write(c, session("update_agent_response", map[string]any{"requestId": id, "agentId": ag, "ok": true, "error": nil}))
+		case "send_agent_message_request":
+			f.write(c, session("send_agent_message_response", map[string]any{"requestId": id, "agentId": ag, "accepted": true, "error": nil}))
+		case "cancel_agent_request":
+			f.write(c, session("cancel_agent_response", map[string]any{"requestId": id, "agentId": ag, "agent": f.agents[i], "error": nil}))
+		case "archive_agent_request":
+			f.agents = slices.Delete(f.agents, i, i+1)
+			f.pushLocked("agent_update", map[string]any{"kind": "remove", "agentId": ag})
+			f.write(c, session("agent_archived", map[string]any{"requestId": id, "agentId": ag, "archivedAt": "2026-11-08T12:00:00.000Z"}))
+		}
+	default:
+		return false
+	}
+	return true
+}
+
+func (f *Daemon) remember(key string, v map[string]any) {
+	if key == "" {
+		return
+	}
+	if f.created == nil {
+		f.created = map[string]map[string]any{}
+	}
+	f.created[key] = v
+}
+
+func (f *Daemon) find(items []map[string]any, id string) int {
+	return slices.IndexFunc(items, func(m map[string]any) bool { return m["id"] == id })
+}
+
+func (f *Daemon) pushLocked(typ string, payload map[string]any) {
+	for _, c := range f.conns {
+		f.write(c, session(typ, payload))
 	}
 }
 

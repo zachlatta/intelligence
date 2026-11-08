@@ -3,8 +3,6 @@ package devbox
 import (
 	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
@@ -28,57 +26,50 @@ type storedTranscript struct {
 	entries map[int]TranscriptEntry
 }
 
-func newFakeServer(t *testing.T, known ...string) (*fakeServer, *httptest.Server) {
+func newFakeServer(known ...string) *fakeServer {
 	f := &fakeServer{store: map[string]*storedTranscript{}, known: map[string]bool{}}
 	for _, k := range known {
 		f.known[k] = true
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer tok" {
-			http.Error(w, "no", http.StatusUnauthorized)
-			return
+	return f
+}
+
+// cursors answers as the server's hello does.
+func (f *fakeServer) cursors(context.Context) (map[string]TranscriptCursor, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[string]TranscriptCursor{}
+	for id, s := range f.store {
+		c := TranscriptCursor{Epoch: s.epoch}
+		for _, e := range s.entries {
+			if e.SeqStart > c.LastSeqStart {
+				c.LastSeqStart, c.LastSeqEnd = e.SeqStart, e.SeqEnd
+			}
 		}
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == TranscriptCursorsPath("box"):
-			out := map[string]TranscriptCursor{}
-			for id, s := range f.store {
-				c := TranscriptCursor{Epoch: s.epoch}
-				for _, e := range s.entries {
-					if e.SeqStart > c.LastSeqStart {
-						c.LastSeqStart, c.LastSeqEnd = e.SeqStart, e.SeqEnd
-					}
-				}
-				out[id] = c
-			}
-			json.NewEncoder(w).Encode(out)
-		case r.Method == http.MethodPost && r.URL.Path == TranscriptPath:
-			var b TranscriptBatch
-			json.NewDecoder(r.Body).Decode(&b)
-			f.batches = append(f.batches, b)
-			if !f.known[b.AgentID] {
-				http.Error(w, "unknown agent", http.StatusNotFound)
-				return
-			}
-			s := f.store[b.AgentID]
-			if b.Replace {
-				s = &storedTranscript{epoch: b.Epoch, entries: map[int]TranscriptEntry{}}
-				f.store[b.AgentID] = s
-			} else if s == nil || s.epoch != b.Epoch {
-				http.Error(w, "send it whole", http.StatusConflict)
-				return
-			}
-			for _, e := range b.Entries {
-				s.entries[e.SeqStart] = e
-			}
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(srv.Close)
-	return f, srv
+		out[id] = c
+	}
+	return out, nil
+}
+
+// send stores a batch as the server does, answering as its acks do.
+func (f *fakeServer) send(_ context.Context, b TranscriptBatch) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.batches = append(f.batches, b)
+	if !f.known[b.AgentID] {
+		return ErrNotYet
+	}
+	s := f.store[b.AgentID]
+	if b.Replace {
+		s = &storedTranscript{epoch: b.Epoch, entries: map[int]TranscriptEntry{}}
+		f.store[b.AgentID] = s
+	} else if s == nil || s.epoch != b.Epoch {
+		return ErrResend
+	}
+	for _, e := range b.Entries {
+		s.entries[e.SeqStart] = e
+	}
+	return nil
 }
 
 func (f *fakeServer) texts(agent string) []string {
@@ -121,8 +112,8 @@ func newSyncRig(t *testing.T, known ...string) *syncRig {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { c.Close() })
-	f, hs := newFakeServer(t, known...)
-	return &syncRig{d: d, c: c, srv: f, ts: &TranscriptSync{Server: hs.URL, Token: "tok", Box: "box", HTTP: hs.Client(), Timeline: c.Timeline}}
+	f := newFakeServer(known...)
+	return &syncRig{d: d, c: c, srv: f, ts: &TranscriptSync{Box: "box", Timeline: c.Timeline, Cursors: f.cursors, Send: f.send}}
 }
 
 func ag(id, status string, updated time.Time) Agent {
@@ -215,7 +206,7 @@ func TestSyncResumesFromTheServersCursorsAfterARestart(t *testing.T) {
 		paseotest.Entry(2, 2, paseotest.Message("assistant_message", "hello")))
 	r.sync(t, ag("a1", "idle", t0))
 	before := r.srv.batchCount()
-	fresh := &TranscriptSync{Server: r.ts.Server, Token: "tok", Box: "box", HTTP: r.ts.HTTP, Timeline: r.c.Timeline}
+	fresh := &TranscriptSync{Box: "box", Timeline: r.c.Timeline, Cursors: r.srv.cursors, Send: r.srv.send}
 	if err := fresh.Sync(context.Background(), []Agent{ag("a1", "idle", t0)}); err != nil {
 		t.Fatal(err)
 	}

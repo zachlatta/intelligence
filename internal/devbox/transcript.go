@@ -1,24 +1,14 @@
 package devbox
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"strings"
 	"time"
 
 	"github.com/zachlatta/intelligence/internal/paseo"
 )
-
-// TranscriptPath is where a dev box POSTs transcript batches.
-const TranscriptPath = "/api/devboxes/transcripts"
-
-// TranscriptCursorsPath is where a dev box reads which transcripts the server already has.
-func TranscriptCursorsPath(box string) string { return "/api/devboxes/" + box + "/transcripts" }
 
 // TranscriptBatch is part of one agent's transcript. Replace starts the transcript over (a first
 // sync, or a new epoch); otherwise its entries replace those with the same SeqStart and are added
@@ -52,14 +42,21 @@ type TranscriptCursor struct {
 // agent's timeline from the daemon (Timeline) only while the agent is loaded: reading a closed
 // agent's timeline starts it again in Paseo. Not safe for concurrent use.
 type TranscriptSync struct {
-	Server, Token, Box string
-	HTTP               *http.Client
-	Timeline           func(ctx context.Context, agentID string, after *paseo.Cursor) (paseo.Timeline, error)
-	MaxBatch           int // bytes per upload; default 4 MB
+	Box      string
+	Timeline func(ctx context.Context, agentID string, after *paseo.Cursor) (paseo.Timeline, error)
+	// Cursors reads where the server's copies end (Link.TranscriptCursors), once per Reset.
+	Cursors func(ctx context.Context) (map[string]TranscriptCursor, error)
+	// Send stores a batch on the server (Link.Transcript): ErrResend and ErrNotYet are answers, not failures.
+	Send     func(ctx context.Context, b TranscriptBatch) error
+	MaxBatch int // bytes per upload; default 4 MB
 
-	cursors map[string]TranscriptCursor // the server's copy, by agent; read from the server once
+	cursors map[string]TranscriptCursor // the server's copy, by agent
 	synced  map[string]time.Time        // each agent's UpdatedAt when it was last synced
 }
+
+// Reset forgets what the server has, so the next Sync reads its cursors again (a new stream: the
+// server may have changed meanwhile).
+func (s *TranscriptSync) Reset() { s.cursors, s.synced = nil, nil }
 
 // loaded statuses: the daemon holds these agents' timelines, so reading one starts nothing.
 var loaded = map[string]bool{"running": true, "idle": true, "error": true, "initializing": true}
@@ -68,7 +65,7 @@ var loaded = map[string]bool{"running": true, "idle": true, "error": true, "init
 // other agents are still synced, and a failed agent is tried again on the next call.
 func (s *TranscriptSync) Sync(ctx context.Context, agents []Agent) error {
 	if s.cursors == nil {
-		cur, err := s.readCursors(ctx)
+		cur, err := s.Cursors(ctx)
 		if err != nil {
 			return fmt.Errorf("transcript cursors: %w", err)
 		}
@@ -83,7 +80,7 @@ func (s *TranscriptSync) Sync(ctx context.Context, agents []Agent) error {
 			continue
 		}
 		err := s.syncAgent(ctx, a.ID)
-		if errors.Is(err, errNotYet) {
+		if errors.Is(err, ErrNotYet) {
 			continue // not a failure: its report has not landed; tried again next time
 		}
 		if err != nil {
@@ -96,12 +93,6 @@ func (s *TranscriptSync) Sync(ctx context.Context, agents []Agent) error {
 	}
 	return first
 }
-
-// errResend: the server cannot place an append (409); the transcript is sent whole.
-var errResend = errors.New("server asked for the whole transcript")
-
-// errNotYet: the server does not know the agent yet (404): its report has not landed.
-var errNotYet = errors.New("agent not on the server yet")
 
 func (s *TranscriptSync) syncAgent(ctx context.Context, id string) error {
 	cur, have := s.cursors[id]
@@ -119,7 +110,7 @@ func (s *TranscriptSync) syncAgent(ctx context.Context, id string) error {
 		return nil // nothing new
 	}
 	err = s.upload(ctx, id, tl, whole)
-	if errors.Is(err, errResend) && !whole {
+	if errors.Is(err, ErrResend) && !whole {
 		if tl, err = s.Timeline(ctx, id, nil); err != nil {
 			return err
 		}
@@ -138,7 +129,7 @@ func (s *TranscriptSync) upload(ctx context.Context, id string, tl paseo.Timelin
 	batch := TranscriptBatch{Box: s.Box, AgentID: id, Epoch: tl.Epoch, Replace: whole}
 	size := 0
 	flush := func() error {
-		if err := s.post(ctx, batch); err != nil {
+		if err := s.Send(ctx, batch); err != nil {
 			return err
 		}
 		batch.Replace, batch.Entries, size = false, nil, 0
@@ -169,51 +160,4 @@ func (s *TranscriptSync) upload(ctx context.Context, id string, tl paseo.Timelin
 	}
 	s.cursors[id] = cur
 	return nil
-}
-
-func (s *TranscriptSync) post(ctx context.Context, b TranscriptBatch) error {
-	body, err := json.Marshal(b)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(s.Server, "/")+TranscriptPath, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+s.Token)
-	resp, err := s.HTTP.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	switch {
-	case resp.StatusCode == http.StatusConflict:
-		return errResend
-	case resp.StatusCode == http.StatusNotFound:
-		return errNotYet
-	case resp.StatusCode/100 != 2:
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("upload refused: %s: %s", resp.Status, strings.TrimSpace(string(msg)))
-	}
-	return nil
-}
-
-func (s *TranscriptSync) readCursors(ctx context.Context) (map[string]TranscriptCursor, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(s.Server, "/")+TranscriptCursorsPath(s.Box), nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+s.Token)
-	resp, err := s.HTTP.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(msg)))
-	}
-	out := map[string]TranscriptCursor{}
-	return out, json.NewDecoder(resp.Body).Decode(&out)
 }

@@ -32,8 +32,8 @@ func TestEveryResponseNamesTheServerVersion(t *testing.T) {
 			t.Errorf("%s: %s = %q, want c0ffee", path, devbox.VersionHeader, got)
 		}
 	}
-	if got := post(t, h, devbox.ReportPath, "wrong", []byte("{}")).Header().Get(devbox.VersionHeader); got != "c0ffee" {
-		t.Errorf("refused report: version header = %q", got)
+	if got := get(t, h, devbox.StreamPath("devbox-1"), map[string]string{"Authorization": "Bearer wrong"}).Header().Get(devbox.VersionHeader); got != "c0ffee" {
+		t.Errorf("refused stream: version header = %q", got)
 	}
 }
 

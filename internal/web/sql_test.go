@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/zachlatta/intelligence/internal/dbtest"
-	"github.com/zachlatta/intelligence/internal/devbox"
 )
 
 type sqlResult struct {
@@ -45,7 +44,7 @@ func q(query string) string {
 
 func TestSQLReadsAppState(t *testing.T) {
 	h, _ := dbServer(t)
-	post(t, h, devbox.ReportPath, "secret", reportJSON(t, sampleReport))
+	sendReport(t, h, sampleReport)
 	code, r := sqlPost(t, h, q("SELECT name, paseo_version, online, running_agents::text AS running FROM devbox_status"))
 	if code != http.StatusOK {
 		t.Fatalf("status %d: %s", code, r.Error)
@@ -137,7 +136,7 @@ func TestEveryTableIsReadableThroughTheSQLAPI(t *testing.T) {
 
 func TestSQLWalksDevboxesWorkspacesAndAgents(t *testing.T) {
 	h, _ := dbServer(t)
-	post(t, h, devbox.ReportPath, "secret", reportJSON(t, sampleReport))
+	sendReport(t, h, sampleReport)
 	code, r := sqlPost(t, h, q(`SELECT d.name, w.name, a.title, a.status FROM devboxes d JOIN workspaces w ON w.box = d.name
 		JOIN agents a ON a.box = w.box AND a.workspace_id = w.id ORDER BY a.id`))
 	if code != http.StatusOK || r.RowCount != 3 || r.Rows[0][0] != "devbox-1" || r.Rows[0][1] != "Login fix" || r.Rows[0][3] != "running" {
