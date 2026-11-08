@@ -1,0 +1,16 @@
+[Unit]
+Description=Intelligence dev box client: reports this box's Paseo daemon to the server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# DEVBOX_SERVER and DEVBOX_TOKEN (and optional DEVBOX_NAME, DEVBOX_INTERVAL, DEVBOX_PASEO)
+EnvironmentFile=%h/.config/intelligence/devbox.env
+# paseo and its node runtime may live under Homebrew on Linux
+Environment=PATH=%h/.local/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/bin/intelligence devbox
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

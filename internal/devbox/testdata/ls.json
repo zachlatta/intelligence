@@ -1,0 +1,5 @@
+[
+  {"id": "a1", "shortId": "a1", "name": "one", "provider": "claude", "status": "running", "cwd": "/w", "created": "2026-11-08T10:00:00Z", "thinking": "medium"},
+  {"id": "a2", "shortId": "a2", "name": "two", "provider": "claude", "status": "idle", "cwd": "/w", "created": "2026-11-08T10:00:00Z", "thinking": "medium"},
+  {"id": "a3", "shortId": "a3", "name": "three", "provider": "codex", "status": "idle", "cwd": "/w", "created": "2026-11-08T10:00:00Z", "thinking": "medium"}
+]

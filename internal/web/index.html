@@ -3,16 +3,53 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="15">
 <title>Intelligence</title>
 <style>
   :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-  body { max-width: 40rem; margin: 4rem auto; padding: 0 1rem; line-height: 1.5; }
+  body { max-width: 48rem; margin: 3rem auto; padding: 0 1rem; line-height: 1.5; }
+  .box { border: 1px solid #8884; border-radius: .5rem; padding: .75rem 1rem; margin: 1rem 0; }
+  .box h3 { margin: 0 0 .25rem; display: flex; gap: .5rem; align-items: baseline; flex-wrap: wrap; }
+  .pill { font-size: .75rem; padding: .05rem .5rem; border-radius: 1rem; background: #8882; }
+  .online { background: #2a72; color: #2a7; }
+  .offline, .bad { background: #c332; color: #c33; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: .1rem 1rem; margin: .5rem 0 0; }
+  dt { opacity: .6; }
+  dd { margin: 0; }
+  .muted { opacity: .6; }
+  .na { opacity: .45; text-decoration: line-through; }
   footer { margin-top: 3rem; opacity: .6; font-size: .85rem; }
 </style>
 </head>
 <body>
 <h1>Intelligence</h1>
-<p>{{if .User}}Hi, {{.User}}.{{else}}Hi.{{end}} Nothing here yet.</p>
+<p>{{if .User}}Hi, {{.User}}.{{else}}Hi.{{end}}</p>
+
+<h2>Dev boxes</h2>
+{{range .Boxes}}{{$p := .Report.Paseo}}
+<section class="box">
+  <h3>{{.Report.Name}}
+    {{if .Online}}<span class="pill online">online</span>{{else}}<span class="pill offline">offline</span>{{end}}
+    <span class="muted" style="font-size:.8rem">reported {{ago $.Now .LastSeen}}</span>
+  </h3>
+  {{if $p.Error}}
+  <p class="pill bad">{{$p.Error}}</p>
+  {{else}}
+  <dl>
+    <dt>Paseo daemon</dt><dd>{{$p.Daemon}}, {{$p.Connected}}{{if $p.Version}} · v{{$p.Version}}{{end}}</dd>
+    {{if not $p.StartedAt.IsZero}}<dt>Up since</dt><dd title="{{$p.StartedAt}}">{{ago $.Now $p.StartedAt}} · pid {{$p.PID}}</dd>{{end}}
+    <dt>Listening</dt><dd>{{$p.Listen}}</dd>
+    <dt>Agents</dt><dd>{{if $p.AgentsError}}<span class="bad">{{$p.AgentsError}}</span>{{else}}{{agents $p.Agents}}{{end}}</dd>
+    <dt>Providers</dt><dd>{{range $i, $pr := $p.Providers}}{{if $i}}, {{end}}<span class="{{if not $pr.Available}}na{{end}}" title="{{$pr.Status}}">{{$pr.Name}}</span>{{else}}<span class="muted">unknown</span>{{end}}
+      {{if $p.Providers}}<span class="muted">(as of {{ago $.Now $p.ProvidersAt}})</span>{{end}}</dd>
+    {{if $p.Note}}<dt>Note</dt><dd class="muted">{{$p.Note}}</dd>{{end}}
+  </dl>
+  {{end}}
+</section>
+{{else}}
+<p class="muted">No dev boxes have reported yet.</p>
+{{end}}
+
 <footer title="{{.Version}}">version {{.Short}}</footer>
 </body>
 </html>

@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Install or update the dev box client on this machine, as a systemd user service.
+# Run from a checkout of this repo, as the user whose Paseo daemon it reports:
+#
+#   deploy/install-devbox
+#
+# The first run writes ~/.config/intelligence/devbox.env (mode 600) from DEVBOX_SERVER and
+# DEVBOX_TOKEN in the environment; later runs keep that file and only rebuild and restart.
+set -euo pipefail
+
+repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
+env_file="$HOME/.config/intelligence/devbox.env"
+unit_dir="$HOME/.config/systemd/user"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+
+if [ ! -f "$env_file" ]; then
+  : "${DEVBOX_SERVER:?set DEVBOX_SERVER (the server's base URL) for the first install}"
+  : "${DEVBOX_TOKEN:?set DEVBOX_TOKEN (the server's dev box token) for the first install}"
+  mkdir -p "$(dirname "$env_file")"
+  (umask 077; printf 'DEVBOX_SERVER=%s\nDEVBOX_TOKEN=%s\n' "$DEVBOX_SERVER" "$DEVBOX_TOKEN" > "$env_file")
+  echo "wrote $env_file"
+fi
+
+rev=$(git -C "$repo" rev-parse HEAD)
+mkdir -p "$HOME/.local/bin" "$unit_dir"
+(cd "$repo" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$HOME/.local/bin/intelligence.new" ./cmd/intelligence)
+mv "$HOME/.local/bin/intelligence.new" "$HOME/.local/bin/intelligence"
+# the binary reports its commit as SOURCE_COMMIT, like the server's container
+install -m 644 "$repo/deploy/intelligence-devbox.service" "$unit_dir/intelligence-devbox.service"
+mkdir -p "$unit_dir/intelligence-devbox.service.d"
+printf '[Service]\nEnvironment=SOURCE_COMMIT=%s\n' "$rev" > "$unit_dir/intelligence-devbox.service.d/version.conf"
+
+systemctl --user daemon-reload
+systemctl --user enable intelligence-devbox.service >/dev/null
+systemctl --user restart intelligence-devbox.service
+systemctl --user --no-pager status intelligence-devbox.service | head -5
