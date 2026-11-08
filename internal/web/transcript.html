@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{or .Agent.Title "Agent"}} · Intelligence</title>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { max-width: 52rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+  .muted { opacity: .6; }
+  .pill { font-size: .75rem; padding: .05rem .5rem; border-radius: 1rem; background: #8882; }
+  .e { margin: .75rem 0; padding: .5rem .75rem; border-radius: .5rem; border: 1px solid #8883; }
+  .user_message { background: #27c1; border-color: #27c4; }
+  .assistant_message { border-color: #8885; }
+  .reasoning, .tool_call, .other { font-size: .85rem; }
+  .text { white-space: pre-wrap; overflow-wrap: anywhere; margin: .25rem 0 0; font: inherit; }
+  .failed { color: #c33; }
+  pre.detail { font-size: .75rem; overflow-x: auto; max-height: 24rem; }
+  summary { cursor: pointer; }
+  code { font-size: .85em; }
+</style>
+</head>
+<body>
+<p><a href="/">← Dev boxes</a></p>
+<h1>{{or .Agent.Title "(untitled)"}}</h1>
+<p class="muted">
+  {{.Box}} · {{if .Workspace.Listed}}{{or .Workspace.Name .Workspace.ID}}{{else}}workspace {{.Workspace.ID}} (not listed by Paseo){{end}}
+  · <span class="pill">{{.Agent.Status}}</span> · {{.Agent.Provider}}{{if .Agent.Model}}/{{.Agent.Model}}{{end}}
+  · <code title="{{.Agent.ID}}">{{shortID .Agent.ID}}</code>
+  {{if not .Agent.CreatedAt.IsZero}}· started {{ago .Now .Agent.CreatedAt}}{{end}}
+</p>
+{{if .Synced}}
+<p class="muted">{{len .Transcript.Entries}} entries · synced {{ago .Now .Transcript.SyncedAt}}</p>
+{{range .Transcript.Entries}}
+{{if or (eq .Kind "user_message") (eq .Kind "assistant_message")}}
+<div class="e {{.Kind}}"><span class="muted">{{if eq .Kind "user_message"}}user{{else}}agent{{end}}{{if not .At.IsZero}} · {{ago $.Now .At}}{{end}}</span><pre class="text">{{.Text}}</pre></div>
+{{else if eq .Kind "reasoning"}}
+<details class="e reasoning"><summary class="muted">reasoning</summary><pre class="text">{{.Text}}</pre></details>
+{{else if eq .Kind "tool_call"}}
+<details class="e tool_call"><summary><code>{{.Tool}}</code> <span class="{{.Status}}">{{.Status}}</span></summary><pre class="detail">{{detail .Item}}</pre></details>
+{{else}}
+<div class="e other muted">{{.Kind}}{{if .Text}}: {{.Text}}{{end}}</div>
+{{end}}
+{{end}}
+{{else if eq .Agent.Status "closed"}}
+<p class="muted">No transcript synced: this agent was closed before syncing reached it. Reading a closed
+agent's transcript from Paseo would start it again, so it is synced only once it is open in Paseo.</p>
+{{else}}
+<p class="muted">No transcript synced yet: it arrives with the box's next sync.</p>
+{{end}}
+<footer class="muted" style="margin-top:3rem;font-size:.85rem">version {{.Version}}</footer>
+</body>
+</html>

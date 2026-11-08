@@ -251,3 +251,56 @@ func TestLocalTargetExplainsAMissingDaemon(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestTimelineReadsWholeThenAfterACursor(t *testing.T) {
+	f := paseotest.New(t, token)
+	f.SetTimeline("a1", "ep1",
+		paseotest.Entry(1, 1, paseotest.Message("user_message", "fix the login")),
+		paseotest.Entry(2, 5, paseotest.Message("assistant_message", "on it")),
+		paseotest.Entry(6, 6, paseotest.ToolCall("Bash", "completed")))
+	c := dial(t, f)
+	tl, err := c.Timeline(ctx5(t), "a1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tl.Epoch != "ep1" || tl.Reset || len(tl.Entries) != 3 {
+		t.Fatalf("timeline = %+v", tl)
+	}
+	e := tl.Entries[1]
+	if e.SeqStart != 2 || e.SeqEnd != 5 || e.TurnID != "turn-1" || e.Provider != "claude" || e.Timestamp.IsZero() ||
+		!strings.Contains(string(e.Item), `"on it"`) {
+		t.Errorf("entry = %+v", e)
+	}
+	req := f.Requests("fetch_agent_timeline_request")[0]
+	if req["direction"] != "tail" || req["limit"] != float64(0) {
+		t.Errorf("first read = %v, want the whole tail (limit 0 is everything)", req)
+	}
+
+	tl, err = c.Timeline(ctx5(t), "a1", &Cursor{Epoch: "ep1", Seq: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tl.Reset || len(tl.Entries) != 1 || tl.Entries[0].SeqStart != 6 {
+		t.Fatalf("after seq 5 = %+v", tl)
+	}
+}
+
+func TestTimelineFromAnotherEpochIsAWholeReset(t *testing.T) {
+	f := paseotest.New(t, token)
+	f.SetTimeline("a1", "ep2", paseotest.Entry(1, 1, paseotest.Message("user_message", "again")))
+	c := dial(t, f)
+	tl, err := c.Timeline(ctx5(t), "a1", &Cursor{Epoch: "ep1", Seq: 40})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tl.Reset || tl.Epoch != "ep2" || len(tl.Entries) != 1 {
+		t.Fatalf("timeline = %+v, want a reset with the whole new timeline", tl)
+	}
+}
+
+func TestTimelineErrorsComeBack(t *testing.T) {
+	c := dial(t, paseotest.New(t, token))
+	if _, err := c.Timeline(ctx5(t), "nope", nil); err == nil || !strings.Contains(err.Error(), "agent not found") {
+		t.Fatalf("err = %v", err)
+	}
+}

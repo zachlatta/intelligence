@@ -181,7 +181,8 @@ func devboxConfig(getenv func(string) string, hostname func() (string, error)) (
 
 // runDevbox follows the box's Paseo daemon over its protocol and reports it to the server: within
 // a second of a change, and every interval (which also re-reads the daemon's status). After each
-// report it updates itself to the server's version when they differ (at most once a minute).
+// report it syncs the transcripts of loaded agents that changed, then updates itself to the
+// server's version when they differ (at most once a minute).
 func runDevbox(ctx context.Context) error {
 	c, err := devboxConfig(os.Getenv, os.Hostname)
 	if err != nil {
@@ -198,6 +199,9 @@ func runDevbox(ctx context.Context) error {
 	}}
 	go w.Run(ctx)
 	client := &http.Client{Timeout: 20 * time.Second}
+	transcripts := &devbox.TranscriptSync{Server: c.Server, Token: c.Token, Box: c.Name,
+		HTTP: &http.Client{Timeout: 2 * time.Minute}, Timeline: w.Timeline}
+	lastSyncErr := ""
 	var up *devbox.Updater
 	if c.AutoUpdate {
 		if up, err = newUpdater(c, v); err != nil {
@@ -241,6 +245,17 @@ func runDevbox(ctx context.Context) error {
 		case err == nil && failing:
 			log.Printf("reporting again")
 			failing = false
+		}
+		if rep.Paseo.Connected && err == nil {
+			syncCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+			serr := transcripts.Sync(syncCtx, rep.Paseo.Agents)
+			cancel()
+			if msg := fmt.Sprint(serr); serr != nil && msg != lastSyncErr && ctx.Err() == nil {
+				log.Printf("transcript sync: %v", serr)
+				lastSyncErr = msg
+			} else if serr == nil {
+				lastSyncErr = ""
+			}
 		}
 		if up != nil && ctx.Err() == nil {
 			if err := up.Maybe(ctx, serverVersion); err != nil {

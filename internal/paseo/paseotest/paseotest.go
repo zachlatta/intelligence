@@ -33,6 +33,37 @@ type Daemon struct {
 	statusErr  string // daemon.get_status answers rpc_error with this
 	silent     bool   // never answers requests
 	accepted   int
+	timelines  map[string]timeline
+}
+
+type timeline struct {
+	epoch   string
+	entries []map[string]any
+}
+
+// SetTimeline sets agent's projected timeline: its epoch and entries (see Entry), in seq order.
+func (f *Daemon) SetTimeline(agent, epoch string, entries ...map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.timelines == nil {
+		f.timelines = map[string]timeline{}
+	}
+	f.timelines[agent] = timeline{epoch, entries}
+}
+
+// Entry is a timeline entry covering seqs start..end, holding item (such as Message or ToolCall).
+func Entry(start, end int, item map[string]any) map[string]any {
+	return map[string]any{"provider": "claude", "item": item, "turnId": "turn-1", "timestamp": "2026-11-08T10:00:00.000Z",
+		"seqStart": start, "seqEnd": end, "sourceSeqRanges": []any{}, "collapsed": []any{}}
+}
+
+// Message is a user_message, assistant_message or reasoning item.
+func Message(kind, text string) map[string]any { return map[string]any{"type": kind, "text": text} }
+
+// ToolCall is a tool_call item.
+func ToolCall(name, status string) map[string]any {
+	return map[string]any{"type": "tool_call", "callId": "call-" + name, "name": name, "status": status,
+		"detail": map[string]any{"input": map[string]any{"command": "ls"}}, "error": nil}
 }
 
 // SetAgents sets the agent snapshots fetch_agents serves (see Agent).
@@ -149,6 +180,8 @@ func (f *Daemon) answer(c *websocket.Conn, msg map[string]any) {
 			entries[i] = map[string]any{"agent": entries[i], "project": map[string]any{}}
 		}
 		f.write(c, session("fetch_agents_response", map[string]any{"requestId": id, "entries": entries, "pageInfo": page}))
+	case "fetch_agent_timeline_request":
+		f.write(c, session("fetch_agent_timeline_response", f.timelinePage(id, msg)))
 	case "fetch_workspaces_request":
 		entries, page := pageOf(f.workspaces, msg)
 		f.write(c, session("fetch_workspaces_response", map[string]any{"requestId": id, "entries": entries, "pageInfo": page,
@@ -265,4 +298,34 @@ func validFetch(msg map[string]any) bool {
 		}
 	}
 	return true
+}
+
+// timelinePage answers a timeline fetch: tail (everything) or the entries starting after a cursor.
+// A cursor from another epoch is stale: the daemon answers with the whole timeline and reset set.
+func (f *Daemon) timelinePage(id string, msg map[string]any) map[string]any {
+	agent, _ := msg["agentId"].(string)
+	tl, ok := f.timelines[agent]
+	if !ok {
+		e := "agent not found"
+		return map[string]any{"requestId": id, "agentId": agent, "entries": []any{}, "error": e, "epoch": "",
+			"window": map[string]any{"minSeq": 0, "maxSeq": 0, "nextSeq": 0}}
+	}
+	after, reset := -1, false
+	if cur, ok := msg["cursor"].(map[string]any); ok && msg["direction"] == "after" {
+		if cur["epoch"] != tl.epoch {
+			reset = true
+		} else {
+			after = int(cur["seq"].(float64))
+		}
+	}
+	entries := []any{}
+	for _, e := range tl.entries {
+		if after < 0 || e["seqStart"].(int) > after {
+			entries = append(entries, e)
+		}
+	}
+	return map[string]any{"requestId": id, "agentId": agent, "agent": nil, "direction": msg["direction"], "projection": "projected",
+		"epoch": tl.epoch, "reset": reset, "staleCursor": reset, "gap": false, "hasOlder": false, "hasNewer": false,
+		"window": map[string]any{"minSeq": 1, "maxSeq": 1, "nextSeq": 2}, "startCursor": nil, "endCursor": nil,
+		"entries": entries, "error": nil}
 }

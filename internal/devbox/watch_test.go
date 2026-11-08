@@ -151,3 +151,18 @@ func drain(w *Watcher) {
 		}
 	}
 }
+
+func TestWatcherReadsTimelinesOnItsConnection(t *testing.T) {
+	d := daemon(t)
+	d.SetTimeline("a1", "ep1", paseotest.Entry(1, 1, paseotest.Message("user_message", "hi")))
+	w := watcher(t, d)
+	eventually(t, w, "a connection", func(s PaseoStatus) bool { return s.Connected })
+	tl, err := w.Timeline(context.Background(), "a1", nil)
+	if err != nil || len(tl.Entries) != 1 {
+		t.Fatalf("timeline = %+v, err %v", tl, err)
+	}
+	down := &Watcher{}
+	if _, err := down.Timeline(context.Background(), "a1", nil); err == nil {
+		t.Errorf("a watcher with no connection should refuse")
+	}
+}

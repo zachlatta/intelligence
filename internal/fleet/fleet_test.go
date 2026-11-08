@@ -76,7 +76,7 @@ func TestBoxWorkspacesAndAgentsRoundTrip(t *testing.T) {
 		!w1.Dirty || w1.Additions != 12 || w1.Deletions != 3 || w1.Project != "example/app" || !w1.ActivityAt.Equal(wp.Workspaces[0].ActivityAt) {
 		t.Errorf("w1 = %+v", w1)
 	}
-	if len(w1.Agents) != 2 || w1.Agents[0] != wp.Agents[0] || w1.Agents[1] != wp.Agents[1] {
+	if len(w1.Agents) != 2 || w1.Agents[0].Agent != wp.Agents[0] || w1.Agents[1].Agent != wp.Agents[1] {
 		t.Errorf("w1 agents = %+v", w1.Agents)
 	}
 }

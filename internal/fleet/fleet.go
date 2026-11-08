@@ -24,8 +24,15 @@ type Box struct {
 // WorkspaceAgents is a workspace and the agents in it.
 type WorkspaceAgents struct {
 	devbox.Workspace
-	Listed bool           `json:"listed"` // false: Paseo did not list it, but an agent is in it
-	Agents []devbox.Agent `json:"agents"`
+	Listed bool        `json:"listed"` // false: Paseo did not list it, but an agent is in it
+	Agents []AgentView `json:"agents"`
+}
+
+// AgentView is an agent and how much of its transcript is synced.
+type AgentView struct {
+	devbox.Agent
+	TranscriptSynced  bool `json:"transcriptSynced"`
+	TranscriptEntries int  `json:"transcriptEntries"`
 }
 
 // Registry is the devboxes, workspaces and agents tables.
@@ -89,9 +96,16 @@ func (r *Registry) Record(ctx context.Context, rep devbox.Report, at time.Time) 
 			"last_user_message_at"}, pgx.CopyFromRows(wrows)); err != nil {
 			return err
 		}
-		_, err = tx.CopyFrom(ctx, pgx.Identifier{"agents"}, []string{"box", "id", "workspace_id", "parent_id", "title",
+		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"agents"}, []string{"box", "id", "workspace_id", "parent_id", "title",
 			"provider", "model", "thinking", "status", "cwd", "requires_attention", "attention_reason", "created_at",
-			"updated_at", "last_user_message_at"}, pgx.CopyFromRows(arows))
+			"updated_at", "last_user_message_at"}, pgx.CopyFromRows(arows)); err != nil {
+			return err
+		}
+		if !ps.Connected {
+			return nil // a box that lost its daemon keeps its transcripts until it can say which agents are gone
+		}
+		_, err = tx.Exec(ctx, `DELETE FROM transcripts t WHERE t.box = $1
+			AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.box = t.box AND a.id = t.agent_id)`, rep.Name)
 		return err
 	})
 }
@@ -133,18 +147,22 @@ func (r *Registry) List(ctx context.Context) ([]Box, error) {
 	}
 
 	type key struct{ box, id string }
-	agents := map[key][]devbox.Agent{}
-	rows, err = r.p.Query(ctx, `SELECT box, workspace_id, id, parent_id, title, provider, model, thinking, status, cwd,
-		requires_attention, attention_reason, created_at, updated_at, last_user_message_at
-		FROM agents ORDER BY box, status <> 'running', created_at DESC NULLS LAST, id`)
+	agents := map[key][]AgentView{}
+	rows, err = r.p.Query(ctx, `SELECT a.box, a.workspace_id, a.id, a.parent_id, a.title, a.provider, a.model, a.thinking,
+		a.status, a.cwd, a.requires_attention, a.attention_reason, a.created_at, a.updated_at, a.last_user_message_at,
+		t.agent_id IS NOT NULL,
+		(SELECT count(*) FROM transcript_entries e WHERE e.box = a.box AND e.agent_id = a.id)::int
+		FROM agents a LEFT JOIN transcripts t ON t.box = a.box AND t.agent_id = a.id
+		ORDER BY a.box, a.status <> 'running', a.created_at DESC NULLS LAST, a.id`)
 	if err != nil {
 		return nil, err
 	}
 	var box string
-	var a devbox.Agent
+	var a AgentView
 	var created, updated, lastMsg *time.Time
 	if _, err := pgx.ForEachRow(rows, []any{&box, &a.WorkspaceID, &a.ID, &a.ParentID, &a.Title, &a.Provider, &a.Model,
-		&a.Thinking, &a.Status, &a.Cwd, &a.RequiresAttention, &a.AttentionReason, &created, &updated, &lastMsg}, func() error {
+		&a.Thinking, &a.Status, &a.Cwd, &a.RequiresAttention, &a.AttentionReason, &created, &updated, &lastMsg,
+		&a.TranscriptSynced, &a.TranscriptEntries}, func() error {
 		a.CreatedAt, a.UpdatedAt, a.LastUserMessageAt = deref(created), deref(updated), deref(lastMsg)
 		k := key{box, a.WorkspaceID}
 		agents[k] = append(agents[k], a)

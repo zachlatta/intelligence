@@ -42,7 +42,7 @@
 <p>{{if .User}}Hi, {{.User}}.{{else}}Hi.{{end}}</p>
 
 <h2>Dev boxes</h2>
-{{range .Boxes}}{{$p := .Report.Paseo}}
+{{range .Boxes}}{{$p := .Report.Paseo}}{{$box := .Report.Name}}
 <section class="box">
   <h3>{{.Report.Name}}
     {{if .Online}}<span class="pill online">online</span>{{else}}<span class="pill offline">offline</span>{{end}}
@@ -77,7 +77,8 @@
       {{range .Agents}}
       <tr>
         <td><span class="pill st-{{.Status}}">{{.Status}}</span>{{if .RequiresAttention}} <span class="pill st-error" title="{{.AttentionReason}}">needs attention</span>{{end}}</td>
-        <td class="name">{{or .Title "(untitled)"}} <code class="muted" title="{{.ID}}">{{shortID .ID}}</code>{{if .ParentID}} <span class="muted" title="started by {{.ParentID}}">· sub-agent</span>{{end}}</td>
+        <td class="name"><a href="/devboxes/{{$box}}/agents/{{.ID}}">{{or .Title "(untitled)"}}</a> <code class="muted" title="{{.ID}}">{{shortID .ID}}</code>{{if .ParentID}} <span class="muted" title="started by {{.ParentID}}">· sub-agent</span>{{end}}
+          <span class="muted" style="font-size:.8rem">· {{if .TranscriptSynced}}{{plural .TranscriptEntries "entry"}}{{else}}no transcript{{end}}</span></td>
         <td>{{.Provider}}{{if .Model}}/{{.Model}}{{end}}{{if .Thinking}} <span class="muted">· {{.Thinking}}</span>{{end}}</td>
         <td class="muted">{{if not .CreatedAt.IsZero}}started {{ago $.Now .CreatedAt}}{{end}}</td>
       </tr>

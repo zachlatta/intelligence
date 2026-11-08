@@ -35,11 +35,29 @@ The hierarchy is devboxes > workspaces > agents:
   workspace Paseo no longer lists (archived or background) that still has an agent in it.
 - `agents`: every unarchived agent, in its workspace (`box`, `workspace_id`), with its model,
   thinking level, status, attention, parent (for sub-agents) and times.
+- `transcripts` and `transcript_entries`: each agent's transcript, its projected Paseo timeline.
+  An entry keeps the daemon's item whole (`item`, jsonb); `kind` (user_message, assistant_message,
+  reasoning, tool_call, ...), `tool`, `status` and `text` are generated from it. NUL characters,
+  which Postgres cannot store, become U+FFFD.
 - `schema_migrations`.
 
 Each report replaces its box's workspaces and agents. A box that cannot reach its daemon has none,
 so nothing stale reads as current. The `devbox_status` view adds `online` (reported within the last
 minute) and counts; `workspace_status` adds each workspace's agent counts.
+
+### Transcripts
+
+After each report the box syncs the transcripts of its loaded agents (running, idle, error) whose
+activity changed: the whole timeline the first time, then only what follows the server's copy
+(re-reading the last entry, which may still be growing), in uploads of at most 4 MB. It reads where
+the server's copies end once at start, so a restart resumes. A new epoch (the daemon replaced the
+timeline) replaces the copy.
+
+**A closed agent's transcript is never read:** the daemon answers a timeline read by loading the
+agent, which starts a closed agent again. An agent's transcript is copied while it is loaded and
+kept after Paseo closes it; one closed before syncing reached it has none until it is opened again.
+A transcript goes when its agent is gone from a connected box's report (archived); a box that loses
+its daemon keeps its transcripts.
 
 ### Talking to Paseo
 
@@ -76,6 +94,9 @@ database and read-only role (`internal/dbtest`) on the server in `TEST_DATABASE_
 
 - `GET /`: dev boxes, their workspaces with agents (running first), and their Paseo daemons. Workspaces
   without agents are folded under a count. Refreshes every 15 seconds.
+- `GET /devboxes/{box}/agents/{id}`: one agent's transcript, oldest first.
+- `POST /api/devboxes/transcripts`, `GET /api/devboxes/{box}/transcripts`: a box's transcript uploads
+  and where the server's copies end. Need the dev box token.
 - `GET /api/devboxes`: the same, as JSON.
 - `POST /api/sql` with `{"query": "...", "limit": 1000}`, or `GET /api/sql?q=...&limit=`: one
   read-only query. Returns `{"columns": [{"name", "type"}], "rows": [[...]], "rowCount",

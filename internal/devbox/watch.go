@@ -3,6 +3,7 @@ package devbox
 import (
 	"cmp"
 	"context"
+	"errors"
 	"slices"
 	"sync"
 	"time"
@@ -193,4 +194,16 @@ func (w *Watcher) Snapshot() PaseoStatus {
 	}
 	slices.SortFunc(s.Agents, func(a, b Agent) int { return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), cmp.Compare(a.ID, b.ID)) })
 	return s
+}
+
+// Timeline reads an agent's timeline on the current connection (see paseo.Client.Timeline: only
+// for loaded agents).
+func (w *Watcher) Timeline(ctx context.Context, agentID string, after *paseo.Cursor) (paseo.Timeline, error) {
+	w.mu.Lock()
+	c := w.client
+	w.mu.Unlock()
+	if c == nil {
+		return paseo.Timeline{}, errors.New("not connected to the Paseo daemon")
+	}
+	return c.Timeline(ctx, agentID, after)
 }

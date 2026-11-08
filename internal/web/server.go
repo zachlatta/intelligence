@@ -83,6 +83,23 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/sql", sqlHandler(cfg))
 	mux.HandleFunc("POST /api/sql", sqlHandler(cfg))
 	mux.Handle("GET /api/devbox/binary/{os}/{arch}", binaries(cfg.BinDir))
+	mux.HandleFunc("POST "+devbox.TranscriptPath, func(w http.ResponseWriter, r *http.Request) {
+		storeTranscript(cfg, reg, w, r)
+	})
+	mux.HandleFunc("GET /api/devboxes/{box}/transcripts", func(w http.ResponseWriter, r *http.Request) {
+		if !devboxAuthorized(cfg, w, r) {
+			return
+		}
+		cur, err := reg.TranscriptCursors(r.Context(), r.PathValue("box"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, cur)
+	})
+	mux.HandleFunc("GET /devboxes/{box}/agents/{agent}", func(w http.ResponseWriter, r *http.Request) {
+		transcriptPage(cfg, reg, w, r)
+	})
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		list, err := reg.List(r.Context())
 		if err != nil {
@@ -106,15 +123,23 @@ func New(cfg Config) http.Handler {
 	})
 }
 
-// report records a dev box's report, if it carries the dev-box token.
-func report(cfg Config, reg *fleet.Registry, w http.ResponseWriter, r *http.Request) {
+// devboxAuthorized answers the request itself unless it carries the dev-box token.
+func devboxAuthorized(cfg Config, w http.ResponseWriter, r *http.Request) bool {
 	if cfg.DevboxToken == "" {
 		http.Error(w, "dev box reports are not configured on this server", http.StatusServiceUnavailable)
-		return
+		return false
 	}
 	tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !ok || subtle.ConstantTimeCompare([]byte(tok), []byte(cfg.DevboxToken)) != 1 {
 		http.Error(w, "bad or missing dev box token", http.StatusUnauthorized)
+		return false
+	}
+	return true
+}
+
+// report records a dev box's report, if it carries the dev-box token.
+func report(cfg Config, reg *fleet.Registry, w http.ResponseWriter, r *http.Request) {
+	if !devboxAuthorized(cfg, w, r) {
 		return
 	}
 	var rep devbox.Report
@@ -168,7 +193,7 @@ func ago(now, t time.Time) string {
 }
 
 // agentSummary counts agents by status, as "2 running, 8 idle": running first, then the rest by name.
-func agentSummary(agents []devbox.Agent) string {
+func agentSummary(agents []fleet.AgentView) string {
 	if len(agents) == 0 {
 		return "none"
 	}
@@ -196,17 +221,20 @@ func agentSummary(agents []devbox.Agent) string {
 	return strings.Join(parts, ", ")
 }
 
-// plural is "1 workspace", "3 workspaces".
+// plural is "1 workspace", "3 workspaces", "2 entries".
 func plural(n int, word string) string {
 	if n == 1 {
 		return "1 " + word
+	}
+	if stem, ok := strings.CutSuffix(word, "y"); ok {
+		return fmt.Sprintf("%d %sies", n, stem)
 	}
 	return fmt.Sprintf("%d %ss", n, word)
 }
 
 // allAgents is every agent on box b, across its workspaces.
-func allAgents(b fleet.Box) []devbox.Agent {
-	var out []devbox.Agent
+func allAgents(b fleet.Box) []fleet.AgentView {
+	var out []fleet.AgentView
 	for _, w := range b.Workspaces {
 		out = append(out, w.Agents...)
 	}
