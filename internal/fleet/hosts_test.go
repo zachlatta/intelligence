@@ -55,11 +55,17 @@ func TestRecordHostStoresMinutesAgentsKillsAndTheProbe(t *testing.T) {
 		h.Probe.Version != "v1" || h.AgentMem["a1"] != 2<<30 {
 		t.Errorf("host = %+v (minute %+v)", h, h.Minute)
 	}
+	// a minute from before the probe ran: the agent still counts as measured by the probe
+	early := host.Report{Agents: []host.AgentMinute{{AgentID: "a1", Minute: now.Add(-10 * time.Minute), CPUSeconds: pf(1), CPUSource: "proc", MemMax: 1}}}
+	if err := r.RecordHost(ctx, "devbox-1", early, now); err != nil {
+		t.Fatal(err)
+	}
 	top, err := r.TopAgents(ctx, "devbox-1", now.Add(-time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(top) != 2 || top[0].AgentID != "a1" || top[0].CPUSeconds != 30 || top[0].Execs != 120 || top[0].MemMax != 2<<30 {
+	if len(top) != 2 || top[0].AgentID != "a1" || top[0].CPUSeconds != 31 || top[0].Execs != 120 || top[0].MemMax != 2<<30 ||
+		top[0].CPUSource != "ebpf" {
 		t.Errorf("top = %+v", top)
 	}
 	ooms, err := r.OOMKills(ctx, now.Add(-time.Hour))

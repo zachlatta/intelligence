@@ -237,7 +237,7 @@ type AgentTotal struct {
 // TopAgents is every agent that used box since since, most CPU first.
 func (r *Registry) TopAgents(ctx context.Context, box string, since time.Time) ([]AgentTotal, error) {
 	rows, err := r.p.Query(ctx, `SELECT m.agent_id, coalesce(max(a.title), ''), coalesce(sum(m.cpu_seconds), 0),
-		coalesce(max(m.cpu_source), ''), max(m.mem_max), coalesce(sum(m.execs), 0), count(*), max(m.minute)
+		CASE WHEN bool_or(m.cpu_source = 'ebpf') THEN 'ebpf' ELSE coalesce(max(m.cpu_source), '') END, max(m.mem_max), coalesce(sum(m.execs), 0), count(*), max(m.minute)
 		FROM agent_minutes m LEFT JOIN agents a ON a.box = m.box AND a.id = m.agent_id
 		WHERE m.box = $1 AND m.minute >= $2
 		GROUP BY m.agent_id ORDER BY 3 DESC, 5 DESC, 1`, box, since)
