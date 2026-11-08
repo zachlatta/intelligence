@@ -219,3 +219,7 @@ Dev box (in `~/.config/intelligence/devbox.env`):
 - Dev box: once per box, from a checkout of `main`, run `deploy/install-devbox` (the first run needs
   `DEVBOX_SERVER` and `DEVBOX_TOKEN` in the environment). After that the box updates itself.
   Logs: `journalctl --user -u intelligence-devbox`.
+
+## License
+
+MIT. See `LICENSE`.
