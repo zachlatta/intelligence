@@ -283,7 +283,10 @@ approval before CI runs.
   diffs, reads, writes, searches). Long output is cut, with a link to the whole entry. Search,
   thinking and tool toggles, and the other agents in the workspace. While the agent is loaded the
   page re-fetches from its last block every 4 seconds and replaces it, so a growing message updates
-  in place.
+  in place. Under its title, the agent's resources from `agent_minutes` and `oom_kills`: its CPU
+  time (average and peak cores), memory now and at its peak, most processes, commands started and
+  OOM kills, opening to charts of its CPU and memory over its life; re-read every minute while live.
+- `GET /devboxes/{box}/agents/{id}/resources`: those resources alone, as HTML, for the live page.
 - `GET /devboxes/{box}/agents/{id}/blocks?from={seq}`: the blocks from a seq on, as HTML, for the live
   page (`X-Epoch`, `X-Agent-Status`).
 - `GET /devboxes/{box}/agents/{id}/entries/{seq}`: one entry whole.

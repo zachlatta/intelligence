@@ -119,6 +119,16 @@
   #latest { position: fixed; right: 1rem; bottom: 1rem; padding: .45rem .8rem; border-radius: 1.2rem; border: 1px solid var(--line);
     background: var(--card); color: var(--fg); box-shadow: 0 2px 10px #0002; font: inherit; font-size: .8rem; cursor: pointer; display: none; }
   .empty { margin: 3rem 0; color: var(--muted); }
+
+  .res { margin: .5rem 0 0; font-size: .8rem; color: var(--muted); }
+  .res > summary { display: flex; flex-wrap: wrap; gap: .2rem .7rem; align-items: baseline; }
+  .res > summary::before { content: "▸"; } .res[open] > summary::before { content: "▾"; }
+  .res .restitle { color: var(--fg); font-weight: 600; }
+  .res .bad { color: var(--bad); }
+  .res h3 { font-size: .8rem; font-weight: 600; color: var(--fg); margin: .7rem 0 .1rem; }
+  .res table { border-collapse: collapse; } .res td { padding: .05rem .6rem .05rem 0; } .res td.n { text-align: right; }
+  .chart { width: 100%; height: auto; }
+  .chart .grid { stroke: var(--line); } .chart .axis { font-size: 10px; fill: currentColor; opacity: .8; }
   @media (max-width: 40rem) {
     .tname { display: none; } .tbody { padding-left: .75rem; } body { font-size: 14px; }
     .toolbar button { padding: .3rem .45rem; } .wide { display: none; }
@@ -138,6 +148,7 @@
     <span title="{{.Agent.ID}}"><code>{{shortID .Agent.ID}}</code></span>
     {{if .Live}}<span title="New entries appear as the agent works"><span class="dot live"></span> live</span>{{end}}
   </div>
+  {{template "resources" .Resources}}
 </div></header>
 {{if .Synced}}
 <div class="bar"><div class="wrap toolbar">
@@ -270,6 +281,18 @@
   };
   setInterval(poll, 4000);
   document.addEventListener('visibilitychange', poll);
+
+  // The agent's resources: the box reports each minute, so re-read them once a minute.
+  setInterval(async () => {
+    const cur = document.getElementById('resources');
+    if (!cur || document.hidden) return;
+    const r = await fetch(main.dataset.base + '/resources', { cache: 'no-store' });
+    if (!r.ok) return;
+    const tpl = document.createElement('template');
+    tpl.innerHTML = await r.text();
+    const next = tpl.content.firstElementChild;
+    if (next) { next.open = cur.open; cur.replaceWith(next); }
+  }, 60000);
 })();
 </script>
 </body>

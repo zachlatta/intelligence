@@ -130,25 +130,34 @@ const (
 
 // usageChart draws each series' used % from from to to: 0% at the bottom, 100% at the top.
 func usageChart(series []fleet.Series, from, to time.Time) template.HTML {
+	return valueChart(series, from, to, 100, func(v float64) string { return fmt.Sprintf("%.0f%%", v) }, from.UTC().Format("Jan 2"), "now")
+}
+
+// valueChart draws each series from from to to, 0 at the bottom and top at the top, the axis
+// labelled by label, its start by fromLabel and its end by toLabel.
+func valueChart(series []fleet.Series, from, to time.Time, top float64, label func(float64) string, fromLabel, toLabel string) template.HTML {
 	span := to.Sub(from).Seconds()
 	if span <= 0 {
 		span = 1
+	}
+	if top <= 0 {
+		top = 1
 	}
 	x := func(t time.Time) float64 {
 		f := math.Max(0, math.Min(1, t.Sub(from).Seconds()/span))
 		return chartLeft + f*plotW
 	}
-	y := func(used float64) float64 {
-		return chartTop + plotH - math.Max(0, math.Min(100, used))/100*plotH
+	y := func(v float64) float64 {
+		return chartTop + plotH - math.Max(0, math.Min(top, v))/top*plotH
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, `<svg class="chart" viewBox="0 0 640 150" role="img" aria-label="used %% over time">`)
-	for _, g := range []float64{0, 50, 100} {
-		fmt.Fprintf(&b, `<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" class="grid"/><text x="%.1f" y="%.1f" class="axis" text-anchor="end">%.0f%%</text>`,
-			chartLeft, chartLeft+plotW, y(g), y(g), chartLeft-4, y(g)+4, g)
+	b.WriteString(`<svg class="chart" viewBox="0 0 640 150" role="img" aria-label="over time">`)
+	for _, g := range []float64{0, top / 2, top} {
+		fmt.Fprintf(&b, `<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" class="grid"/><text x="%.1f" y="%.1f" class="axis" text-anchor="end">%s</text>`,
+			chartLeft, chartLeft+plotW, y(g), y(g), chartLeft-4, y(g)+4, template.HTMLEscapeString(label(g)))
 	}
-	fmt.Fprintf(&b, `<text x="%.1f" y="146" class="axis">%s</text><text x="%.1f" y="146" class="axis" text-anchor="end">now</text>`,
-		chartLeft, from.UTC().Format("Jan 2"), chartLeft+plotW)
+	fmt.Fprintf(&b, `<text x="%.1f" y="146" class="axis">%s</text><text x="%.1f" y="146" class="axis" text-anchor="end">%s</text>`,
+		chartLeft, template.HTMLEscapeString(fromLabel), chartLeft+plotW, template.HTMLEscapeString(toLabel))
 	for i, s := range series {
 		pts := make([]string, 0, len(s.Points))
 		for _, p := range s.Points {

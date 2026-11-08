@@ -35,7 +35,10 @@ var transcriptTmpl = template.Must(template.New("transcript").Funcs(template.Fun
 	"noteText": noteText,
 	"iso":      func(t time.Time) string { return t.UTC().Format(time.RFC3339) },
 	"deref":    func(p *int) int { return *p },
-}).Parse(transcriptHTML + blocksHTML))
+	"dur":      dur,
+	"size":     size,
+	"plural64": func(n int64, word string) string { return plural(int(n), word) },
+}).Parse(transcriptHTML + blocksHTML + resourcesHTML))
 
 // blocksTmpl renders blocks alone, for live updates.
 var blocksTmpl = transcriptTmpl
@@ -102,11 +105,16 @@ func transcriptPage(cfg Config, reg *fleet.Registry, w http.ResponseWriter, r *h
 	}
 	base := "/devboxes/" + box + "/agents/" + agentID
 	blocks := buildBlocks(tr.Entries)
+	res, rerr := agentUse(r, cfg, reg, box, agentID, live(agent))
+	if rerr != nil {
+		http.Error(w, rerr.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = transcriptTmpl.Execute(w, map[string]any{
 		"Box": box, "Agent": agent, "Workspace": ws, "Siblings": siblings, "Transcript": tr, "Synced": err == nil,
 		"Now": cfg.Now(), "Base": base, "Stats": stats, "Live": err == nil && live(agent), "Blocks": blocks,
-		"BlocksData": blocksData{Base: base, Blocks: blocks, Now: cfg.Now()},
+		"BlocksData": blocksData{Base: base, Blocks: blocks, Now: cfg.Now()}, "Resources": res,
 	})
 }
 

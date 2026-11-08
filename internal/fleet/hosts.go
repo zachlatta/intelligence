@@ -278,3 +278,56 @@ func (r *Registry) OOMKills(ctx context.Context, since time.Time) ([]OOMKill, er
 		return k, err
 	})
 }
+
+// AgentMinute is one of an agent's stored minutes.
+type AgentMinute struct {
+	Minute       time.Time `json:"minute"`
+	CPUSeconds   *float64  `json:"cpuSeconds"`
+	CPUSource    string    `json:"cpuSource"`
+	MemMax       int64     `json:"memMax"`
+	ProcessesMax int       `json:"processesMax"`
+	Execs        *int64    `json:"execs"`
+}
+
+// AgentUse is everything recorded of one agent's resources: its minutes (oldest first), the
+// processes the kernel killed for memory, and how many CPUs its box has.
+type AgentUse struct {
+	Minutes []AgentMinute
+	OOMs    []OOMKill
+	CPUs    int
+}
+
+// AgentUse reads an agent's minutes and kills on box.
+func (r *Registry) AgentUse(ctx context.Context, box, agentID string) (AgentUse, error) {
+	var u AgentUse
+	rows, err := r.p.Query(ctx, `SELECT minute, cpu_seconds, cpu_source, mem_max, processes_max, execs
+		FROM agent_minutes WHERE box = $1 AND agent_id = $2 ORDER BY minute`, box, agentID)
+	if err != nil {
+		return u, err
+	}
+	u.Minutes, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (AgentMinute, error) {
+		var m AgentMinute
+		var cpu *float32
+		err := row.Scan(&m.Minute, &cpu, &m.CPUSource, &m.MemMax, &m.ProcessesMax, &m.Execs)
+		m.CPUSeconds, m.Minute = f64(cpu), m.Minute.UTC()
+		return m, err
+	})
+	if err != nil {
+		return u, err
+	}
+	rows, err = r.p.Query(ctx, `SELECT box, at, pid, comm, agent_id, '', anon_rss FROM oom_kills
+		WHERE box = $1 AND agent_id = $2 ORDER BY at DESC LIMIT 200`, box, agentID)
+	if err != nil {
+		return u, err
+	}
+	u.OOMs, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (OOMKill, error) {
+		var k OOMKill
+		err := row.Scan(&k.Box, &k.At, &k.PID, &k.Comm, &k.AgentID, &k.Title, &k.AnonRSS)
+		return k, err
+	})
+	if err != nil {
+		return u, err
+	}
+	err = r.p.QueryRow(ctx, `SELECT coalesce((SELECT cpus FROM host_current WHERE box = $1), 0)`, box).Scan(&u.CPUs)
+	return u, err
+}

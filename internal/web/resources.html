@@ -1,0 +1,18 @@
+{{define "resources"}}<details class="res" id="resources">
+  <summary>{{if .Minutes}}<span class="restitle">Resources</span>
+    {{if .HasCPU}}<span>CPU {{dur .CPUSeconds}} · {{printf "%.2f" .AvgCores}} cores average, {{printf "%.2f" .PeakCores}} peak</span>{{end}}
+    <span>RAM {{if .MemNow}}{{size .MemNow}} now, {{end}}{{size .MemPeak}} peak</span>
+    <span>{{plural .ProcsPeak "process"}} at most</span>
+    {{if .HasExecs}}<span>{{plural64 .Execs "command"}}</span>{{end}}
+    {{if .OOMs}}<span class="bad">{{plural (len .OOMs) "OOM kill"}}</span>{{end}}
+  {{else}}<span class="restitle">Resources</span> <span>No resources recorded for this agent yet: its box reports each minute it has processes.</span>{{end}}</summary>
+  {{if .Minutes}}<div class="resbody">
+    {{if .CPU}}<h3>CPU, in cores</h3>{{.CPU}}{{end}}
+    {{if .Mem}}<h3>Memory (proportional set size of its processes, the most each minute)</h3>{{.Mem}}{{end}}
+    {{if .OOMs}}<h3 class="bad">OOM kills</h3>
+    <table>{{range .OOMs}}<tr><td>{{.At.Format "Jan 2 15:04:05 MST"}}</td><td>{{.Comm}} ({{.PID}})</td><td class="n">{{size .AnonRSS}}</td></tr>{{end}}</table>{{end}}
+    <p class="small muted">{{plural .Minutes "minute"}} measured, {{.First.Format "Jan 2 15:04 MST"}} to {{.Last.Format "Jan 2 15:04 MST"}}{{if .CPUs}} on a box with {{.CPUs}} CPUs{{end}}.
+      CPU is {{if .EBPF}}exact (eBPF): every process the agent started, however short{{else}}sampled (/proc): only processes alive at each 15-second walk, so short commands are missed{{end}}.
+      Also in <code>agent_minutes</code> and <code>oom_kills</code> through <code>/api/sql</code>.</p>
+  </div>{{end}}
+</details>{{end}}

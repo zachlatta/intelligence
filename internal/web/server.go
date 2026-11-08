@@ -99,6 +99,9 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /devboxes/{box}/agents/{agent}/blocks", func(w http.ResponseWriter, r *http.Request) {
 		transcriptBlocks(cfg, reg, w, r)
 	})
+	mux.HandleFunc("GET /devboxes/{box}/agents/{agent}/resources", func(w http.ResponseWriter, r *http.Request) {
+		transcriptResources(cfg, reg, w, r)
+	})
 	mux.HandleFunc("GET /devboxes/{box}/agents/{agent}/entries/{seq}", func(w http.ResponseWriter, r *http.Request) {
 		transcriptEntry(reg, w, r)
 	})
