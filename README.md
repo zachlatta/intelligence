@@ -92,8 +92,10 @@ database and read-only role (`internal/dbtest`) on the server in `TEST_DATABASE_
 
 ## Routes
 
-- `GET /`: dev boxes, their workspaces with agents (running first), and their Paseo daemons. Workspaces
-  without agents are folded under a count. Refreshes every 15 seconds.
+- `GET /`: a collapsible tree of hosts > workspaces (with their project) > agents (with their status).
+  Hosts start open, and so do workspaces with an agent running or needing attention; workspaces without
+  agents are folded under a count. Problems (Paseo not connected, a client not on the server's version)
+  show under the host. The tree refreshes in place every 15 seconds and keeps what was opened or closed.
 - `GET /devboxes/{box}/agents/{id}`: one agent's transcript as turns: messages rendered as Markdown
   (raw HTML shown as text, unsafe links dropped, images named rather than loaded), thinking folded to
   a line, and runs of tool calls as a compact list that opens per call (commands with exit codes,

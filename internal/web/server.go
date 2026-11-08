@@ -45,6 +45,7 @@ var indexTmpl = template.Must(template.New("index").Funcs(template.FuncMap{
 	"plural":         plural,
 	"allAgents":      allAgents,
 	"idleWorkspaces": idleWorkspaces,
+	"openWorkspace":  openWorkspace,
 }).Parse(indexHTML))
 
 // New returns the app's HTTP handler.
@@ -198,7 +199,7 @@ func ago(now, t time.Time) string {
 // agentSummary counts agents by status, as "2 running, 8 idle": running first, then the rest by name.
 func agentSummary(agents []fleet.AgentView) string {
 	if len(agents) == 0 {
-		return "none"
+		return "no agents"
 	}
 	counts := map[string]int{}
 	for _, a := range agents {
@@ -258,4 +259,14 @@ func idleWorkspaces(b fleet.Box) []fleet.WorkspaceAgents {
 		}
 	}
 	return out
+}
+
+// openWorkspace says whether w starts open on the home page: it has an agent running or needing attention.
+func openWorkspace(w fleet.WorkspaceAgents) bool {
+	for _, a := range w.Agents {
+		if a.Status == "running" || a.RequiresAttention {
+			return true
+		}
+	}
+	return false
 }

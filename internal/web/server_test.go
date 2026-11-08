@@ -231,9 +231,8 @@ func TestReportedBoxIsListedInTheAPIAndOnTheHomePage(t *testing.T) {
 	}
 
 	page := get(t, h, "/", nil).Body.String()
-	for _, want := range []string{"devbox-1", "online", "connected", "0.15.3", "claude", "1 running, 2 idle", "3 workspaces",
-		"Login fix", "worktree", "fix-login", "+12", "−3", "example/app", "Fix the &lt;b&gt;login&lt;/b&gt; page", "a100000",
-		"claude-opus-5-5", "Write notes", "needs attention"} {
+	for _, want := range []string{"devbox-1", "online", "1 running, 2 idle", "Login fix", "example/app",
+		"Fix the &lt;b&gt;login&lt;/b&gt; page", "claude-opus-5-5", "Write notes", "needs attention"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("home page misses %q", want)
 		}
@@ -258,17 +257,14 @@ func TestHomePageSaysWhenNoBoxHasReported(t *testing.T) {
 	}
 }
 
-func TestHomePageShowsEachBoxClientVersion(t *testing.T) {
+func TestHomePageFlagsABoxNotOnTheServersVersion(t *testing.T) {
 	h, _ := dbServerVersion(t, "0123456789abcdef")
 	rep := sampleReport
 	rep.Version = "fedcba9876543210"
 	post(t, h, devbox.ReportPath, "secret", reportJSON(t, rep))
 	page := get(t, h, "/", nil).Body.String()
-	if !strings.Contains(page, `title="fedcba9876543210">fedcba987654</span>`) {
-		t.Errorf("box's client version missing:\n%s", page)
-	}
-	if !strings.Contains(page, "not on the server's version") {
-		t.Errorf("a box on another version than the server should say so")
+	if !strings.Contains(page, `title="fedcba9876543210">client fedcba987654 is not on the server's version`) {
+		t.Errorf("a box on another version than the server should say so, with its version:\n%s", page)
 	}
 	rep.Version = "0123456789abcdef"
 	post(t, h, devbox.ReportPath, "secret", reportJSON(t, rep))
@@ -308,5 +304,63 @@ func TestHomePageShowsADisconnectedBox(t *testing.T) {
 	page := get(t, h, "/", nil).Body.String()
 	if !strings.Contains(page, "not connected") || !strings.Contains(page, "refused") {
 		t.Errorf("a box that cannot reach its daemon should say so and why")
+	}
+	if !strings.Contains(page, "no agents") {
+		t.Errorf("a box with no agents should say so")
+	}
+}
+
+// details returns the <details> element with id in page, up to its first child's end, or "".
+func detailsTag(page, id string) string {
+	i := strings.Index(page, `id="`+id+`"`)
+	if i < 0 {
+		return ""
+	}
+	start := strings.LastIndex(page[:i], "<details")
+	end := strings.Index(page[i:], ">")
+	if start < 0 || end < 0 {
+		return ""
+	}
+	return page[start : i+end+1]
+}
+
+func TestHomePageIsATreeOfHostsWorkspacesAndAgents(t *testing.T) {
+	h, _ := dbServer(t)
+	post(t, h, devbox.ReportPath, "secret", reportJSON(t, sampleReport))
+	page := get(t, h, "/", nil).Body.String()
+
+	host := detailsTag(page, "host-devbox-1")
+	if host == "" || !strings.Contains(host, " open") {
+		t.Fatalf("each host should be a details element, open by default: %q", host)
+	}
+	app, docs := detailsTag(page, "ws-devbox-1-w-app"), detailsTag(page, "ws-devbox-1-w-docs")
+	if app == "" || docs == "" {
+		t.Fatalf("each workspace with agents should be a details element under its host:\n%s", page)
+	}
+	if !strings.Contains(app, " open") {
+		t.Errorf("a workspace with a running agent should start open: %q", app)
+	}
+	if strings.Contains(docs, " open") {
+		t.Errorf("a workspace with only idle agents should start closed: %q", docs)
+	}
+	if !(strings.Index(page, `id="host-devbox-1"`) < strings.Index(page, `id="ws-devbox-1-w-app"`) &&
+		strings.Index(page, `id="ws-devbox-1-w-app"`) < strings.Index(page, "a1000000-0000-4000-8000-000000000001")) {
+		t.Errorf("the tree should nest host > workspace > agent")
+	}
+	for _, want := range []string{`class="status st-running">running`, `class="status st-idle">idle`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("each agent should show its status: missing %q", want)
+		}
+	}
+}
+
+func TestHomePageRefreshesWithoutResettingTheTree(t *testing.T) {
+	h, _ := dbServer(t)
+	page := get(t, h, "/", nil).Body.String()
+	if strings.Contains(page, `http-equiv="refresh"`) {
+		t.Errorf("a full-page refresh would collapse what the reader opened")
+	}
+	if !strings.Contains(page, "<script>") || !strings.Contains(page, "setInterval") {
+		t.Errorf("the page should refresh the tree in place")
 	}
 }

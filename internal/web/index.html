@@ -3,102 +3,102 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="15">
 <title>Intelligence</title>
 <style>
   :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-  body { max-width: 48rem; margin: 3rem auto; padding: 0 1rem; line-height: 1.5; }
-  .box { border: 1px solid #8884; border-radius: .5rem; padding: .75rem 1rem; margin: 1rem 0; }
-  .box h3 { margin: 0 0 .25rem; display: flex; gap: .5rem; align-items: baseline; flex-wrap: wrap; }
-  .pill { font-size: .75rem; padding: .05rem .5rem; border-radius: 1rem; background: #8882; }
-  .online { background: #2a72; color: #2a7; }
-  .offline, .bad { background: #c332; color: #c33; }
-  dl { display: grid; grid-template-columns: max-content 1fr; gap: .1rem 1rem; margin: .5rem 0 0; }
-  dt { opacity: .6; }
-  dd { margin: 0; }
-  .muted { opacity: .6; }
-  .na { opacity: .45; text-decoration: line-through; }
-  table.agents { width: 100%; border-collapse: collapse; margin-top: .4rem; font-size: .9rem; }
-  table.agents th { text-align: left; font-weight: normal; opacity: .6; padding: .2rem .5rem .2rem 0; }
-  table.agents td { padding: .25rem .5rem .25rem 0; border-top: 1px solid #8882; vertical-align: top; }
-  table.agents .name { overflow-wrap: anywhere; }
-  .agents-wrap { overflow-x: auto; }
+  body { max-width: 52rem; margin: 2.5rem auto; padding: 0 1rem; line-height: 1.5; }
+  h1 { font-size: 1.4rem; margin: 0 0 1rem; }
+  details { margin: 0; }
+  summary { cursor: pointer; list-style: none; display: flex; gap: .5rem; align-items: baseline; padding: .2rem .25rem;
+    border-radius: .3rem; }
+  summary::-webkit-details-marker { display: none; }
+  summary::before { content: "▸"; width: .8rem; flex: none; opacity: .5; transition: transform .1s; }
+  details[open] > summary::before { transform: rotate(90deg); }
+  summary:hover { background: #8881; }
+  .host > summary { font-size: 1.1rem; font-weight: 600; }
+  .children { margin-left: .6rem; padding-left: .8rem; border-left: 1px solid #8883; }
+  .name { overflow-wrap: anywhere; }
+  .meta { opacity: .6; font-size: .85rem; font-weight: normal; }
+  .grow { flex: 1; }
+  .dot { width: .55rem; height: .55rem; border-radius: 50%; flex: none; align-self: center; background: #8888; }
+  .dot.online { background: #2a7; } .dot.offline { background: #c33; }
+  ul.agents { list-style: none; margin: 0 0 .3rem; padding: 0 0 0 1.05rem; }
+  ul.agents li { display: flex; gap: .5rem; align-items: baseline; padding: .1rem .25rem; font-size: .92rem; }
+  .status { font-size: .75rem; padding: 0 .45rem; border-radius: 1rem; background: #8882; flex: none; min-width: 3.2rem;
+    text-align: center; }
   .st-running { background: #27c3; color: #27c; }
-  .st-error { background: #c332; color: #c33; }
-  code { font-size: .85em; }
-  .ws { margin-top: 1rem; padding-top: .5rem; border-top: 1px solid #8883; }
-  .ws-head { display: flex; flex-wrap: wrap; gap: .4rem; align-items: baseline; }
-  .ws-head .dir { flex-basis: 100%; font-size: .8rem; overflow-wrap: anywhere; }
-  .ws-running { background: #27c3; color: #27c; }
-  .ws-attention { background: #c832; color: #c83; }
-  .diff .add { color: #2a7; } .diff .del { color: #c33; }
-  .ws-idle { margin-top: 1rem; }
-  .ws-idle ul { margin: .25rem 0; padding-left: 1.2rem; font-size: .85rem; }
+  .st-error, .attn { background: #c332; color: #c33; }
+  .attn { font-size: .75rem; padding: 0 .45rem; border-radius: 1rem; }
+  .warn { color: #c33; font-size: .85rem; margin: .1rem 0 .3rem 1.05rem; }
+  .quiet { margin: .2rem 0 .2rem 1.05rem; font-size: .85rem; }
+  .quiet summary { opacity: .6; }
+  .quiet ul { margin: 0; padding-left: 1.6rem; }
+  a { color: inherit; text-decoration: none; } a:hover { color: #27c; text-decoration: underline; }
   footer { margin-top: 3rem; opacity: .6; font-size: .85rem; }
 </style>
 </head>
 <body>
 <h1>Intelligence</h1>
-
-<h2>Dev boxes</h2>
+<main id="tree">
 {{range .Boxes}}{{$p := .Report.Paseo}}{{$box := .Report.Name}}
-<section class="box">
-  <h3>{{.Report.Name}}
-    {{if .Online}}<span class="pill online">online</span>{{else}}<span class="pill offline">offline</span>{{end}}
-    <span class="muted" style="font-size:.8rem">reported {{ago $.Now .LastSeen}}</span>
-    <span class="muted" style="font-size:.8rem">client <span title="{{.Report.Version}}">{{short .Report.Version}}</span>{{if ne .Report.Version $.Version}} · not on the server's version{{end}}</span>
-  </h3>
-  {{if not $p.Connected}}
-  <p><span class="pill bad">Paseo not connected</span> <span class="muted">{{$p.Error}}</span></p>
-  {{else}}
-  <dl>
-    <dt>Paseo daemon</dt><dd>connected{{if $p.Version}} · v{{$p.Version}}{{end}}{{if $p.Listen}} · {{$p.Listen}}{{end}}</dd>
-    {{if not $p.StartedAt.IsZero}}<dt>Up since</dt><dd title="{{$p.StartedAt}}">{{ago $.Now $p.StartedAt}} · pid {{$p.PID}}</dd>{{end}}
-    <dt>Agents</dt><dd>{{agents (allAgents .)}} <span class="muted">in {{plural (len .Workspaces) "workspace"}}</span></dd>
-    <dt>Providers</dt><dd>{{range $i, $pr := $p.Providers}}{{if $i}}, {{end}}<span class="{{if not $pr.Available}}na{{end}}" title="{{if $pr.Available}}available{{else}}unavailable{{end}}{{if $pr.Error}}: {{$pr.Error}}{{end}}">{{$pr.Name}}</span>{{else}}<span class="muted">unknown</span>{{end}}
-      {{if $p.Providers}}<span class="muted">(as of {{ago $.Now $p.ProvidersAt}})</span>{{end}}</dd>
-    {{if $p.StatusError}}<dt>Status</dt><dd class="muted">last read failed: {{$p.StatusError}}</dd>{{end}}
-  </dl>
+<details class="host" id="host-{{$box}}" open>
+  <summary>
+    <span class="dot {{if .Online}}online{{else}}offline{{end}}" title="{{if .Online}}online{{else}}offline{{end}}"></span>
+    <span class="name">{{$box}}</span>
+    <span class="meta grow">{{if .Online}}online{{else}}offline{{end}} · {{agents (allAgents .)}}</span>
+    <span class="meta" title="Paseo {{$p.Version}}{{if $p.Listen}} at {{$p.Listen}}{{end}}; client {{.Report.Version}}">reported {{ago $.Now .LastSeen}}</span>
+  </summary>
+  <div class="children">
+  {{if not $p.Connected}}<p class="warn">Paseo not connected{{if $p.Error}}: {{$p.Error}}{{end}}</p>{{end}}
+  {{if ne .Report.Version $.Version}}<p class="warn" title="{{.Report.Version}}">client {{short .Report.Version}} is not on the server's version</p>{{end}}
   {{range .Workspaces}}{{if .Agents}}
-  <div class="ws">
-    <div class="ws-head">
-      <strong>{{if .Listed}}{{or .Name .ID}}{{else}}{{.ID}}{{end}}</strong>
-      {{if .Listed}}<span class="pill">{{.Kind}}</span> <span class="pill ws-{{.Status}}">{{.Status}}</span>{{else}}<span class="pill" title="Paseo did not list this workspace: it is archived or in the background">not listed by Paseo</span>{{end}}
-      {{if .Project}}<span class="muted">{{.Project}}</span>{{end}}
-      {{if .Branch}}<code>{{.Branch}}</code>{{end}}
-      {{if or .Additions .Deletions}}<span class="diff"><span class="add">+{{.Additions}}</span> <span class="del">−{{.Deletions}}</span></span>{{end}}
-      {{if .Dirty}}<span class="muted" title="uncommitted changes">· dirty</span>{{end}}
-      <div class="muted dir"><code>{{.Directory}}</code></div>
-    </div>
-    <div class="agents-wrap">
-    <table class="agents">
-      <tbody>
-      {{range .Agents}}
-      <tr>
-        <td><span class="pill st-{{.Status}}">{{.Status}}</span>{{if .RequiresAttention}} <span class="pill st-error" title="{{.AttentionReason}}">needs attention</span>{{end}}</td>
-        <td class="name"><a href="/devboxes/{{$box}}/agents/{{.ID}}">{{or .Title "(untitled)"}}</a> <code class="muted" title="{{.ID}}">{{shortID .ID}}</code>{{if .ParentID}} <span class="muted" title="started by {{.ParentID}}">· sub-agent</span>{{end}}
-          <span class="muted" style="font-size:.8rem">· {{if .TranscriptSynced}}{{plural .TranscriptEntries "entry"}}{{else}}no transcript{{end}}</span></td>
-        <td>{{.Provider}}{{if .Model}}/{{.Model}}{{end}}{{if .Thinking}} <span class="muted">· {{.Thinking}}</span>{{end}}</td>
-        <td class="muted">{{if not .CreatedAt.IsZero}}started {{ago $.Now .CreatedAt}}{{end}}</td>
-      </tr>
-      {{end}}
-      </tbody>
-    </table>
-    </div>
-  </div>
+  <details class="ws" id="ws-{{$box}}-{{.ID}}"{{if openWorkspace .}} open{{end}}>
+    <summary title="{{.Directory}}{{if .Branch}} · {{.Branch}}{{end}}">
+      <span class="name">{{if .Listed}}{{or .Name .ID}}{{else}}{{.ID}}{{end}}</span>
+      <span class="meta">{{if .Project}}in {{.Project}}{{else if not .Listed}}not listed by Paseo{{end}}</span>
+      <span class="meta grow" style="text-align:right">{{agents .Agents}}</span>
+    </summary>
+    <ul class="agents">
+    {{range .Agents}}
+      <li>
+        <span class="status st-{{.Status}}">{{.Status}}</span>
+        <a class="name grow" href="/devboxes/{{$box}}/agents/{{.ID}}" title="{{.ID}}">{{or .Title "(untitled)"}}</a>
+        {{if .RequiresAttention}}<span class="attn" title="{{.AttentionReason}}">needs attention</span>{{end}}
+        <span class="meta">{{.Model}}{{if not .CreatedAt.IsZero}} · {{ago $.Now .CreatedAt}}{{end}}</span>
+      </li>
+    {{end}}
+    </ul>
+  </details>
   {{end}}{{end}}
   {{$idle := idleWorkspaces .}}{{if $idle}}
-  <details class="ws-idle">
-    <summary class="muted">{{plural (len $idle) "workspace"}} without agents</summary>
-    <ul>{{range $idle}}<li>{{or .Name .ID}} <span class="muted">· {{.Kind}} · {{.Status}}{{if .Branch}} · {{.Branch}}{{end}}</span> <code class="muted">{{.Directory}}</code></li>{{end}}</ul>
+  <details class="quiet" id="idle-{{$box}}">
+    <summary>{{plural (len $idle) "workspace"}} without agents</summary>
+    <ul>{{range $idle}}<li title="{{.Directory}}">{{or .Name .ID}}{{if .Project}} <span class="meta">in {{.Project}}</span>{{end}}</li>{{end}}</ul>
   </details>
   {{end}}
-  {{end}}
-</section>
+  </div>
+</details>
 {{else}}
-<p class="muted">No dev boxes have reported yet.</p>
+<p class="meta">No dev boxes have reported yet.</p>
 {{end}}
-
+</main>
 <footer title="{{.Version}}">version {{.Short}}</footer>
+<script>
+// Refresh the tree in place every 15 seconds, keeping whatever the reader opened or closed.
+setInterval(async () => {
+  try {
+    const res = await fetch(location.href, { cache: "no-store" });
+    if (!res.ok) return;
+    const next = new DOMParser().parseFromString(await res.text(), "text/html").getElementById("tree");
+    const tree = document.getElementById("tree");
+    if (!next || !tree) return;
+    for (const d of next.querySelectorAll("details[id]")) {
+      const cur = document.getElementById(d.id);
+      if (cur) d.open = cur.open;
+    }
+    tree.replaceWith(next);
+  } catch {}
+}, 15000);
+</script>
 </body>
 </html>

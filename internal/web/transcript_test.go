@@ -117,7 +117,7 @@ func TestHomePageLinksAgentsToTranscripts(t *testing.T) {
 	h := reported(t)
 	postJSON(t, h, devbox.TranscriptPath, "secret", batch(true, "ep1", tentry(1, `{"type":"user_message","text":"hi"}`)))
 	page := get(t, h, "/", nil).Body.String()
-	if !strings.Contains(page, `href="/devboxes/devbox-1/agents/`+agentA1+`"`) || !strings.Contains(page, "1 entry") {
-		t.Errorf("home page should link each agent to its transcript with its size")
+	if !strings.Contains(page, `href="/devboxes/devbox-1/agents/`+agentA1+`"`) {
+		t.Errorf("home page should link each agent to its transcript")
 	}
 }
