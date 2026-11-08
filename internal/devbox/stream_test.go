@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/zachlatta/intelligence/internal/usage"
 )
 
 // streamServer is the server's side of the stream, scripted by the test.
@@ -202,5 +204,21 @@ func TestTranscriptSyncRereadsCursorsAfterReset(t *testing.T) {
 	r.sync(t)
 	if calls != 2 {
 		t.Errorf("read cursors %d times, want once per Reset", calls)
+	}
+}
+
+func TestLinkSendsUsage(t *testing.T) {
+	s := newStreamServer(t)
+	l, _ := link(t, s)
+	connected(t, l)
+	rep := usage.Report{CollectedAt: time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC),
+		Sources: []usage.Source{{Provider: usage.Muse, Accounts: []usage.Account{{ID: "default", Windows: []usage.Window{{ID: "7d", UsedPct: 25}}}}}}}
+	if err := l.Usage(context.Background(), rep); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.got) != 1 || s.got[0].Type != UsageFrame || s.got[0].Usage == nil || s.got[0].Usage.Sources[0].Accounts[0].Windows[0].UsedPct != 25 {
+		t.Fatalf("got %+v", s.got)
 	}
 }

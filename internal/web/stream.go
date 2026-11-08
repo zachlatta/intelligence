@@ -142,6 +142,8 @@ func receive(ctx context.Context, cfg Config, reg *fleet.Registry, h *hub, box s
 		if errors.Is(err, fleet.ErrUnknownCommand) {
 			err = nil // nothing to record, and nothing the box can do about it
 		}
+	case f.Type == devbox.UsageFrame && f.Usage != nil:
+		err = reg.RecordUsage(ctx, box, *f.Usage, cfg.Now())
 	default:
 		err = fmt.Errorf("unexpected %q frame", f.Type)
 	}

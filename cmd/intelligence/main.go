@@ -1,7 +1,7 @@
 // Command intelligence is the Intelligence server and its dev-box client.
 //
 //	intelligence [server]   serve the web app (the container's default)
-//	intelligence devbox     run on a dev box: stream its Paseo daemon to the server, run the server's commands, and stay on its version
+//	intelligence devbox     run on a dev box: stream its Paseo daemon and its plans' usage to the server, run the server's commands, and stay on its version
 //	intelligence version    print this binary's version
 package main
 
@@ -27,6 +27,7 @@ import (
 	"github.com/zachlatta/intelligence/internal/db"
 	"github.com/zachlatta/intelligence/internal/devbox"
 	"github.com/zachlatta/intelligence/internal/paseo"
+	"github.com/zachlatta/intelligence/internal/usage"
 	"github.com/zachlatta/intelligence/internal/web"
 )
 
@@ -228,6 +229,10 @@ func runDevbox(ctx context.Context) error {
 			}
 		}
 	}()
+	// every 5 minutes: each plan's usage, per login, from each provider's own meter
+	home, _ := os.UserHomeDir()
+	plans := &usage.Reader{Home: home}
+	go (&devbox.UsageSync{Read: plans.Read, Send: link.Usage}).Run(ctx)
 	transcripts := &devbox.TranscriptSync{Box: c.Name, Timeline: w.Timeline, Cursors: link.TranscriptCursors, Send: link.Transcript}
 	log.Printf("intelligence devbox %s streaming as %s to %s (self-update %v)", v, c.Name, c.Server, up != nil)
 	heartbeat := time.NewTicker(c.Interval)

@@ -12,6 +12,7 @@ import (
 
 	"github.com/zachlatta/intelligence/internal/dbtest"
 	"github.com/zachlatta/intelligence/internal/devbox"
+	"github.com/zachlatta/intelligence/internal/usage"
 )
 
 // rawBox is a box's end of the stream, driven frame by frame.
@@ -198,5 +199,26 @@ func TestStreamStoresTranscriptsAndHellosWithCursors(t *testing.T) {
 	again := openStream(t, h, "devbox-1")
 	if c := again.hello.Cursors[agentA1]; c.Epoch != "ep1" || c.LastSeqStart != 2 || again.hello.Version != "v" {
 		t.Errorf("hello = %+v", again.hello)
+	}
+}
+
+func TestStreamStoresUsage(t *testing.T) {
+	h, d := dbServer(t)
+	b := openStream(t, h, "devbox-1") // before the box's first report: usage does not wait for it
+	at := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
+	rep := usage.Report{CollectedAt: at, Sources: []usage.Source{{Provider: usage.Claude, Accounts: []usage.Account{
+		{ID: "ada@example.com", Label: "ada@example.com", Slot: 1, Active: true, ObservedAt: at,
+			Windows: []usage.Window{{ID: "7d", Seconds: usage.Week, UsedPct: 17, ResetsAt: at.Add(72 * time.Hour)}}}}}}}
+	if ack := b.call(devbox.Frame{Type: devbox.UsageFrame, Usage: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	var used float64
+	var box string
+	if err := d.Owner.QueryRow(context.Background(), `SELECT r.used_pct, a.box FROM usage_readings r
+		JOIN usage_active a USING (provider, account) WHERE r.account = 'ada@example.com'`).Scan(&used, &box); err != nil || used != 17 || box != "devbox-1" {
+		t.Errorf("stored %v on %q: %v", used, box, err)
+	}
+	if ack := b.call(devbox.Frame{Type: devbox.UsageFrame}); ack.Error == "" {
+		t.Errorf("an empty usage frame was accepted")
 	}
 }

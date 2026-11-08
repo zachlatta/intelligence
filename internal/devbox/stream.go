@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/zachlatta/intelligence/internal/usage"
 )
 
 // StreamPath is the WebSocket a dev box holds open to the server. Everything between them goes
@@ -28,6 +30,7 @@ type Frame struct {
 	Report     *Report          `json:"report,omitempty"`     // report: box -> server
 	Transcript *TranscriptBatch `json:"transcript,omitempty"` // transcript: box -> server
 	Update     *CommandUpdate   `json:"update,omitempty"`     // command_update: box -> server
+	Usage      *usage.Report    `json:"usage,omitempty"`      // usage: box -> server
 	Command    *Command         `json:"command,omitempty"`    // command: server -> box
 	Error      string           `json:"error,omitempty"`      // ack: refused, and why
 	Code       string           `json:"code,omitempty"`       // ack: AckResend or AckNotYet
@@ -39,6 +42,7 @@ const (
 	ReportFrame        = "report"
 	TranscriptFrame    = "transcript"
 	CommandUpdateFrame = "command_update"
+	UsageFrame         = "usage"
 	CommandFrame       = "command"
 	AckFrame           = "ack"
 )
@@ -227,6 +231,11 @@ func (l *Link) Transcript(ctx context.Context, b TranscriptBatch) error {
 // Update sends a command's progress.
 func (l *Link) Update(ctx context.Context, u CommandUpdate) error {
 	return l.call(ctx, Frame{Type: CommandUpdateFrame, Update: &u})
+}
+
+// Usage sends a read of the box's plans' usage.
+func (l *Link) Usage(ctx context.Context, r usage.Report) error {
+	return l.call(ctx, Frame{Type: UsageFrame, Usage: &r})
 }
 
 // TranscriptCursors are the server's transcript cursors from the current stream's hello.

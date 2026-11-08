@@ -34,12 +34,24 @@
   .quiet summary { opacity: .6; }
   .quiet ul { margin: 0; padding-left: 1.6rem; }
   a { color: inherit; text-decoration: none; } a:hover { color: #27c; text-decoration: underline; }
+  .plans { margin: 0 0 1.2rem; }
+  .plans h2 { font-size: 1.1rem; margin: 0 0 .3rem; }
+  .plans .plan { margin: 0 0 .5rem .25rem; }
+  .plans .warn { margin-left: .25rem; }
+  {{template "plancss"}}
   footer { margin-top: 3rem; opacity: .6; font-size: .85rem; }
 </style>
 </head>
 <body>
 <h1>Intelligence</h1>
 <main id="tree">
+{{if or .Plans.Plans .Plans.Problems}}
+<section class="plans">
+  <h2><a href="/usage">Plans</a></h2>
+  {{range .Plans.Problems}}<p class="warn">{{.}}</p>{{end}}
+  {{range .Plans.Plans}}<div class="plan">{{template "plan" (planAt $.Now .)}}</div>{{end}}
+</section>
+{{end}}
 {{range .Boxes}}{{$p := .Report.Paseo}}{{$box := .Report.Name}}
 <details class="host" id="host-{{$box}}" open>
   <summary>

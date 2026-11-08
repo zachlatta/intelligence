@@ -1,8 +1,9 @@
 # Intelligence
 
 A web app, inspired by agent-factory, that will orchestrate coding agents through Paseo on a fleet
-of dev boxes. For now it shows each dev box's Paseo daemon, and all of its state is readable with
-read-only SQL.
+of dev boxes. For now it shows each dev box's Paseo daemon and how much of each subscription plan
+(every Claude login, Codex, Muse, Antigravity) is used over time, and all of its state is readable
+with read-only SQL.
 
 ## How it fits together
 
@@ -13,8 +14,8 @@ One binary, three commands:
 - `intelligence devbox`: runs on each dev box as a systemd user service. It keeps one connection to
   the local Paseo daemon over the daemon's own WebSocket protocol (`internal/paseo`), reads its
   status, workspaces and agents, then follows the updates the daemon pushes. It holds one
-  WebSocket stream to the server (below) for its reports, its agents' transcripts and the server's
-  commands. The box dials out, so it needs no inbound port, and the server never dials a box.
+  WebSocket stream to the server (below) for its reports, its agents' transcripts, its plans' usage
+  and the server's commands. The box dials out, so it needs no inbound port, and the server never dials a box.
 - `intelligence version`: prints the commit the binary was built from.
 
 ### State and the read-only SQL contract
@@ -41,6 +42,8 @@ The hierarchy is devboxes > workspaces > agents:
   which Postgres cannot store, become U+FFFD.
 - `commands`: what the server asked a box to do (below): its kind, args, status, result or error,
   and when it was created, sent, started, finished and when it expires.
+- `usage_accounts`, `usage_readings`, `usage_active` and `usage_sources`: subscription plans' usage
+  over time (below), with the views `usage_current`, `usage_pace`, `usage_cycles` and `usage_totals`.
 - `schema_migrations`.
 
 Each report replaces its box's workspaces and agents. A box that cannot reach its daemon has none,
@@ -55,7 +58,7 @@ open, dialing again 5 seconds after it drops. Each frame is a JSON `devbox.Frame
 - server to box: `hello` first (the server's version and where its transcript copies end), then
   `command`s.
 - box to server: `report` (within a second of a change and every 15 seconds, which also re-reads
-  the daemon's status), `transcript` batches and `command_update`s. Each carries an `id`, and the
+  the daemon's status), `transcript` batches, `usage` (every 5 minutes) and `command_update`s. Each carries an `id`, and the
   server answers each with an `ack` once it is stored (or with why not). A box frame not acked in
   30 seconds drops the stream, so a box notices a dead server on its next report; the server
   pings every 30 seconds, so it notices a dead box.
@@ -87,6 +90,39 @@ remembers its last 1000 results, so a repeat gets the first result again without
 command not finished by its expiry (10 minutes by default) is `expired`: never delivered, or
 delivered with no result (it may have run). A box does not start an expired command, and a result
 that arrives after expiry replaces it.
+
+### Plan usage
+
+Every 5 minutes each box reads every provider's own meter (`internal/usage`) and sends it up its
+stream as a `usage` frame. Paseo's own usage report is not used: it shows only the logged-in Claude
+login and misses providers.
+
+- Claude: `cswap list --json`, so every login cswap holds, not only the active one. A login is its
+  email (two organizations of one email are two logins); cswap's number for it is kept as `slot`,
+  which can change. The reading's time is cswap's `usageFetchedAt`: cswap caches.
+- Codex: the subscription meter (`chatgpt.com/backend-api/wham/usage`) with the login's own token
+  from `~/.codex/auth.json`, sent nowhere else; when the meter fails, the newest rate-limit reading in
+  the local sessions, noted as such.
+- Muse: `muse usage --json`. Before the first use in a window it reports no usage; that is stored as
+  a note, not as a reading.
+- Antigravity: `agy -p /usage --output-format json` (no agent turn). Each model group is a pool:
+  `gemini/7d`, `gemini/5h`, `claude-gpt/7d`, ...
+
+A tool missing from a box is skipped; a failed read is recorded in `usage_sources` and stores no
+reading. The same login read from several boxes is one login. Windows are `7d`, `5h` and pools'
+(`fable/7d`); reset times are rounded to the minute, as providers jitter them.
+
+`usage_readings` keeps the history as runs: a row is one window holding one value from
+`first_observed` to `last_observed`, and a new row starts only when the value or reset changes. A
+reading older than the newest is ignored (another box's older cswap cache), and a window still at
+0% whose reset keeps moving (not started) stays one run. `usage_active` records which login each
+box's tool used, and when (cswap switches Claude logins).
+
+The views: `usage_current` (each window's latest value; `remaining_pct` is null once the window
+has reset with no reading since, and `stale` after 15 minutes without one), `usage_pace` (% left
+minus % of the window still to run: positive is under-spending), `usage_cycles` (the most of each
+window used before each reset, so how much of each week each login used) and `usage_totals`
+(logins, and weeks of quota left across them, per provider).
 
 ### Transcripts
 
@@ -158,6 +194,10 @@ approval before CI runs.
   Hosts start open, and so do workspaces with an agent running or needing attention; workspaces without
   agents are folded under a count. Problems (Paseo not connected, a client not on the server's version)
   show under the host. The tree refreshes in place every 15 seconds and keeps what was opened or closed.
+  Above it, Plans: every login with each window's % left, its reset, pace and the boxes using it.
+- `GET /usage?days=7` (1 to 365): every login with a chart of each window's used % over the days,
+  and its weekly peaks.
+- `GET /api/usage`: the logins and their windows, as JSON.
 - `GET /devboxes/{box}/agents/{id}`: one agent's transcript as turns: messages rendered as Markdown
   (raw HTML shown as text, unsafe links dropped, images named rather than loaded), thinking folded to
   a line, and runs of tool calls as a compact list that opens per call (commands with exit codes,
