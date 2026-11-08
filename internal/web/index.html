@@ -39,7 +39,10 @@
   .plans .plan { margin: 0 0 .5rem .25rem; }
   .plans .warn { margin-left: .25rem; }
   {{template "plancss"}}
-  footer { margin-top: 3rem; opacity: .6; font-size: .85rem; }
+  a.new { font-size: .8rem; opacity: .5; flex: none; font-weight: normal; } a.new:hover { opacity: 1; }
+  .session { margin-top: 3rem; opacity: .6; font-size: .85rem; }
+  .session button { font: inherit; background: none; border: 0; padding: 0; color: inherit; cursor: pointer; text-decoration: underline; }
+  footer { margin-top: .4rem; opacity: .6; font-size: .85rem; }
 </style>
 </head>
 <body>
@@ -59,6 +62,7 @@
     <span class="name">{{$box}}</span>
     <span class="meta grow">{{if .Online}}online{{else}}offline{{end}} · {{agents (allAgents .)}}</span>
     <span class="meta" title="Paseo {{$p.Version}}{{if $p.Listen}} at {{$p.Listen}}{{end}}; client {{.Report.Version}}">reported {{ago $.Now .LastSeen}}</span>
+    <a class="new" href="/devboxes/{{$box}}/workspaces/new" title="Make a workspace with an agent in it">+ workspace</a>
   </summary>
   <div class="children">
   {{if not $p.Connected}}<p class="warn">Paseo not connected{{if $p.Error}}: {{$p.Error}}{{end}}</p>{{end}}
@@ -69,6 +73,7 @@
       <span class="name">{{if .Listed}}{{or .Name .ID}}{{else}}{{.ID}}{{end}}</span>
       <span class="meta">{{if .Project}}in {{.Project}}{{else if not .Listed}}not listed by Paseo{{end}}</span>
       <span class="meta grow" style="text-align:right">{{agents .Agents}}</span>
+      <a class="new" href="/devboxes/{{$box}}/workspaces/{{.ID}}/agents/new" title="Start an agent here">+ agent</a>
     </summary>
     <ul class="agents">
     {{range .Agents}}
@@ -85,7 +90,8 @@
   {{$idle := idleWorkspaces .}}{{if $idle}}
   <details class="quiet" id="idle-{{$box}}">
     <summary>{{plural (len $idle) "workspace"}} without agents</summary>
-    <ul>{{range $idle}}<li title="{{.Directory}}">{{or .Name .ID}}{{if .Project}} <span class="meta">in {{.Project}}</span>{{end}}</li>{{end}}</ul>
+    <ul>{{range $idle}}<li title="{{.Directory}}">{{or .Name .ID}}{{if .Project}} <span class="meta">in {{.Project}}</span>{{end}}
+      <a class="new" href="/devboxes/{{$box}}/workspaces/{{.ID}}/agents/new" title="Start an agent here">+ agent</a></li>{{end}}</ul>
   </details>
   {{end}}
   </div>
@@ -94,8 +100,13 @@
 <p class="meta">No dev boxes have reported yet.</p>
 {{end}}
 </main>
+<p class="session">{{if .Operator}}signed in · <button id="sign-out">sign out</button>{{else}}<a href="/login">sign in</a> to start workspaces and agents{{end}}</p>
 <footer title="{{.Version}}">version {{.Short}}</footer>
 <script>
+document.getElementById("sign-out")?.addEventListener("click", async () => {
+  await fetch("/api/session", { method: "DELETE" });
+  location.reload();
+});
 // Refresh the tree in place every 15 seconds, keeping whatever the reader opened or closed.
 setInterval(async () => {
   try {

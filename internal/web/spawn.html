@@ -1,0 +1,220 @@
+{{define "head"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.}} · Intelligence</title>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { max-width: 40rem; margin: 2.5rem auto; padding: 0 1rem; line-height: 1.5; }
+  h1 { font-size: 1.3rem; margin: 0 0 .25rem; }
+  .crumbs { font-size: .85rem; opacity: .7; margin-bottom: 1rem; }
+  a { color: inherit; } a:hover { color: #27c; }
+  label { display: block; margin: .9rem 0 .25rem; font-weight: 600; font-size: .9rem; }
+  label.check { display: flex; gap: .5rem; align-items: center; font-weight: normal; }
+  textarea, input:not([type=checkbox]), select { font: inherit; width: 100%; box-sizing: border-box; padding: .45rem .55rem;
+    border-radius: .35rem; border: 1px solid #8886; background: transparent; }
+  textarea { min-height: 10rem; resize: vertical; }
+  .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: .6rem; }
+  .row label { font-weight: normal; font-size: .8rem; opacity: .8; margin: .6rem 0 .15rem; }
+  fieldset { border: 1px solid #8884; border-radius: .4rem; margin: 1rem 0 0; padding: .2rem .8rem .8rem; }
+  legend { font-size: .85rem; opacity: .7; }
+  button { font: inherit; margin-top: 1.2rem; padding: .5rem 1.1rem; border-radius: .35rem; border: 0; background: #27c; color: white;
+    cursor: pointer; } button:disabled { opacity: .5; cursor: default; }
+  .meta { opacity: .6; font-size: .85rem; }
+  .warn { color: #c33; white-space: pre-wrap; }
+  #progress { margin-top: .8rem; }
+  footer { margin-top: 3rem; opacity: .6; font-size: .85rem; }
+</style>
+</head>
+{{end}}
+
+{{define "foot"}}<footer title="{{.Version}}">version {{short .Version}}</footer>
+</body>
+</html>
+{{end}}
+
+{{define "login"}}{{template "head" "Sign in"}}
+<body>
+<div class="crumbs"><a href="/">Intelligence</a></div>
+<h1>Sign in</h1>
+{{if not .Configured}}<p class="warn">This server has no operator token (OPERATOR_TOKEN), so nobody can sign in.</p>
+{{else}}
+<p class="meta">Starting workspaces and agents needs the operator token. This browser stays signed in for 30 days.</p>
+<form id="login" data-next="{{.Next}}">
+  <label for="token">Operator token</label>
+  <input id="token" name="token" type="password" autocomplete="current-password" autofocus required>
+  <button>Sign in</button>
+  <p id="progress"></p>
+</form>
+<script>
+document.getElementById("login").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const form = e.target, out = document.getElementById("progress");
+  const res = await fetch("/api/session", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token: form.token.value }) });
+  if (res.ok) { location.href = form.dataset.next; return; }
+  out.className = "warn";
+  out.textContent = await res.text();
+});
+</script>
+{{end}}
+{{template "foot" .}}{{end}}
+
+{{define "agentfields"}}
+  <label for="prompt">What should the agent do?</label>
+  <textarea id="prompt" name="prompt" required autofocus></textarea>
+  <label for="title">Title <span class="meta">(optional)</span></label>
+  <input id="title" name="title" maxlength="200">
+  <div class="row">
+    <div><label for="provider">Provider</label>
+      <select id="provider" name="provider">{{range .Providers}}<option value="{{.}}"{{if eq . $.Agent.Provider}} selected{{end}}>{{.}}</option>{{else}}<option value="{{$.Agent.Provider}}">{{$.Agent.Provider}}</option>{{end}}</select></div>
+    <div><label for="model">Model</label><input id="model" name="model" value="{{.Agent.Model}}" placeholder="provider default"></div>
+    <div><label for="thinking">Thinking</label>
+      <select id="thinking" name="thinking"><option value="">default</option>{{range .Thinking}}<option value="{{.}}"{{if eq . $.Agent.Thinking}} selected{{end}}>{{.}}</option>{{end}}</select></div>
+    <div><label for="mode">Mode</label><input id="mode" name="mode" value="{{.Agent.Mode}}" placeholder="provider default"></div>
+  </div>
+  {{if not .Providers}}<p class="warn">The box reports no available providers.</p>{{end}}
+{{end}}
+
+{{define "spawnjs"}}
+<script>
+// The form writes through the commands API and follows its command through the read-only SQL API,
+// then opens the new agent's transcript.
+const form = document.getElementById("spawn");
+const { box, commands, kind, defaultProvider, defaultModel, defaultMode } = form.dataset;
+const progressSQL = form.dataset.progressSql;
+const out = document.getElementById("progress");
+
+// model and mode names belong to a provider: keep the defaults only for the default provider
+form.provider.addEventListener("change", () => {
+  const def = form.provider.value === defaultProvider;
+  form.model.value = def ? defaultModel : "";
+  form.mode.value = def ? defaultMode : "";
+});
+
+function agentArgs() {
+  const a = { provider: form.provider.value, prompt: form.prompt.value };
+  for (const k of ["model", "thinking", "mode", "title"]) {
+    if (form[k].value.trim()) a[k] = form[k].value.trim();
+  }
+  return a;
+}
+
+function say(text, warn) {
+  out.textContent = text;
+  out.className = warn ? "warn" : "meta";
+}
+
+async function sql(query) {
+  const res = await fetch("/api/sql", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query }) });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error);
+  return body.rows;
+}
+
+async function follow(id) {
+  if (!/^[0-9a-f-]{36}$/.test(id)) throw new Error("the server returned a bad command id");
+  for (;;) {
+    const [row] = await sql(progressSQL.replaceAll("$ID", id));
+    const [status, error, workspace, agent, reported] = row || [];
+    if (status === "failed" || status === "expired") {
+      throw new Error(error || "the command " + status);
+    }
+    if (reported) {
+      location.href = "/devboxes/" + encodeURIComponent(box) + "/agents/" + encodeURIComponent(agent);
+      return;
+    }
+    say(status === "succeeded" ? "Started. Waiting for the box to report it…" :
+        status === "queued" ? "Waiting for the box to connect…" : "The box is starting it…");
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const button = form.querySelector("button");
+  button.disabled = true;
+  say("Sending…");
+  try {
+    const res = await fetch(commands, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind, args: spawnArgs() }) });
+    if (res.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return; }
+    if (!res.ok) throw new Error(await res.text());
+    await follow((await res.json()).id);
+  } catch (err) {
+    say(err.message, true);
+    button.disabled = false;
+  }
+});
+</script>
+{{end}}
+
+{{define "agent"}}{{template "head" "New agent"}}
+<body>
+<div class="crumbs"><a href="/">Intelligence</a> › {{.Box}} › {{or .Workspace.Name .Workspace.ID}}</div>
+<h1>New agent in {{or .Workspace.Name .Workspace.ID}}</h1>
+<p class="meta">{{.Workspace.Directory}}{{if .Workspace.Branch}} · {{.Workspace.Branch}}{{end}}{{if .Workspace.Project}} · {{.Workspace.Project}}{{end}}</p>
+<form id="spawn" data-box="{{.Box}}" data-commands="{{.Commands}}" data-kind="create_agent" data-workspace="{{.Workspace.ID}}"
+  data-default-provider="{{.Agent.Provider}}" data-default-model="{{.Agent.Model}}" data-default-mode="{{.Agent.Mode}}"
+  data-progress-sql="{{.ProgressSQL}}">
+  {{template "agentfields" .}}
+  <button>Start agent</button>
+  <p id="progress"></p>
+</form>
+<script>
+function spawnArgs() {
+  return { workspaceId: document.getElementById("spawn").dataset.workspace, ...agentArgs() };
+}
+</script>
+{{template "spawnjs"}}
+{{template "foot" .}}{{end}}
+
+{{define "workspace"}}{{template "head" "New workspace"}}
+<body>
+<div class="crumbs"><a href="/">Intelligence</a> › {{.Box}}</div>
+<h1>New workspace on {{.Box}}</h1>
+<form id="spawn" data-box="{{.Box}}" data-commands="{{.Commands}}" data-kind="create_workspace"
+  data-default-provider="{{.Agent.Provider}}" data-default-model="{{.Agent.Model}}" data-default-mode="{{.Agent.Mode}}"
+  data-progress-sql="{{.ProgressSQL}}">
+  <label for="repo">Repository</label>
+  <select id="repo" name="repo">
+    {{range .Repositories}}<option value="{{.Root}}">{{if .Project}}{{.Project}} · {{end}}{{.Root}}</option>{{end}}
+    <option value="">another directory…</option>
+  </select>
+  <input id="cwd" name="cwd" placeholder="a directory on {{.Box}}"{{if .Repositories}} hidden{{end}}>
+  <label class="check"><input type="checkbox" name="worktree" checked> in a new git worktree</label>
+  <div class="row" id="worktree-fields">
+    <div><label for="branch">Branch</label><input id="branch" name="branch" placeholder="Paseo picks one"></div>
+    <div><label for="base">From</label><input id="base" name="base" placeholder="the default branch"></div>
+  </div>
+  <fieldset><legend>Its agent</legend>
+  {{template "agentfields" .}}
+  </fieldset>
+  <button>Start workspace and agent</button>
+  <p id="progress"></p>
+</form>
+<script>
+const repo = document.getElementById("repo"), cwd = document.getElementById("cwd");
+const worktree = document.querySelector("[name=worktree]");
+repo.addEventListener("change", () => { cwd.hidden = repo.value !== ""; });
+worktree.addEventListener("change", () => { document.getElementById("worktree-fields").hidden = !worktree.checked; });
+
+function spawnArgs() {
+  const dir = repo.value || cwd.value.trim();
+  if (!dir) throw new Error("Choose a repository or type a directory.");
+  const agent = agentArgs();
+  const args = { cwd: dir, agent };
+  if (agent.title) args.title = agent.title;
+  if (worktree.checked) {
+    args.worktree = true;
+    const branch = document.getElementById("branch").value.trim(), base = document.getElementById("base").value.trim();
+    if (branch) args.branch = branch;
+    if (base) args.base = base;
+  }
+  return args;
+}
+</script>
+{{template "spawnjs"}}
+{{template "foot" .}}{{end}}

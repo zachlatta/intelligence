@@ -49,6 +49,7 @@ type Workspace struct {
 	Status            string    `json:"status"` // running, attention, done
 	Directory         string    `json:"directory"`
 	Project           string    `json:"project"`
+	ProjectRoot       string    `json:"projectRoot,omitempty"` // the repository's main checkout, for a new worktree of it
 	Branch            string    `json:"branch,omitempty"`
 	Dirty             bool      `json:"dirty"`
 	Additions         int       `json:"additions"`

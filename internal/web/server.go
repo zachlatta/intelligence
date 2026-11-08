@@ -85,6 +85,11 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET "+devbox.StreamPath("{box}"), stream(cfg, reg, changes))
 	mux.HandleFunc("POST /api/devboxes/{box}/commands", enqueueCommand(cfg, reg))
 	mux.HandleFunc("GET /api/devboxes/{box}/commands/{id}", showCommand(reg, changes))
+	mux.HandleFunc("POST /api/session", signIn(cfg))
+	mux.HandleFunc("DELETE /api/session", signOut)
+	mux.HandleFunc("GET /login", loginPage(cfg))
+	mux.HandleFunc("GET /devboxes/{box}/workspaces/new", newWorkspacePage(cfg, reg))
+	mux.HandleFunc("GET /devboxes/{box}/workspaces/{ws}/agents/new", newAgentPage(cfg, reg))
 	mux.HandleFunc("GET /api/sql", sqlHandler(cfg))
 	mux.HandleFunc("POST /api/sql", sqlHandler(cfg))
 	mux.Handle("GET /api/devbox/binary/{os}/{arch}", binaries(cfg.BinDir))
@@ -112,11 +117,12 @@ func New(cfg Config) http.Handler {
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_ = indexTmpl.Execute(w, map[string]any{
-			"Version": cfg.Version,
-			"Short":   short(cfg.Version),
-			"Boxes":   list,
-			"Plans":   plans,
-			"Now":     cfg.Now(),
+			"Version":  cfg.Version,
+			"Short":    short(cfg.Version),
+			"Boxes":    list,
+			"Plans":    plans,
+			"Now":      cfg.Now(),
+			"Operator": hasSession(cfg, r),
 		})
 	})
 	// every response names the server's version, so a dev box sees on any call that it should update

@@ -33,7 +33,8 @@ The hierarchy is devboxes > workspaces > agents:
 - `devboxes`: each box's latest report: whether it is connected to its daemon (`connected`, else
   why in `paseo_error`), the daemon's version, listen address, pid, start and providers.
 - `workspaces`: each box's Paseo workspaces: a directory, local checkout or git worktree that agents
-  run in (`kind`), with its status, project, branch, diff and directory. `listed = false` is a
+  run in (`kind`), with its status, project and its repository's main checkout (`project_root`),
+  branch, diff and directory. `listed = false` is a
   workspace Paseo no longer lists (archived or background) that still has an agent in it.
 - `agents`: every unarchived agent, in its workspace (`box`, `workspace_id`), with its model,
   thinking level, status, attention, parent (for sub-agents) and times.
@@ -83,7 +84,9 @@ against its daemon and reports `running`, then `succeeded` with a result (`{"wor
 "agentId"}`) or `failed` with the daemon's reason. Kinds and their args:
 
 - `create_workspace`: `cwd`, and optionally `title`; with `worktree: true`, a new git worktree of the
-  repository at `cwd`, on `branch` from `base`.
+  repository at `cwd`, on `branch` from `base`. With `agent` (`create_agent`'s args, without
+  `workspaceId` or `cwd`), an agent is then started in the new workspace. If that agent fails, the
+  command fails but its result still names the workspace it made.
 - `create_agent`: `provider` (`claude`, `codex`, ...), `workspaceId` (it runs in that workspace's
   directory) or `cwd`, and optionally `model`, `thinking`, `mode`, `title`, `prompt` (its first
   message) and `labels`. The agent is labelled `intelligence.command=<command id>`.
@@ -199,7 +202,8 @@ approval before CI runs.
 
 ## Routes
 
-- `GET /`: a collapsible tree of hosts > workspaces (with their project) > agents (with their status).
+- `GET /`: a collapsible tree of hosts > workspaces (with their project) > agents (with their status),
+  with links to make a workspace on each host and start an agent in each workspace.
   Hosts start open, and so do workspaces with an agent running or needing attention; workspaces without
   agents are folded under a count. Problems (Paseo not connected, a client not on the server's version)
   show under the host. The tree refreshes in place every 15 seconds and keeps what was opened or closed.
@@ -207,6 +211,15 @@ approval before CI runs.
 - `GET /usage?days=7` (1 to 365): every login with a chart of each window's used % over the days,
   and its weekly peaks.
 - `GET /api/usage`: the logins and their windows, as JSON.
+- `GET /devboxes/{box}/workspaces/{ws}/agents/new`: the form that starts an agent in a workspace.
+  `GET /devboxes/{box}/workspaces/new`: the form that makes a workspace with an agent in it, by
+  default a new git worktree of one of the box's repositories (its workspaces' `project_root`s), or
+  of a directory typed in. The home page links to both. Each asks what the agent should do, an
+  optional title, and the provider (those the box reports available), model, thinking and mode,
+  which start as Opus 5.5, medium thinking, `bypassPermissions`. The page sends a command to the
+  commands API, follows it through `/api/sql`, then opens the new agent's transcript; a failure
+  shows Paseo's reason. Both need a signed-in browser and send one to `/login` first.
+- `GET /login`: signs a browser in through the session API.
 - `GET /devboxes/{box}/agents/{id}`: one agent's transcript as turns: messages rendered as Markdown
   (raw HTML shown as text, unsafe links dropped, images named rather than loaded), thinking folded to
   a line, and runs of tool calls as a compact list that opens per call (commands with exit codes,
@@ -220,12 +233,17 @@ approval before CI runs.
 - `GET /api/devboxes/{box}/stream`: a dev box's stream (WebSocket). Needs `Authorization: Bearer
   <DEVBOX_TOKEN>`; refused with 503 while the server has no token.
 - `POST /api/devboxes/{box}/commands` with `{"kind": "...", "args": {...}, "ttl": "10m"}`: queue a
-  command (kinds above; `ttl` from 1s to 24h). Needs `Authorization: Bearer <OPERATOR_TOKEN>`;
-  refused with 503 while the server has none. 202 with the command and its `Location`; 400 for a
-  kind or args that do not parse, 404 for a box that has never connected.
+  command (kinds above; `ttl` from 1s to 24h). Needs `Authorization: Bearer <OPERATOR_TOKEN>`, or a
+  signed-in browser sending JSON from this origin (another site's request is refused with 403, a
+  non-JSON one with 415); refused with 503 while the server has no token. 202 with the command and
+  its `Location`; 400 for a kind or args that do not parse, 404 for a box that has never connected.
 - `GET /api/devboxes/{box}/commands/{id}`, optionally `?wait=30s` (at most 1m): the command, after
   waiting until it finishes or the wait is up (woken by its update, not polling).
 - `GET /api/devboxes`: the same, as JSON.
+- `POST /api/session` with `{"token"}`: signs a browser in with the operator token (204), as a
+  cookie holding a hash of the token (HttpOnly, Secure, SameSite=Strict, 30 days), so changing the
+  token signs every browser out. `DELETE /api/session` signs it out. Requests from another site are
+  refused.
 - `POST /api/sql` with `{"query": "...", "limit": 1000}`, or `GET /api/sql?q=...&limit=`: one
   read-only query. Returns `{"columns": [{"name", "type"}], "rows": [[...]], "rowCount",
   "truncated"}`, or 400 with `{"error"}`. At most 10000 rows; 5 seconds per query.
@@ -233,7 +251,8 @@ approval before CI runs.
 - `GET /healthz`: `{"status":"ok","version":"<commit>","database":"ok"}`, 503 when the database is
   unreachable.
 
-The read routes are open to the tailnet. Changing anything on a box needs the operator token.
+The read routes are open to the tailnet. Changing anything on a box needs the operator token, or a
+browser signed in with it. Pages read through SQL and write through the API (see `AGENTS.md`).
 
 ## Configuration
 
@@ -243,7 +262,8 @@ Server:
 - `READONLY_DATABASE_URL`: the same database as the read-only role. The server creates or updates
   that role (name and password from the URL) and its grants on every start.
 - `DEVBOX_TOKEN`: the token dev boxes stream with.
-- `OPERATOR_TOKEN`: the token that may send dev boxes commands. Unset, commands are refused.
+- `OPERATOR_TOKEN`: the token that may send dev boxes commands, and signs a browser in. Unset,
+  commands and sign-in are refused.
 - `PORT`: listen port, default `8080`.
 - `DEVBOX_BINARIES`: where the dev box binaries are; default `/usr/local/share/intelligence/devbox`.
 

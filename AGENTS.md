@@ -11,6 +11,16 @@ Read `README.md` first.
 - Prefer the standard library. Add a dependency only when it clearly earns its place.
 - Do all work in the repo, never in `/tmp`. Transient scratch goes in `.factory-scratch/` (git-ignored).
 
+## API first
+
+Build the app API-first, as it is built test-first:
+
+- **Reads are SQL.** Anything a page or a client needs to know is readable with read-only SQL
+  (`/api/sql`). A new thing to read is a table, view or column, not a new read endpoint.
+- **Writes are API calls.** Every change goes through a JSON route under `/api/`, written and tested
+  before any page uses it. The web interface makes its changes by calling those routes from the
+  browser, and has no write path of its own (no form posts to page routes).
+
 ## The read-only SQL contract
 
 All app state is readable with a read-only SQL query (`/api/sql`). So:

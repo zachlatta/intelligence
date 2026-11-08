@@ -63,7 +63,7 @@ func TestWatcherReadsTheDaemon(t *testing.T) {
 	}
 	ws := s.Workspaces[0]
 	if ws.ID != "w1" || ws.Kind != "worktree" || ws.Status != "running" || ws.Branch != "feature/x" || !ws.Dirty ||
-		ws.Additions != 12 || ws.Deletions != 3 || ws.Project != "example/app" || ws.Directory != "/w/w1" || ws.CreatedAt.IsZero() {
+		ws.Additions != 12 || ws.Deletions != 3 || ws.Project != "example/app" || ws.ProjectRoot != "/w/app" || ws.Directory != "/w/w1" || ws.CreatedAt.IsZero() {
 		t.Errorf("workspace = %+v", ws)
 	}
 	a := s.Agents[0]

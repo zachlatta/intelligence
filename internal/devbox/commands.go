@@ -56,13 +56,15 @@ const (
 )
 
 // CreateWorkspaceArgs: a workspace on Cwd, or with Worktree a new git worktree of the repository at
-// Cwd on a new Branch from Base.
+// Cwd on a new Branch from Base. With Agent, an agent is then started in it (Agent names no
+// workspace or directory of its own).
 type CreateWorkspaceArgs struct {
-	Cwd      string `json:"cwd"`
-	Worktree bool   `json:"worktree,omitempty"`
-	Branch   string `json:"branch,omitempty"`
-	Base     string `json:"base,omitempty"`
-	Title    string `json:"title,omitempty"`
+	Cwd      string           `json:"cwd"`
+	Worktree bool             `json:"worktree,omitempty"`
+	Branch   string           `json:"branch,omitempty"`
+	Base     string           `json:"base,omitempty"`
+	Title    string           `json:"title,omitempty"`
+	Agent    *CreateAgentArgs `json:"agent,omitempty"`
 }
 
 // CreateAgentArgs: an agent in WorkspaceID (its directory unless Cwd is given), or in Cwd.
@@ -123,6 +125,12 @@ func ParseCommand(kind string, args json.RawMessage) (any, error) {
 		if !a.Worktree && (a.Branch != "" || a.Base != "") {
 			return nil, errors.New("create_workspace: branch and base are for a worktree")
 		}
+		if a.Agent != nil && a.Agent.Provider == "" {
+			return nil, errors.New("create_workspace: its agent needs a provider")
+		}
+		if a.Agent != nil && (a.Agent.WorkspaceID != "" || a.Agent.Cwd != "") {
+			return nil, errors.New("create_workspace: its agent runs in the new workspace, so it takes no workspaceId or cwd")
+		}
 		return a, nil
 	case CreateAgentKind:
 		var a CreateAgentArgs
@@ -181,24 +189,28 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 	case CreateWorkspaceArgs:
 		ws, err := c.CreateWorkspace(ctx, paseo.CreateWorkspace{Cwd: a.Cwd, Worktree: a.Worktree, Branch: a.Branch, Base: a.Base,
 			Title: a.Title, IdempotencyKey: cmd.ID})
-		return CommandResult{WorkspaceID: ws.ID}, err
+		if err != nil || a.Agent == nil {
+			return CommandResult{WorkspaceID: ws.ID}, err
+		}
+		ag := *a.Agent
+		ag.WorkspaceID, ag.Cwd = ws.ID, ws.Directory
+		// its own idempotency key: a repeat returns the same agent, never the workspace
+		res, err := createAgent(ctx, c, ag, cmd.ID, cmd.ID+":agent")
+		res.WorkspaceID = ws.ID
+		if err != nil {
+			err = fmt.Errorf("made workspace %s, but its agent: %w", ws.ID, err)
+		}
+		return res, err
 	case CreateAgentArgs:
-		cwd := a.Cwd
-		if cwd == "" {
+		if a.Cwd == "" {
 			w.mu.Lock()
-			cwd = w.workspaces[a.WorkspaceID].Directory
+			a.Cwd = w.workspaces[a.WorkspaceID].Directory
 			w.mu.Unlock()
-			if cwd == "" {
+			if a.Cwd == "" {
 				return CommandResult{}, fmt.Errorf("no workspace %s on this box", a.WorkspaceID)
 			}
 		}
-		labels := map[string]string{"intelligence.command": cmd.ID}
-		for k, v := range a.Labels {
-			labels[k] = v
-		}
-		ag, err := c.CreateAgent(ctx, paseo.CreateAgent{WorkspaceID: a.WorkspaceID, Cwd: cwd, Provider: a.Provider, Model: a.Model,
-			Thinking: a.Thinking, Mode: a.Mode, Title: a.Title, Prompt: a.Prompt, Labels: labels, IdempotencyKey: cmd.ID})
-		return CommandResult{AgentID: ag.ID, WorkspaceID: ag.WorkspaceID}, err
+		return createAgent(ctx, c, a, cmd.ID, cmd.ID)
 	case WorkspaceArgs:
 		if cmd.Kind == ArchiveWorkspaceKind {
 			return CommandResult{WorkspaceID: a.WorkspaceID}, c.ArchiveWorkspace(ctx, a.WorkspaceID)
@@ -218,6 +230,17 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 		}
 	}
 	return CommandResult{}, fmt.Errorf("unknown command kind %q", cmd.Kind)
+}
+
+// createAgent starts a in a.Cwd, labelled with the command that asked for it.
+func createAgent(ctx context.Context, c *paseo.Client, a CreateAgentArgs, cmdID, key string) (CommandResult, error) {
+	labels := map[string]string{"intelligence.command": cmdID}
+	for k, v := range a.Labels {
+		labels[k] = v
+	}
+	ag, err := c.CreateAgent(ctx, paseo.CreateAgent{WorkspaceID: a.WorkspaceID, Cwd: a.Cwd, Provider: a.Provider, Model: a.Model,
+		Thinking: a.Thinking, Mode: a.Mode, Title: a.Title, Prompt: a.Prompt, Labels: labels, IdempotencyKey: key})
+	return CommandResult{AgentID: ag.ID, WorkspaceID: ag.WorkspaceID}, err
 }
 
 // Runner runs the commands a box receives, each once: a command delivered again while it runs is
@@ -295,10 +318,16 @@ func (r *Runner) run(ctx context.Context, cmd Command) CommandUpdate {
 	ectx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	res, err := r.Exec(ectx, cmd)
-	if err != nil {
-		return CommandUpdate{ID: cmd.ID, Status: CommandFailed, Error: err.Error()}
+	var b json.RawMessage
+	if res != (CommandResult{}) {
+		b, _ = json.Marshal(res)
 	}
-	b, _ := json.Marshal(res)
+	if err != nil { // keep what it made before it failed: a workspace whose agent did not start
+		return CommandUpdate{ID: cmd.ID, Status: CommandFailed, Result: b, Error: err.Error()}
+	}
+	if b == nil {
+		b = json.RawMessage("{}")
+	}
 	return CommandUpdate{ID: cmd.ID, Status: CommandSucceeded, Result: b}
 }
 

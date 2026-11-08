@@ -210,7 +210,7 @@ const maxCommandTTL = 24 * time.Hour
 // enqueueCommand queues a command for a box: {"kind", "args", "ttl"}. It needs the operator token.
 func enqueueCommand(cfg Config, reg *fleet.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !operatorAuthorized(cfg, w, r) {
+		if !operatorOrSession(cfg, w, r) {
 			return
 		}
 		var req struct {

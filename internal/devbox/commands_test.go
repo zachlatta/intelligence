@@ -12,7 +12,7 @@ import (
 
 func TestParseCommandChecksEachKind(t *testing.T) {
 	good := map[string]string{
-		CreateWorkspaceKind:  `{"cwd":"/w/app","worktree":true,"branch":"fix","base":"main","title":"Fix"}`,
+		CreateWorkspaceKind:  `{"cwd":"/w/app","worktree":true,"branch":"fix","base":"main","title":"Fix","agent":{"provider":"claude","prompt":"go"}}`,
 		CreateAgentKind:      `{"workspaceId":"w1","provider":"claude","prompt":"go"}`,
 		ArchiveWorkspaceKind: `{"workspaceId":"w1"}`,
 		RenameWorkspaceKind:  `{"workspaceId":"w1","title":"New"}`,
@@ -27,17 +27,20 @@ func TestParseCommandChecksEachKind(t *testing.T) {
 		}
 	}
 	bad := map[string]string{
-		CreateWorkspaceKind + " no cwd":        `{}`,
-		CreateWorkspaceKind + " branch":        `{"cwd":"/w","branch":"x"}`,
-		CreateAgentKind + " no provider":       `{"cwd":"/w"}`,
-		CreateAgentKind + " nowhere":           `{"provider":"claude"}`,
-		CreateAgentKind + " unknown field":     `{"provider":"claude","cwd":"/w","env":{"X":"1"}}`,
-		ArchiveWorkspaceKind + " no id":        `{}`,
-		ArchiveAgentKind + " text":             `{"agentId":"a1","text":"x"}`,
-		RenameAgentKind + " no title":          `{"agentId":"a1"}`,
-		SendMessageKind + " no text":           `{"agentId":"a1"}`,
-		"delete_everything x":                  `{}`,
-		CreateWorkspaceKind + " not an object": `[1]`,
+		CreateWorkspaceKind + " no cwd":            `{}`,
+		CreateWorkspaceKind + " branch":            `{"cwd":"/w","branch":"x"}`,
+		CreateWorkspaceKind + " agent no provider": `{"cwd":"/w","agent":{"prompt":"go"}}`,
+		CreateWorkspaceKind + " agent elsewhere":   `{"cwd":"/w","agent":{"provider":"claude","cwd":"/x"}}`,
+		CreateWorkspaceKind + " agent in another":  `{"cwd":"/w","agent":{"provider":"claude","workspaceId":"w1"}}`,
+		CreateAgentKind + " no provider":           `{"cwd":"/w"}`,
+		CreateAgentKind + " nowhere":               `{"provider":"claude"}`,
+		CreateAgentKind + " unknown field":         `{"provider":"claude","cwd":"/w","env":{"X":"1"}}`,
+		ArchiveWorkspaceKind + " no id":            `{}`,
+		ArchiveAgentKind + " text":                 `{"agentId":"a1","text":"x"}`,
+		RenameAgentKind + " no title":              `{"agentId":"a1"}`,
+		SendMessageKind + " no text":               `{"agentId":"a1"}`,
+		"delete_everything x":                      `{}`,
+		CreateWorkspaceKind + " not an object":     `[1]`,
 	}
 	for name, args := range bad {
 		kind, _, _ := strings.Cut(name, " ")
@@ -74,6 +77,51 @@ func TestExecuteCreatesAnAgentInAWorkspacesDirectory(t *testing.T) {
 		t.Errorf("request = %v: the command id is the idempotency key and a label", req)
 	}
 	eventually(t, w, "the new agent", func(s PaseoStatus) bool { return len(s.Agents) == 3 })
+}
+
+func TestExecuteCreatesAWorkspaceWithAnAgentInIt(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	args := `{"cwd":"/w/app","worktree":true,"branch":"dark","title":"Dark mode","agent":{"provider":"claude","prompt":"add dark mode","title":"Dark"}}`
+	res, err := execute(t, w, CreateWorkspaceKind, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.WorkspaceID == "" || res.AgentID == "" {
+		t.Fatalf("result = %+v", res)
+	}
+	req := d.Requests("agent.create.request")[0]
+	if req["workspaceId"] != res.WorkspaceID || req["config"].(map[string]any)["cwd"] != "/w/app-worktrees/dark" ||
+		req["initialPrompt"] != "add dark mode" {
+		t.Errorf("agent request = %v: it runs in the new workspace's directory", req)
+	}
+	if req["idempotencyKey"] != "cmd-create_workspace:agent" || req["labels"].(map[string]any)["intelligence.command"] != "cmd-create_workspace" {
+		t.Errorf("agent request = %v", req)
+	}
+	again, err := execute(t, w, CreateWorkspaceKind, args) // redelivered
+	if err != nil || again != res || len(d.Requests("agent.create.request")) != 2 {
+		t.Errorf("a repeat made something new: %+v %v", again, err)
+	}
+	eventually(t, w, "the new workspace and agent", func(s PaseoStatus) bool { return len(s.Agents) == 3 })
+}
+
+func TestAFailedAgentStillReportsTheWorkspaceItsCommandMade(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	res, err := execute(t, w, CreateWorkspaceKind, `{"cwd":"/w/app","agent":{"provider":"nope","prompt":"go"}}`)
+	if err == nil || !strings.Contains(err.Error(), "Unknown provider") || res.WorkspaceID == "" || res.AgentID != "" {
+		t.Errorf("result = %+v, %v", res, err)
+	}
+	u := &updates{}
+	r := &Runner{Exec: func(context.Context, Command) (CommandResult, error) {
+		return CommandResult{WorkspaceID: "w9"}, errors.New("agent: Unknown provider")
+	}, Report: u.report}
+	got := r.run(context.Background(), Command{ID: "c1"})
+	if got.Status != CommandFailed || string(got.Result) != `{"workspaceId":"w9"}` {
+		t.Errorf("update = %+v: a failure keeps what was made", got)
+	}
 }
 
 func TestExecuteEveryOtherKind(t *testing.T) {

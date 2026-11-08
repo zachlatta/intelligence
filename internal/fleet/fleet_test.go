@@ -215,3 +215,19 @@ func TestDeletingABoxDeletesItsWorkspacesAndAgents(t *testing.T) {
 		t.Fatalf("%d rows left after their box was deleted", n)
 	}
 }
+
+func TestWorkspacesKeepTheirProjectRoot(t *testing.T) {
+	r := New(dbtest.New(t).Owner)
+	rep := full()
+	rep.Paseo.Workspaces[0].ProjectRoot = "/w/app"
+	record(t, r, rep, t1)
+	list, err := r.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range list[0].Workspaces {
+		if w.ID == "w1" && w.ProjectRoot != "/w/app" {
+			t.Errorf("w1 project root = %q", w.ProjectRoot)
+		}
+	}
+}

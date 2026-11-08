@@ -194,7 +194,7 @@ func (w *Watcher) Snapshot() PaseoStatus {
 	}
 	for _, x := range w.workspaces {
 		s.Workspaces = append(s.Workspaces, Workspace{ID: x.ID, Name: cmp.Or(x.Title, x.Name), Kind: x.Kind, Status: x.Status,
-			Directory: x.Directory, Project: x.Project, Branch: x.Branch(), Dirty: x.Dirty(), Additions: x.Additions(),
+			Directory: x.Directory, Project: x.Project, ProjectRoot: x.ProjectRoot, Branch: x.Branch(), Dirty: x.Dirty(), Additions: x.Additions(),
 			Deletions: x.Deletions(), CreatedAt: x.CreatedAt, ActivityAt: x.ActivityAt, LastUserMessageAt: x.LastUserMessageAt})
 	}
 	slices.SortFunc(s.Workspaces, func(a, b Workspace) int { return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.ID, b.ID)) })
