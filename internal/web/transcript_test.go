@@ -76,3 +76,24 @@ func TestHomePageLinksAgentsToTranscripts(t *testing.T) {
 		t.Errorf("home page should link each agent to its transcript")
 	}
 }
+
+func TestTranscriptPageShowsWhenTheAgentIsWorking(t *testing.T) {
+	h, _ := dbServer(t)
+	rep := sampleReport
+	rep.Paseo.Agents = append([]devbox.Agent(nil), rep.Paseo.Agents...)
+	rep.Paseo.Agents[0].LastUserMessageAt = t0.Add(-3 * time.Minute)
+	sendReport(t, h, rep)
+
+	page := get(t, h, "/devboxes/devbox-1/agents/"+agentA1, nil).Body.String()
+	for _, want := range []string{`<div id="working" class="working">`, `data-since="` + t0.Add(-3*time.Minute).UTC().Format(time.RFC3339) + `"`,
+		`<title>● Fix the`, `class="spinner"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("a running agent's page misses %q", want)
+		}
+	}
+
+	idle := get(t, h, "/devboxes/devbox-1/agents/"+rep.Paseo.Agents[1].ID, nil).Body.String()
+	if !strings.Contains(idle, `<div id="working" class="working" hidden>`) || strings.Contains(idle, "<title>●") {
+		t.Errorf("an idle agent's page should hide the working indicator")
+	}
+}

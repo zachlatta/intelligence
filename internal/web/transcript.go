@@ -38,6 +38,7 @@ var transcriptTmpl = template.Must(template.New("transcript").Funcs(template.Fun
 	"dur":      dur,
 	"size":     size,
 	"plural64": func(n int64, word string) string { return plural(int(n), word) },
+	"working":  working,
 }).Parse(transcriptHTML + blocksHTML + resourcesHTML + layoutHTML))
 
 // blocksTmpl renders blocks alone, for live updates.
@@ -71,6 +72,9 @@ func agentContext(r *http.Request, reg *fleet.Registry, box, agentID string) (*f
 	}
 	return nil, nil, nil, nil
 }
+
+// working: the agent is in a turn (or starting one), so it is doing work right now.
+func working(status string) bool { return status == "running" || status == "initializing" }
 
 // live: the agent is loaded in Paseo, so its transcript may still grow.
 func live(a *fleet.AgentView) bool { return a.Status != "closed" }
