@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/zachlatta/intelligence/internal/dbtest"
-	"github.com/zachlatta/intelligence/internal/devbox"
+	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
 func binServer(t *testing.T) (http.Handler, string) {
@@ -27,27 +27,27 @@ func binServer(t *testing.T) (http.Handler, string) {
 
 func TestEveryResponseNamesTheServerVersion(t *testing.T) {
 	h, _ := binServer(t)
-	for _, path := range []string{"/", "/healthz", "/api/devboxes", "/api/sql?q=select+1", "/nope"} {
-		if got := get(t, h, path, nil).Header().Get(devbox.VersionHeader); got != "c0ffee" {
-			t.Errorf("%s: %s = %q, want c0ffee", path, devbox.VersionHeader, got)
+	for _, path := range []string{"/", "/healthz", "/api/hosts", "/api/sql?q=select+1", "/nope"} {
+		if got := get(t, h, path, nil).Header().Get(hostclient.VersionHeader); got != "c0ffee" {
+			t.Errorf("%s: %s = %q, want c0ffee", path, hostclient.VersionHeader, got)
 		}
 	}
-	if got := get(t, h, devbox.StreamPath("devbox-1"), map[string]string{"Authorization": "Bearer wrong"}).Header().Get(devbox.VersionHeader); got != "c0ffee" {
+	if got := get(t, h, hostclient.StreamPath("host-1"), map[string]string{"Authorization": "Bearer wrong"}).Header().Get(hostclient.VersionHeader); got != "c0ffee" {
 		t.Errorf("refused stream: version header = %q", got)
 	}
 }
 
-func TestServesTheDevboxBinaryWithVersionAndChecksum(t *testing.T) {
+func TestServesTheHostBinaryWithVersionAndChecksum(t *testing.T) {
 	h, _ := binServer(t)
-	rec := get(t, h, devbox.BinaryPath("linux", "amd64"), nil)
+	rec := get(t, h, hostclient.BinaryPath("linux", "amd64"), nil)
 	if rec.Code != http.StatusOK || rec.Body.String() != "ELF fake" {
 		t.Fatalf("status %d body %q", rec.Code, rec.Body)
 	}
 	sum := sha256.Sum256([]byte("ELF fake"))
-	if got := rec.Header().Get(devbox.SHA256Header); got != hex.EncodeToString(sum[:]) {
+	if got := rec.Header().Get(hostclient.SHA256Header); got != hex.EncodeToString(sum[:]) {
 		t.Errorf("sha256 header = %q", got)
 	}
-	if got := rec.Header().Get(devbox.VersionHeader); got != "c0ffee" {
+	if got := rec.Header().Get(hostclient.VersionHeader); got != "c0ffee" {
 		t.Errorf("version header = %q", got)
 	}
 }
@@ -55,13 +55,22 @@ func TestServesTheDevboxBinaryWithVersionAndChecksum(t *testing.T) {
 func TestUnknownPlatformsAndOddPathsAre404(t *testing.T) {
 	h, _ := binServer(t)
 	for _, path := range []string{
-		devbox.BinaryPath("plan9", "amd64"),
-		"/api/devbox/binary/../secret.txt",
-		"/api/devbox/binary/secret.txt/x",
-		"/api/devbox/binary/linux/amd64.",
+		hostclient.BinaryPath("plan9", "amd64"),
+		"/api/host/binary/../secret.txt",
+		"/api/host/binary/secret.txt/x",
+		"/api/host/binary/linux/amd64.",
 	} {
 		if rec := get(t, h, path, nil); rec.Code == http.StatusOK {
 			t.Errorf("%s: status 200, want not found", path)
 		}
+	}
+}
+
+// A host client from before dev boxes were called hosts downloads its update from the old path.
+func TestServesTheHostBinaryOnItsPathFromBeforeTheRename(t *testing.T) {
+	h, _ := binServer(t)
+	rec := get(t, h, "/api/devbox/binary/linux/amd64", nil)
+	if rec.Code != http.StatusOK || rec.Body.String() != "ELF fake" {
+		t.Fatalf("status %d body %q", rec.Code, rec.Body)
 	}
 }

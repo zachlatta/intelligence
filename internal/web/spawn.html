@@ -38,7 +38,7 @@
       <select id="thinking" name="thinking"><option value="">default</option>{{range .Thinking}}<option value="{{.}}"{{if eq . $.Agent.Thinking}} selected{{end}}>{{.}}</option>{{end}}</select></div>
     <div><label for="mode">Mode</label><input id="mode" name="mode" value="{{.Agent.Mode}}" placeholder="provider default"></div>
   </div>
-  {{if not .Providers}}<p class="banner">The box reports no available providers.</p>{{end}}
+  {{if not .Providers}}<p class="banner">The host reports no available providers.</p>{{end}}
 {{end}}
 
 {{define "spawnjs"}}
@@ -46,7 +46,7 @@
 // The form writes through the commands API and follows its command through the read-only SQL API,
 // then opens the new agent's transcript.
 const form = document.getElementById("spawn");
-const { box, commands, kind, defaultProvider, defaultModel, defaultMode } = form.dataset;
+const { host, commands, kind, defaultProvider, defaultModel, defaultMode } = form.dataset;
 const progressSQL = form.dataset.progressSql;
 const out = document.getElementById("progress");
 
@@ -87,11 +87,11 @@ async function follow(id) {
       throw new Error(error || "the command " + status);
     }
     if (reported) {
-      location.href = "/devboxes/" + encodeURIComponent(box) + "/agents/" + encodeURIComponent(agent);
+      location.href = "/hosts/" + encodeURIComponent(host) + "/agents/" + encodeURIComponent(agent);
       return;
     }
-    say(status === "succeeded" ? "Started. Waiting for the box to report it…" :
-        status === "queued" ? "Waiting for the box to connect…" : "The box is starting it…");
+    say(status === "succeeded" ? "Started. Waiting for the host to report it…" :
+        status === "queued" ? "Waiting for the host to connect…" : "The host is starting it…");
     await new Promise((r) => setTimeout(r, 1000));
   }
 }
@@ -117,10 +117,10 @@ form.addEventListener("submit", async (e) => {
 
 {{define "agent"}}{{template "head" "New agent"}}
 <body>
-<div class="crumbs"><a href="/">Dev boxes</a><span class="sep">/</span>{{.Box}}<span class="sep">/</span>{{or .Workspace.Name .Workspace.ID}}</div>
+<div class="crumbs"><a href="/">Hosts</a><span class="sep">/</span>{{.Host}}<span class="sep">/</span>{{or .Workspace.Name .Workspace.ID}}</div>
 <div class="page-head"><div><h1>New agent in {{or .Workspace.Name .Workspace.ID}}</h1>
 <p class="sub"><span class="mono">{{.Workspace.Directory}}</span>{{if .Workspace.Branch}} · <span class="mono">{{.Workspace.Branch}}</span>{{end}}{{if .Workspace.Project}} · {{.Workspace.Project}}{{end}}</p></div></div>
-<form id="spawn" class="card form" data-box="{{.Box}}" data-commands="{{.Commands}}" data-kind="create_agent" data-workspace="{{.Workspace.ID}}"
+<form id="spawn" class="card form" data-host="{{.Host}}" data-commands="{{.Commands}}" data-kind="create_agent" data-workspace="{{.Workspace.ID}}"
   data-default-provider="{{.Agent.Provider}}" data-default-model="{{.Agent.Model}}" data-default-mode="{{.Agent.Mode}}"
   data-progress-sql="{{.ProgressSQL}}">
   {{template "agentfields" .}}
@@ -137,10 +137,10 @@ function spawnArgs() {
 
 {{define "workspace"}}{{template "head" "New workspace"}}
 <body>
-<div class="crumbs"><a href="/">Dev boxes</a><span class="sep">/</span>{{.Box}}</div>
-<div class="page-head"><div><h1>New workspace on {{.Box}}</h1>
+<div class="crumbs"><a href="/">Hosts</a><span class="sep">/</span>{{.Host}}</div>
+<div class="page-head"><div><h1>New workspace on {{.Host}}</h1>
 <p class="sub">A workspace with an agent in it, by default in a new git worktree.</p></div></div>
-<form id="spawn" class="card form" data-box="{{.Box}}" data-commands="{{.Commands}}" data-kind="create_workspace"
+<form id="spawn" class="card form" data-host="{{.Host}}" data-commands="{{.Commands}}" data-kind="create_workspace"
   data-default-provider="{{.Agent.Provider}}" data-default-model="{{.Agent.Model}}" data-default-mode="{{.Agent.Mode}}"
   data-progress-sql="{{.ProgressSQL}}">
   <label for="repo">Repository</label>
@@ -148,7 +148,7 @@ function spawnArgs() {
     {{range .Repositories}}<option value="{{.Root}}">{{if .Project}}{{.Project}} · {{end}}{{.Root}}</option>{{end}}
     <option value="">another directory…</option>
   </select>
-  <input id="cwd" name="cwd" style="margin-top:.5rem" placeholder="a directory on {{.Box}}"{{if .Repositories}} hidden{{end}}>
+  <input id="cwd" name="cwd" style="margin-top:.5rem" placeholder="a directory on {{.Host}}"{{if .Repositories}} hidden{{end}}>
   <label class="check"><input type="checkbox" name="worktree" checked> in a new git worktree</label>
   <div class="fields" id="worktree-fields">
     <div><label for="branch">Branch</label><input id="branch" name="branch" placeholder="Paseo picks one"></div>

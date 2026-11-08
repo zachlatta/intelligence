@@ -11,9 +11,9 @@ import (
 	"github.com/zachlatta/intelligence/internal/usage"
 )
 
-// RecordUsage stores a box's read of its plans' usage, received at at: each login, each window's
-// value as a run in usage_readings, which login the box uses, and how each read went.
-func (r *Registry) RecordUsage(ctx context.Context, box string, rep usage.Report, at time.Time) error {
+// RecordUsage stores a host's read of its plans' usage, received at at: each login, each window's
+// value as a run in usage_readings, which login the host uses, and how each read went.
+func (r *Registry) RecordUsage(ctx context.Context, host string, rep usage.Report, at time.Time) error {
 	collected := rep.CollectedAt
 	if collected.IsZero() {
 		collected = at
@@ -23,7 +23,7 @@ func (r *Registry) RecordUsage(ctx context.Context, box string, rep usage.Report
 			if s.Missing || s.Provider == "" {
 				continue
 			}
-			if err := setSource(ctx, tx, box, s.Provider, "", s.Error, "", collected, at); err != nil {
+			if err := setSource(ctx, tx, host, s.Provider, "", s.Error, "", collected, at); err != nil {
 				return err
 			}
 			if s.Error != "" {
@@ -33,7 +33,7 @@ func (r *Registry) RecordUsage(ctx context.Context, box string, rep usage.Report
 				if a.ID == "" {
 					continue
 				}
-				if err := recordAccount(ctx, tx, box, s.Provider, a, collected, at); err != nil {
+				if err := recordAccount(ctx, tx, host, s.Provider, a, collected, at); err != nil {
 					return err
 				}
 			}
@@ -42,16 +42,16 @@ func (r *Registry) RecordUsage(ctx context.Context, box string, rep usage.Report
 	})
 }
 
-func setSource(ctx context.Context, tx pgx.Tx, box, provider, account, errMsg, note string, observed, at time.Time) error {
-	_, err := tx.Exec(ctx, `INSERT INTO usage_sources (box, provider, account, ok, error, note, observed_at, received_at)
+func setSource(ctx context.Context, tx pgx.Tx, host, provider, account, errMsg, note string, observed, at time.Time) error {
+	_, err := tx.Exec(ctx, `INSERT INTO usage_sources (host, provider, account, ok, error, note, observed_at, received_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		ON CONFLICT (box, provider, account) DO UPDATE SET ok = EXCLUDED.ok, error = EXCLUDED.error, note = EXCLUDED.note,
+		ON CONFLICT (host, provider, account) DO UPDATE SET ok = EXCLUDED.ok, error = EXCLUDED.error, note = EXCLUDED.note,
 		observed_at = EXCLUDED.observed_at, received_at = EXCLUDED.received_at`,
-		box, provider, account, errMsg == "", errMsg, note, nullTime(observed), at)
+		host, provider, account, errMsg == "", errMsg, note, nullTime(observed), at)
 	return err
 }
 
-func recordAccount(ctx context.Context, tx pgx.Tx, box, provider string, a usage.Account, collected, at time.Time) error {
+func recordAccount(ctx context.Context, tx pgx.Tx, host, provider string, a usage.Account, collected, at time.Time) error {
 	obs := a.ObservedAt
 	if obs.IsZero() {
 		obs = collected
@@ -60,7 +60,7 @@ func recordAccount(ctx context.Context, tx pgx.Tx, box, provider string, a usage
 	if a.Slot > 0 {
 		slot = &a.Slot
 	}
-	// The upsert also locks the login's row, so two boxes reading one login take turns.
+	// The upsert also locks the login's row, so two hosts reading one login take turns.
 	if _, err := tx.Exec(ctx, `INSERT INTO usage_accounts (provider, account, label, plan, slot, first_seen, last_seen)
 		VALUES ($1, $2, $3, $4, $5, $6, $6)
 		ON CONFLICT (provider, account) DO UPDATE SET
@@ -72,11 +72,11 @@ func recordAccount(ctx context.Context, tx pgx.Tx, box, provider string, a usage
 		provider, a.ID, a.Label, a.Plan, slot, obs); err != nil {
 		return err
 	}
-	if err := setSource(ctx, tx, box, provider, a.ID, a.Error, a.Note, obs, at); err != nil {
+	if err := setSource(ctx, tx, host, provider, a.ID, a.Error, a.Note, obs, at); err != nil {
 		return err
 	}
 	if a.Active {
-		if err := markActive(ctx, tx, box, provider, a.ID, collected); err != nil {
+		if err := markActive(ctx, tx, host, provider, a.ID, collected); err != nil {
 			return err
 		}
 	}
@@ -112,7 +112,7 @@ func recordWindow(ctx context.Context, tx pgx.Tx, provider, account string, w us
 	case err != nil:
 		return err
 	case !obs.After(last):
-		return nil // no newer than what is stored: another box's older cache, or a repeat
+		return nil // no newer than what is stored: another host's older cache, or a repeat
 	case used == w.UsedPct && (sameTime(reset, newReset) || w.UsedPct == 0):
 		// the same value; at 0% a moving reset is a window not yet started
 		_, err := tx.Exec(ctx, `UPDATE usage_readings SET last_observed = $5, observations = observations + 1,
@@ -127,12 +127,12 @@ func recordWindow(ctx context.Context, tx pgx.Tx, provider, account string, w us
 	return err
 }
 
-// markActive extends the box's current active-login run, or starts one when the login changed.
-func markActive(ctx context.Context, tx pgx.Tx, box, provider, account string, at time.Time) error {
+// markActive extends the host's current active-login run, or starts one when the login changed.
+func markActive(ctx context.Context, tx pgx.Tx, host, provider, account string, at time.Time) error {
 	var cur string
 	var since, until time.Time
-	err := tx.QueryRow(ctx, `SELECT account, since, until FROM usage_active WHERE box = $1 AND provider = $2
-		ORDER BY since DESC LIMIT 1`, box, provider).Scan(&cur, &since, &until)
+	err := tx.QueryRow(ctx, `SELECT account, since, until FROM usage_active WHERE host = $1 AND provider = $2
+		ORDER BY since DESC LIMIT 1`, host, provider).Scan(&cur, &since, &until)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 	case err != nil:
@@ -140,12 +140,12 @@ func markActive(ctx context.Context, tx pgx.Tx, box, provider, account string, a
 	case !at.After(until):
 		return nil
 	case cur == account:
-		_, err := tx.Exec(ctx, "UPDATE usage_active SET until = $4 WHERE box = $1 AND provider = $2 AND since = $3",
-			box, provider, since, at)
+		_, err := tx.Exec(ctx, "UPDATE usage_active SET until = $4 WHERE host = $1 AND provider = $2 AND since = $3",
+			host, provider, since, at)
 		return err
 	}
-	_, err = tx.Exec(ctx, "INSERT INTO usage_active (box, provider, account, since, until) VALUES ($1, $2, $3, $4, $4)",
-		box, provider, account, at)
+	_, err = tx.Exec(ctx, "INSERT INTO usage_active (host, provider, account, since, until) VALUES ($1, $2, $3, $4, $4)",
+		host, provider, account, at)
 	return err
 }
 
@@ -156,7 +156,7 @@ func sameTime(a, b *time.Time) bool {
 	return a.Equal(*b)
 }
 
-// Plan is one login's plan as last read: each window, which boxes use it now, and what is wrong.
+// Plan is one login's plan as last read: each window, which hosts use it now, and what is wrong.
 type Plan struct {
 	Provider string       `json:"provider"`
 	Account  string       `json:"account"`
@@ -164,7 +164,7 @@ type Plan struct {
 	Plan     string       `json:"plan,omitempty"`
 	Slot     int          `json:"slot,omitempty"`
 	LastSeen time.Time    `json:"lastSeen"`
-	ActiveOn []string     `json:"activeOn,omitempty"` // boxes whose tool uses this login now
+	ActiveOn []string     `json:"activeOn,omitempty"` // hosts whose tool uses this login now
 	Error    string       `json:"error,omitempty"`    // the newest read of it failed
 	Note     string       `json:"note,omitempty"`
 	Windows  []PlanWindow `json:"windows,omitempty"`
@@ -183,13 +183,13 @@ type PlanWindow struct {
 	Pace         *float64  `json:"pace,omitempty"` // % left minus % of the window to run
 }
 
-// PlansView is every login's plan, and the boxes whose read of a provider failed lately.
+// PlansView is every login's plan, and the hosts whose read of a provider failed lately.
 type PlansView struct {
 	Plans    []Plan   `json:"plans"`
-	Problems []string `json:"problems,omitempty"` // "box: provider: error"
+	Problems []string `json:"problems,omitempty"` // "host: provider: error"
 }
 
-// recent is how long a box's view of a login (active, failed) stands without a new read.
+// recent is how long a host's view of a login (active, failed) stands without a new read.
 const recent = "15 minutes"
 
 var providerOrder = map[string]int{usage.Claude: 0, usage.Codex: 1, usage.Muse: 2, usage.Antigravity: 3}
@@ -198,9 +198,9 @@ var providerOrder = map[string]int{usage.Claude: 0, usage.Codex: 1, usage.Muse: 
 func (r *Registry) Plans(ctx context.Context) (PlansView, error) {
 	var v PlansView
 	rows, err := r.p.Query(ctx, `SELECT a.provider, a.account, a.label, a.plan, coalesce(a.slot, 0), a.last_seen,
-		coalesce((SELECT array_agg(x.box ORDER BY x.box) FROM (
-			SELECT DISTINCT ON (u.box) u.box, u.account, u.until FROM usage_active u
-			WHERE u.provider = a.provider ORDER BY u.box, u.since DESC) x
+		coalesce((SELECT array_agg(x.host ORDER BY x.host) FROM (
+			SELECT DISTINCT ON (u.host) u.host, u.account, u.until FROM usage_active u
+			WHERE u.provider = a.provider ORDER BY u.host, u.since DESC) x
 			WHERE x.account = a.account AND x.until > now() - interval '`+recent+`'), '{}'),
 		coalesce((SELECT s.error FROM usage_sources s WHERE s.provider = a.provider AND s.account = a.account AND NOT s.ok
 			AND s.received_at > now() - interval '`+recent+`' ORDER BY s.received_at DESC LIMIT 1), ''),
@@ -254,8 +254,8 @@ func (r *Registry) Plans(ctx context.Context) (PlansView, error) {
 		ws := v.Plans[i].Windows
 		sort.SliceStable(ws, func(a, b int) bool { return windowRank(ws[a].ID) < windowRank(ws[b].ID) })
 	}
-	rows, err = r.p.Query(ctx, `SELECT box || ': ' || provider || ': ' || error FROM usage_sources
-		WHERE account = '' AND NOT ok AND received_at > now() - interval '`+recent+`' ORDER BY box, provider`)
+	rows, err = r.p.Query(ctx, `SELECT host || ': ' || provider || ': ' || error FROM usage_sources
+		WHERE account = '' AND NOT ok AND received_at > now() - interval '`+recent+`' ORDER BY host, provider`)
 	if err != nil {
 		return v, err
 	}

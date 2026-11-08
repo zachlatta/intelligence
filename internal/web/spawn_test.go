@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zachlatta/intelligence/internal/devbox"
+	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
-const newAgentPath = "/devboxes/devbox-1/workspaces/w-app/agents/new"
+const newAgentPath = "/hosts/host-1/workspaces/w-app/agents/new"
 
 // call makes one request with a JSON body (if any), extra headers and cookies.
 func call(t *testing.T, h http.Handler, method, path, body string, header map[string]string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
@@ -130,13 +130,13 @@ func TestChangingThePasswordSignsOutOtherBrowsers(t *testing.T) {
 func TestTheCommandsAPITakesABrowserSession(t *testing.T) {
 	h, _ := cmdServer(t)
 	c := signInAs(t, h)
-	path := "/api/devboxes/devbox-1/commands"
+	path := "/api/hosts/host-1/commands"
 	if rec := call(t, h, http.MethodPost, path, archiveA1, sameOriginFetch, c); rec.Code != http.StatusAccepted {
 		t.Errorf("same-origin with a session: %d %s", rec.Code, rec.Body)
 	}
 	// behind tailscale serve, the browser's origin need not be the Host this server sees
 	if rec := call(t, h, http.MethodPost, path, archiveA1, map[string]string{"Sec-Fetch-Site": "same-origin",
-		"Origin": "https://box.example"}, c); rec.Code != http.StatusAccepted {
+		"Origin": "https://host.example"}, c); rec.Code != http.StatusAccepted {
 		t.Errorf("same-origin behind a proxy: %d %s", rec.Code, rec.Body)
 	}
 	if rec := call(t, anon(h), http.MethodPost, path, archiveA1, sameOriginFetch); rec.Code != http.StatusUnauthorized {
@@ -166,14 +166,14 @@ func TestTheCommandsAPITakesABrowserSession(t *testing.T) {
 	if rec.Code != http.StatusUnsupportedMediaType {
 		t.Errorf("text/plain with a session: %d, want 415", rec.Code)
 	}
-	if rec := call(t, anon(h), http.MethodPost, path, archiveA1, map[string]string{"Authorization": "Bearer " + keyOf(t, h, "devbox-1")}); rec.Code != http.StatusUnauthorized {
-		t.Errorf("a dev box's key is no session: %d", rec.Code)
+	if rec := call(t, anon(h), http.MethodPost, path, archiveA1, map[string]string{"Authorization": "Bearer " + keyOf(t, h, "host-1")}); rec.Code != http.StatusUnauthorized {
+		t.Errorf("a host's key is no session: %d", rec.Code)
 	}
 }
 
 func TestSpawnPagesNeedASession(t *testing.T) {
 	h, _ := cmdServer(t)
-	for _, p := range []string{newAgentPath, "/devboxes/devbox-1/workspaces/new"} {
+	for _, p := range []string{newAgentPath, "/hosts/host-1/workspaces/new"} {
 		rec := get(t, anon(h), p, nil)
 		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login?next="+url.QueryEscape(p) {
 			t.Errorf("%s with no session: %d %q", p, rec.Code, rec.Header().Get("Location"))
@@ -202,7 +202,7 @@ func TestNewAgentPage(t *testing.T) {
 	}
 	page := rec.Body.String()
 	for _, want := range []string{"Login fix", "/w/app-login", "fix-login", `<option value="claude" selected>`, `name="prompt"`,
-		`value="claude-opus-5-5"`, `<option value="medium" selected>`, `value="bypassPermissions"`, `"/api/devboxes/devbox-1/commands"`,
+		`value="claude-opus-5-5"`, `<option value="medium" selected>`, `value="bypassPermissions"`, `"/api/hosts/host-1/commands"`,
 		`"create_agent"`, `"w-app"`, "/api/sql"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("new agent page misses %s", want)
@@ -211,27 +211,27 @@ func TestNewAgentPage(t *testing.T) {
 	if strings.Contains(page, `<option value="copilot"`) {
 		t.Errorf("an unavailable provider is offered")
 	}
-	if rec := call(t, h, http.MethodGet, "/devboxes/devbox-1/workspaces/w-nope/agents/new", "", nil, c); rec.Code != http.StatusNotFound {
+	if rec := call(t, h, http.MethodGet, "/hosts/host-1/workspaces/w-nope/agents/new", "", nil, c); rec.Code != http.StatusNotFound {
 		t.Errorf("unknown workspace: %d", rec.Code)
 	}
 }
 
-func TestNewWorkspacePageOffersTheBoxsRepositories(t *testing.T) {
+func TestNewWorkspacePageOffersTheHostsRepositories(t *testing.T) {
 	h, _ := cmdServer(t)
 	rep := sampleReport
-	rep.Paseo.Workspaces = append([]devbox.Workspace{}, sampleReport.Paseo.Workspaces...)
+	rep.Paseo.Workspaces = append([]hostclient.Workspace{}, sampleReport.Paseo.Workspaces...)
 	rep.Paseo.Workspaces[0].ProjectRoot = "/w/app"
-	rep.Paseo.Workspaces = append(rep.Paseo.Workspaces, devbox.Workspace{ID: "w-app2", Name: "Other", Directory: "/w/app-other",
+	rep.Paseo.Workspaces = append(rep.Paseo.Workspaces, hostclient.Workspace{ID: "w-app2", Name: "Other", Directory: "/w/app-other",
 		Project: "example/app", ProjectRoot: "/w/app"})
 	sendReport(t, h, rep)
 	c := signInAs(t, h)
-	rec := call(t, h, http.MethodGet, "/devboxes/devbox-1/workspaces/new", "", nil, c)
+	rec := call(t, h, http.MethodGet, "/hosts/host-1/workspaces/new", "", nil, c)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("new workspace page: %d %s", rec.Code, rec.Body)
 	}
 	page := rec.Body.String()
 	for _, want := range []string{`<option value="/w/app">example/app · /w/app</option>`, `name="worktree" checked`, `name="branch"`,
-		`name="base"`, `name="prompt"`, `"create_workspace"`, `"/api/devboxes/devbox-1/commands"`} {
+		`name="base"`, `name="prompt"`, `"create_workspace"`, `"/api/hosts/host-1/commands"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("new workspace page misses %s", want)
 		}
@@ -239,16 +239,16 @@ func TestNewWorkspacePageOffersTheBoxsRepositories(t *testing.T) {
 	if strings.Count(page, `<option value="/w/app">`) != 1 {
 		t.Errorf("a repository is offered once, however many workspaces it has")
 	}
-	if rec := call(t, h, http.MethodGet, "/devboxes/nobox/workspaces/new", "", nil, c); rec.Code != http.StatusNotFound {
-		t.Errorf("unknown box: %d", rec.Code)
+	if rec := call(t, h, http.MethodGet, "/hosts/nohost/workspaces/new", "", nil, c); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown host: %d", rec.Code)
 	}
 }
 
 func TestHomePageLinksToSpawning(t *testing.T) {
 	h, _ := cmdServer(t)
 	home := get(t, h, "/", nil).Body.String()
-	for _, want := range []string{`href="` + newAgentPath + `"`, `href="/devboxes/devbox-1/workspaces/w-idle/agents/new"`,
-		`href="/devboxes/devbox-1/workspaces/new"`, `href="/account#add"`} {
+	for _, want := range []string{`href="` + newAgentPath + `"`, `href="/hosts/host-1/workspaces/w-idle/agents/new"`,
+		`href="/hosts/host-1/workspaces/new"`, `href="/account#add"`} {
 		if !strings.Contains(home, want) {
 			t.Errorf("home page misses %s", want)
 		}
@@ -262,8 +262,8 @@ func TestHomePageLinksToSpawning(t *testing.T) {
 // The spawn pages follow a command through the read-only SQL API with commandProgressSQL.
 func TestCommandProgressIsReadableThroughSQL(t *testing.T) {
 	h, _ := cmdServer(t)
-	b := openStream(t, h, "devbox-1")
-	_, cmd, _ := enqueue(t, h, "devbox-1", "", `{"kind":"create_workspace","args":{"cwd":"/w/app","worktree":true,
+	b := openStream(t, h, "host-1")
+	_, cmd, _ := enqueue(t, h, "host-1", "", `{"kind":"create_workspace","args":{"cwd":"/w/app","worktree":true,
 		"agent":{"provider":"claude","prompt":"go"}}}`)
 	progress := func() []any {
 		t.Helper()
@@ -274,21 +274,21 @@ func TestCommandProgressIsReadableThroughSQL(t *testing.T) {
 		}
 		return res.Rows[0]
 	}
-	if got := b.command(); got.ID != cmd.ID { // sending is asynchronous: wait until the box has it
-		t.Fatalf("box got %+v", got)
+	if got := b.command(); got.ID != cmd.ID { // sending is asynchronous: wait until the host has it
+		t.Fatalf("host got %+v", got)
 	}
 	if row := progress(); row[0] != "sent" || row[4] != false {
 		t.Errorf("sent: %v", row)
 	}
-	b.call(devbox.Frame{Type: devbox.CommandUpdateFrame, Update: &devbox.CommandUpdate{ID: cmd.ID, Status: devbox.CommandSucceeded,
+	b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{ID: cmd.ID, Status: hostclient.CommandSucceeded,
 		Result: json.RawMessage(`{"workspaceId":"w-new","agentId":"a9"}`)}})
 	if row := progress(); row[0] != "succeeded" || row[2] != "w-new" || row[3] != "a9" || row[4] != false {
 		t.Errorf("succeeded, not yet reported: %v", row)
 	}
 	rep := sampleReport
-	rep.Paseo.Workspaces = append(append([]devbox.Workspace{}, sampleReport.Paseo.Workspaces...), devbox.Workspace{ID: "w-new"})
-	rep.Paseo.Agents = append(append([]devbox.Agent{}, sampleReport.Paseo.Agents...), devbox.Agent{ID: "a9", WorkspaceID: "w-new"})
-	b.call(devbox.Frame{Type: devbox.ReportFrame, Report: &rep})
+	rep.Paseo.Workspaces = append(append([]hostclient.Workspace{}, sampleReport.Paseo.Workspaces...), hostclient.Workspace{ID: "w-new"})
+	rep.Paseo.Agents = append(append([]hostclient.Agent{}, sampleReport.Paseo.Agents...), hostclient.Agent{ID: "a9", WorkspaceID: "w-new"})
+	b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep})
 	if row := progress(); row[4] != true {
 		t.Errorf("reported: %v", row)
 	}

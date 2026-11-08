@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -38,43 +40,43 @@ func TestAddrDefaultsToPort8080(t *testing.T) {
 	}
 }
 
-func TestDevboxConfigNeedsOnlyTheServer(t *testing.T) {
-	host := func() (string, error) { return "devbox-1", nil }
-	if _, err := devboxConfig(env(map[string]string{}), host); err == nil || !strings.Contains(err.Error(), "DEVBOX_SERVER") {
-		t.Errorf("err = %v, want DEVBOX_SERVER missing", err)
+func TestHostConfigNeedsOnlyTheServer(t *testing.T) {
+	hostname := func() (string, error) { return "host-1", nil }
+	if _, err := hostConfig(env(map[string]string{}), hostname); err == nil || !strings.Contains(err.Error(), "HOST_SERVER") {
+		t.Errorf("err = %v, want HOST_SERVER missing", err)
 	}
-	// a box installed before accounts still has DEVBOX_TOKEN in its env file: it starts, and joins
-	if _, err := devboxConfig(env(map[string]string{"DEVBOX_SERVER": "https://x", "DEVBOX_TOKEN": "old"}), host); err != nil {
+	// a host installed before accounts still has DEVBOX_TOKEN in its env file: it starts, and joins
+	if _, err := hostConfig(env(map[string]string{"HOST_SERVER": "https://x", "DEVBOX_TOKEN": "old"}), hostname); err != nil {
 		t.Errorf("an old env file: %v", err)
 	}
 }
 
-func TestDevboxConfigDefaults(t *testing.T) {
-	c, err := devboxConfig(env(map[string]string{"DEVBOX_SERVER": "https://x", "HOME": "/home/someone"}), func() (string, error) { return "Devbox-1", nil })
+func TestHostConfigDefaults(t *testing.T) {
+	c, err := hostConfig(env(map[string]string{"HOST_SERVER": "https://x", "HOME": "/home/someone"}), func() (string, error) { return "Host-1", nil })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Name != "devbox-1" || c.Interval != 15*time.Second || c.Server != "https://x" || c.KeyFile != "/home/someone/.config/intelligence/devbox.key" {
+	if c.Name != "host-1" || c.Interval != 15*time.Second || c.Server != "https://x" || c.KeyFile != "/home/someone/.config/intelligence/host.key" {
 		t.Errorf("config = %+v", c)
 	}
-	c, _ = devboxConfig(env(map[string]string{"DEVBOX_SERVER": "https://x", "DEVBOX_KEY_FILE": "/etc/box.key"}), func() (string, error) { return "h", nil })
-	if c.KeyFile != "/etc/box.key" {
-		t.Errorf("DEVBOX_KEY_FILE: %q", c.KeyFile)
+	c, _ = hostConfig(env(map[string]string{"HOST_SERVER": "https://x", "HOST_KEY_FILE": "/etc/host.key"}), func() (string, error) { return "h", nil })
+	if c.KeyFile != "/etc/host.key" {
+		t.Errorf("HOST_KEY_FILE: %q", c.KeyFile)
 	}
 }
 
-func TestDevboxConfigOverrides(t *testing.T) {
-	c, err := devboxConfig(env(map[string]string{"DEVBOX_SERVER": "https://x", "DEVBOX_TOKEN": "t",
-		"DEVBOX_NAME": "box-2", "DEVBOX_INTERVAL": "1m"}), func() (string, error) { return "h", nil })
+func TestHostConfigOverrides(t *testing.T) {
+	c, err := hostConfig(env(map[string]string{"HOST_SERVER": "https://x", "DEVBOX_TOKEN": "t",
+		"HOST_NAME": "host-2", "HOST_INTERVAL": "1m"}), func() (string, error) { return "h", nil })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Name != "box-2" || c.Interval != time.Minute {
+	if c.Name != "host-2" || c.Interval != time.Minute {
 		t.Errorf("config = %+v", c)
 	}
-	if _, err := devboxConfig(env(map[string]string{"DEVBOX_SERVER": "https://x", "DEVBOX_TOKEN": "t", "DEVBOX_NAME": "bad name"}),
+	if _, err := hostConfig(env(map[string]string{"HOST_SERVER": "https://x", "DEVBOX_TOKEN": "t", "HOST_NAME": "bad name"}),
 		func() (string, error) { return "h", nil }); err == nil {
-		t.Errorf("an invalid DEVBOX_NAME should be refused")
+		t.Errorf("an invalid HOST_NAME should be refused")
 	}
 }
 
@@ -95,32 +97,32 @@ func TestServerConfigReadsTheReadonlyRoleFromItsURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.ReadonlyRole != "intelligence_ro" || c.ReadonlyPassword != "s3cr@t" || c.BinDir != "/usr/local/share/intelligence/devbox" {
+	if c.ReadonlyRole != "intelligence_ro" || c.ReadonlyPassword != "s3cr@t" || c.BinDir != "/usr/local/share/intelligence/host" {
 		t.Errorf("config = %+v", c)
 	}
 }
 
-func TestDevboxAutoUpdateCanBeTurnedOff(t *testing.T) {
-	base := map[string]string{"DEVBOX_SERVER": "https://x", "DEVBOX_TOKEN": "t"}
-	c, _ := devboxConfig(env(base), func() (string, error) { return "h", nil })
+func TestHostAutoUpdateCanBeTurnedOff(t *testing.T) {
+	base := map[string]string{"HOST_SERVER": "https://x", "DEVBOX_TOKEN": "t"}
+	c, _ := hostConfig(env(base), func() (string, error) { return "h", nil })
 	if !c.AutoUpdate {
 		t.Errorf("auto-update should default on")
 	}
-	base["DEVBOX_AUTOUPDATE"] = "off"
-	c, _ = devboxConfig(env(base), func() (string, error) { return "h", nil })
+	base["HOST_AUTOUPDATE"] = "off"
+	c, _ = hostConfig(env(base), func() (string, error) { return "h", nil })
 	if c.AutoUpdate {
-		t.Errorf("DEVBOX_AUTOUPDATE=off should turn it off")
+		t.Errorf("HOST_AUTOUPDATE=off should turn it off")
 	}
 }
 
-func TestDevboxPaseoHome(t *testing.T) {
-	base := map[string]string{"DEVBOX_SERVER": "https://x", "DEVBOX_TOKEN": "t", "HOME": "/home/someone"}
-	c, err := devboxConfig(env(base), func() (string, error) { return "h", nil })
+func TestHostPaseoHome(t *testing.T) {
+	base := map[string]string{"HOST_SERVER": "https://x", "DEVBOX_TOKEN": "t", "HOME": "/home/someone"}
+	c, err := hostConfig(env(base), func() (string, error) { return "h", nil })
 	if err != nil || c.PaseoHome != "/home/someone/.paseo" {
 		t.Errorf("PaseoHome = %q (err %v), want ~/.paseo", c.PaseoHome, err)
 	}
-	base["DEVBOX_PASEO_HOME"] = "/srv/paseo"
-	if c, _ := devboxConfig(env(base), func() (string, error) { return "h", nil }); c.PaseoHome != "/srv/paseo" {
+	base["HOST_PASEO_HOME"] = "/srv/paseo"
+	if c, _ := hostConfig(env(base), func() (string, error) { return "h", nil }); c.PaseoHome != "/srv/paseo" {
 		t.Errorf("PaseoHome = %q, want the override", c.PaseoHome)
 	}
 }
@@ -135,9 +137,60 @@ func TestProbeConfig(t *testing.T) {
 	}
 }
 
-func TestDevboxProbeSocketDefault(t *testing.T) {
-	c, err := devboxConfig(env(map[string]string{"DEVBOX_SERVER": "https://x", "DEVBOX_TOKEN": "t"}), func() (string, error) { return "b", nil })
+func TestHostProbeSocketDefault(t *testing.T) {
+	c, err := hostConfig(env(map[string]string{"HOST_SERVER": "https://x", "DEVBOX_TOKEN": "t"}), func() (string, error) { return "b", nil })
 	if err != nil || c.ProbeSocket != "/run/intelligence/probe.sock" {
 		t.Errorf("probe socket = %q, %v", c.ProbeSocket, err)
+	}
+}
+
+// A host installed before dev boxes were called hosts runs the new binary (self-update) from its
+// old unit: `intelligence devbox`, with DEVBOX_* variables and its key in devbox.key. It keeps working.
+func TestHostConfigReadsTheDevboxNamesFromBeforeTheRename(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".config", "intelligence")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "devbox.key"), []byte("k"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := map[string]string{"HOME": home, "DEVBOX_SERVER": "https://x", "DEVBOX_NAME": "old-1", "DEVBOX_INTERVAL": "1m",
+		"DEVBOX_AUTOUPDATE": "off", "DEVBOX_PASEO_HOME": "/p", "DEVBOX_PROBE_SOCKET": "off"}
+	hostname := func() (string, error) { return "h", nil }
+	c, err := hostConfig(env(old), hostname)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Server != "https://x" || c.Name != "old-1" || c.Interval != time.Minute || c.AutoUpdate || c.PaseoHome != "/p" ||
+		c.ProbeSocket != "" || c.KeyFile != filepath.Join(dir, "devbox.key") {
+		t.Errorf("config = %+v", c)
+	}
+	old["HOST_NAME"] = "new-1"
+	if c, _ := hostConfig(env(old), hostname); c.Name != "new-1" {
+		t.Errorf("HOST_NAME should win over DEVBOX_NAME: %q", c.Name)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "host.key"), []byte("k"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := hostConfig(env(old), hostname); c.KeyFile != filepath.Join(dir, "host.key") {
+		t.Errorf("host.key should win over devbox.key: %q", c.KeyFile)
+	}
+}
+
+func TestDevboxIsTheHostCommand(t *testing.T) {
+	if got := command([]string{"intelligence", "devbox"}); got != "host" {
+		t.Errorf("command(devbox) = %q, want host", got)
+	}
+	if got := command([]string{"intelligence"}); got != "server" {
+		t.Errorf("command() = %q, want server", got)
+	}
+}
+
+func TestServerConfigReadsDevboxBinariesFromBeforeTheRename(t *testing.T) {
+	c, err := serverConfig(env(map[string]string{"DATABASE_URL": "postgres://app:p@db/app",
+		"READONLY_DATABASE_URL": "postgres://ro:p@db/app", "DEVBOX_BINARIES": "/old"}))
+	if err != nil || c.BinDir != "/old" {
+		t.Errorf("BinDir = %q, %v; want /old", c.BinDir, err)
 	}
 }

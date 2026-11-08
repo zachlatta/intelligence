@@ -14,7 +14,7 @@ import (
 func seedUsage(t *testing.T, d dbtest.DB) time.Time {
 	t.Helper()
 	now := time.Now().UTC().Truncate(time.Second)
-	fixtureFor(t, d).keyFor(t, "devbox-1") // the box is the test account's
+	fixtureFor(t, d).keyFor(t, "host-1") // the host is the test account's
 	reg := fleet.New(d.Owner)
 	read := func(at time.Time, used float64, reset time.Time) {
 		rep := usage.Report{CollectedAt: at, Sources: []usage.Source{
@@ -24,7 +24,7 @@ func seedUsage(t *testing.T, d dbtest.DB) time.Time {
 					{ID: "5h", Seconds: usage.FiveHours, UsedPct: 12, ResetsAt: at.Add(2 * time.Hour)}}},
 				{ID: "grace@example.com", Label: "grace@example.com", Slot: 2, ObservedAt: at, Error: "cswap usage status: expired"}}},
 			{Provider: usage.Codex, Error: "codex meter: 401 Unauthorized"}}}
-		if err := reg.RecordUsage(t.Context(), "devbox-1", rep, at); err != nil {
+		if err := reg.RecordUsage(t.Context(), "host-1", rep, at); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -38,8 +38,8 @@ func TestIndexShowsEachLoginsPlan(t *testing.T) {
 	h, d := dbServer(t)
 	seedUsage(t, d)
 	body := get(t, h, "/", nil).Body.String()
-	for _, want := range []string{`href="/usage"`, "ada@example.com", "#1", "70% left", "active on devbox-1", "resets in 3d 12h",
-		"grace@example.com", "cswap usage status: expired", "devbox-1: codex: codex meter: 401 Unauthorized"} {
+	for _, want := range []string{`href="/usage"`, "ada@example.com", "#1", "70% left", "active on host-1", "resets in 3d 12h",
+		"grace@example.com", "cswap usage status: expired", "host-1: codex: codex meter: 401 Unauthorized"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("index misses %q", want)
 		}

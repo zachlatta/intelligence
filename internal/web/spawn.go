@@ -10,11 +10,11 @@ import (
 )
 
 // commandProgressSQL is how the spawn pages follow their command, through the read-only SQL API
-// ($ID is the command's id): its status and error, what it made, and whether the box has
+// ($ID is the command's id): its status and error, what it made, and whether the host has
 // reported the agent yet (its transcript page has something to show).
 const commandProgressSQL = `SELECT c.status, c.error, coalesce(c.result ->> 'workspaceId', '') AS workspace_id,
 	coalesce(c.result ->> 'agentId', '') AS agent_id,
-	EXISTS (SELECT 1 FROM agents a WHERE a.box = c.box AND a.id = c.result ->> 'agentId') AS reported
+	EXISTS (SELECT 1 FROM agents a WHERE a.host = c.host AND a.id = c.result ->> 'agentId') AS reported
 	FROM commands c WHERE c.id = '$ID'`
 
 // newAgent is what the spawn forms start with: the fleet's default agent (Opus 5.5, medium
@@ -47,18 +47,18 @@ func render(w http.ResponseWriter, name string, data map[string]any) {
 	}
 }
 
-// boxNamed is the box called name, or false.
-func boxNamed(reg *fleet.Registry, r *http.Request, name string) (fleet.Box, bool, error) {
+// hostNamed is the host called name, or false.
+func hostNamed(reg *fleet.Registry, r *http.Request, name string) (fleet.Host, bool, error) {
 	list, err := reg.List(r.Context())
 	for _, b := range list {
 		if b.Report.Name == name {
 			return b, true, err
 		}
 	}
-	return fleet.Box{}, false, err
+	return fleet.Host{}, false, err
 }
 
-func availableProviders(b fleet.Box) []string {
+func availableProviders(b fleet.Host) []string {
 	var out []string
 	for _, p := range b.Report.Paseo.Providers {
 		if p.Available {
@@ -68,16 +68,16 @@ func availableProviders(b fleet.Box) []string {
 	return out
 }
 
-func spawnData(cfg Config, b fleet.Box) map[string]any {
-	box := b.Report.Name
-	return map[string]any{"Version": cfg.Version, "Box": box, "Providers": availableProviders(b), "Agent": newAgent,
-		"Thinking": thinkingLevels, "Commands": "/api/devboxes/" + box + "/commands", "ProgressSQL": commandProgressSQL}
+func spawnData(cfg Config, b fleet.Host) map[string]any {
+	host := b.Report.Name
+	return map[string]any{"Version": cfg.Version, "Host": host, "Providers": availableProviders(b), "Agent": newAgent,
+		"Thinking": thinkingLevels, "Commands": "/api/hosts/" + host + "/commands", "ProgressSQL": commandProgressSQL}
 }
 
 // newAgentPage is the form that starts an agent in a workspace.
 func newAgentPage(cfg Config, reg *fleet.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		b, ok, err := boxNamed(reg, r, r.PathValue("box"))
+		b, ok, err := hostNamed(reg, r, r.PathValue("host"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -101,11 +101,11 @@ func newAgentPage(cfg Config, reg *fleet.Registry) http.HandlerFunc {
 // repository is a repository a new workspace can be made from.
 type repository struct{ Root, Project string }
 
-// newWorkspacePage is the form that makes a workspace, a new worktree of one of the box's
+// newWorkspacePage is the form that makes a workspace, a new worktree of one of the host's
 // repositories by default, with an agent in it.
 func newWorkspacePage(cfg Config, reg *fleet.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		b, ok, err := boxNamed(reg, r, r.PathValue("box"))
+		b, ok, err := hostNamed(reg, r, r.PathValue("host"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

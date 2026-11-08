@@ -58,8 +58,8 @@
 {{template "top" "/"}}
 <main class="container page">
 <div class="page-head">
-  <div><h1>Dev boxes</h1><p class="sub">Each box's Paseo daemon, its workspaces and their agents.</p></div>
-  <div class="actions"><a class="meta" href="/account" title="Your account and its dev boxes">{{.Username}}</a><a class="btn sm" href="/account#add">Add a dev box</a><button class="btn sm" id="sign-out">Sign out</button></div>
+  <div><h1>Hosts</h1><p class="sub">Each host's Paseo daemon, its workspaces and their agents.</p></div>
+  <div class="actions"><a class="meta" href="/account" title="Your account and its hosts">{{.Username}}</a><a class="btn sm" href="/account#add">Add a host</a><button class="btn sm" id="sign-out">Sign out</button></div>
 </div>
 <div id="tree">
 {{if or .Plans.Plans .Plans.Problems}}
@@ -70,53 +70,53 @@
 </section>
 {{end}}
 <h2 class="section-title">Machines</h2>
-{{range .Boxes}}{{$p := .Report.Paseo}}{{$box := .Report.Name}}
-<details class="host card" id="host-{{$box}}" open>
+{{range .Hosts}}{{$p := .Report.Paseo}}{{$host := .Report.Name}}
+<details class="host card" id="host-{{$host}}" open>
   <summary>
     <span class="chev"></span>
     <span class="dot {{if .Online}}online{{else}}offline{{end}}" title="{{if .Online}}online{{else}}offline{{end}}"></span>
-    <span class="name">{{$box}}</span>
+    <span class="name">{{$host}}</span>
     <span class="badge {{if .Online}}green{{end}}">{{if .Online}}online{{else}}offline{{end}}</span>
     <span class="meta grow">{{agents (allAgents .)}}</span>
     <span class="meta when" title="Paseo {{$p.Version}}{{if $p.Listen}} at {{$p.Listen}}{{end}}; client {{.Report.Version}}">reported {{ago $.Now .LastSeen}}</span>
-    <a class="new btn sm" href="/devboxes/{{$box}}/workspaces/new" title="Make a workspace with an agent in it">+ workspace</a>
+    <a class="new btn sm" href="/hosts/{{$host}}/workspaces/new" title="Make a workspace with an agent in it">+ workspace</a>
   </summary>
   <div class="children">
-  {{with index $.Hosts $box}}{{with hostLine .}}<p class="res"><a href="/hosts#{{$box}}">{{.}}</a></p>{{end}}{{end}}
+  {{with index $.Resources $host}}{{with hostLine .}}<p class="res"><a href="/resources#{{$host}}">{{.}}</a></p>{{end}}{{end}}
   {{if not $p.Connected}}<p class="banner warn">Paseo not connected{{if $p.Error}}: {{$p.Error}}{{end}}</p>{{end}}
   {{if ne .Report.Version $.Version}}<p class="banner warn" title="{{.Report.Version}}">client {{short .Report.Version}} is not on the server's version</p>{{end}}
   {{range .Workspaces}}{{if .Agents}}
-  <details class="ws" id="ws-{{$box}}-{{.ID}}"{{if openWorkspace .}} open{{end}}>
+  <details class="ws" id="ws-{{$host}}-{{.ID}}"{{if openWorkspace .}} open{{end}}>
     <summary title="{{.Directory}}{{if .Branch}} · {{.Branch}}{{end}}">
       <span class="chev"></span>
       <span class="name">{{if .Listed}}{{or .Name .ID}}{{else}}{{.ID}}{{end}}</span>
       {{if .Project}}<span class="badge">{{.Project}}</span>{{else if not .Listed}}<span class="meta">not listed by Paseo</span>{{end}}
       <span class="meta grow" style="text-align:right">{{agents .Agents}}</span>
-      <a class="new btn ghost sm" href="/devboxes/{{$box}}/workspaces/{{.ID}}/agents/new" title="Start an agent here">+ agent</a>
+      <a class="new btn ghost sm" href="/hosts/{{$host}}/workspaces/{{.ID}}/agents/new" title="Start an agent here">+ agent</a>
     </summary>
     <ul class="agents">
     {{range .Agents}}
       <li>
         <span class="status st-{{.Status}}">{{.Status}}</span>
-        <a class="name grow" href="/devboxes/{{$box}}/agents/{{.ID}}" title="{{.ID}}">{{or .Title "(untitled)"}}</a>
+        <a class="name grow" href="/hosts/{{$host}}/agents/{{.ID}}" title="{{.ID}}">{{or .Title "(untitled)"}}</a>
         {{if .RequiresAttention}}<span class="badge orange" title="{{.AttentionReason}}">needs attention</span>{{end}}
-        <span class="meta">{{.Model}}{{with agentMem (index $.Hosts $box) .ID}} · {{.}}{{end}}{{if not .CreatedAt.IsZero}} · {{ago $.Now .CreatedAt}}{{end}}</span>
+        <span class="meta">{{.Model}}{{with agentMem (index $.Resources $host) .ID}} · {{.}}{{end}}{{if not .CreatedAt.IsZero}} · {{ago $.Now .CreatedAt}}{{end}}</span>
       </li>
     {{end}}
     </ul>
   </details>
   {{end}}{{end}}
   {{$idle := idleWorkspaces .}}{{if $idle}}
-  <details class="quiet" id="idle-{{$box}}">
+  <details class="quiet" id="idle-{{$host}}">
     <summary><span class="chev"></span>{{plural (len $idle) "workspace"}} without agents</summary>
     <ul>{{range $idle}}<li title="{{.Directory}}"><span>{{or .Name .ID}}</span>{{if .Project}} <span class="badge">{{.Project}}</span>{{end}}
-      <a class="new btn ghost sm" href="/devboxes/{{$box}}/workspaces/{{.ID}}/agents/new" title="Start an agent here">+ agent</a></li>{{end}}</ul>
+      <a class="new btn ghost sm" href="/hosts/{{$host}}/workspaces/{{.ID}}/agents/new" title="Start an agent here">+ agent</a></li>{{end}}</ul>
   </details>
   {{end}}
   </div>
 </details>
 {{else}}
-<p class="empty-state">No dev boxes yet. <a href="/account#add">Add one</a>.</p>
+<p class="empty-state">No hosts yet. <a href="/account#add">Add one</a>.</p>
 {{end}}
 </div>
 <footer title="{{.Version}}">version {{.Short}}</footer>

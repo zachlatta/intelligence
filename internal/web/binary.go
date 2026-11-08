@@ -10,12 +10,12 @@ import (
 	"regexp"
 	"sync"
 
-	"github.com/zachlatta/intelligence/internal/devbox"
+	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
 var platformRe = regexp.MustCompile(`^[a-z0-9]{1,16}$`)
 
-// binaries serves dir's intelligence-<os>-<arch> files, with their sha256, for dev box self-update.
+// binaries serves dir's intelligence-<os>-<arch> files, with their sha256, for host self-update.
 // The files are built into the image with the server, so they are the server's version.
 func binaries(dir string) http.Handler {
 	var mu sync.Mutex
@@ -51,7 +51,7 @@ func binaries(dir string) http.Handler {
 			sums[path] = sum
 		}
 		mu.Unlock()
-		w.Header().Set(devbox.SHA256Header, sum)
+		w.Header().Set(hostclient.SHA256Header, sum)
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Cache-Control", "no-store")
 		http.ServeContent(w, r, "", fi.ModTime(), f)

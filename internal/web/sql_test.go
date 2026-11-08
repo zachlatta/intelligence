@@ -46,14 +46,14 @@ func q(query string) string {
 func TestSQLReadsAppState(t *testing.T) {
 	h, _ := dbServer(t)
 	sendReport(t, h, sampleReport)
-	code, r := sqlPost(t, h, q("SELECT name, paseo_version, online, running_agents::text AS running FROM devbox_status"))
+	code, r := sqlPost(t, h, q("SELECT name, paseo_version, online, running_agents::text AS running FROM host_status"))
 	if code != http.StatusOK {
 		t.Fatalf("status %d: %s", code, r.Error)
 	}
 	if len(r.Columns) != 4 || r.Columns[0].Name != "name" || r.Columns[2].Type != "bool" {
 		t.Errorf("columns = %+v", r.Columns)
 	}
-	if r.RowCount != 1 || len(r.Rows) != 1 || r.Rows[0][0] != "devbox-1" || r.Rows[0][1] != "0.15.3" || r.Rows[0][2] != true || r.Rows[0][3] != "1" {
+	if r.RowCount != 1 || len(r.Rows) != 1 || r.Rows[0][0] != "host-1" || r.Rows[0][1] != "0.15.3" || r.Rows[0][2] != true || r.Rows[0][3] != "1" {
 		t.Errorf("rows = %+v", r.Rows)
 	}
 }
@@ -69,13 +69,13 @@ func TestSQLGETWithQueryParameter(t *testing.T) {
 func TestSQLRefusesWrites(t *testing.T) {
 	h, _ := dbServer(t)
 	for _, query := range []string{
-		"INSERT INTO devboxes (name, last_seen) VALUES ('x', now())",
-		"UPDATE devboxes SET daemon = 'x'",
+		"INSERT INTO hosts (name, last_seen) VALUES ('x', now())",
+		"UPDATE hosts SET daemon = 'x'",
 		"DELETE FROM schema_migrations",
 		"CREATE TABLE sneaky (x int)",
-		"DROP TABLE devboxes",
+		"DROP TABLE hosts",
 		"SELECT set_config('role', 'postgres', false)",
-		"SELECT 1; DELETE FROM devboxes",
+		"SELECT 1; DELETE FROM hosts",
 	} {
 		if code, r := sqlPost(t, h, q(query)); code != http.StatusBadRequest || r.Error == "" {
 			t.Errorf("%q: status %d error %q, want 400 with the database's error", query, code, r.Error)
@@ -126,7 +126,7 @@ func TestEveryTableIsReadableThroughTheSQLAPI(t *testing.T) {
 		tables = append(tables, n)
 	}
 	if len(tables) < 3 {
-		t.Fatalf("tables = %v, want devboxes, devbox_status and schema_migrations at least", tables)
+		t.Fatalf("tables = %v, want hosts, host_status and schema_migrations at least", tables)
 	}
 	for _, tbl := range tables {
 		if code, r := sqlPost(t, h, q(`SELECT * FROM "`+tbl+`" LIMIT 1`)); code != http.StatusOK {
@@ -135,12 +135,12 @@ func TestEveryTableIsReadableThroughTheSQLAPI(t *testing.T) {
 	}
 }
 
-func TestSQLWalksDevboxesWorkspacesAndAgents(t *testing.T) {
+func TestSQLWalksHostsWorkspacesAndAgents(t *testing.T) {
 	h, _ := dbServer(t)
 	sendReport(t, h, sampleReport)
-	code, r := sqlPost(t, h, q(`SELECT d.name, w.name, a.title, a.status FROM devboxes d JOIN workspaces w ON w.box = d.name
-		JOIN agents a ON a.box = w.box AND a.workspace_id = w.id ORDER BY a.id`))
-	if code != http.StatusOK || r.RowCount != 3 || r.Rows[0][0] != "devbox-1" || r.Rows[0][1] != "Login fix" || r.Rows[0][3] != "running" {
+	code, r := sqlPost(t, h, q(`SELECT d.name, w.name, a.title, a.status FROM hosts d JOIN workspaces w ON w.host = d.name
+		JOIN agents a ON a.host = w.host AND a.workspace_id = w.id ORDER BY a.id`))
+	if code != http.StatusOK || r.RowCount != 3 || r.Rows[0][0] != "host-1" || r.Rows[0][1] != "Login fix" || r.Rows[0][3] != "running" {
 		t.Fatalf("status %d rows %+v error %q", code, r.Rows, r.Error)
 	}
 }

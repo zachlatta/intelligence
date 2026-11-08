@@ -13,14 +13,14 @@ import (
 // topic: what changed, for whoever waits on it.
 const channel = "fleet"
 
-// CommandsTopic: a command was queued for box.
-func CommandsTopic(box string) string { return "commands:" + box }
+// CommandsTopic: a command was queued for host.
+func CommandsTopic(host string) string { return "commands:" + host }
 
-// CommandTopic: the command with id changed (a box's update, or its expiry).
+// CommandTopic: the command with id changed (a host's update, or its expiry).
 func CommandTopic(id string) string { return "command:" + id }
 
-// StreamTopic: a stream attached for box, so any other stream it had is over.
-func StreamTopic(box string) string { return "stream:" + box }
+// StreamTopic: a stream attached for host, so any other stream it had is over.
+func StreamTopic(host string) string { return "stream:" + host }
 
 // Changes wakes the server's waiters when the fleet changes, whichever server instance changed
 // it: the registry announces each change with a Postgres NOTIFY, and Run listens on one
@@ -142,5 +142,5 @@ const notifySQL = "SELECT pg_notify('" + channel + "', $1)"
 // NotifySQL announces a topic ($1), for changes made outside the registry.
 const NotifySQL = notifySQL
 
-// EnrollmentTopic: the dev box enrollment with id was claimed.
+// EnrollmentTopic: the host enrollment with id was claimed.
 func EnrollmentTopic(id string) string { return "enrollment:" + id }

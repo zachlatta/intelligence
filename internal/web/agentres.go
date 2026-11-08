@@ -110,18 +110,18 @@ func niceBytes(b int64) float64 {
 }
 
 // agentUse reads and builds an agent's resources.
-func agentUse(r *http.Request, cfg Config, reg *fleet.Registry, box, agentID string, isLive bool) (agentResources, error) {
-	u, err := reg.AgentUse(r.Context(), box, agentID)
+func agentUse(r *http.Request, cfg Config, reg *fleet.Registry, host, agentID string, isLive bool) (agentResources, error) {
+	u, err := reg.AgentUse(r.Context(), host, agentID)
 	if err != nil {
 		return agentResources{}, err
 	}
-	return buildResources(u, "/devboxes/"+box+"/agents/"+agentID, cfg.Now().UTC(), isLive), nil
+	return buildResources(u, "/hosts/"+host+"/agents/"+agentID, cfg.Now().UTC(), isLive), nil
 }
 
 // transcriptResources sends an agent's resources alone, for a live page to replace its own with.
 func transcriptResources(cfg Config, reg *fleet.Registry, w http.ResponseWriter, r *http.Request) {
-	box, agentID := r.PathValue("box"), r.PathValue("agent")
-	agent, _, _, err := agentContext(r, reg, box, agentID)
+	host, agentID := r.PathValue("host"), r.PathValue("agent")
+	agent, _, _, err := agentContext(r, reg, host, agentID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -130,7 +130,7 @@ func transcriptResources(cfg Config, reg *fleet.Registry, w http.ResponseWriter,
 		http.NotFound(w, r)
 		return
 	}
-	res, err := agentUse(r, cfg, reg, box, agentID, live(agent))
+	res, err := agentUse(r, cfg, reg, host, agentID, live(agent))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

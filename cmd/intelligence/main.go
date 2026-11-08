@@ -1,8 +1,8 @@
-// Command intelligence is the Intelligence server and its dev-box client.
+// Command intelligence is the Intelligence server and its host client.
 //
 //	intelligence [server]   serve the web app (the container's default)
-//	intelligence devbox     run on a dev box: stream its Paseo daemon and its plans' usage to the server, run the server's commands, and stay on its version
-//	intelligence probe      run as root on a Linux dev box: the eBPF probe that charges each agent's CPU and OOM kills
+//	intelligence host       run on a host: stream its Paseo daemon and its plans' usage to the server, run the server's commands, and stay on its version
+//	intelligence probe      run as root on a Linux host: the eBPF probe that charges each agent's CPU and OOM kills
 //	intelligence version    print this binary's version
 package main
 
@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/url"
@@ -28,11 +29,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/zachlatta/intelligence/internal/db"
-	"github.com/zachlatta/intelligence/internal/devbox"
 	"github.com/zachlatta/intelligence/internal/fleet"
-	"github.com/zachlatta/intelligence/internal/host"
+	"github.com/zachlatta/intelligence/internal/hostclient"
 	"github.com/zachlatta/intelligence/internal/paseo"
 	"github.com/zachlatta/intelligence/internal/probe"
+	"github.com/zachlatta/intelligence/internal/resources"
 	"github.com/zachlatta/intelligence/internal/usage"
 	"github.com/zachlatta/intelligence/internal/web"
 )
@@ -43,16 +44,13 @@ var buildCommit string
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	cmd := ""
-	if len(os.Args) > 1 {
-		cmd = os.Args[1]
-	}
+	cmd := command(os.Args)
 	var err error
 	switch cmd {
-	case "", "server":
+	case "server":
 		err = serve(ctx)
-	case "devbox":
-		err = runDevbox(ctx)
+	case "host":
+		err = runHost(ctx)
 	case "probe":
 		if len(os.Args) > 2 && os.Args[2] == "version" {
 			// a binary that can run the probe says so: the probe updates only to such a binary
@@ -63,10 +61,33 @@ func main() {
 	case "version":
 		fmt.Println(version(os.Getenv))
 	default:
-		err = fmt.Errorf("unknown command %q: want server, devbox, probe or version", cmd)
+		err = fmt.Errorf("unknown command %q: want server, host, probe or version", cmd)
 	}
 	if err != nil {
 		log.Fatal(err)
+	}
+}
+
+// command is the command os.Args names: server when none. devbox is host, its name before dev
+// boxes were called hosts, which a host installed before then runs from its old unit.
+func command(args []string) string {
+	switch {
+	case len(args) < 2 || args[1] == "":
+		return "server"
+	case args[1] == "devbox":
+		return "host"
+	}
+	return args[1]
+}
+
+// withDevboxNames reads a HOST_ variable, or else its DEVBOX_ name from before dev boxes were
+// called hosts: a host installed then keeps its env file, and a server its settings.
+func withDevboxNames(getenv func(string) string) func(string) string {
+	return func(k string) string {
+		if v := getenv(k); v != "" || !strings.HasPrefix(k, "HOST_") {
+			return v
+		}
+		return getenv("DEVBOX_" + strings.TrimPrefix(k, "HOST_"))
 	}
 }
 
@@ -76,13 +97,14 @@ type serverSettings struct {
 	ReadonlyURL      string // READONLY_DATABASE_URL: the same database as the read-only role the SQL API uses
 	ReadonlyRole     string // the user in ReadonlyURL; the server creates or updates it
 	ReadonlyPassword string
-	BinDir           string // DEVBOX_BINARIES: dev box binaries to serve; default /usr/local/share/intelligence/devbox
+	BinDir           string // HOST_BINARIES: host binaries to serve; default /usr/local/share/intelligence/host
 }
 
 func serverConfig(getenv func(string) string) (serverSettings, error) {
-	c := serverSettings{DatabaseURL: getenv("DATABASE_URL"), ReadonlyURL: getenv("READONLY_DATABASE_URL"), BinDir: getenv("DEVBOX_BINARIES")}
+	getenv = withDevboxNames(getenv)
+	c := serverSettings{DatabaseURL: getenv("DATABASE_URL"), ReadonlyURL: getenv("READONLY_DATABASE_URL"), BinDir: getenv("HOST_BINARIES")}
 	if c.BinDir == "" {
-		c.BinDir = "/usr/local/share/intelligence/devbox"
+		c.BinDir = "/usr/local/share/intelligence/host"
 	}
 	switch {
 	case c.DatabaseURL == "":
@@ -131,7 +153,7 @@ func serve(ctx context.Context) error {
 	}
 	for _, gone := range []string{"DEVBOX_TOKEN", "OPERATOR_TOKEN"} {
 		if os.Getenv(gone) != "" {
-			log.Printf("%s is set but no longer used: accounts sign in with passwords, and each dev box has its own key", gone)
+			log.Printf("%s is set but no longer used: accounts sign in with passwords, and each host has its own key", gone)
 		}
 	}
 	srv := &http.Server{
@@ -153,22 +175,26 @@ func serve(ctx context.Context) error {
 	return nil
 }
 
-// devboxSettings configure `intelligence devbox`, from the environment.
-type devboxSettings struct {
-	Server     string        // DEVBOX_SERVER: the server's base URL
-	KeyFile    string        // DEVBOX_KEY_FILE: where the box keeps its key; default ~/.config/intelligence/devbox.key
-	Name       string        // DEVBOX_NAME: this box's name; default the lowercased hostname
-	Interval   time.Duration // DEVBOX_INTERVAL: how often to re-read the daemon's status; default 15s
-	PaseoHome  string        // DEVBOX_PASEO_HOME: the Paseo daemon's home; default ~/.paseo
-	AutoUpdate bool          // DEVBOX_AUTOUPDATE: "off" keeps this binary; default on
-	// DEVBOX_PROBE_SOCKET: the eBPF probe's socket; default /run/intelligence/probe.sock ("off": none)
+// hostSettings configure `intelligence host`, from the environment. Each HOST_ variable may also
+// be set by its DEVBOX_ name (withDevboxNames).
+type hostSettings struct {
+	Server string // HOST_SERVER: the server's base URL
+	// HOST_KEY_FILE: where the host keeps its key; default ~/.config/intelligence/host.key, or devbox.key
+	// if only it exists
+	KeyFile    string
+	Name       string        // HOST_NAME: this host's name; default the lowercased hostname
+	Interval   time.Duration // HOST_INTERVAL: how often to re-read the daemon's status; default 15s
+	PaseoHome  string        // HOST_PASEO_HOME: the Paseo daemon's home; default ~/.paseo
+	AutoUpdate bool          // HOST_AUTOUPDATE: "off" keeps this binary; default on
+	// HOST_PROBE_SOCKET: the eBPF probe's socket; default /run/intelligence/probe.sock ("off": none)
 	ProbeSocket string
 }
 
-func devboxConfig(getenv func(string) string, hostname func() (string, error)) (devboxSettings, error) {
-	c := devboxSettings{Server: getenv("DEVBOX_SERVER"), KeyFile: getenv("DEVBOX_KEY_FILE"), Name: getenv("DEVBOX_NAME"),
-		Interval: 15 * time.Second, PaseoHome: getenv("DEVBOX_PASEO_HOME"), AutoUpdate: getenv("DEVBOX_AUTOUPDATE") != "off",
-		ProbeSocket: getenv("DEVBOX_PROBE_SOCKET")}
+func hostConfig(getenv func(string) string, hostname func() (string, error)) (hostSettings, error) {
+	getenv = withDevboxNames(getenv)
+	c := hostSettings{Server: getenv("HOST_SERVER"), KeyFile: getenv("HOST_KEY_FILE"), Name: getenv("HOST_NAME"),
+		Interval: 15 * time.Second, PaseoHome: getenv("HOST_PASEO_HOME"), AutoUpdate: getenv("HOST_AUTOUPDATE") != "off",
+		ProbeSocket: getenv("HOST_PROBE_SOCKET")}
 	switch c.ProbeSocket {
 	case "":
 		c.ProbeSocket = defaultProbeSocket
@@ -179,51 +205,58 @@ func devboxConfig(getenv func(string) string, hostname func() (string, error)) (
 		c.PaseoHome = filepath.Join(getenv("HOME"), ".paseo")
 	}
 	if c.KeyFile == "" {
-		c.KeyFile = filepath.Join(getenv("HOME"), ".config", "intelligence", "devbox.key")
+		dir := filepath.Join(getenv("HOME"), ".config", "intelligence")
+		c.KeyFile = filepath.Join(dir, "host.key")
+		// a host that joined before dev boxes were called hosts keeps the key it has
+		if _, err := os.Stat(c.KeyFile); errors.Is(err, fs.ErrNotExist) {
+			if _, err := os.Stat(filepath.Join(dir, "devbox.key")); err == nil {
+				c.KeyFile = filepath.Join(dir, "devbox.key")
+			}
+		}
 	}
 	if c.Server == "" {
-		return c, errors.New("DEVBOX_SERVER is not set: the server's base URL")
+		return c, errors.New("HOST_SERVER is not set: the server's base URL")
 	}
-	if v := getenv("DEVBOX_INTERVAL"); v != "" {
+	if v := getenv("HOST_INTERVAL"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil || d < time.Second {
-			return c, fmt.Errorf("DEVBOX_INTERVAL %q: want a duration of at least 1s", v)
+			return c, fmt.Errorf("HOST_INTERVAL %q: want a duration of at least 1s", v)
 		}
 		c.Interval = d
 	}
 	if c.Name == "" {
 		h, err := hostname()
 		if err != nil {
-			return c, fmt.Errorf("no DEVBOX_NAME and no hostname: %w", err)
+			return c, fmt.Errorf("no HOST_NAME and no hostname: %w", err)
 		}
 		c.Name = strings.ToLower(h)
 	}
-	if !devbox.ValidName(c.Name) {
-		return c, fmt.Errorf("dev box name %q: use lowercase letters, digits, '.', '_' and '-'", c.Name)
+	if !hostclient.ValidName(c.Name) {
+		return c, fmt.Errorf("host name %q: use lowercase letters, digits, '.', '_' and '-'", c.Name)
 	}
 	return c, nil
 }
 
-// runDevbox runs the dev box client (devbox.Box): it follows the box's Paseo daemon and holds one
+// runHost runs the host client (hostclient.Client): it follows the host's Paseo daemon and holds one
 // stream to the server, for reports, transcripts, plan usage and the server's commands, and stays
 // on the server's version.
-func runDevbox(ctx context.Context) error {
-	c, err := devboxConfig(os.Getenv, os.Hostname)
+func runHost(ctx context.Context) error {
+	c, err := hostConfig(os.Getenv, os.Hostname)
 	if err != nil {
 		return err
 	}
 	v := version(os.Getenv)
-	b := &devbox.Box{Name: c.Name, Version: v, StatusEvery: c.Interval,
-		Watcher: &devbox.Watcher{Dial: func(ctx context.Context) (*paseo.Client, error) {
+	b := &hostclient.Client{Name: c.Name, Version: v, StatusEvery: c.Interval,
+		Watcher: &hostclient.Watcher{Dial: func(ctx context.Context) (*paseo.Client, error) {
 			// re-read each time: the daemon's listen address and credential change when it restarts
-			t, err := paseo.LocalTarget(c.PaseoHome, "intelligence-devbox")
+			t, err := paseo.LocalTarget(c.PaseoHome, "intelligence-host")
 			if err != nil {
 				return nil, err
 			}
 			return paseo.Dial(ctx, t)
 		}},
-		// with no key yet, the box joins an account: it logs a code to enter on the server's account page
-		Link: &devbox.Link{Server: c.Server, Box: c.Name, Keys: &devbox.Keys{File: c.KeyFile, Server: c.Server, Box: c.Name}}}
+		// with no key yet, the host joins an account: it logs a code to enter on the server's account page
+		Link: &hostclient.Link{Server: c.Server, Host: c.Name, Keys: &hostclient.Keys{File: c.KeyFile, Server: c.Server, Host: c.Name}}}
 	if c.AutoUpdate {
 		if up, err := newUpdater(c, v); err != nil {
 			log.Printf("self-update off: %v", err)
@@ -233,14 +266,14 @@ func runDevbox(ctx context.Context) error {
 	}
 	// every 5 minutes: each plan's usage, per login, from each provider's own meter
 	home, _ := os.UserHomeDir()
-	b.Usage = &devbox.UsageSync{Read: (&usage.Reader{Home: home}).Read}
+	b.Usage = &hostclient.UsageSync{Read: (&usage.Reader{Home: home}).Read}
 	// every minute: the host, each agent's processes, and the eBPF probe's CPU and OOM kills
 	probeSocket := c.ProbeSocket
 	if runtime.GOOS != "linux" {
 		probeSocket = ""
 	}
-	b.Host = &host.Collector{Reader: &host.Reader{Home: home}, Walker: &host.AgentWalker{}, ProbeSocket: probeSocket}
-	log.Printf("intelligence devbox %s streaming as %s to %s (self-update %v)", v, c.Name, c.Server, b.Update != nil)
+	b.Resources = &resources.Collector{Reader: &resources.Reader{Home: home}, Walker: &resources.AgentWalker{}, ProbeSocket: probeSocket}
+	log.Printf("intelligence host %s streaming as %s to %s (self-update %v)", v, c.Name, c.Server, b.Update != nil)
 	return b.Run(ctx)
 }
 
@@ -267,7 +300,7 @@ const defaultProbeSocket = "/run/intelligence/probe.sock"
 // probeSettings configure `intelligence probe`, from the environment (/etc/intelligence/probe.env).
 type probeSettings struct {
 	Server     string // PROBE_SERVER: the server's base URL, to follow its version; "" never updates
-	User       string // PROBE_USER: the dev box user, who may read the socket
+	User       string // PROBE_USER: the host user, who may read the socket
 	Socket     string // PROBE_SOCKET: default /run/intelligence/probe.sock
 	AutoUpdate bool   // PROBE_AUTOUPDATE: "off" keeps this binary; default on
 }
@@ -281,8 +314,8 @@ func probeConfig(getenv func(string) string) probeSettings {
 	return c
 }
 
-// runProbe loads the eBPF probe and serves its counters on a socket only the dev box user (and
-// root) can read. Like the dev box client it follows the server's version: every minute it asks
+// runProbe loads the eBPF probe and serves its counters on a socket only the host user (and
+// root) can read. Like the host client it follows the server's version: every minute it asks
 // the server's version and, when it differs, downloads the server's binary, checks its sha256 and
 // that it runs and reports that version, replaces itself and re-executes.
 func runProbe(ctx context.Context) error {
@@ -312,9 +345,9 @@ func runProbe(ctx context.Context) error {
 	served := make(chan error, 1)
 	go func() { served <- probe.Serve(ctx, c.Socket, uid, p, nil) }()
 	log.Printf("intelligence probe %s: loaded; serving %s", v, c.Socket)
-	var up *devbox.Updater
+	var up *hostclient.Updater
 	if c.AutoUpdate && c.Server != "" {
-		dc := devboxSettings{Server: c.Server}
+		dc := hostSettings{Server: c.Server}
 		if up, err = newUpdater(dc, v); err != nil {
 			log.Printf("self-update off: %v", err)
 		} else {
@@ -326,7 +359,7 @@ func runProbe(ctx context.Context) error {
 			}
 		}
 	}
-	t := time.NewTicker(devbox.UpdateEvery)
+	t := time.NewTicker(hostclient.UpdateEvery)
 	defer t.Stop()
 	for {
 		select {
@@ -360,10 +393,10 @@ func serverVersion(ctx context.Context, server string) (string, error) {
 		return "", err
 	}
 	res.Body.Close()
-	return res.Header.Get(devbox.VersionHeader), nil
+	return res.Header.Get(hostclient.VersionHeader), nil
 }
 
-func newUpdater(c devboxSettings, current string) (*devbox.Updater, error) {
+func newUpdater(c hostSettings, current string) (*hostclient.Updater, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -371,7 +404,7 @@ func newUpdater(c devboxSettings, current string) (*devbox.Updater, error) {
 	if exe, err = filepath.EvalSymlinks(exe); err != nil {
 		return nil, err
 	}
-	return &devbox.Updater{
+	return &hostclient.Updater{
 		Server: c.Server, Client: &http.Client{Timeout: 2 * time.Minute}, Current: current, Exe: exe,
 		OS: runtime.GOOS, Arch: runtime.GOARCH, Now: time.Now,
 		Verify: func(ctx context.Context, path string) (string, error) {

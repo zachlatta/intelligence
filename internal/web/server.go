@@ -16,8 +16,8 @@ import (
 
 	"github.com/zachlatta/intelligence/internal/accounts"
 	"github.com/zachlatta/intelligence/internal/db"
-	"github.com/zachlatta/intelligence/internal/devbox"
 	"github.com/zachlatta/intelligence/internal/fleet"
+	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
 // Config is what the server needs. All app state is in DB; each account reads it through its own
@@ -29,7 +29,7 @@ type Config struct {
 	DB         *pgxpool.Pool // the app's database, migrated (db.Migrate)
 	Readonly   *pgxpool.Pool // the same database as the read-only role (db.EnsureReadonlyRole)
 	SQLTimeout time.Duration // per SQL API query; default 5s
-	BinDir     string        // dev box binaries, intelligence-<os>-<arch>, served for self-update; "" = none
+	BinDir     string        // host binaries, intelligence-<os>-<arch>, served for self-update; "" = none
 	Now        func() time.Time
 }
 
@@ -37,7 +37,7 @@ type Config struct {
 type app struct {
 	cfg     Config
 	store   *accounts.Store
-	reg     *fleet.Registry // as the owner: for the dev box streams and for writes
+	reg     *fleet.Registry // as the owner: for the host streams and for writes
 	changes *fleet.Changes
 }
 
@@ -93,15 +93,23 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /login", loginPage(cfg))
 	mux.HandleFunc("GET /ui.css", stylesheet)
 	mux.HandleFunc("GET /account", a.page(func(v viewer) http.HandlerFunc { return accountPage(cfg, v) }))
-	// dev boxes: joining an account, and their streams
-	mux.HandleFunc("POST /api/devbox-enrollments", a.enroll)
-	mux.HandleFunc("POST /api/devbox-enrollments/{id}/key", a.collectKey)
-	mux.HandleFunc("POST /api/devbox-enrollments/claim", a.write(a.claimBox))
-	mux.HandleFunc("DELETE /api/devboxes/{box}", a.write(a.removeBox))
-	mux.HandleFunc("GET "+devbox.StreamPath("{box}"), stream(a))
+	// hosts: joining an account, and their streams
+	mux.HandleFunc("POST /api/host-enrollments", a.enroll)
+	mux.HandleFunc("POST /api/host-enrollments/{id}/key", a.collectKey)
+	mux.HandleFunc("POST /api/host-enrollments/claim", a.write(a.claimHost))
+	mux.HandleFunc("DELETE /api/hosts/{host}", a.write(a.removeHost))
+	mux.HandleFunc("GET "+hostclient.StreamPath("{host}"), stream(a))
+	mux.Handle("GET /api/host/binary/{os}/{arch}", binaries(cfg.BinDir))
+	// before dev boxes were called hosts: a client of then updates itself from here, and old
+	// links to its pages still land
 	mux.Handle("GET /api/devbox/binary/{os}/{arch}", binaries(cfg.BinDir))
-	// what a signed-in account reads: its own boxes, through its own role
-	mux.HandleFunc("GET /api/devboxes", a.read(func(v viewer) http.HandlerFunc {
+	mux.HandleFunc("GET /devboxes/{rest...}", func(w http.ResponseWriter, r *http.Request) {
+		u := *r.URL
+		u.Path, u.RawPath = "/hosts/"+r.PathValue("rest"), ""
+		http.Redirect(w, r, u.RequestURI(), http.StatusMovedPermanently)
+	})
+	// what a signed-in account reads: its own hosts, through its own role
+	mux.HandleFunc("GET /api/hosts", a.read(func(v viewer) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			list, err := v.reg.List(r.Context())
 			if err != nil {
@@ -111,32 +119,37 @@ func New(cfg Config) http.Handler {
 			writeJSON(w, list)
 		}
 	}))
-	mux.HandleFunc("POST /api/devboxes/{box}/commands", a.write(func(v viewer) http.HandlerFunc { return enqueueCommand(a, v) }))
-	mux.HandleFunc("GET /api/devboxes/{box}/commands/{id}", a.read(func(v viewer) http.HandlerFunc { return showCommand(a, v) }))
+	mux.HandleFunc("POST /api/hosts/{host}/commands", a.write(func(v viewer) http.HandlerFunc { return enqueueCommand(a, v) }))
+	mux.HandleFunc("GET /api/hosts/{host}/commands/{id}", a.read(func(v viewer) http.HandlerFunc { return showCommand(a, v) }))
 	mux.HandleFunc("GET /api/sql", a.read(func(v viewer) http.HandlerFunc { return sqlHandler(cfg, v.pool) }))
 	mux.HandleFunc("POST /api/sql", a.read(func(v viewer) http.HandlerFunc { return sqlHandler(cfg, v.pool) }))
-	mux.HandleFunc("GET /api/hosts", a.read(func(v viewer) http.HandlerFunc { return hostsAPI(v.reg) }))
+	mux.HandleFunc("GET /api/hosts/resources", a.read(func(v viewer) http.HandlerFunc { return hostResourcesAPI(v.reg) }))
 	mux.HandleFunc("GET /api/usage", a.read(func(v viewer) http.HandlerFunc { return usageAPI(v.reg) }))
-	mux.HandleFunc("GET /devboxes/{box}/workspaces/new", a.page(func(v viewer) http.HandlerFunc { return newWorkspacePage(cfg, v.reg) }))
-	mux.HandleFunc("GET /devboxes/{box}/workspaces/{ws}/agents/new", a.page(func(v viewer) http.HandlerFunc { return newAgentPage(cfg, v.reg) }))
-	mux.HandleFunc("GET /devboxes/{box}/agents/{agent}", a.page(func(v viewer) http.HandlerFunc {
+	mux.HandleFunc("GET /hosts/{host}/workspaces/new", a.page(func(v viewer) http.HandlerFunc { return newWorkspacePage(cfg, v.reg) }))
+	mux.HandleFunc("GET /hosts/{host}/workspaces/{ws}/agents/new", a.page(func(v viewer) http.HandlerFunc { return newAgentPage(cfg, v.reg) }))
+	mux.HandleFunc("GET /hosts/{host}/agents/{agent}", a.page(func(v viewer) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) { transcriptPage(cfg, v.reg, w, r) }
 	}))
-	mux.HandleFunc("GET /devboxes/{box}/agents/{agent}/blocks", a.read(func(v viewer) http.HandlerFunc {
+	mux.HandleFunc("GET /hosts/{host}/agents/{agent}/blocks", a.read(func(v viewer) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) { transcriptBlocks(cfg, v.reg, w, r) }
 	}))
-	mux.HandleFunc("GET /devboxes/{box}/agents/{agent}/resources", a.read(func(v viewer) http.HandlerFunc {
+	mux.HandleFunc("GET /hosts/{host}/agents/{agent}/resources", a.read(func(v viewer) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) { transcriptResources(cfg, v.reg, w, r) }
 	}))
-	mux.HandleFunc("GET /devboxes/{box}/agents/{agent}/entries/{seq}", a.page(func(v viewer) http.HandlerFunc {
+	mux.HandleFunc("GET /hosts/{host}/agents/{agent}/entries/{seq}", a.page(func(v viewer) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) { transcriptEntry(v.reg, w, r) }
 	}))
 	mux.HandleFunc("GET /usage", a.page(func(v viewer) http.HandlerFunc { return usagePage(cfg, v.reg) }))
-	mux.HandleFunc("GET /hosts", a.page(func(v viewer) http.HandlerFunc { return hostsPage(cfg, v.reg) }))
+	mux.HandleFunc("GET /resources", a.page(func(v viewer) http.HandlerFunc { return hostResourcesPage(cfg, v.reg) }))
+	mux.HandleFunc("GET /hosts", func(w http.ResponseWriter, r *http.Request) { // its name before the home page's hosts took it
+		u := *r.URL
+		u.Path, u.RawPath = "/resources", ""
+		http.Redirect(w, r, u.RequestURI(), http.StatusMovedPermanently)
+	})
 	mux.HandleFunc("GET /{$}", a.page(func(v viewer) http.HandlerFunc { return homePage(cfg, v) }))
-	// every response names the server's version, so a dev box sees on any call that it should update
+	// every response names the server's version, so a host sees on any call that it should update
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set(devbox.VersionHeader, cfg.Version)
+		w.Header().Set(hostclient.VersionHeader, cfg.Version)
 		mux.ServeHTTP(w, r)
 	})
 }
@@ -159,20 +172,20 @@ func homePage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		hosts, err := v.reg.Hosts(r.Context())
+		res, err := v.reg.HostResources(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_ = indexTmpl.Execute(w, map[string]any{
-			"Version":  cfg.Version,
-			"Short":    short(cfg.Version),
-			"Boxes":    list,
-			"Plans":    plans,
-			"Hosts":    hosts,
-			"Now":      cfg.Now(),
-			"Username": v.acct.Username,
+			"Version":   cfg.Version,
+			"Short":     short(cfg.Version),
+			"Hosts":     list,
+			"Plans":     plans,
+			"Resources": res,
+			"Now":       cfg.Now(),
+			"Username":  v.acct.Username,
 		})
 	}
 }
@@ -247,8 +260,8 @@ func plural(n int, word string) string {
 	return fmt.Sprintf("%d %ss", n, word)
 }
 
-// allAgents is every agent on box b, across its workspaces.
-func allAgents(b fleet.Box) []fleet.AgentView {
+// allAgents is every agent on host b, across its workspaces.
+func allAgents(b fleet.Host) []fleet.AgentView {
 	var out []fleet.AgentView
 	for _, w := range b.Workspaces {
 		out = append(out, w.Agents...)
@@ -257,7 +270,7 @@ func allAgents(b fleet.Box) []fleet.AgentView {
 }
 
 // idleWorkspaces are b's workspaces with no agents.
-func idleWorkspaces(b fleet.Box) []fleet.WorkspaceAgents {
+func idleWorkspaces(b fleet.Host) []fleet.WorkspaceAgents {
 	var out []fleet.WorkspaceAgents
 	for _, w := range b.Workspaces {
 		if len(w.Agents) == 0 {

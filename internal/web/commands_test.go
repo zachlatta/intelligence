@@ -11,13 +11,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/zachlatta/intelligence/internal/dbtest"
-	"github.com/zachlatta/intelligence/internal/devbox"
 	"github.com/zachlatta/intelligence/internal/fleet"
+	"github.com/zachlatta/intelligence/internal/hostclient"
 	"github.com/zachlatta/intelligence/internal/paseo"
 	"github.com/zachlatta/intelligence/internal/paseo/paseotest"
 )
 
-// cmdServer has devbox-1 reported, in the signed-in account.
+// cmdServer has host-1 reported, in the signed-in account.
 func cmdServer(t *testing.T) (http.Handler, dbtest.DB) {
 	t.Helper()
 	d := dbtest.New(t)
@@ -32,24 +32,24 @@ func instance(t *testing.T, d dbtest.DB, p *pgxpool.Pool) http.Handler {
 }
 
 // TestCommandsCrossServerInstances: during a deploy two instances run. A command queued on one
-// goes at once down a stream held by the other, and a wait on one returns as soon as the box's
+// goes at once down a stream held by the other, and a wait on one returns as soon as the host's
 // result lands through the other. Neither polls.
 func TestCommandsCrossServerInstances(t *testing.T) {
 	h, d := cmdServer(t)
 	other := instance(t, d, dbtest.Pool(t, d))
-	b := openStream(t, h, "devbox-1")
+	b := openStream(t, h, "host-1")
 	start := time.Now()
-	_, c, _ := enqueue(t, other, "devbox-1", "", archiveA1)
+	_, c, _ := enqueue(t, other, "host-1", "", archiveA1)
 	if got := b.command(); got.ID != c.ID {
 		t.Fatalf("command = %+v", got)
 	}
 	done := make(chan fleet.Command)
-	go func() { _, c := showCmd(t, other, "devbox-1", c.ID, "?wait=30s"); done <- c }()
+	go func() { _, c := showCmd(t, other, "host-1", c.ID, "?wait=30s"); done <- c }()
 	time.Sleep(100 * time.Millisecond) // let the wait start
-	b.call(devbox.Frame{Type: devbox.CommandUpdateFrame, Update: &devbox.CommandUpdate{ID: c.ID, Status: devbox.CommandSucceeded}})
+	b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{ID: c.ID, Status: hostclient.CommandSucceeded}})
 	select {
 	case fin := <-done:
-		if fin.Status != devbox.CommandSucceeded {
+		if fin.Status != hostclient.CommandSucceeded {
 			t.Errorf("finished = %+v", fin)
 		}
 	case <-time.After(10 * time.Second):
@@ -60,24 +60,24 @@ func TestCommandsCrossServerInstances(t *testing.T) {
 	}
 }
 
-func enqueue(t *testing.T, h http.Handler, box, token, body string) (int, fleet.Command, string) {
+func enqueue(t *testing.T, h http.Handler, host, token, body string) (int, fleet.Command, string) {
 	t.Helper()
-	rec := post(t, h, "/api/devboxes/"+box+"/commands", token, []byte(body))
+	rec := post(t, h, "/api/hosts/"+host+"/commands", token, []byte(body))
 	var c fleet.Command
 	if rec.Code == http.StatusAccepted {
 		if err := json.Unmarshal(rec.Body.Bytes(), &c); err != nil {
 			t.Fatal(err)
 		}
-		if loc := rec.Header().Get("Location"); loc != "/api/devboxes/"+box+"/commands/"+c.ID {
+		if loc := rec.Header().Get("Location"); loc != "/api/hosts/"+host+"/commands/"+c.ID {
 			t.Errorf("location = %q", loc)
 		}
 	}
 	return rec.Code, c, rec.Body.String()
 }
 
-func showCmd(t *testing.T, h http.Handler, box, id, query string) (int, fleet.Command) {
+func showCmd(t *testing.T, h http.Handler, host, id, query string) (int, fleet.Command) {
 	t.Helper()
-	rec := get(t, h, "/api/devboxes/"+box+"/commands/"+id+query, nil)
+	rec := get(t, h, "/api/hosts/"+host+"/commands/"+id+query, nil)
 	var c fleet.Command
 	if rec.Code == http.StatusOK {
 		json.Unmarshal(rec.Body.Bytes(), &c)
@@ -87,24 +87,24 @@ func showCmd(t *testing.T, h http.Handler, box, id, query string) (int, fleet.Co
 
 const archiveA1 = `{"kind":"archive_agent","args":{"agentId":"a1"}}`
 
-// TestCommandsGoOnlyToTheAccountsOwnBoxes: another account can neither queue a command for a box
+// TestCommandsGoOnlyToTheAccountsOwnHosts: another account can neither queue a command for a host
 // that is not its own nor read one.
-func TestCommandsGoOnlyToTheAccountsOwnBoxes(t *testing.T) {
+func TestCommandsGoOnlyToTheAccountsOwnHosts(t *testing.T) {
 	h, _ := cmdServer(t)
-	_, c, _ := enqueue(t, h, "devbox-1", "", archiveA1)
+	_, c, _ := enqueue(t, h, "host-1", "", archiveA1)
 	ts := h.(*testServer)
 	bob, err := ts.store.Create(t.Context(), "bob", testPassword)
 	if err != nil {
 		t.Fatal(err)
 	}
 	asBob := sessionFor(t, ts.store, bob)
-	if rec := call(t, h, http.MethodPost, "/api/devboxes/devbox-1/commands", archiveA1, nil, asBob); rec.Code != http.StatusNotFound {
-		t.Errorf("bob queues for someone's box: %d", rec.Code)
+	if rec := call(t, h, http.MethodPost, "/api/hosts/host-1/commands", archiveA1, nil, asBob); rec.Code != http.StatusNotFound {
+		t.Errorf("bob queues for someone's host: %d", rec.Code)
 	}
-	if rec := call(t, h, http.MethodGet, "/api/devboxes/devbox-1/commands/"+c.ID, "", nil, asBob); rec.Code != http.StatusNotFound {
+	if rec := call(t, h, http.MethodGet, "/api/hosts/host-1/commands/"+c.ID, "", nil, asBob); rec.Code != http.StatusNotFound {
 		t.Errorf("bob reads someone's command: %d", rec.Code)
 	}
-	if rec := call(t, anon(h), http.MethodGet, "/api/devboxes/devbox-1/commands/"+c.ID, "", nil); rec.Code != http.StatusUnauthorized {
+	if rec := call(t, anon(h), http.MethodGet, "/api/hosts/host-1/commands/"+c.ID, "", nil); rec.Code != http.StatusUnauthorized {
 		t.Errorf("no one reads a command: %d", rec.Code)
 	}
 }
@@ -119,68 +119,68 @@ func TestCommandsAreChecked(t *testing.T) {
 		`{"kind":"archive_agent","args":{"agentId":"a1"},"extra":1}`:   http.StatusBadRequest,
 		`not json`: http.StatusBadRequest,
 	} {
-		if code, _, msg := enqueue(t, h, "devbox-1", "", body); code != want {
+		if code, _, msg := enqueue(t, h, "host-1", "", body); code != want {
 			t.Errorf("%s: %d %s, want %d", body, code, msg, want)
 		}
 	}
 	if code, _, _ := enqueue(t, h, "nobody", "", archiveA1); code != http.StatusNotFound {
-		t.Errorf("unknown box: %d, want 404", code)
+		t.Errorf("unknown host: %d, want 404", code)
 	}
-	if code, _ := showCmd(t, h, "devbox-1", "not-an-id", ""); code != http.StatusNotFound {
+	if code, _ := showCmd(t, h, "host-1", "not-an-id", ""); code != http.StatusNotFound {
 		t.Errorf("unknown command: %d", code)
 	}
 }
 
 func TestACommandGoesDownTheStreamAtOnceAndItsResultComesBack(t *testing.T) {
 	h, _ := cmdServer(t)
-	b := openStream(t, h, "devbox-1")
-	code, c, msg := enqueue(t, h, "devbox-1", "", `{"kind":"create_agent","args":{"cwd":"/w/app","provider":"claude","prompt":"go"},"ttl":"1m"}`)
-	if code != http.StatusAccepted || c.Status != devbox.CommandQueued || !c.ExpiresAt.Equal(c.CreatedAt.Add(time.Minute)) {
+	b := openStream(t, h, "host-1")
+	code, c, msg := enqueue(t, h, "host-1", "", `{"kind":"create_agent","args":{"cwd":"/w/app","provider":"claude","prompt":"go"},"ttl":"1m"}`)
+	if code != http.StatusAccepted || c.Status != hostclient.CommandQueued || !c.ExpiresAt.Equal(c.CreatedAt.Add(time.Minute)) {
 		t.Fatalf("enqueue: %d %s", code, msg)
 	}
 	got := b.command()
-	if got.ID != c.ID || got.Kind != devbox.CreateAgentKind || !strings.Contains(string(got.Args), `"prompt":"go"`) {
+	if got.ID != c.ID || got.Kind != hostclient.CreateAgentKind || !strings.Contains(string(got.Args), `"prompt":"go"`) {
 		t.Fatalf("command = %+v", got)
 	}
-	if code, other := showCmd(t, h, "devbox-2", c.ID, ""); code != http.StatusNotFound {
-		t.Errorf("another box's path: %d %+v", code, other)
+	if code, other := showCmd(t, h, "host-2", c.ID, ""); code != http.StatusNotFound {
+		t.Errorf("another host's path: %d %+v", code, other)
 	}
-	_, sent := showCmd(t, h, "devbox-1", c.ID, "")
-	if sent.Status != devbox.CommandSent || sent.Attempts != 1 {
+	_, sent := showCmd(t, h, "host-1", c.ID, "")
+	if sent.Status != hostclient.CommandSent || sent.Attempts != 1 {
 		t.Errorf("after sending: %+v", sent)
 	}
 	done := make(chan fleet.Command)
-	go func() { _, c := showCmd(t, h, "devbox-1", c.ID, "?wait=5s"); done <- c }()
-	b.call(devbox.Frame{Type: devbox.CommandUpdateFrame, Update: &devbox.CommandUpdate{ID: c.ID, Status: devbox.CommandRunning}})
-	b.call(devbox.Frame{Type: devbox.CommandUpdateFrame, Update: &devbox.CommandUpdate{ID: c.ID, Status: devbox.CommandSucceeded,
+	go func() { _, c := showCmd(t, h, "host-1", c.ID, "?wait=5s"); done <- c }()
+	b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{ID: c.ID, Status: hostclient.CommandRunning}})
+	b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{ID: c.ID, Status: hostclient.CommandSucceeded,
 		Result: json.RawMessage(`{"agentId":"a9"}`)}})
 	select {
 	case fin := <-done:
-		if fin.Status != devbox.CommandSucceeded || string(fin.Result) != `{"agentId":"a9"}` || fin.StartedAt.IsZero() {
+		if fin.Status != hostclient.CommandSucceeded || string(fin.Result) != `{"agentId":"a9"}` || fin.StartedAt.IsZero() {
 			t.Errorf("finished = %+v", fin)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("?wait never returned")
 	}
-	if ack := b.call(devbox.Frame{Type: devbox.CommandUpdateFrame, Update: &devbox.CommandUpdate{ID: "00000000-0000-4000-8000-000000000000",
-		Status: devbox.CommandFailed}}); ack.Error != "" {
+	if ack := b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{ID: "00000000-0000-4000-8000-000000000000",
+		Status: hostclient.CommandFailed}}); ack.Error != "" {
 		t.Errorf("an update for an unknown command is dropped, not refused: %+v", ack)
 	}
 }
 
-func TestQueuedCommandsWaitForTheBoxAndUnfinishedOnesAreResent(t *testing.T) {
+func TestQueuedCommandsWaitForTheHostAndUnfinishedOnesAreResent(t *testing.T) {
 	d := dbtest.New(t)
 	h := instance(t, d, d.Owner)
-	key := keyOf(t, h, "devbox-1")                                                           // the account's
+	key := keyOf(t, h, "host-1")                                                             // the account's
 	if err := fleet.New(d.Owner).Record(t.Context(), sampleReport, time.Now()); err != nil { // known, with no stream
 		t.Fatal(err)
 	}
-	code, c, msg := enqueue(t, h, "devbox-1", "", archiveA1)
+	code, c, msg := enqueue(t, h, "host-1", "", archiveA1)
 	if code != http.StatusAccepted {
 		t.Fatalf("enqueue: %d %s", code, msg)
 	}
 	srv := serve(t, h)
-	first, _, err := dialStream(t, srv, "devbox-1", key)
+	first, _, err := dialStream(t, srv, "host-1", key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,26 +188,26 @@ func TestQueuedCommandsWaitForTheBoxAndUnfinishedOnesAreResent(t *testing.T) {
 		t.Fatalf("on connect: %+v", got)
 	}
 	first.conn.CloseNow() // dropped before a result
-	second, _, err := dialStream(t, srv, "devbox-1", key)
+	second, _, err := dialStream(t, srv, "host-1", key)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := second.command(); got.ID != c.ID {
 		t.Fatalf("on reconnect: %+v", got)
 	}
-	if _, now := showCmd(t, h, "devbox-1", c.ID, ""); now.Attempts != 2 {
+	if _, now := showCmd(t, h, "host-1", c.ID, ""); now.Attempts != 2 {
 		t.Errorf("attempts = %d, want 2", now.Attempts)
 	}
 }
 
 func TestShowCommandWaitIsBounded(t *testing.T) {
 	h, _ := cmdServer(t)
-	_, c, _ := enqueue(t, h, "devbox-1", "", archiveA1)
-	if code, _ := showCmd(t, h, "devbox-1", c.ID, "?wait=2h"); code != http.StatusBadRequest {
+	_, c, _ := enqueue(t, h, "host-1", "", archiveA1)
+	if code, _ := showCmd(t, h, "host-1", c.ID, "?wait=2h"); code != http.StatusBadRequest {
 		t.Errorf("wait 2h: %d, want 400", code)
 	}
 	start := time.Now()
-	if code, got := showCmd(t, h, "devbox-1", c.ID, "?wait=200ms"); code != http.StatusOK || got.Finished() {
+	if code, got := showCmd(t, h, "host-1", c.ID, "?wait=200ms"); code != http.StatusOK || got.Finished() {
 		t.Errorf("wait on an unfinished command: %d %+v", code, got)
 	}
 	if time.Since(start) < 200*time.Millisecond {
@@ -215,39 +215,39 @@ func TestShowCommandWaitIsBounded(t *testing.T) {
 	}
 }
 
-// TestADevBoxRunsTheServersCommands is the whole path: a dev box (devbox.Box, on a fake Paseo
-// daemon) connects and reports, the server queues a command, the box receives and runs it, and
+// TestAHostRunsTheServersCommands is the whole path: a host (hostclient.Client, on a fake Paseo
+// daemon) connects and reports, the server queues a command, the host receives and runs it, and
 // the result lands in Postgres.
-func TestADevBoxRunsTheServersCommands(t *testing.T) {
+func TestAHostRunsTheServersCommands(t *testing.T) {
 	d := dbtest.New(t)
 	h := instance(t, d, d.Owner)
 	srv := serve(t, h)
 	daemon := paseotest.New(t, "tok")
 	daemon.SetWorkspaces(paseotest.Workspace("w-app", "worktree", "running"))
 	ctx, cancel := context.WithCancel(context.Background())
-	box := &devbox.Box{Name: "devbox-1", Version: "v", Settle: 10 * time.Millisecond, Logf: t.Logf,
-		Watcher: &devbox.Watcher{RetryEvery: 20 * time.Millisecond, Dial: func(ctx context.Context) (*paseo.Client, error) {
+	host := &hostclient.Client{Name: "host-1", Version: "v", Settle: 10 * time.Millisecond, Logf: t.Logf,
+		Watcher: &hostclient.Watcher{RetryEvery: 20 * time.Millisecond, Dial: func(ctx context.Context) (*paseo.Client, error) {
 			return paseo.Dial(ctx, paseo.Target{URL: daemon.URL(), Token: "tok", ClientID: "test"})
 		}},
-		Link: &devbox.Link{Server: srv.URL, Token: keyOf(t, h, "devbox-1"), Box: "devbox-1", RetryEvery: 20 * time.Millisecond}}
+		Link: &hostclient.Link{Server: srv.URL, Token: keyOf(t, h, "host-1"), Host: "host-1", RetryEvery: 20 * time.Millisecond}}
 	stopped := make(chan struct{})
-	go func() { box.Run(ctx); close(stopped) }()
+	go func() { host.Run(ctx); close(stopped) }()
 	t.Cleanup(func() { cancel(); <-stopped })
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if bs := boxes(t, d); len(bs) == 1 && bs[0].Online && bs[0].Report.Paseo.Connected && len(bs[0].Workspaces) == 1 {
+		if bs := hosts(t, d); len(bs) == 1 && bs[0].Online && bs[0].Report.Paseo.Connected && len(bs[0].Workspaces) == 1 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the box never reported its daemon: %+v", boxes(t, d))
+			t.Fatalf("the host never reported its daemon: %+v", hosts(t, d))
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	_, c, _ := enqueue(t, h, "devbox-1", "", `{"kind":"create_agent","args":{"workspaceId":"w-app","provider":"claude","prompt":"fix it"}}`)
-	_, done := showCmd(t, h, "devbox-1", c.ID, "?wait=10s")
-	var res devbox.CommandResult
+	_, c, _ := enqueue(t, h, "host-1", "", `{"kind":"create_agent","args":{"workspaceId":"w-app","provider":"claude","prompt":"fix it"}}`)
+	_, done := showCmd(t, h, "host-1", c.ID, "?wait=10s")
+	var res hostclient.CommandResult
 	json.Unmarshal(done.Result, &res)
-	if done.Status != devbox.CommandSucceeded || res.AgentID == "" || res.WorkspaceID != "w-app" {
+	if done.Status != hostclient.CommandSucceeded || res.AgentID == "" || res.WorkspaceID != "w-app" {
 		t.Fatalf("command = %+v", done)
 	}
 	req := daemon.Requests("agent.create.request")[0]
@@ -259,7 +259,7 @@ func TestADevBoxRunsTheServersCommands(t *testing.T) {
 	if len(res2.Rows) == 1 {
 		status, _ = res2.Rows[0][0].(string)
 	}
-	if status != devbox.CommandSucceeded {
+	if status != hostclient.CommandSucceeded {
 		t.Errorf("the account's SQL sees %q (%+v)", status, res2)
 	}
 }

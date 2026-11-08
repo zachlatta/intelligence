@@ -1,4 +1,4 @@
-// Package probe is Intelligence's eBPF probe: a small root service on each Linux dev box that
+// Package probe is Intelligence's eBPF probe: a small root service on each Linux host that
 // follows every process in the kernel and charges its CPU time to the Paseo agent it belongs to,
 // counts the commands each agent starts, and records each process the kernel kills for memory,
 // with its agent. Short-lived commands (git, tests, builds) are counted exactly, which reading
@@ -6,7 +6,7 @@
 //
 // A process belongs to an agent when its environment names it (PASEO_AGENT_ID) or its parent
 // belongs to it: the kernel side copies the parent's agent to each new process, and the user side
-// reads the environment of each new program that has none. The dev box client reads the counters
+// reads the environment of each new program that has none. The host client reads the counters
 // over a Unix socket (Fetch) and sends them to the server.
 package probe
 

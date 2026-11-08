@@ -7,14 +7,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zachlatta/intelligence/internal/devbox"
 	"github.com/zachlatta/intelligence/internal/fleet"
+	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
 func fe(seq int, item string) fleet.Entry {
 	var k struct{ Type, Name, Status, Text string }
 	json.Unmarshal([]byte(item), &k)
-	e := fleet.Entry{TranscriptEntry: devbox.TranscriptEntry{SeqStart: seq, SeqEnd: seq, At: t0, Item: json.RawMessage(item)},
+	e := fleet.Entry{TranscriptEntry: hostclient.TranscriptEntry{SeqStart: seq, SeqEnd: seq, At: t0, Item: json.RawMessage(item)},
 		Kind: k.Type, Text: k.Text}
 	if k.Type == "tool_call" {
 		e.Tool, e.Status, e.Text = k.Name, k.Status, ""
@@ -122,7 +122,7 @@ func TestLongOutputIsCutWithALinkToTheWhole(t *testing.T) {
 func renderBlocksForTest(t *testing.T, entries []fleet.Entry) string {
 	t.Helper()
 	var b strings.Builder
-	if err := blocksTmpl.ExecuteTemplate(&b, "blocks", blocksData{Base: "/devboxes/devbox-1/agents/a1", Blocks: buildBlocks(entries), Now: t0}); err != nil {
+	if err := blocksTmpl.ExecuteTemplate(&b, "blocks", blocksData{Base: "/hosts/host-1/agents/a1", Blocks: buildBlocks(entries), Now: t0}); err != nil {
 		t.Fatal(err)
 	}
 	return b.String()
@@ -134,7 +134,7 @@ func TestTranscriptLiveUpdateSendsBlocksFromASeq(t *testing.T) {
 		tentry(1, `{"type":"user_message","text":"go"}`),
 		tentry(2, `{"type":"tool_call","callId":"c","name":"Bash","status":"completed","detail":{"type":"shell","command":"ls","output":"a"},"error":null}`),
 		tentry(3, `{"type":"assistant_message","text":"half"}`)))
-	base := "/devboxes/devbox-1/agents/" + agentA1
+	base := "/hosts/host-1/agents/" + agentA1
 	rec := get(t, h, base+"/blocks?from=3", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d", rec.Code)
@@ -157,11 +157,11 @@ func TestTranscriptEntryShowsTheWholeItem(t *testing.T) {
 	h := reported(t)
 	sendBatch(t, h, batch(true, "ep1",
 		tentry(1, `{"type":"tool_call","callId":"c","name":"Bash","status":"completed","detail":{"type":"shell","command":"cat <big>","output":"`+strings.Repeat("y", 9000)+`"},"error":null}`)))
-	rec := get(t, h, "/devboxes/devbox-1/agents/"+agentA1+"/entries/1", nil)
+	rec := get(t, h, "/hosts/host-1/agents/"+agentA1+"/entries/1", nil)
 	if rec.Code != http.StatusOK || strings.Count(rec.Body.String(), "y") < 9000 || !strings.Contains(rec.Body.String(), "cat &lt;big&gt;") {
 		t.Fatalf("entry page: %d, %d bytes", rec.Code, rec.Body.Len())
 	}
-	if rec := get(t, h, "/devboxes/devbox-1/agents/"+agentA1+"/entries/99", nil); rec.Code != http.StatusNotFound {
+	if rec := get(t, h, "/hosts/host-1/agents/"+agentA1+"/entries/99", nil); rec.Code != http.StatusNotFound {
 		t.Errorf("missing entry: %d", rec.Code)
 	}
 }
@@ -169,10 +169,10 @@ func TestTranscriptEntryShowsTheWholeItem(t *testing.T) {
 func TestTranscriptPageHasTheToolbarAndOtherAgents(t *testing.T) {
 	h := reported(t)
 	sendBatch(t, h, batch(true, "ep1", tentry(1, `{"type":"user_message","text":"go"}`)))
-	page := get(t, h, "/devboxes/devbox-1/agents/"+agentA1, nil).Body.String()
+	page := get(t, h, "/hosts/host-1/agents/"+agentA1, nil).Body.String()
 	for _, want := range []string{`id="search"`, `data-toggle="reasoning"`, `data-toggle="tools"`,
-		"Audit", // the other agent in the same workspace
-		`href="/devboxes/devbox-1/agents/a3000000`, // links to it
+		"Audit",                               // the other agent in the same workspace
+		`href="/hosts/host-1/agents/a3000000`, // links to it
 		"claude-opus-5-5", "1 entry"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("transcript page misses %q", want)
@@ -183,7 +183,7 @@ func TestTranscriptPageHasTheToolbarAndOtherAgents(t *testing.T) {
 func TestMarkdownImagesBecomePlaceholders(t *testing.T) {
 	html := string(markdown("before ![Screenshot of the grid](/tmp/shots/a.png) after ![](https://example.com/b.png)"))
 	if strings.Contains(html, "<img") {
-		t.Errorf("images point at files on the dev box the page cannot load; want a placeholder: %s", html)
+		t.Errorf("images point at files on the host the page cannot load; want a placeholder: %s", html)
 	}
 	for _, want := range []string{"Screenshot of the grid", "/tmp/shots/a.png", `href="https://example.com/b.png"`} {
 		if !strings.Contains(html, want) {

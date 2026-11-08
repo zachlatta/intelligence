@@ -342,7 +342,7 @@ func (rawHTMLAsText) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
 		}
 		return ast.WalkSkipChildren, nil
 	})
-	// images point at files on the dev box (screenshots by path) that the page cannot load: name
+	// images point at files on the host (screenshots by path) that the page cannot load: name
 	// them, and link those on the web
 	reg.Register(ast.KindImage, func(w util.BufWriter, src []byte, n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if entering {

@@ -37,7 +37,7 @@ func ctx5(t *testing.T) context.Context {
 func TestHelloAsksOnlyForWhatItSubscribesTo(t *testing.T) {
 	f := paseotest.New(t, token)
 	c := dial(t, f)
-	if info := c.Info(); info.ServerID != "srv_test" || info.Hostname != "devbox-1" || info.Version != "0.15.3" {
+	if info := c.Info(); info.ServerID != "srv_test" || info.Hostname != "host-1" || info.Version != "0.15.3" {
 		t.Errorf("server info = %+v", info)
 	}
 	h := f.Hellos()[0]
@@ -227,13 +227,13 @@ func TestLocalTargetReadsThePaseoHome(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("paseo.pid", `{"pid": 1, "listen": "0.0.0.0:6767", "hostname": "devbox-1"}`, 0o644)
+	write("paseo.pid", `{"pid": 1, "listen": "0.0.0.0:6767", "hostname": "host-1"}`, 0o644)
 	write("local-credential", token+"\n", 0o600)
-	tgt, err := LocalTarget(home, "intelligence-devbox")
+	tgt, err := LocalTarget(home, "intelligence-host")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tgt.URL != "ws://127.0.0.1:6767/ws" || tgt.Token != token || tgt.ClientID != "intelligence-devbox" {
+	if tgt.URL != "ws://127.0.0.1:6767/ws" || tgt.Token != token || tgt.ClientID != "intelligence-host" {
 		t.Errorf("target = %+v (an all-interfaces listen is dialed on loopback)", tgt)
 	}
 	write("paseo.pid", `{"pid": 1, "listen": "192.0.2.9:7000"}`, 0o644)

@@ -1,6 +1,6 @@
 {{define "login"}}{{template "head" "Sign in"}}
 <div class="page-head"><div><h1>Sign in</h1>
-<p class="sub">An account sees only the dev boxes added to it. This browser stays signed in for 30 days.</p></div></div>
+<p class="sub">An account sees only the hosts added to it. This browser stays signed in for 30 days.</p></div></div>
 <form id="login" class="card form" data-next="{{.Next}}">
   <label for="username">Username</label>
   <input id="username" name="username" autocomplete="username" autocapitalize="none" autofocus required>
@@ -36,26 +36,26 @@ for (const [id, path] of [["login", "/api/session"], ["signup", "/api/accounts"]
 
 {{define "account"}}{{template "head" "Account"}}
 <div class="page-head"><div><h1>{{.Username}}</h1>
-<p class="sub">Your account sees only its own dev boxes, and everything they report.</p></div>
+<p class="sub">Your account sees only its own hosts, and everything they report.</p></div>
   <div class="actions"><button class="btn sm" id="sign-out">Sign out</button></div></div>
 
-<h2 class="section-title" id="boxes">Dev boxes</h2>
-{{if .Boxes}}<div class="card"><table class="table">
-  <thead><tr><th>Box</th><th>Status</th><th>Joined</th><th>Key last used</th><th></th></tr></thead>
-  <tbody>{{range .Boxes}}<tr><td><b>{{.Box}}</b></td><td>{{if .Online}}<span class="badge">online</span>{{else}}<span class="meta">offline</span>{{end}}</td>
+<h2 class="section-title" id="hosts">Hosts</h2>
+{{if .Hosts}}<div class="card"><table class="table">
+  <thead><tr><th>Host</th><th>Status</th><th>Joined</th><th>Key last used</th><th></th></tr></thead>
+  <tbody>{{range .Hosts}}<tr><td><b>{{.Host}}</b></td><td>{{if .Online}}<span class="badge">online</span>{{else}}<span class="meta">offline</span>{{end}}</td>
     <td class="meta">{{ago $.Now .Joined}}</td><td class="meta">{{with .Used}}{{ago $.Now .}}{{else}}never{{end}}</td>
-    <td><button class="btn ghost sm remove" data-box="{{.Box}}">Remove</button></td></tr>{{end}}</tbody>
+    <td><button class="btn ghost sm remove" data-host="{{.Host}}">Remove</button></td></tr>{{end}}</tbody>
 </table></div>
-{{else}}<p class="empty-state">No dev boxes yet.</p>{{end}}
+{{else}}<p class="empty-state">No hosts yet.</p>{{end}}
 
-<h2 class="section-title" id="add">Add a dev box</h2>
+<h2 class="section-title" id="add">Add a host</h2>
 <form id="claim" class="card form">
-  <p class="meta">On the box, from a checkout of the repository, run:</p>
-  <pre>DEVBOX_SERVER={{.Server}} deploy/install-devbox</pre>
-  <p class="meta">It prints a code (also in <code>journalctl --user -u intelligence-devbox</code>). Enter it here within the hour.</p>
+  <p class="meta">On the host, from a checkout of the repository, run:</p>
+  <pre>HOST_SERVER={{.Server}} deploy/install-host</pre>
+  <p class="meta">It prints a code (also in <code>journalctl --user -u intelligence-host</code>). Enter it here within the hour.</p>
   <label for="code">Code</label>
   <input id="code" name="code" placeholder="ABCD-1234" autocomplete="off" autocapitalize="characters" required>
-  <div class="form-actions"><button class="btn primary">Add the box</button></div>
+  <div class="form-actions"><button class="btn primary">Add the host</button></div>
   <p id="claim-progress" class="progress"></p>
 </form>
 
@@ -84,17 +84,17 @@ document.getElementById("sign-out").addEventListener("click", () =>
   send("DELETE", "/api/session", null, null, () => { location.href = "/login"; }));
 for (const b of document.querySelectorAll("button.remove")) {
   b.addEventListener("click", () => {
-    if (!confirm("Remove " + b.dataset.box + "? Its key stops working, and what it reported is deleted. It asks to join again with a new code.")) return;
-    send("DELETE", "/api/devboxes/" + encodeURIComponent(b.dataset.box), null, null, () => location.reload());
+    if (!confirm("Remove " + b.dataset.host + "? Its key stops working, and what it reported is deleted. It asks to join again with a new code.")) return;
+    send("DELETE", "/api/hosts/" + encodeURIComponent(b.dataset.host), null, null, () => location.reload());
   });
 }
 document.getElementById("claim").addEventListener("submit", (e) => {
   e.preventDefault();
   const out = document.getElementById("claim-progress");
-  send("POST", "/api/devbox-enrollments/claim", { code: e.target.code.value }, out, async (res) => {
-    const { box } = await res.json();
+  send("POST", "/api/host-enrollments/claim", { code: e.target.code.value }, out, async (res) => {
+    const { host } = await res.json();
     out.className = "progress meta";
-    out.textContent = box + " joined. It connects within a few seconds.";
+    out.textContent = host + " joined. It connects within a few seconds.";
     setTimeout(() => location.reload(), 3000);
   });
 });

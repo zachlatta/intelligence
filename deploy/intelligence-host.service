@@ -1,0 +1,14 @@
+[Unit]
+Description=Intelligence host client: reports this host's Paseo daemon to the server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# HOST_SERVER (and optional HOST_KEY_FILE, HOST_NAME, HOST_INTERVAL, HOST_PASEO_HOME, HOST_AUTOUPDATE)
+EnvironmentFile=%h/.config/intelligence/host.env
+ExecStart=%h/.local/bin/intelligence host
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

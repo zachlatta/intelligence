@@ -8,7 +8,7 @@ import (
 func TestTranscriptPageShowsTheAgentsResources(t *testing.T) {
 	h, d := dbServer(t)
 	seedHost(t, d)
-	rec := get(t, h, "/devboxes/devbox-1/agents/"+agentA1, nil)
+	rec := get(t, h, "/hosts/host-1/agents/"+agentA1, nil)
 	if rec.Code != 200 {
 		t.Fatalf("status %d", rec.Code)
 	}
@@ -21,7 +21,7 @@ func TestTranscriptPageShowsTheAgentsResources(t *testing.T) {
 			t.Errorf("transcript page misses %q", want)
 		}
 	}
-	frag := get(t, h, "/devboxes/devbox-1/agents/"+agentA1+"/resources", nil)
+	frag := get(t, h, "/hosts/host-1/agents/"+agentA1+"/resources", nil)
 	if frag.Code != 200 || !strings.Contains(frag.Body.String(), "CPU 3m 0s") || strings.Contains(frag.Body.String(), "<html") {
 		t.Errorf("resources fragment: %d %s", frag.Code, frag.Body.String())
 	}
@@ -29,7 +29,7 @@ func TestTranscriptPageShowsTheAgentsResources(t *testing.T) {
 
 func TestTranscriptPageWithoutResourcesSaysSo(t *testing.T) {
 	h := reported(t)
-	body := get(t, h, "/devboxes/devbox-1/agents/"+agentA1, nil).Body.String()
+	body := get(t, h, "/hosts/host-1/agents/"+agentA1, nil).Body.String()
 	if !strings.Contains(body, "No resources recorded") {
 		t.Errorf("an agent with no minutes should say it has none")
 	}

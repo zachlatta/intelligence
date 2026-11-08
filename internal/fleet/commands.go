@@ -12,17 +12,17 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/zachlatta/intelligence/internal/devbox"
+	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
 var (
-	// ErrUnknownBox refuses a command for a box that has never connected.
-	ErrUnknownBox = errors.New("no such dev box")
-	// ErrUnknownCommand: no command with that id for that box.
+	// ErrUnknownHost refuses a command for a host that has never connected.
+	ErrUnknownHost = errors.New("no such host")
+	// ErrUnknownCommand: no command with that id for that host.
 	ErrUnknownCommand = errors.New("no such command")
 )
 
-// BadCommandError refuses a command whose kind or arguments do not parse (devbox.ParseCommand).
+// BadCommandError refuses a command whose kind or arguments do not parse (hostclient.ParseCommand).
 type BadCommandError struct{ Err error }
 
 func (e *BadCommandError) Error() string { return e.Err.Error() }
@@ -31,7 +31,7 @@ func (e *BadCommandError) Unwrap() error { return e.Err }
 // Command is a command and how far it got (the commands table).
 type Command struct {
 	ID         string          `json:"id"`
-	Box        string          `json:"box"`
+	Host       string          `json:"host"`
 	Kind       string          `json:"kind"`
 	Args       json.RawMessage `json:"args"`
 	Status     string          `json:"status"`
@@ -47,21 +47,21 @@ type Command struct {
 
 // Finished reports whether c will not change again (expired can, if a late result arrives).
 func (c Command) Finished() bool {
-	return c.Status == devbox.CommandSucceeded || c.Status == devbox.CommandFailed || c.Status == devbox.CommandExpired
+	return c.Status == hostclient.CommandSucceeded || c.Status == hostclient.CommandFailed || c.Status == hostclient.CommandExpired
 }
 
-// Wire is the command as a box receives it.
-func (c Command) Wire() devbox.Command {
-	return devbox.Command{ID: c.ID, Kind: c.Kind, Args: c.Args, CreatedAt: c.CreatedAt, ExpiresAt: c.ExpiresAt}
+// Wire is the command as a host receives it.
+func (c Command) Wire() hostclient.Command {
+	return hostclient.Command{ID: c.ID, Kind: c.Kind, Args: c.Args, CreatedAt: c.CreatedAt, ExpiresAt: c.ExpiresAt}
 }
 
-const commandColumns = `id::text, box, kind, args, status, result, error, attempts, created_at, expires_at, sent_at, started_at, finished_at`
+const commandColumns = `id::text, host, kind, args, status, result, error, attempts, created_at, expires_at, sent_at, started_at, finished_at`
 
 func scanCommand(row pgx.Row) (Command, error) {
 	var c Command
 	var result []byte
 	var sent, started, finished *time.Time
-	err := row.Scan(&c.ID, &c.Box, &c.Kind, &c.Args, &c.Status, &result, &c.Error, &c.Attempts, &c.CreatedAt, &c.ExpiresAt,
+	err := row.Scan(&c.ID, &c.Host, &c.Kind, &c.Args, &c.Status, &result, &c.Error, &c.Attempts, &c.CreatedAt, &c.ExpiresAt,
 		&sent, &started, &finished)
 	if result != nil {
 		c.Result = result
@@ -71,30 +71,30 @@ func scanCommand(row pgx.Row) (Command, error) {
 	return c, err
 }
 
-// Enqueue queues a command for box, created at at, that expires ttl later.
-func (r *Registry) Enqueue(ctx context.Context, box, kind string, args json.RawMessage, ttl time.Duration, at time.Time) (Command, error) {
-	if _, err := devbox.ParseCommand(kind, args); err != nil {
+// Enqueue queues a command for host, created at at, that expires ttl later.
+func (r *Registry) Enqueue(ctx context.Context, host, kind string, args json.RawMessage, ttl time.Duration, at time.Time) (Command, error) {
+	if _, err := hostclient.ParseCommand(kind, args); err != nil {
 		return Command{}, &BadCommandError{err}
 	}
 	if len(args) == 0 {
 		args = json.RawMessage("{}")
 	}
 	var known bool
-	if err := r.p.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM devboxes WHERE name = $1)", box).Scan(&known); err != nil {
+	if err := r.p.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM hosts WHERE name = $1)", host).Scan(&known); err != nil {
 		return Command{}, err
 	}
 	if !known {
-		return Command{}, ErrUnknownBox
+		return Command{}, ErrUnknownHost
 	}
 	var c Command
 	err := pgx.BeginFunc(ctx, r.p, func(tx pgx.Tx) error {
 		var err error
-		c, err = scanCommand(tx.QueryRow(ctx, `INSERT INTO commands (box, kind, args, created_at, expires_at)
-			VALUES ($1, $2, $3, $4, $5) RETURNING `+commandColumns, box, kind, []byte(args), at, at.Add(ttl)))
+		c, err = scanCommand(tx.QueryRow(ctx, `INSERT INTO commands (host, kind, args, created_at, expires_at)
+			VALUES ($1, $2, $3, $4, $5) RETURNING `+commandColumns, host, kind, []byte(args), at, at.Add(ttl)))
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, notifySQL, CommandsTopic(box))
+		_, err = tx.Exec(ctx, notifySQL, CommandsTopic(host))
 		return err
 	})
 	return c, err
@@ -108,25 +108,25 @@ func (r *Registry) Command(ctx context.Context, id string) (Command, error) {
 	return scanCommand(r.p.QueryRow(ctx, "SELECT "+commandColumns+" FROM commands WHERE id = $1", id))
 }
 
-// Claim marks box's commands sent and returns them, oldest first, to go down its stream at at.
+// Claim marks host's commands sent and returns them, oldest first, to go down its stream at at.
 // Queued ones are claimed; with unfinished (a new stream), so are those sent before with no result
-// yet, as the box may never have received them. Commands past their expiry expire instead.
-func (r *Registry) Claim(ctx context.Context, box string, unfinished bool, at time.Time) ([]Command, error) {
+// yet, as the host may never have received them. Commands past their expiry expire instead.
+func (r *Registry) Claim(ctx context.Context, host string, unfinished bool, at time.Time) ([]Command, error) {
 	if _, err := r.p.Exec(ctx, `WITH expired AS (UPDATE commands SET status = 'expired', finished_at = $2,
-		error = CASE status WHEN 'queued' THEN 'expired before the box was connected to receive it'
-		                    ELSE 'expired with no result from the box: it may or may not have run' END
-		WHERE box = $1 AND status IN ('queued', 'sent', 'running') AND expires_at <= $2 RETURNING id)
-		SELECT pg_notify('`+channel+`', 'command:' || id) FROM expired`, box, at); err != nil {
+		error = CASE status WHEN 'queued' THEN 'expired before the host was connected to receive it'
+		                    ELSE 'expired with no result from the host: it may or may not have run' END
+		WHERE host = $1 AND status IN ('queued', 'sent', 'running') AND expires_at <= $2 RETURNING id)
+		SELECT pg_notify('`+channel+`', 'command:' || id) FROM expired`, host, at); err != nil {
 		return nil, err
 	}
-	statuses := []string{devbox.CommandQueued}
+	statuses := []string{hostclient.CommandQueued}
 	if unfinished {
-		statuses = append(statuses, devbox.CommandSent, devbox.CommandRunning)
+		statuses = append(statuses, hostclient.CommandSent, hostclient.CommandRunning)
 	}
 	rows, err := r.p.Query(ctx, `UPDATE commands SET status = CASE WHEN status = 'queued' THEN 'sent' ELSE status END,
 		sent_at = coalesce(sent_at, $2), attempts = attempts + 1
-		WHERE id IN (SELECT id FROM commands WHERE box = $1 AND status = ANY($3) AND expires_at > $2 FOR UPDATE SKIP LOCKED)
-		RETURNING `+commandColumns, box, at, statuses)
+		WHERE id IN (SELECT id FROM commands WHERE host = $1 AND status = ANY($3) AND expires_at > $2 FOR UPDATE SKIP LOCKED)
+		RETURNING `+commandColumns, host, at, statuses)
 	if err != nil {
 		return nil, err
 	}
@@ -140,20 +140,20 @@ func (r *Registry) Claim(ctx context.Context, box string, unfinished bool, at ti
 	return out, err
 }
 
-// UpdateCommand records a box's update to one of its commands, received at at. The first result
+// UpdateCommand records a host's update to one of its commands, received at at. The first result
 // stands: a later update (a resent command reporting again) changes nothing. A result for an
 // expired command replaces the expiry, as it is what happened.
-func (r *Registry) UpdateCommand(ctx context.Context, box string, u devbox.CommandUpdate, at time.Time) error {
+func (r *Registry) UpdateCommand(ctx context.Context, host string, u hostclient.CommandUpdate, at time.Time) error {
 	if !uuidRe.MatchString(u.ID) {
 		return ErrUnknownCommand
 	}
 	var sql string
-	args := []any{box, u.ID, at}
+	args := []any{host, u.ID, at}
 	switch u.Status {
-	case devbox.CommandRunning:
+	case hostclient.CommandRunning:
 		sql = `UPDATE commands SET status = 'running', started_at = coalesce(started_at, $3)
-			WHERE box = $1 AND id = $2 AND status IN ('queued', 'sent', 'running')`
-	case devbox.CommandSucceeded, devbox.CommandFailed:
+			WHERE host = $1 AND id = $2 AND status IN ('queued', 'sent', 'running')`
+	case hostclient.CommandSucceeded, hostclient.CommandFailed:
 		var result []byte
 		if len(u.Result) > 0 {
 			if !json.Valid(u.Result) {
@@ -162,10 +162,10 @@ func (r *Registry) UpdateCommand(ctx context.Context, box string, u devbox.Comma
 			result = u.Result
 		}
 		sql = `UPDATE commands SET status = $4, result = $5, error = $6, finished_at = $3
-			WHERE box = $1 AND id = $2 AND status NOT IN ('succeeded', 'failed')`
+			WHERE host = $1 AND id = $2 AND status NOT IN ('succeeded', 'failed')`
 		args = append(args, u.Status, result, u.Error)
 	default:
-		return fmt.Errorf("a box cannot set a command %q", u.Status)
+		return fmt.Errorf("a host cannot set a command %q", u.Status)
 	}
 	var changed bool
 	err := pgx.BeginFunc(ctx, r.p, func(tx pgx.Tx) error {
@@ -181,7 +181,7 @@ func (r *Registry) UpdateCommand(ctx context.Context, box string, u devbox.Comma
 		return err
 	}
 	var known bool
-	if err := r.p.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM commands WHERE box = $1 AND id = $2)", box, u.ID).Scan(&known); err != nil {
+	if err := r.p.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM commands WHERE host = $1 AND id = $2)", host, u.ID).Scan(&known); err != nil {
 		return err
 	}
 	if !known {

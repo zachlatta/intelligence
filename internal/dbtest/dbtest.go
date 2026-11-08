@@ -132,15 +132,15 @@ func randHex(t testing.TB) string {
 	return hex.EncodeToString(b)
 }
 
-// Reader is the read pool of the account that owns box, made (and given the box) if no account
+// Reader is the read pool of the account that owns host, made (and given the host) if no account
 // does: it reads as the SQL API does for that account, only that account's rows.
-func Reader(t testing.TB, d DB, box string) *pgxpool.Pool {
+func Reader(t testing.TB, d DB, host string) *pgxpool.Pool {
 	t.Helper()
 	ctx := context.Background()
 	roles := db.NewAccountRoles(d.Owner, d.Readonly)
 	t.Cleanup(roles.Close)
 	var role string
-	err := d.Owner.QueryRow(ctx, "SELECT a.role_name FROM devbox_keys k JOIN accounts a ON a.id = k.account_id WHERE k.box = $1", box).Scan(&role)
+	err := d.Owner.QueryRow(ctx, "SELECT a.role_name FROM host_keys k JOIN accounts a ON a.id = k.account_id WHERE k.host = $1", host).Scan(&role)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var id int64
 		if err := d.Owner.QueryRow(ctx, "SELECT nextval(pg_get_serial_sequence('accounts', 'id'))").Scan(&id); err != nil {
@@ -152,7 +152,7 @@ func Reader(t testing.TB, d DB, box string) *pgxpool.Pool {
 		if _, err := d.Owner.Exec(ctx, `INSERT INTO accounts (id, username, password_hash, role_name) VALUES ($1, $2, '-', $3)`, id, fmt.Sprintf("reader%d", id), role); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := d.Owner.Exec(ctx, `INSERT INTO devbox_keys (box, account_id, key_hash, created_at) VALUES ($1, $2, md5(random()::text), now())`, box, id); err != nil {
+		if _, err := d.Owner.Exec(ctx, `INSERT INTO host_keys (host, account_id, key_hash, created_at) VALUES ($1, $2, md5(random()::text), now())`, host, id); err != nil {
 			t.Fatal(err)
 		}
 		err = nil

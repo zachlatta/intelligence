@@ -10,11 +10,11 @@ import "strings"
 // messages take the commands API's default.
 const queuedMessageTTL = "24h"
 
-// pendingMessagesSQL reads the messages to box's agent that have not gone yet, oldest first: id,
+// pendingMessagesSQL reads the messages to host's agent that have not gone yet, oldest first: id,
 // text, behavior, status and when each was sent.
-func pendingMessagesSQL(box, agentID string) string {
+func pendingMessagesSQL(host, agentID string) string {
 	return `SELECT id::text, args ->> 'text' AS text, coalesce(nullif(args ->> 'behavior', ''), 'steer') AS behavior, status,
-	created_at FROM commands WHERE box = ` + sqlString(box) + ` AND kind = 'send_message' AND args ->> 'agentId' = ` +
+	created_at FROM commands WHERE host = ` + sqlString(host) + ` AND kind = 'send_message' AND args ->> 'agentId' = ` +
 		sqlString(agentID) + ` AND status IN ('queued', 'sent', 'running') ORDER BY created_at, id`
 }
 

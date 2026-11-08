@@ -122,7 +122,7 @@ type legend struct{ Window, Color string }
 
 var chartColors = []string{"#4b70cc", "#e0803a", "#1f9d63", "#8a63d2", "#d04841", "#8e8b8a"}
 
-// The chart's geometry: the plot is plotW by plotH at (chartLeft, chartTop), in a 640x150 box.
+// The chart's geometry: the plot is plotW by plotH at (chartLeft, chartTop), in a 640x150 host.
 const (
 	chartLeft, chartTop = 40.0, 10.0
 	plotW, plotH        = 600.0, 120.0

@@ -6,20 +6,20 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/zachlatta/intelligence/internal/host"
+	"github.com/zachlatta/intelligence/internal/resources"
 )
 
-// RecordHost stores a box's host report, received at at. Minutes already stored (a retried send)
+// RecordHost stores a host's host report, received at at. Minutes already stored (a retried send)
 // are replaced.
-func (r *Registry) RecordHost(ctx context.Context, box string, rep host.Report, at time.Time) error {
+func (r *Registry) RecordHost(ctx context.Context, host string, rep resources.Report, at time.Time) error {
 	return pgx.BeginFunc(ctx, r.p, func(tx pgx.Tx) error {
 		b := &pgx.Batch{}
 		for _, m := range rep.Minutes {
-			b.Queue(`INSERT INTO host_minutes (box, minute, samples, cpus, cpu_avg_pct, cpu_max_pct, load1, load5, load15,
+			b.Queue(`INSERT INTO host_minutes (host, minute, samples, cpus, cpu_avg_pct, cpu_max_pct, load1, load5, load15,
 				mem_total, mem_available_min, swap_total, swap_used_max, disk_total, disk_available_min,
 				psi_cpu_some, psi_mem_some, psi_mem_full, psi_io_some, psi_io_full, oom_kills, paseo_mem_max, paseo_mem_peak, paseo_oom_kills)
 				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
-				ON CONFLICT (box, minute) DO UPDATE SET samples = EXCLUDED.samples, cpus = EXCLUDED.cpus,
+				ON CONFLICT (host, minute) DO UPDATE SET samples = EXCLUDED.samples, cpus = EXCLUDED.cpus,
 				cpu_avg_pct = EXCLUDED.cpu_avg_pct, cpu_max_pct = EXCLUDED.cpu_max_pct, load1 = EXCLUDED.load1,
 				load5 = EXCLUDED.load5, load15 = EXCLUDED.load15, mem_total = EXCLUDED.mem_total,
 				mem_available_min = EXCLUDED.mem_available_min, swap_total = EXCLUDED.swap_total,
@@ -28,7 +28,7 @@ func (r *Registry) RecordHost(ctx context.Context, box string, rep host.Report, 
 				psi_mem_some = EXCLUDED.psi_mem_some, psi_mem_full = EXCLUDED.psi_mem_full, psi_io_some = EXCLUDED.psi_io_some,
 				psi_io_full = EXCLUDED.psi_io_full, oom_kills = EXCLUDED.oom_kills, paseo_mem_max = EXCLUDED.paseo_mem_max,
 				paseo_mem_peak = EXCLUDED.paseo_mem_peak, paseo_oom_kills = EXCLUDED.paseo_oom_kills`,
-				box, m.Minute, m.Samples, m.CPUs, m.CPUAvgPct, m.CPUMaxPct, m.Load1, m.Load5, m.Load15,
+				host, m.Minute, m.Samples, m.CPUs, m.CPUAvgPct, m.CPUMaxPct, m.Load1, m.Load5, m.Load15,
 				int64(m.MemTotal), int64(m.MemAvailableMin), int64(m.SwapTotal), int64(m.SwapUsedMax), int64(m.DiskTotal),
 				int64(m.DiskAvailableMin), m.PSICPUSome, m.PSIMemSome, m.PSIMemFull, m.PSIIOSome, m.PSIIOFull,
 				i64(m.OOMKills), i64(m.PaseoMemMax), i64(m.PaseoMemPeak), i64(m.PaseoOOMKills))
@@ -37,23 +37,23 @@ func (r *Registry) RecordHost(ctx context.Context, box string, rep host.Report, 
 			if a.AgentID == "" {
 				continue
 			}
-			b.Queue(`INSERT INTO agent_minutes (box, agent_id, minute, cpu_seconds, cpu_source, mem_max, processes_max, execs)
+			b.Queue(`INSERT INTO agent_minutes (host, agent_id, minute, cpu_seconds, cpu_source, mem_max, processes_max, execs)
 				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-				ON CONFLICT (box, agent_id, minute) DO UPDATE SET cpu_seconds = EXCLUDED.cpu_seconds,
+				ON CONFLICT (host, agent_id, minute) DO UPDATE SET cpu_seconds = EXCLUDED.cpu_seconds,
 				cpu_source = EXCLUDED.cpu_source, mem_max = EXCLUDED.mem_max, processes_max = EXCLUDED.processes_max,
 				execs = EXCLUDED.execs`,
-				box, a.AgentID, a.Minute, a.CPUSeconds, a.CPUSource, int64(a.MemMax), a.ProcessesMax, i64(a.Execs))
+				host, a.AgentID, a.Minute, a.CPUSeconds, a.CPUSource, int64(a.MemMax), a.ProcessesMax, i64(a.Execs))
 		}
 		for _, o := range rep.OOMs {
-			b.Queue(`INSERT INTO oom_kills (box, at, pid, comm, agent_id, anon_rss, file_rss, shmem_rss)
+			b.Queue(`INSERT INTO oom_kills (host, at, pid, comm, agent_id, anon_rss, file_rss, shmem_rss)
 				VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING`,
-				box, o.At, o.PID, o.Comm, o.AgentID, int64(o.AnonRSS), int64(o.FileRSS), int64(o.ShmemRSS))
+				host, o.At, o.PID, o.Comm, o.AgentID, int64(o.AnonRSS), int64(o.FileRSS), int64(o.ShmemRSS))
 		}
 		if p := rep.Probe; p != nil {
-			b.Queue(`INSERT INTO host_probes (box, running, version, error, tracked, received_at) VALUES ($1, $2, $3, $4, $5, $6)
-				ON CONFLICT (box) DO UPDATE SET running = EXCLUDED.running, version = EXCLUDED.version, error = EXCLUDED.error,
+			b.Queue(`INSERT INTO host_probes (host, running, version, error, tracked, received_at) VALUES ($1, $2, $3, $4, $5, $6)
+				ON CONFLICT (host) DO UPDATE SET running = EXCLUDED.running, version = EXCLUDED.version, error = EXCLUDED.error,
 				tracked = EXCLUDED.tracked, received_at = EXCLUDED.received_at`,
-				box, p.Running, p.Version, p.Error, p.Tracked, at)
+				host, p.Running, p.Version, p.Error, p.Tracked, at)
 		}
 		return tx.SendBatch(ctx, b).Close()
 	})
@@ -122,7 +122,7 @@ func f64(p *float32) *float64 {
 	return &v
 }
 
-// HostNow is a box's newest minute, its probe, and each agent's memory now.
+// HostNow is a host's newest minute, its probe, and each agent's memory now.
 type HostNow struct {
 	Minute       *HostMinute
 	MemUsedFrac  float64
@@ -132,7 +132,7 @@ type HostNow struct {
 	AgentMem     map[string]int64 // agents with a minute in the last 3, their most memory
 }
 
-// ProbeRow is a box's probe, as last reported.
+// ProbeRow is a host's probe, as last reported.
 type ProbeRow struct {
 	Running    bool      `json:"running"`
 	Version    string    `json:"version"`
@@ -141,29 +141,29 @@ type ProbeRow struct {
 	ReceivedAt time.Time `json:"receivedAt"`
 }
 
-// Hosts is every box's HostNow.
-func (r *Registry) Hosts(ctx context.Context) (map[string]*HostNow, error) {
+// HostResources is every host's HostNow.
+func (r *Registry) HostResources(ctx context.Context) (map[string]*HostNow, error) {
 	out := map[string]*HostNow{}
-	get := func(box string) *HostNow {
-		if h := out[box]; h != nil {
+	get := func(host string) *HostNow {
+		if h := out[host]; h != nil {
 			return h
 		}
 		h := &HostNow{AgentMem: map[string]int64{}}
-		out[box] = h
+		out[host] = h
 		return h
 	}
-	rows, err := r.p.Query(ctx, `SELECT box, `+hostMinuteCols+`, coalesce(mem_used_frac, 0), coalesce(disk_used_frac, 0), fresh FROM host_current`)
+	rows, err := r.p.Query(ctx, `SELECT host, `+hostMinuteCols+`, coalesce(mem_used_frac, 0), coalesce(disk_used_frac, 0), fresh FROM host_current`)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
-		var box string
+		var host string
 		var m HostMinute
 		var cpuAvg, cpuMax, memSome, memFull, cpuSome, ioSome *float32
 		var load float32
 		var memFrac, diskFrac float64
 		var fresh bool
-		if err := rows.Scan(&box, &m.Minute, &m.CPUs, &cpuAvg, &cpuMax, &load, &m.MemTotal, &m.MemAvailableMin, &m.SwapTotal,
+		if err := rows.Scan(&host, &m.Minute, &m.CPUs, &cpuAvg, &cpuMax, &load, &m.MemTotal, &m.MemAvailableMin, &m.SwapTotal,
 			&m.SwapUsedMax, &m.DiskTotal, &m.DiskAvailableMin, &memSome, &memFull, &cpuSome, &ioSome, &m.OOMKills, &m.PaseoMemMax,
 			&memFrac, &diskFrac, &fresh); err != nil {
 			rows.Close()
@@ -172,57 +172,57 @@ func (r *Registry) Hosts(ctx context.Context) (map[string]*HostNow, error) {
 		m.Load1 = float64(load)
 		m.CPUAvgPct, m.CPUMaxPct, m.PSIMemSome, m.PSIMemFull, m.PSICPUSome, m.PSIIOSome =
 			f64(cpuAvg), f64(cpuMax), f64(memSome), f64(memFull), f64(cpuSome), f64(ioSome)
-		h := get(box)
+		h := get(host)
 		h.Minute, h.MemUsedFrac, h.DiskUsedFrac, h.Fresh = &m, memFrac, diskFrac, fresh
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	rows, err = r.p.Query(ctx, "SELECT box, running, version, error, tracked, received_at FROM host_probes")
+	rows, err = r.p.Query(ctx, "SELECT host, running, version, error, tracked, received_at FROM host_probes")
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
-		var box string
+		var host string
 		var p ProbeRow
-		if err := rows.Scan(&box, &p.Running, &p.Version, &p.Error, &p.Tracked, &p.ReceivedAt); err != nil {
+		if err := rows.Scan(&host, &p.Running, &p.Version, &p.Error, &p.Tracked, &p.ReceivedAt); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		get(box).Probe = &p
+		get(host).Probe = &p
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	rows, err = r.p.Query(ctx, `SELECT DISTINCT ON (box, agent_id) box, agent_id, mem_max FROM agent_minutes
-		WHERE minute > now() - interval '3 minutes' ORDER BY box, agent_id, minute DESC`)
+	rows, err = r.p.Query(ctx, `SELECT DISTINCT ON (host, agent_id) host, agent_id, mem_max FROM agent_minutes
+		WHERE minute > now() - interval '3 minutes' ORDER BY host, agent_id, minute DESC`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var box, id string
+		var host, id string
 		var mem int64
-		if err := rows.Scan(&box, &id, &mem); err != nil {
+		if err := rows.Scan(&host, &id, &mem); err != nil {
 			return nil, err
 		}
-		get(box).AgentMem[id] = mem
+		get(host).AgentMem[id] = mem
 	}
 	return out, rows.Err()
 }
 
-// HostHistory is a box's minutes since since, oldest first.
-func (r *Registry) HostHistory(ctx context.Context, box string, since time.Time) ([]HostMinute, error) {
-	rows, err := r.p.Query(ctx, `SELECT `+hostMinuteCols+` FROM host_minutes WHERE box = $1 AND minute >= $2 ORDER BY minute`, box, since)
+// HostHistory is a host's minutes since since, oldest first.
+func (r *Registry) HostHistory(ctx context.Context, host string, since time.Time) ([]HostMinute, error) {
+	rows, err := r.p.Query(ctx, `SELECT `+hostMinuteCols+` FROM host_minutes WHERE host = $1 AND minute >= $2 ORDER BY minute`, host, since)
 	if err != nil {
 		return nil, err
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (HostMinute, error) { return scanHostMinute(row) })
 }
 
-// AgentTotal is one agent's use of a box over a period.
+// AgentTotal is one agent's use of a host over a period.
 type AgentTotal struct {
 	AgentID    string    `json:"agentId"`
 	Title      string    `json:"title"` // from agents, while Paseo lists it
@@ -234,13 +234,13 @@ type AgentTotal struct {
 	LastSeen   time.Time `json:"lastSeen"`
 }
 
-// TopAgents is every agent that used box since since, most CPU first.
-func (r *Registry) TopAgents(ctx context.Context, box string, since time.Time) ([]AgentTotal, error) {
+// TopAgents is every agent that used host since since, most CPU first.
+func (r *Registry) TopAgents(ctx context.Context, host string, since time.Time) ([]AgentTotal, error) {
 	rows, err := r.p.Query(ctx, `SELECT m.agent_id, coalesce(max(a.title), ''), coalesce(sum(m.cpu_seconds), 0),
 		CASE WHEN bool_or(m.cpu_source = 'ebpf') THEN 'ebpf' ELSE coalesce(max(m.cpu_source), '') END, max(m.mem_max), coalesce(sum(m.execs), 0), count(*), max(m.minute)
-		FROM agent_minutes m LEFT JOIN agents a ON a.box = m.box AND a.id = m.agent_id
-		WHERE m.box = $1 AND m.minute >= $2
-		GROUP BY m.agent_id ORDER BY 3 DESC, 5 DESC, 1`, box, since)
+		FROM agent_minutes m LEFT JOIN agents a ON a.host = m.host AND a.id = m.agent_id
+		WHERE m.host = $1 AND m.minute >= $2
+		GROUP BY m.agent_id ORDER BY 3 DESC, 5 DESC, 1`, host, since)
 	if err != nil {
 		return nil, err
 	}
@@ -255,7 +255,7 @@ func (r *Registry) TopAgents(ctx context.Context, box string, since time.Time) (
 
 // OOMKill is a stored kill.
 type OOMKill struct {
-	Box     string    `json:"box"`
+	Host    string    `json:"host"`
 	At      time.Time `json:"at"`
 	PID     int       `json:"pid"`
 	Comm    string    `json:"comm"`
@@ -266,15 +266,15 @@ type OOMKill struct {
 
 // OOMKills is every kill since since, newest first.
 func (r *Registry) OOMKills(ctx context.Context, since time.Time) ([]OOMKill, error) {
-	rows, err := r.p.Query(ctx, `SELECT k.box, k.at, k.pid, k.comm, k.agent_id, coalesce(a.title, ''), k.anon_rss
-		FROM oom_kills k LEFT JOIN agents a ON a.box = k.box AND a.id = k.agent_id
+	rows, err := r.p.Query(ctx, `SELECT k.host, k.at, k.pid, k.comm, k.agent_id, coalesce(a.title, ''), k.anon_rss
+		FROM oom_kills k LEFT JOIN agents a ON a.host = k.host AND a.id = k.agent_id
 		WHERE k.at >= $1 ORDER BY k.at DESC LIMIT 200`, since)
 	if err != nil {
 		return nil, err
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (OOMKill, error) {
 		var k OOMKill
-		err := row.Scan(&k.Box, &k.At, &k.PID, &k.Comm, &k.AgentID, &k.Title, &k.AnonRSS)
+		err := row.Scan(&k.Host, &k.At, &k.PID, &k.Comm, &k.AgentID, &k.Title, &k.AnonRSS)
 		return k, err
 	})
 }
@@ -290,18 +290,18 @@ type AgentMinute struct {
 }
 
 // AgentUse is everything recorded of one agent's resources: its minutes (oldest first), the
-// processes the kernel killed for memory, and how many CPUs its box has.
+// processes the kernel killed for memory, and how many CPUs its host has.
 type AgentUse struct {
 	Minutes []AgentMinute
 	OOMs    []OOMKill
 	CPUs    int
 }
 
-// AgentUse reads an agent's minutes and kills on box.
-func (r *Registry) AgentUse(ctx context.Context, box, agentID string) (AgentUse, error) {
+// AgentUse reads an agent's minutes and kills on host.
+func (r *Registry) AgentUse(ctx context.Context, host, agentID string) (AgentUse, error) {
 	var u AgentUse
 	rows, err := r.p.Query(ctx, `SELECT minute, cpu_seconds, cpu_source, mem_max, processes_max, execs
-		FROM agent_minutes WHERE box = $1 AND agent_id = $2 ORDER BY minute`, box, agentID)
+		FROM agent_minutes WHERE host = $1 AND agent_id = $2 ORDER BY minute`, host, agentID)
 	if err != nil {
 		return u, err
 	}
@@ -315,19 +315,19 @@ func (r *Registry) AgentUse(ctx context.Context, box, agentID string) (AgentUse,
 	if err != nil {
 		return u, err
 	}
-	rows, err = r.p.Query(ctx, `SELECT box, at, pid, comm, agent_id, '', anon_rss FROM oom_kills
-		WHERE box = $1 AND agent_id = $2 ORDER BY at DESC LIMIT 200`, box, agentID)
+	rows, err = r.p.Query(ctx, `SELECT host, at, pid, comm, agent_id, '', anon_rss FROM oom_kills
+		WHERE host = $1 AND agent_id = $2 ORDER BY at DESC LIMIT 200`, host, agentID)
 	if err != nil {
 		return u, err
 	}
 	u.OOMs, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (OOMKill, error) {
 		var k OOMKill
-		err := row.Scan(&k.Box, &k.At, &k.PID, &k.Comm, &k.AgentID, &k.Title, &k.AnonRSS)
+		err := row.Scan(&k.Host, &k.At, &k.PID, &k.Comm, &k.AgentID, &k.Title, &k.AnonRSS)
 		return k, err
 	})
 	if err != nil {
 		return u, err
 	}
-	err = r.p.QueryRow(ctx, `SELECT coalesce((SELECT cpus FROM host_current WHERE box = $1), 0)`, box).Scan(&u.CPUs)
+	err = r.p.QueryRow(ctx, `SELECT coalesce((SELECT cpus FROM host_current WHERE host = $1), 0)`, host).Scan(&u.CPUs)
 	return u, err
 }

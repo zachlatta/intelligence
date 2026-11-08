@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 # PROBE_SERVER (to follow the server's version), PROBE_USER (who may read the socket), optional
 # PROBE_SOCKET and PROBE_AUTOUPDATE. Root, so it can load eBPF programs; it updates itself in
-# /usr/local/lib/intelligence like the dev box client does in ~/.local/bin.
+# /usr/local/lib/intelligence like the host client does in ~/.local/bin.
 EnvironmentFile=/etc/intelligence/probe.env
 ExecStart=/usr/local/lib/intelligence/intelligence probe
 Restart=always

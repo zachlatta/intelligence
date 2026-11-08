@@ -14,7 +14,7 @@ import (
 )
 
 // testServer is a server on a test database, with that database's account signed in: get and
-// call send its session cookie, and openStream streams with each box's key. anon(h) is the same
+// call send its session cookie, and openStream streams with each host's key. anon(h) is the same
 // server with no one signed in.
 type testServer struct {
 	http.Handler
@@ -23,7 +23,7 @@ type testServer struct {
 }
 
 // fixture is one test database's account, shared by every server instance on it: "someone",
-// signed in, with a key for each box a test streams as.
+// signed in, with a key for each host a test streams as.
 type fixture struct {
 	store  *accounts.Store
 	acct   accounts.Account
@@ -64,11 +64,11 @@ func sessionFor(t *testing.T, s *accounts.Store, a accounts.Account) *http.Cooki
 	return &http.Cookie{Name: sessionCookie, Value: tok}
 }
 
-// joinBox adds box to account a through the enrollment flow, and returns its key.
-func joinBox(t *testing.T, s *accounts.Store, a accounts.Account, box string) string {
+// joinHost adds host to account a through the enrollment flow, and returns its key.
+func joinHost(t *testing.T, s *accounts.Store, a accounts.Account, host string) string {
 	t.Helper()
 	ctx := context.Background()
-	e, err := s.Enroll(ctx, box)
+	e, err := s.Enroll(ctx, host)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,16 +82,16 @@ func joinBox(t *testing.T, s *accounts.Store, a accounts.Account, box string) st
 	return key
 }
 
-// keyFor is box's key in the fixture's account, joining it the first time.
-func (f *fixture) keyFor(t *testing.T, box string) string {
+// keyFor is host's key in the fixture's account, joining it the first time.
+func (f *fixture) keyFor(t *testing.T, host string) string {
 	t.Helper()
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if k, ok := f.keys[box]; ok {
+	if k, ok := f.keys[host]; ok {
 		return k
 	}
-	f.keys[box] = joinBox(t, f.store, f.acct, box)
-	return f.keys[box]
+	f.keys[host] = joinHost(t, f.store, f.acct, host)
+	return f.keys[host]
 }
 
 // newServer is a server instance on d's database through p, at version v, with d's account.
@@ -119,12 +119,12 @@ func signedIn(h http.Handler, req *http.Request) {
 	}
 }
 
-// keyOf is box's key on test server h.
-func keyOf(t *testing.T, h http.Handler, box string) string {
+// keyOf is host's key on test server h.
+func keyOf(t *testing.T, h http.Handler, host string) string {
 	t.Helper()
 	ts, ok := h.(*testServer)
 	if !ok {
 		t.Fatal("not a test server")
 	}
-	return ts.keyFor(t, box)
+	return ts.keyFor(t, host)
 }

@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
-# Install the eBPF probe on this Linux dev box, as a root systemd service. After that it keeps
-# itself on the server's version (self-update), like the dev box client, so this is needed once per
-# box. Run from a checkout of this repo, as the dev box user, after deploy/install-devbox:
+# Install the eBPF probe on this Linux host, as a root systemd service. After that it keeps
+# itself on the server's version (self-update), like the host client, so this is needed once per
+# host. Run from a checkout of this repo, as the host user, after deploy/install-host:
 #
 #   deploy/install-probe
 #
-# It needs sudo. The probe reads the server's URL from the dev box's env file; it needs no token.
+# It needs sudo. The probe reads the server's URL from the host's env file; it needs no token.
 set -euo pipefail
 
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
-env_file="$HOME/.config/intelligence/devbox.env"
-[ -f "$env_file" ] || { echo "no $env_file: run deploy/install-devbox first" >&2; exit 1; }
-server=$(sed -n 's/^DEVBOX_SERVER=//p' "$env_file")
-[ -n "$server" ] || { echo "no DEVBOX_SERVER in $env_file" >&2; exit 1; }
+env_file="$HOME/.config/intelligence/host.env"
+# a host installed before dev boxes were called hosts, and not reinstalled since
+[ -f "$env_file" ] || [ ! -f "$HOME/.config/intelligence/devbox.env" ] || env_file="$HOME/.config/intelligence/devbox.env"
+[ -f "$env_file" ] || { echo "no $env_file: run deploy/install-host first" >&2; exit 1; }
+server=$(sed -n 's/^\(HOST\|DEVBOX\)_SERVER=//p' "$env_file")
+[ -n "$server" ] || { echo "no HOST_SERVER in $env_file" >&2; exit 1; }
 
 rev=$(git -C "$repo" rev-parse HEAD)
 mkdir -p "$repo/.factory-scratch"

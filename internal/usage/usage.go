@@ -1,7 +1,7 @@
 // Package usage reads how much of each subscription plan's quota is used, per login, from each
 // provider's own meter: every Claude login cswap holds (`cswap list --json`), Codex's subscription
 // meter (with the login's own token, falling back to the newest local session reading), Muse
-// (`muse usage --json`) and Antigravity (`agy -p /usage`). A dev box reads them and sends the
+// (`muse usage --json`) and Antigravity (`agy -p /usage`). A host reads them and sends the
 // Report up its stream; the server keeps the history.
 package usage
 
@@ -41,7 +41,7 @@ const (
 	FiveHours = 5 * 3600
 )
 
-// Report is one read of every provider on a box.
+// Report is one read of every provider on a host.
 type Report struct {
 	CollectedAt time.Time `json:"collectedAt"`
 	Sources     []Source  `json:"sources"`
@@ -50,7 +50,7 @@ type Report struct {
 // Source is one provider's read.
 type Source struct {
 	Provider string    `json:"provider"`
-	Missing  bool      `json:"missing,omitempty"` // the box has no such tool or login: nothing to read
+	Missing  bool      `json:"missing,omitempty"` // the host has no such tool or login: nothing to read
 	Error    string    `json:"error,omitempty"`   // the read failed; Accounts is empty
 	Accounts []Account `json:"accounts,omitempty"`
 }
@@ -60,8 +60,8 @@ type Account struct {
 	ID         string    `json:"id"`              // stable within the provider: the login's email, or "default"
 	Label      string    `json:"label"`           // what to show for it
 	Plan       string    `json:"plan,omitempty"`  // the plan or tier, where the provider says
-	Slot       int       `json:"slot,omitempty"`  // cswap's account number on this box; it can change
-	Active     bool      `json:"active"`          // the login this box's tool uses now
+	Slot       int       `json:"slot,omitempty"`  // cswap's account number on this host; it can change
+	Active     bool      `json:"active"`          // the login this host's tool uses now
 	ObservedAt time.Time `json:"observedAt"`      // when the provider was read (cswap caches, so not now)
 	Note       string    `json:"note,omitempty"`  // a caveat on the reading
 	Error      string    `json:"error,omitempty"` // this login's read failed; Windows is empty
@@ -76,10 +76,10 @@ type Window struct {
 	ResetsAt time.Time `json:"resetsAt,omitzero"` // rounded to the minute: providers jitter it by up to a second
 }
 
-// ErrMissing: the tool is not installed on this box.
+// ErrMissing: the tool is not installed on this host.
 var ErrMissing = errors.New("not installed")
 
-// Reader reads every provider on this box.
+// Reader reads every provider on this host.
 type Reader struct {
 	Home     string // the user's home: Codex's login, and ~/.local/bin for the tools
 	CodexURL string // Codex's subscription meter; default the real one

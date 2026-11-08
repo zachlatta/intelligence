@@ -148,7 +148,7 @@ func (f *Daemon) serve(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			helloed = true
-			f.write(c, session("status", map[string]any{"status": "server_info", "serverId": "srv_test", "hostname": "devbox-1",
+			f.write(c, session("status", map[string]any{"status": "server_info", "serverId": "srv_test", "hostname": "host-1",
 				"version": "0.15.3", "protocolVersion": 1}))
 			continue
 		}

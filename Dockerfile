@@ -7,10 +7,10 @@ COPY . .
 ARG SOURCE_COMMIT=dev
 RUN set -eu; ldflags="-s -w -X main.buildCommit=${SOURCE_COMMIT}"; \
     CGO_ENABLED=0 go build -trimpath -ldflags="$ldflags" -o /out/intelligence ./cmd/intelligence; \
-    mkdir -p /out/devbox; \
+    mkdir -p /out/host; \
     for p in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do \
       CGO_ENABLED=0 GOOS=${p%/*} GOARCH=${p#*/} go build -trimpath -ldflags="$ldflags" \
-        -o /out/devbox/intelligence-${p%/*}-${p#*/} ./cmd/intelligence; \
+        -o /out/host/intelligence-${p%/*}-${p#*/} ./cmd/intelligence; \
     done
 
 # Every test passes, the read-only SQL contract with them, against a throwaway Postgres 18,
@@ -33,7 +33,7 @@ RUN set -eu; \
 FROM alpine:3
 RUN adduser -D -H -u 65532 app
 COPY --from=test /tests-passed /usr/local/share/intelligence/tests-passed
-COPY --from=build /out/devbox /usr/local/share/intelligence/devbox
+COPY --from=build /out/host /usr/local/share/intelligence/host
 COPY --from=build /out/intelligence /usr/local/bin/intelligence
 USER app
 ENV PORT=8080

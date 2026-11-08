@@ -1,4 +1,4 @@
-// Package paseo speaks the Paseo daemon's WebSocket protocol (version 1), for the reads a dev box
+// Package paseo speaks the Paseo daemon's WebSocket protocol (version 1), for the reads a host
 // reports: the daemon's status, its workspaces and its agents, kept current by pushed updates.
 //
 // The protocol is the daemon's own and is not published as stable; this follows what the daemon

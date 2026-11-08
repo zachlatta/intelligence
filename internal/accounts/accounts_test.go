@@ -111,16 +111,16 @@ func TestChangingThePasswordEndsOtherSessions(t *testing.T) {
 	}
 }
 
-func TestADevBoxJoinsAnAccountWithACode(t *testing.T) {
+func TestAHostJoinsAnAccountWithACode(t *testing.T) {
 	s, d := store(t)
 	ann, _ := s.Create(ctx, "ann", goodPassword)
 	bob, _ := s.Create(ctx, "bob", goodPassword)
-	e, err := s.Enroll(ctx, "box-1")
+	e, err := s.Enroll(ctx, "host-1")
 	if err != nil || e.ID == "" || len(e.Secret) < 40 || len(e.Code) != 9 || e.Code[4] != '-' {
 		t.Fatalf("enroll: %+v %v", e, err)
 	}
 	if _, err := s.Enroll(ctx, "Bad Name"); err == nil {
-		t.Errorf("a bad box name enrolled")
+		t.Errorf("a bad host name enrolled")
 	}
 	if _, _, err := s.Collect(ctx, e.ID, e.Secret); !errors.Is(err, accounts.ErrNotClaimed) {
 		t.Errorf("collect before the claim: %v", err)
@@ -129,41 +129,41 @@ func TestADevBoxJoinsAnAccountWithACode(t *testing.T) {
 		t.Errorf("a wrong code: %v", err)
 	}
 	// codes are forgiving: any case, with or without the dash, spaces around
-	box, err := s.Claim(ctx, ann, " "+strings.ToLower(strings.ReplaceAll(e.Code, "-", ""))+" ")
-	if err != nil || box != "box-1" {
-		t.Fatalf("claim: %q %v", box, err)
+	host, err := s.Claim(ctx, ann, " "+strings.ToLower(strings.ReplaceAll(e.Code, "-", ""))+" ")
+	if err != nil || host != "host-1" {
+		t.Fatalf("claim: %q %v", host, err)
 	}
 	if _, _, err := s.Collect(ctx, e.ID, "not-the-secret"); !errors.Is(err, accounts.ErrNoSuchEnrollment) {
 		t.Errorf("collect with a wrong secret: %v", err)
 	}
-	key, gotBox, err := s.Collect(ctx, e.ID, e.Secret)
-	if err != nil || gotBox != "box-1" || len(key) < 40 {
-		t.Fatalf("collect: %q %q %v", key, gotBox, err)
+	key, gotHost, err := s.Collect(ctx, e.ID, e.Secret)
+	if err != nil || gotHost != "host-1" || len(key) < 40 {
+		t.Fatalf("collect: %q %q %v", key, gotHost, err)
 	}
 	if _, _, err := s.Collect(ctx, e.ID, e.Secret); !errors.Is(err, accounts.ErrNoSuchEnrollment) {
 		t.Errorf("a key is collected once: %v", err)
 	}
-	if ok, err := s.BoxKey(ctx, "box-1", key); !ok || err != nil {
+	if ok, err := s.HostKey(ctx, "host-1", key); !ok || err != nil {
 		t.Errorf("the key: %v %v", ok, err)
 	}
-	for box, k := range map[string]string{"box-1": "wrong", "box-2": key} {
-		if ok, _ := s.BoxKey(ctx, box, k); ok {
-			t.Errorf("%s with key %q accepted", box, k)
+	for host, k := range map[string]string{"host-1": "wrong", "host-2": key} {
+		if ok, _ := s.HostKey(ctx, host, k); ok {
+			t.Errorf("%s with key %q accepted", host, k)
 		}
 	}
-	if owns, _ := s.Owns(ctx, ann.ID, "box-1"); !owns {
-		t.Errorf("ann does not own box-1")
+	if owns, _ := s.Owns(ctx, ann.ID, "host-1"); !owns {
+		t.Errorf("ann does not own host-1")
 	}
-	if owns, _ := s.Owns(ctx, bob.ID, "box-1"); owns {
-		t.Errorf("bob owns box-1")
+	if owns, _ := s.Owns(ctx, bob.ID, "host-1"); owns {
+		t.Errorf("bob owns host-1")
 	}
-	// another account cannot take a box name that is ann's
-	e2, _ := s.Enroll(ctx, "box-1")
-	if _, err := s.Claim(ctx, bob, e2.Code); !errors.Is(err, accounts.ErrBoxTaken) {
-		t.Errorf("bob claims ann's box: %v", err)
+	// another account cannot take a host name that is ann's
+	e2, _ := s.Enroll(ctx, "host-1")
+	if _, err := s.Claim(ctx, bob, e2.Code); !errors.Is(err, accounts.ErrHostTaken) {
+		t.Errorf("bob claims ann's host: %v", err)
 	}
-	// ann can: the box gets a new key, and the old one stops working
-	e3, _ := s.Enroll(ctx, "box-1")
+	// ann can: the host gets a new key, and the old one stops working
+	e3, _ := s.Enroll(ctx, "host-1")
 	if _, err := s.Claim(ctx, ann, e3.Code); err != nil {
 		t.Fatal(err)
 	}
@@ -171,41 +171,41 @@ func TestADevBoxJoinsAnAccountWithACode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, _ := s.BoxKey(ctx, "box-1", key); ok {
+	if ok, _ := s.HostKey(ctx, "host-1", key); ok {
 		t.Errorf("the replaced key still works")
 	}
-	if ok, _ := s.BoxKey(ctx, "box-1", key2); !ok {
+	if ok, _ := s.HostKey(ctx, "host-1", key2); !ok {
 		t.Errorf("the new key does not work")
 	}
 	var stored string
-	d.Owner.QueryRow(ctx, "SELECT key_hash FROM devbox_keys").Scan(&stored)
+	d.Owner.QueryRow(ctx, "SELECT key_hash FROM host_keys").Scan(&stored)
 	if stored == key2 {
 		t.Errorf("the key itself is stored")
 	}
-	if _, err := d.Owner.Exec(ctx, "INSERT INTO devboxes (name, last_seen) VALUES ('box-1', now()); INSERT INTO host_probes (box, running, received_at) VALUES ('box-1', true, now())"); err != nil {
+	if _, err := d.Owner.Exec(ctx, "INSERT INTO hosts (name, last_seen) VALUES ('host-1', now()); INSERT INTO host_probes (host, running, received_at) VALUES ('host-1', true, now())"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RemoveBox(ctx, ann.ID, "box-1"); err != nil {
+	if err := s.RemoveHost(ctx, ann.ID, "host-1"); err != nil {
 		t.Fatal(err)
 	}
-	if ok, _ := s.BoxKey(ctx, "box-1", key2); ok {
-		t.Errorf("a removed box's key works")
+	if ok, _ := s.HostKey(ctx, "host-1", key2); ok {
+		t.Errorf("a removed host's key works")
 	}
 	var left int
-	d.Owner.QueryRow(ctx, "SELECT (SELECT count(*) FROM devboxes) + (SELECT count(*) FROM host_probes)").Scan(&left)
+	d.Owner.QueryRow(ctx, "SELECT (SELECT count(*) FROM hosts) + (SELECT count(*) FROM host_probes)").Scan(&left)
 	if left != 0 {
-		t.Errorf("a removed box's reports are kept: %d rows", left)
+		t.Errorf("a removed host's reports are kept: %d rows", left)
 	}
-	if err := s.RemoveBox(ctx, bob.ID, "box-1"); !errors.Is(err, accounts.ErrNoSuchBox) {
-		t.Errorf("removing a box that is not yours: %v", err)
+	if err := s.RemoveHost(ctx, bob.ID, "host-1"); !errors.Is(err, accounts.ErrNoSuchHost) {
+		t.Errorf("removing a host that is not yours: %v", err)
 	}
 }
 
 func TestAnExpiredCodeCannotBeClaimed(t *testing.T) {
 	s, d := store(t)
 	ann, _ := s.Create(ctx, "ann", goodPassword)
-	e, _ := s.Enroll(ctx, "box-1")
-	d.Owner.Exec(ctx, "UPDATE devbox_enrollments SET expires_at = now() - interval '1 second'")
+	e, _ := s.Enroll(ctx, "host-1")
+	d.Owner.Exec(ctx, "UPDATE host_enrollments SET expires_at = now() - interval '1 second'")
 	if _, err := s.Claim(ctx, ann, e.Code); !errors.Is(err, accounts.ErrNoSuchCode) {
 		t.Errorf("claim an expired code: %v", err)
 	}

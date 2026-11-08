@@ -1,7 +1,7 @@
-// Package accounts holds who can sign in, their browsers' sessions, and the dev boxes each owns.
+// Package accounts holds who can sign in, their browsers' sessions, and the hosts each owns.
 //
-// An account signs in with a username and password. A dev box joins an account by showing a short
-// code that a signed-in account enters; the box then collects its own key, which it streams with.
+// An account signs in with a username and password. A host joins an account by showing a short
+// code that a signed-in account enters; the host then collects its own key, which it streams with.
 // Only hashes of passwords, session tokens, codes and keys are stored. Everything an account reads
 // it reads through its own Postgres role (Reader), scoped to its own rows by row-level security.
 package accounts
@@ -24,8 +24,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/zachlatta/intelligence/internal/db"
-	"github.com/zachlatta/intelligence/internal/devbox"
 	"github.com/zachlatta/intelligence/internal/fleet"
+	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
 // Account is someone who can sign in.
@@ -39,11 +39,11 @@ var (
 	ErrTaken            = errors.New("that username is taken")
 	ErrBadCredentials   = errors.New("wrong username or password")
 	ErrNoSession        = errors.New("not signed in")
-	ErrNoSuchCode       = errors.New("no dev box is waiting with that code (codes last an hour)")
-	ErrBoxTaken         = errors.New("a dev box with that name belongs to another account")
+	ErrNoSuchCode       = errors.New("no host is waiting with that code (codes last an hour)")
+	ErrHostTaken        = errors.New("a host with that name belongs to another account")
 	ErrNotClaimed       = errors.New("not claimed yet")
 	ErrNoSuchEnrollment = errors.New("no such enrollment, or it expired")
-	ErrNoSuchBox        = errors.New("no such dev box in this account")
+	ErrNoSuchHost       = errors.New("no such host in this account")
 )
 
 // BadInputError is a username or password that cannot be used, and why.
@@ -54,7 +54,7 @@ func (e *BadInputError) Error() string { return e.Reason }
 const (
 	// SessionLife is how long a browser stays signed in.
 	SessionLife = 30 * 24 * time.Hour
-	// EnrollmentLife is how long a dev box's code can be entered.
+	// EnrollmentLife is how long a host's code can be entered.
 	EnrollmentLife = time.Hour
 	minPassword    = 12
 	maxPassword    = 1024
@@ -215,11 +215,11 @@ func (s *Store) EndSession(ctx context.Context, token string) error {
 	return err
 }
 
-// Enrollment is a dev box asking to join an account. Code is shown to a person, who enters it
-// while signed in; Secret stays on the box, which collects its key with it.
+// Enrollment is a host asking to join an account. Code is shown to a person, who enters it
+// while signed in; Secret stays on the host, which collects its key with it.
 type Enrollment struct {
 	ID        string    `json:"id"`
-	Box       string    `json:"box"`
+	Host      string    `json:"host"`
 	Code      string    `json:"code"`
 	Secret    string    `json:"secret"`
 	ExpiresAt time.Time `json:"expiresAt"`
@@ -257,32 +257,32 @@ func normalizeCode(code string) string {
 	return code[:4] + "-" + code[4:]
 }
 
-// Enroll starts box asking to join an account.
-func (s *Store) Enroll(ctx context.Context, box string) (Enrollment, error) {
-	if !devbox.ValidName(box) {
-		return Enrollment{}, &BadInputError{"bad dev box name: use lowercase letters, digits, '.', '_' and '-'"}
+// Enroll starts host asking to join an account.
+func (s *Store) Enroll(ctx context.Context, host string) (Enrollment, error) {
+	if !hostclient.ValidName(host) {
+		return Enrollment{}, &BadInputError{"bad host name: use lowercase letters, digits, '.', '_' and '-'"}
 	}
 	now := s.Now()
-	e := Enrollment{Box: box, Code: newCode(), Secret: randomToken(), ExpiresAt: now.Add(EnrollmentLife)}
+	e := Enrollment{Host: host, Code: newCode(), Secret: randomToken(), ExpiresAt: now.Add(EnrollmentLife)}
 	err := pgx.BeginFunc(ctx, s.p, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, "DELETE FROM devbox_enrollments WHERE expires_at < $1", now); err != nil {
+		if _, err := tx.Exec(ctx, "DELETE FROM host_enrollments WHERE expires_at < $1", now); err != nil {
 			return err
 		}
-		return tx.QueryRow(ctx, `INSERT INTO devbox_enrollments (box, code_hash, secret_hash, created_at, expires_at)
-			VALUES ($1, $2, $3, $4, $5) RETURNING id`, box, sha(e.Code), sha(e.Secret), now, e.ExpiresAt).Scan(&e.ID)
+		return tx.QueryRow(ctx, `INSERT INTO host_enrollments (host, code_hash, secret_hash, created_at, expires_at)
+			VALUES ($1, $2, $3, $4, $5) RETURNING id`, host, sha(e.Code), sha(e.Secret), now, e.ExpiresAt).Scan(&e.ID)
 	})
 	return e, err
 }
 
-// Claim gives the box waiting with code to a, and returns its name. A box whose name is another
+// Claim gives the host waiting with code to a, and returns its name. A host whose name is another
 // account's cannot be claimed.
 func (s *Store) Claim(ctx context.Context, a Account, code string) (string, error) {
-	var box string
+	var host string
 	err := pgx.BeginFunc(ctx, s.p, func(tx pgx.Tx) error {
 		var id string
 		var claimedBy *int64
-		err := tx.QueryRow(ctx, `SELECT id, box, account_id FROM devbox_enrollments WHERE code_hash = $1 AND expires_at > $2 FOR UPDATE`,
-			sha(normalizeCode(code)), s.Now()).Scan(&id, &box, &claimedBy)
+		err := tx.QueryRow(ctx, `SELECT id, host, account_id FROM host_enrollments WHERE code_hash = $1 AND expires_at > $2 FOR UPDATE`,
+			sha(normalizeCode(code)), s.Now()).Scan(&id, &host, &claimedBy)
 		if errors.Is(err, pgx.ErrNoRows) || (err == nil && claimedBy != nil && *claimedBy != a.ID) {
 			return ErrNoSuchCode
 		}
@@ -290,30 +290,30 @@ func (s *Store) Claim(ctx context.Context, a Account, code string) (string, erro
 			return err
 		}
 		var owner int64
-		err = tx.QueryRow(ctx, "SELECT account_id FROM devbox_keys WHERE box = $1", box).Scan(&owner)
+		err = tx.QueryRow(ctx, "SELECT account_id FROM host_keys WHERE host = $1", host).Scan(&owner)
 		if err == nil && owner != a.ID {
-			return ErrBoxTaken
+			return ErrHostTaken
 		}
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
-		if _, err := tx.Exec(ctx, "UPDATE devbox_enrollments SET account_id = $2, claimed_at = $3 WHERE id = $1", id, a.ID, s.Now()); err != nil {
+		if _, err := tx.Exec(ctx, "UPDATE host_enrollments SET account_id = $2, claimed_at = $3 WHERE id = $1", id, a.ID, s.Now()); err != nil {
 			return err
 		}
 		_, err = tx.Exec(ctx, fleet.NotifySQL, fleet.EnrollmentTopic(id))
 		return err
 	})
-	return box, err
+	return host, err
 }
 
-// Collect is the key for the box that enrolled as id, once claimed: ErrNotClaimed until then. The
-// key replaces any the box had, and is handed out once.
-func (s *Store) Collect(ctx context.Context, id, secret string) (key, box string, err error) {
+// Collect is the key for the host that enrolled as id, once claimed: ErrNotClaimed until then. The
+// key replaces any the host had, and is handed out once.
+func (s *Store) Collect(ctx context.Context, id, secret string) (key, host string, err error) {
 	err = pgx.BeginFunc(ctx, s.p, func(tx pgx.Tx) error {
 		var secretHash string
 		var account *int64
-		err := tx.QueryRow(ctx, `SELECT box, secret_hash, account_id FROM devbox_enrollments WHERE id::text = $1 AND expires_at > $2 FOR UPDATE`,
-			id, s.Now()).Scan(&box, &secretHash, &account)
+		err := tx.QueryRow(ctx, `SELECT host, secret_hash, account_id FROM host_enrollments WHERE id::text = $1 AND expires_at > $2 FOR UPDATE`,
+			id, s.Now()).Scan(&host, &secretHash, &account)
 		if errors.Is(err, pgx.ErrNoRows) || (err == nil && subtle.ConstantTimeCompare([]byte(secretHash), []byte(sha(secret))) != 1) {
 			return ErrNoSuchEnrollment
 		}
@@ -324,48 +324,48 @@ func (s *Store) Collect(ctx context.Context, id, secret string) (key, box string
 			return ErrNotClaimed
 		}
 		key = "ibk_" + randomToken()
-		tag, err := tx.Exec(ctx, `INSERT INTO devbox_keys (box, account_id, key_hash, created_at) VALUES ($1, $2, $3, $4)
-			ON CONFLICT (box) DO UPDATE SET key_hash = excluded.key_hash, created_at = excluded.created_at, last_used_at = NULL
-			WHERE devbox_keys.account_id = excluded.account_id`, box, *account, sha(key), s.Now())
+		tag, err := tx.Exec(ctx, `INSERT INTO host_keys (host, account_id, key_hash, created_at) VALUES ($1, $2, $3, $4)
+			ON CONFLICT (host) DO UPDATE SET key_hash = excluded.key_hash, created_at = excluded.created_at, last_used_at = NULL
+			WHERE host_keys.account_id = excluded.account_id`, host, *account, sha(key), s.Now())
 		if err != nil {
 			return err
 		}
 		if tag.RowsAffected() == 0 { // another account took the name since the claim
-			return ErrBoxTaken
+			return ErrHostTaken
 		}
-		_, err = tx.Exec(ctx, "DELETE FROM devbox_enrollments WHERE id = $1::uuid", id)
+		_, err = tx.Exec(ctx, "DELETE FROM host_enrollments WHERE id = $1::uuid", id)
 		return err
 	})
 	if err != nil {
 		return "", "", err
 	}
-	return key, box, nil
+	return key, host, nil
 }
 
-// BoxKey says whether key is box's, and notes its use.
-func (s *Store) BoxKey(ctx context.Context, box, key string) (bool, error) {
-	tag, err := s.p.Exec(ctx, "UPDATE devbox_keys SET last_used_at = $3 WHERE box = $1 AND key_hash = $2", box, sha(key), s.Now())
+// HostKey says whether key is host's, and notes its use.
+func (s *Store) HostKey(ctx context.Context, host, key string) (bool, error) {
+	tag, err := s.p.Exec(ctx, "UPDATE host_keys SET last_used_at = $3 WHERE host = $1 AND key_hash = $2", host, sha(key), s.Now())
 	return err == nil && tag.RowsAffected() == 1, err
 }
 
-// Owns says whether box is account id's.
-func (s *Store) Owns(ctx context.Context, id int64, box string) (bool, error) {
+// Owns says whether host is account id's.
+func (s *Store) Owns(ctx context.Context, id int64, host string) (bool, error) {
 	var owns bool
-	err := s.p.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM devbox_keys WHERE box = $1 AND account_id = $2)", box, id).Scan(&owns)
+	err := s.p.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM host_keys WHERE host = $1 AND account_id = $2)", host, id).Scan(&owns)
 	return owns, err
 }
 
-// RemoveBox takes box from account id, with everything it reported: its key stops working, and
-// the box asks to join again. Its name is free for any account.
-func (s *Store) RemoveBox(ctx context.Context, id int64, box string) error {
+// RemoveHost takes host from account id, with everything it reported: its key stops working, and
+// the host asks to join again. Its name is free for any account.
+func (s *Store) RemoveHost(ctx context.Context, id int64, host string) error {
 	return pgx.BeginFunc(ctx, s.p, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, "DELETE FROM devbox_keys WHERE box = $1 AND account_id = $2", box, id)
+		tag, err := tx.Exec(ctx, "DELETE FROM host_keys WHERE host = $1 AND account_id = $2", host, id)
 		if err != nil {
 			return err
 		}
 		if tag.RowsAffected() == 0 {
-			return ErrNoSuchBox
+			return ErrNoSuchHost
 		}
-		return fleet.Forget(ctx, tx, box)
+		return fleet.Forget(ctx, tx, host)
 	})
 }

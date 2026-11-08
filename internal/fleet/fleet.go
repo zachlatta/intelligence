@@ -1,4 +1,4 @@
-// Package fleet stores each dev box's latest report in Postgres as devboxes > workspaces > agents.
+// Package fleet stores each host's latest report in Postgres as hosts > workspaces > agents.
 package fleet
 
 import (
@@ -9,13 +9,13 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/zachlatta/intelligence/internal/devbox"
+	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
-// Box is a dev box as the server last heard from it, with its workspaces and their agents.
+// Host is a host as the server last heard from it, with its workspaces and their agents.
 // Report.Paseo carries the daemon's status; its Workspaces and Agents are empty here.
-type Box struct {
-	Report     devbox.Report     `json:"report"`
+type Host struct {
+	Report     hostclient.Report `json:"report"`
 	LastSeen   time.Time         `json:"lastSeen"` // when the server last heard from it
 	Online     bool              `json:"online"`   // it holds a stream to the server
 	Workspaces []WorkspaceAgents `json:"workspaces"`
@@ -23,34 +23,34 @@ type Box struct {
 
 // WorkspaceAgents is a workspace and the agents in it.
 type WorkspaceAgents struct {
-	devbox.Workspace
+	hostclient.Workspace
 	Listed bool        `json:"listed"` // false: Paseo did not list it, but an agent is in it
 	Agents []AgentView `json:"agents"`
 }
 
 // AgentView is an agent and how much of its transcript is synced.
 type AgentView struct {
-	devbox.Agent
+	hostclient.Agent
 	TranscriptSynced  bool `json:"transcriptSynced"`
 	TranscriptEntries int  `json:"transcriptEntries"`
 }
 
-// Registry is the devboxes, workspaces and agents tables.
+// Registry is the hosts, workspaces and agents tables.
 type Registry struct{ p *pgxpool.Pool }
 
 // New returns the registry on p, which must be migrated (db.Migrate).
 func New(p *pgxpool.Pool) *Registry { return &Registry{p: p} }
 
-// Record stores rep, received at at, as its box's latest state: it replaces the box's
+// Record stores rep, received at at, as its host's latest state: it replaces the host's
 // workspaces and agents.
-func (r *Registry) Record(ctx context.Context, rep devbox.Report, at time.Time) error {
+func (r *Registry) Record(ctx context.Context, rep hostclient.Report, at time.Time) error {
 	ps := rep.Paseo
 	providers, err := json.Marshal(nonNil(ps.Providers))
 	if err != nil {
 		return err
 	}
 	return pgx.BeginFunc(ctx, r.p, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO devboxes (name, client_version, collected_at, last_seen, connected, paseo_error,
+		_, err := tx.Exec(ctx, `INSERT INTO hosts (name, client_version, collected_at, last_seen, connected, paseo_error,
 			status_error, paseo_version, hostname, listen, pid, started_at, providers, providers_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 			ON CONFLICT (name) DO UPDATE SET client_version = EXCLUDED.client_version, collected_at = EXCLUDED.collected_at,
@@ -63,7 +63,7 @@ func (r *Registry) Record(ctx context.Context, rep devbox.Report, at time.Time) 
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, "DELETE FROM workspaces WHERE box = $1", rep.Name); err != nil { // and their agents
+		if _, err := tx.Exec(ctx, "DELETE FROM workspaces WHERE host = $1", rep.Name); err != nil { // and their agents
 			return err
 		}
 		listed := map[string]bool{}
@@ -91,36 +91,36 @@ func (r *Registry) Record(ctx context.Context, rep devbox.Report, at time.Time) 
 				a.Status, a.Cwd, a.RequiresAttention, a.AttentionReason, nullTime(a.CreatedAt), nullTime(a.UpdatedAt),
 				nullTime(a.LastUserMessageAt)})
 		}
-		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"workspaces"}, []string{"box", "id", "listed", "name", "kind", "status",
+		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"workspaces"}, []string{"host", "id", "listed", "name", "kind", "status",
 			"directory", "project", "branch", "dirty", "additions", "deletions", "created_at", "activity_at",
 			"last_user_message_at", "project_root"}, pgx.CopyFromRows(wrows)); err != nil {
 			return err
 		}
-		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"agents"}, []string{"box", "id", "workspace_id", "parent_id", "title",
+		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"agents"}, []string{"host", "id", "workspace_id", "parent_id", "title",
 			"provider", "model", "thinking", "status", "cwd", "requires_attention", "attention_reason", "created_at",
 			"updated_at", "last_user_message_at"}, pgx.CopyFromRows(arows)); err != nil {
 			return err
 		}
 		if !ps.Connected {
-			return nil // a box that lost its daemon keeps its transcripts until it can say which agents are gone
+			return nil // a host that lost its daemon keeps its transcripts until it can say which agents are gone
 		}
-		_, err = tx.Exec(ctx, `DELETE FROM transcripts t WHERE t.box = $1
-			AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.box = t.box AND a.id = t.agent_id)`, rep.Name)
+		_, err = tx.Exec(ctx, `DELETE FROM transcripts t WHERE t.host = $1
+			AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.host = t.host AND a.id = t.agent_id)`, rep.Name)
 		return err
 	})
 }
 
-// List returns every box by name. Its workspaces come with running agents first, then with any
+// List returns every host by name. Its workspaces come with running agents first, then with any
 // agents, then the most recently active; agents are running first, then newest.
-func (r *Registry) List(ctx context.Context) ([]Box, error) {
+func (r *Registry) List(ctx context.Context) ([]Host, error) {
 	rows, err := r.p.Query(ctx, `SELECT name, client_version, collected_at, last_seen, online, connected, paseo_error,
 		status_error, paseo_version, hostname, listen, pid, started_at, providers, providers_at
-		FROM devbox_status ORDER BY name`)
+		FROM host_status ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
-	boxes, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Box, error) {
-		var b Box
+	hosts, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Host, error) {
+		var b Host
 		var collected, started, providersAt *time.Time
 		var providers []byte
 		p := &b.Report.Paseo
@@ -142,57 +142,57 @@ func (r *Registry) List(ctx context.Context) ([]Box, error) {
 		return nil, err
 	}
 	index := map[string]int{}
-	for i := range boxes {
-		index[boxes[i].Report.Name] = i
+	for i := range hosts {
+		index[hosts[i].Report.Name] = i
 	}
 
-	type key struct{ box, id string }
+	type key struct{ host, id string }
 	agents := map[key][]AgentView{}
-	rows, err = r.p.Query(ctx, `SELECT a.box, a.workspace_id, a.id, a.parent_id, a.title, a.provider, a.model, a.thinking,
+	rows, err = r.p.Query(ctx, `SELECT a.host, a.workspace_id, a.id, a.parent_id, a.title, a.provider, a.model, a.thinking,
 		a.status, a.cwd, a.requires_attention, a.attention_reason, a.created_at, a.updated_at, a.last_user_message_at,
 		t.agent_id IS NOT NULL,
-		(SELECT count(*) FROM transcript_entries e WHERE e.box = a.box AND e.agent_id = a.id)::int
-		FROM agents a LEFT JOIN transcripts t ON t.box = a.box AND t.agent_id = a.id
-		ORDER BY a.box, a.status <> 'running', a.created_at DESC NULLS LAST, a.id`)
+		(SELECT count(*) FROM transcript_entries e WHERE e.host = a.host AND e.agent_id = a.id)::int
+		FROM agents a LEFT JOIN transcripts t ON t.host = a.host AND t.agent_id = a.id
+		ORDER BY a.host, a.status <> 'running', a.created_at DESC NULLS LAST, a.id`)
 	if err != nil {
 		return nil, err
 	}
-	var box string
+	var host string
 	var a AgentView
 	var created, updated, lastMsg *time.Time
-	if _, err := pgx.ForEachRow(rows, []any{&box, &a.WorkspaceID, &a.ID, &a.ParentID, &a.Title, &a.Provider, &a.Model,
+	if _, err := pgx.ForEachRow(rows, []any{&host, &a.WorkspaceID, &a.ID, &a.ParentID, &a.Title, &a.Provider, &a.Model,
 		&a.Thinking, &a.Status, &a.Cwd, &a.RequiresAttention, &a.AttentionReason, &created, &updated, &lastMsg,
 		&a.TranscriptSynced, &a.TranscriptEntries}, func() error {
 		a.CreatedAt, a.UpdatedAt, a.LastUserMessageAt = deref(created), deref(updated), deref(lastMsg)
-		k := key{box, a.WorkspaceID}
+		k := key{host, a.WorkspaceID}
 		agents[k] = append(agents[k], a)
 		return nil
 	}); err != nil {
 		return nil, err
 	}
 
-	rows, err = r.p.Query(ctx, `SELECT box, id, listed, name, kind, status, directory, project, branch, dirty, additions,
+	rows, err = r.p.Query(ctx, `SELECT host, id, listed, name, kind, status, directory, project, branch, dirty, additions,
 		deletions, created_at, activity_at, last_user_message_at, project_root
 		FROM workspace_status
-		ORDER BY box, running_agents > 0 DESC, agents > 0 DESC,
+		ORDER BY host, running_agents > 0 DESC, agents > 0 DESC,
 		         greatest(activity_at, last_user_message_at, created_at) DESC NULLS LAST, name, id`)
 	if err != nil {
 		return nil, err
 	}
 	var w WorkspaceAgents
 	var wCreated, wActivity, wLastMsg *time.Time
-	if _, err := pgx.ForEachRow(rows, []any{&box, &w.ID, &w.Listed, &w.Name, &w.Kind, &w.Status, &w.Directory, &w.Project,
+	if _, err := pgx.ForEachRow(rows, []any{&host, &w.ID, &w.Listed, &w.Name, &w.Kind, &w.Status, &w.Directory, &w.Project,
 		&w.Branch, &w.Dirty, &w.Additions, &w.Deletions, &wCreated, &wActivity, &wLastMsg, &w.ProjectRoot}, func() error {
 		w.CreatedAt, w.ActivityAt, w.LastUserMessageAt = deref(wCreated), deref(wActivity), deref(wLastMsg)
-		w.Agents = agents[key{box, w.ID}]
-		if i, ok := index[box]; ok {
-			boxes[i].Workspaces = append(boxes[i].Workspaces, w)
+		w.Agents = agents[key{host, w.ID}]
+		if i, ok := index[host]; ok {
+			hosts[i].Workspaces = append(hosts[i].Workspaces, w)
 		}
 		return nil
 	}); err != nil {
 		return nil, err
 	}
-	return boxes, nil
+	return hosts, nil
 }
 
 func nonNil[T any](s []T) []T {

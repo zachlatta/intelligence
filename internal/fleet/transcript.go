@@ -10,15 +10,15 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/zachlatta/intelligence/internal/devbox"
+	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
 var (
 	// ErrEpochChanged refuses an append the server cannot place: no transcript yet, or one of another
-	// epoch. The box sends the transcript whole instead.
+	// epoch. The host sends the transcript whole instead.
 	ErrEpochChanged = errors.New("transcript epoch changed: send it whole")
-	// ErrUnknownAgent refuses a transcript of an agent the box has not reported.
-	ErrUnknownAgent = errors.New("agent not reported by this box")
+	// ErrUnknownAgent refuses a transcript of an agent the host has not reported.
+	ErrUnknownAgent = errors.New("agent not reported by this host")
 )
 
 // Transcript is one agent's synced transcript.
@@ -30,31 +30,31 @@ type Transcript struct {
 
 // Entry is a transcript entry with the columns read from its item.
 type Entry struct {
-	devbox.TranscriptEntry
+	hostclient.TranscriptEntry
 	Kind, Tool, Status, Text string
 }
 
 // StoreTranscript stores a batch received at at.
-func (r *Registry) StoreTranscript(ctx context.Context, b devbox.TranscriptBatch, at time.Time) error {
+func (r *Registry) StoreTranscript(ctx context.Context, b hostclient.TranscriptBatch, at time.Time) error {
 	return pgx.BeginFunc(ctx, r.p, func(tx pgx.Tx) error {
 		var known bool
-		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM agents WHERE box = $1 AND id = $2)", b.Box, b.AgentID).Scan(&known); err != nil {
+		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM agents WHERE host = $1 AND id = $2)", b.Host, b.AgentID).Scan(&known); err != nil {
 			return err
 		}
 		if !known {
 			return ErrUnknownAgent
 		}
 		if b.Replace {
-			if _, err := tx.Exec(ctx, "DELETE FROM transcripts WHERE box = $1 AND agent_id = $2", b.Box, b.AgentID); err != nil {
+			if _, err := tx.Exec(ctx, "DELETE FROM transcripts WHERE host = $1 AND agent_id = $2", b.Host, b.AgentID); err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, "INSERT INTO transcripts (box, agent_id, epoch, synced_at) VALUES ($1, $2, $3, $4)",
-				b.Box, b.AgentID, b.Epoch, at); err != nil {
+			if _, err := tx.Exec(ctx, "INSERT INTO transcripts (host, agent_id, epoch, synced_at) VALUES ($1, $2, $3, $4)",
+				b.Host, b.AgentID, b.Epoch, at); err != nil {
 				return err
 			}
 		} else {
-			tag, err := tx.Exec(ctx, "UPDATE transcripts SET synced_at = $4 WHERE box = $1 AND agent_id = $2 AND epoch = $3",
-				b.Box, b.AgentID, b.Epoch, at)
+			tag, err := tx.Exec(ctx, "UPDATE transcripts SET synced_at = $4 WHERE host = $1 AND agent_id = $2 AND epoch = $3",
+				b.Host, b.AgentID, b.Epoch, at)
 			if err != nil {
 				return err
 			}
@@ -68,11 +68,11 @@ func (r *Registry) StoreTranscript(ctx context.Context, b devbox.TranscriptBatch
 				return err
 			}
 			e.Item = item
-			if _, err := tx.Exec(ctx, `INSERT INTO transcript_entries (box, agent_id, seq_start, seq_end, turn_id, provider, at, item)
+			if _, err := tx.Exec(ctx, `INSERT INTO transcript_entries (host, agent_id, seq_start, seq_end, turn_id, provider, at, item)
 				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-				ON CONFLICT (box, agent_id, seq_start) DO UPDATE SET seq_end = EXCLUDED.seq_end, turn_id = EXCLUDED.turn_id,
+				ON CONFLICT (host, agent_id, seq_start) DO UPDATE SET seq_end = EXCLUDED.seq_end, turn_id = EXCLUDED.turn_id,
 				provider = EXCLUDED.provider, at = EXCLUDED.at, item = EXCLUDED.item`,
-				b.Box, b.AgentID, e.SeqStart, e.SeqEnd, e.TurnID, e.Provider, nullTime(e.At), []byte(e.Item)); err != nil {
+				b.Host, b.AgentID, e.SeqStart, e.SeqEnd, e.TurnID, e.Provider, nullTime(e.At), []byte(e.Item)); err != nil {
 				return err
 			}
 		}
@@ -80,17 +80,17 @@ func (r *Registry) StoreTranscript(ctx context.Context, b devbox.TranscriptBatch
 	})
 }
 
-// TranscriptCursors are where box's transcripts end, by agent.
-func (r *Registry) TranscriptCursors(ctx context.Context, box string) (map[string]devbox.TranscriptCursor, error) {
+// TranscriptCursors are where host's transcripts end, by agent.
+func (r *Registry) TranscriptCursors(ctx context.Context, host string) (map[string]hostclient.TranscriptCursor, error) {
 	rows, err := r.p.Query(ctx, `SELECT t.agent_id, t.epoch, coalesce(max(e.seq_start), 0), coalesce(max(e.seq_end), 0)
-		FROM transcripts t LEFT JOIN transcript_entries e ON e.box = t.box AND e.agent_id = t.agent_id
-		WHERE t.box = $1 GROUP BY t.agent_id, t.epoch`, box)
+		FROM transcripts t LEFT JOIN transcript_entries e ON e.host = t.host AND e.agent_id = t.agent_id
+		WHERE t.host = $1 GROUP BY t.agent_id, t.epoch`, host)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]devbox.TranscriptCursor{}
+	out := map[string]hostclient.TranscriptCursor{}
 	var id string
-	var c devbox.TranscriptCursor
+	var c hostclient.TranscriptCursor
 	_, err = pgx.ForEachRow(rows, []any{&id, &c.Epoch, &c.LastSeqStart, &c.LastSeqEnd}, func() error {
 		out[id] = c
 		return nil
@@ -98,17 +98,17 @@ func (r *Registry) TranscriptCursors(ctx context.Context, box string) (map[strin
 	return out, err
 }
 
-// Transcript is agentID's transcript on box from seq fromSeq on (0 for all), in seq order;
+// Transcript is agentID's transcript on host from seq fromSeq on (0 for all), in seq order;
 // pgx.ErrNoRows when none is synced.
-func (r *Registry) Transcript(ctx context.Context, box, agentID string, fromSeq int) (Transcript, error) {
+func (r *Registry) Transcript(ctx context.Context, host, agentID string, fromSeq int) (Transcript, error) {
 	var t Transcript
-	if err := r.p.QueryRow(ctx, "SELECT epoch, synced_at FROM transcripts WHERE box = $1 AND agent_id = $2", box, agentID).
+	if err := r.p.QueryRow(ctx, "SELECT epoch, synced_at FROM transcripts WHERE host = $1 AND agent_id = $2", host, agentID).
 		Scan(&t.Epoch, &t.SyncedAt); err != nil {
 		return t, err
 	}
 	t.SyncedAt = t.SyncedAt.UTC()
 	rows, err := r.p.Query(ctx, `SELECT seq_start, seq_end, turn_id, provider, at, item, kind, tool, status, text
-		FROM transcript_entries WHERE box = $1 AND agent_id = $2 AND seq_start >= $3 ORDER BY seq_start`, box, agentID, fromSeq)
+		FROM transcript_entries WHERE host = $1 AND agent_id = $2 AND seq_start >= $3 ORDER BY seq_start`, host, agentID, fromSeq)
 	if err != nil {
 		return t, err
 	}
@@ -167,12 +167,12 @@ func replaceNUL(v any) any {
 }
 
 // TranscriptEntry is the entry of agentID's transcript that starts at seq; pgx.ErrNoRows when none.
-func (r *Registry) TranscriptEntry(ctx context.Context, box, agentID string, seq int) (Entry, error) {
+func (r *Registry) TranscriptEntry(ctx context.Context, host, agentID string, seq int) (Entry, error) {
 	var e Entry
 	var at *time.Time
 	var item []byte
 	err := r.p.QueryRow(ctx, `SELECT seq_start, seq_end, turn_id, provider, at, item, kind, tool, status, text
-		FROM transcript_entries WHERE box = $1 AND agent_id = $2 AND seq_start = $3`, box, agentID, seq).
+		FROM transcript_entries WHERE host = $1 AND agent_id = $2 AND seq_start = $3`, host, agentID, seq).
 		Scan(&e.SeqStart, &e.SeqEnd, &e.TurnID, &e.Provider, &at, &item, &e.Kind, &e.Tool, &e.Status, &e.Text)
 	e.At, e.Item = deref(at), json.RawMessage(item)
 	return e, err

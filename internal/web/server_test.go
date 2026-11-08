@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/zachlatta/intelligence/internal/dbtest"
-	"github.com/zachlatta/intelligence/internal/devbox"
 	"github.com/zachlatta/intelligence/internal/fleet"
+	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
 func get(t *testing.T, h http.Handler, path string, header map[string]string) *httptest.ResponseRecorder {
@@ -67,7 +67,7 @@ func TestIndexHasNoGreeting(t *testing.T) {
 	h, _ := dbServer(t)
 	page := get(t, h, "/", map[string]string{"Tailscale-User-Name": "Some One"}).Body.String()
 	if strings.Contains(page, "Hi") || strings.Contains(page, "Some One") {
-		t.Errorf("the home page should open on the dev boxes, with no greeting")
+		t.Errorf("the home page should open on the hosts, with no greeting")
 	}
 }
 
@@ -121,7 +121,7 @@ func dbServerVersion(t *testing.T, v string) (http.Handler, dbtest.DB) {
 	return newServer(t, d, d.Owner, v), d
 }
 
-func boxes(t *testing.T, d dbtest.DB) []fleet.Box {
+func hosts(t *testing.T, d dbtest.DB) []fleet.Host {
 	t.Helper()
 	b, err := fleet.New(d.Owner).List(t.Context())
 	if err != nil {
@@ -143,16 +143,16 @@ func post(t *testing.T, h http.Handler, path, token string, body []byte) *httpte
 	return rec
 }
 
-var sampleReport = devbox.Report{Name: "devbox-1", CollectedAt: t0, Version: "c1", Paseo: devbox.PaseoStatus{
-	Connected: true, Version: "0.15.3", Hostname: "devbox-1", PID: 3029, Listen: "0.0.0.0:6767",
-	Providers: []devbox.Provider{{Name: "claude", Available: true}, {Name: "copilot"}},
-	Workspaces: []devbox.Workspace{
+var sampleReport = hostclient.Report{Name: "host-1", CollectedAt: t0, Version: "c1", Paseo: hostclient.PaseoStatus{
+	Connected: true, Version: "0.15.3", Hostname: "host-1", PID: 3029, Listen: "0.0.0.0:6767",
+	Providers: []hostclient.Provider{{Name: "claude", Available: true}, {Name: "copilot"}},
+	Workspaces: []hostclient.Workspace{
 		{ID: "w-app", Name: "Login fix", Kind: "worktree", Status: "running", Directory: "/w/app-login", Project: "example/app",
 			Branch: "fix-login", Dirty: true, Additions: 12, Deletions: 3},
 		{ID: "w-docs", Name: "Docs", Kind: "directory", Status: "done", Directory: "/w/docs", Project: "docs"},
 		{ID: "w-idle", Name: "Quiet checkout", Kind: "local_checkout", Status: "done", Directory: "/w/quiet"},
 	},
-	Agents: []devbox.Agent{
+	Agents: []hostclient.Agent{
 		{ID: "a1000000-0000-4000-8000-000000000001", WorkspaceID: "w-app", Title: "Fix the <b>login</b> page", Provider: "claude",
 			Model: "claude-opus-5-5", Thinking: "medium", Status: "running", Cwd: "/w/app-login", CreatedAt: t0.Add(-time.Hour)},
 		{ID: "a2000000-0000-4000-8000-000000000002", WorkspaceID: "w-docs", Title: "Write notes", Provider: "codex",
@@ -163,25 +163,25 @@ var sampleReport = devbox.Report{Name: "devbox-1", CollectedAt: t0, Version: "c1
 	},
 }}
 
-func TestReportedBoxIsListedInTheAPIAndOnTheHomePage(t *testing.T) {
+func TestReportedHostIsListedInTheAPIAndOnTheHomePage(t *testing.T) {
 	h, _ := dbServer(t)
 	sendReport(t, h, sampleReport)
 
-	rec := get(t, h, "/api/devboxes", nil)
+	rec := get(t, h, "/api/hosts", nil)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /api/devboxes = %d", rec.Code)
+		t.Fatalf("GET /api/hosts = %d", rec.Code)
 	}
-	var list []fleet.Box
+	var list []fleet.Host
 	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 1 || list[0].Report.Name != "devbox-1" || !list[0].Online || len(list[0].Workspaces) != 3 ||
+	if len(list) != 1 || list[0].Report.Name != "host-1" || !list[0].Online || len(list[0].Workspaces) != 3 ||
 		len(list[0].Workspaces[0].Agents) != 2 {
 		t.Fatalf("list = %+v", list)
 	}
 
 	page := get(t, h, "/", nil).Body.String()
-	for _, want := range []string{"devbox-1", "online", "1 running, 2 idle", "Login fix", "example/app",
+	for _, want := range []string{"host-1", "online", "1 running, 2 idle", "Login fix", "example/app",
 		"Fix the &lt;b&gt;login&lt;/b&gt; page", "claude-opus-5-5", "Write notes", "needs attention"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("home page misses %q", want)
@@ -189,38 +189,38 @@ func TestReportedBoxIsListedInTheAPIAndOnTheHomePage(t *testing.T) {
 	}
 }
 
-func TestHomePageShowsSilentBoxOffline(t *testing.T) {
+func TestHomePageShowsSilentHostOffline(t *testing.T) {
 	h, d := dbServer(t)
-	keyOf(t, h, "devbox-1") // the account's
+	keyOf(t, h, "host-1") // the account's
 	if err := fleet.New(d.Owner).Record(t.Context(), sampleReport, time.Now().Add(-5*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	page := get(t, h, "/", nil).Body.String()
 	if !strings.Contains(page, "offline") {
-		t.Errorf("a box silent for 5 minutes should show offline")
+		t.Errorf("a host silent for 5 minutes should show offline")
 	}
 }
 
-func TestHomePageSaysWhenNoBoxHasReported(t *testing.T) {
+func TestHomePageSaysWhenNoHostHasReported(t *testing.T) {
 	h, _ := dbServer(t)
-	if page := get(t, h, "/", nil).Body.String(); !strings.Contains(page, "No dev boxes yet") {
+	if page := get(t, h, "/", nil).Body.String(); !strings.Contains(page, "No hosts yet") {
 		t.Errorf("empty fleet message missing")
 	}
 }
 
-func TestHomePageFlagsABoxNotOnTheServersVersion(t *testing.T) {
+func TestHomePageFlagsAHostNotOnTheServersVersion(t *testing.T) {
 	h, _ := dbServerVersion(t, "0123456789abcdef")
 	rep := sampleReport
 	rep.Version = "fedcba9876543210"
 	sendReport(t, h, rep)
 	page := get(t, h, "/", nil).Body.String()
 	if !strings.Contains(page, `title="fedcba9876543210">client fedcba987654 is not on the server's version`) {
-		t.Errorf("a box on another version than the server should say so, with its version:\n%s", page)
+		t.Errorf("a host on another version than the server should say so, with its version:\n%s", page)
 	}
 	rep.Version = "0123456789abcdef"
 	sendReport(t, h, rep)
 	if strings.Contains(get(t, h, "/", nil).Body.String(), "not on the server's version") {
-		t.Errorf("a box on the server's version is not behind")
+		t.Errorf("a host on the server's version is not behind")
 	}
 }
 
@@ -248,15 +248,15 @@ func TestHomePageFoldsWorkspacesWithoutAgents(t *testing.T) {
 	}
 }
 
-func TestHomePageShowsADisconnectedBox(t *testing.T) {
+func TestHomePageShowsADisconnectedHost(t *testing.T) {
 	h, _ := dbServer(t)
-	sendReport(t, h, devbox.Report{Name: "devbox-2", Paseo: devbox.PaseoStatus{Error: "connect ws://127.0.0.1:6767/ws: refused"}})
+	sendReport(t, h, hostclient.Report{Name: "host-2", Paseo: hostclient.PaseoStatus{Error: "connect ws://127.0.0.1:6767/ws: refused"}})
 	page := get(t, h, "/", nil).Body.String()
 	if !strings.Contains(page, "not connected") || !strings.Contains(page, "refused") {
-		t.Errorf("a box that cannot reach its daemon should say so and why")
+		t.Errorf("a host that cannot reach its daemon should say so and why")
 	}
 	if !strings.Contains(page, "no agents") {
-		t.Errorf("a box with no agents should say so")
+		t.Errorf("a host with no agents should say so")
 	}
 }
 
@@ -279,11 +279,11 @@ func TestHomePageIsATreeOfHostsWorkspacesAndAgents(t *testing.T) {
 	sendReport(t, h, sampleReport)
 	page := get(t, h, "/", nil).Body.String()
 
-	host := detailsTag(page, "host-devbox-1")
+	host := detailsTag(page, "host-host-1")
 	if host == "" || !strings.Contains(host, " open") {
 		t.Fatalf("each host should be a details element, open by default: %q", host)
 	}
-	app, docs := detailsTag(page, "ws-devbox-1-w-app"), detailsTag(page, "ws-devbox-1-w-docs")
+	app, docs := detailsTag(page, "ws-host-1-w-app"), detailsTag(page, "ws-host-1-w-docs")
 	if app == "" || docs == "" {
 		t.Fatalf("each workspace with agents should be a details element under its host:\n%s", page)
 	}
@@ -293,8 +293,8 @@ func TestHomePageIsATreeOfHostsWorkspacesAndAgents(t *testing.T) {
 	if strings.Contains(docs, " open") {
 		t.Errorf("a workspace with only idle agents should start closed: %q", docs)
 	}
-	if !(strings.Index(page, `id="host-devbox-1"`) < strings.Index(page, `id="ws-devbox-1-w-app"`) &&
-		strings.Index(page, `id="ws-devbox-1-w-app"`) < strings.Index(page, "a1000000-0000-4000-8000-000000000001")) {
+	if !(strings.Index(page, `id="host-host-1"`) < strings.Index(page, `id="ws-host-1-w-app"`) &&
+		strings.Index(page, `id="ws-host-1-w-app"`) < strings.Index(page, "a1000000-0000-4000-8000-000000000001")) {
 		t.Errorf("the tree should nest host > workspace > agent")
 	}
 	for _, want := range []string{`class="status st-running">running`, `class="status st-idle">idle`} {

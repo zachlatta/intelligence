@@ -165,7 +165,7 @@
 <body>
 {{template "top" "/"}}
 <header class="top"><div class="wrap">
-  <div class="crumbs"><a href="/">Dev boxes</a><span class="sep">/</span>{{.Box}}<span class="sep">/</span>{{if .Workspace.Listed}}{{or .Workspace.Name .Workspace.ID}}{{else}}{{.Workspace.ID}}{{end}}{{if .Workspace.Branch}} · <code>{{.Workspace.Branch}}</code>{{end}}</div>
+  <div class="crumbs"><a href="/">Hosts</a><span class="sep">/</span>{{.Host}}<span class="sep">/</span>{{if .Workspace.Listed}}{{or .Workspace.Name .Workspace.ID}}{{else}}{{.Workspace.ID}}{{end}}{{if .Workspace.Branch}} · <code>{{.Workspace.Branch}}</code>{{end}}</div>
   <h1>{{or .Agent.Title "(untitled)"}}</h1>
   <div class="meta">
     <span class="pill {{.Agent.Status}}" id="status">{{if working .Agent.Status}}<span class="spinner"></span>{{else}}<span class="dot {{.Agent.Status}}"></span>{{end}}{{.Agent.Status}}</span>
@@ -191,7 +191,7 @@
 <div class="wrap">
   {{if .Siblings}}
   <nav class="siblings" aria-label="Other agents in this workspace">
-    {{range .Siblings}}<a href="/devboxes/{{$.Box}}/agents/{{.ID}}" title="{{.Status}}"><span class="dot {{.Status}}"></span> {{or .Title "(untitled)"}}</a>{{end}}
+    {{range .Siblings}}<a href="/hosts/{{$.Host}}/agents/{{.ID}}" title="{{.Status}}"><span class="dot {{.Status}}"></span> {{or .Title "(untitled)"}}</a>{{end}}
   </nav>
   {{end}}
   <main id="transcript" data-base="{{.Base}}" data-epoch="{{.Transcript.Epoch}}" data-live="{{if .Live}}1{{end}}">
@@ -201,13 +201,13 @@
     <p class="empty">No transcript synced: this agent was closed before syncing reached it. Reading a closed
     agent's transcript from Paseo would start it again, so it is synced once it is open in Paseo.</p>
   {{else}}
-    <p class="empty">No transcript synced yet: it arrives with the box's next sync.</p>
+    <p class="empty">No transcript synced yet: it arrives with the host's next sync.</p>
   {{end}}
   </main>
 </div>
 <button id="latest" type="button">↓ Latest</button>
 
-<form id="chat" class="chat" data-commands="{{.Chat.Commands}}" data-agent="{{.Agent.ID}}" data-box="{{.Box}}"
+<form id="chat" class="chat" data-commands="{{.Chat.Commands}}" data-agent="{{.Agent.ID}}" data-host="{{.Host}}"
   data-pending-sql="{{.Chat.PendingSQL}}" data-queue-ttl="{{.Chat.QueueTTL}}" data-status="{{.Agent.Status}}"><div class="wrap">
   <div id="working" class="working"{{if not (working .Agent.Status)}} hidden{{end}}><span class="spinner"></span><span class="wtext">Agent is working</span>
     <span class="wfor" id="working-for"{{if not .Agent.LastUserMessageAt.IsZero}} data-since="{{iso .Agent.LastUserMessageAt}}"{{end}}></span></div>
@@ -288,7 +288,7 @@ const isWorking = st => st === 'running' || st === 'initializing';
         t.className = 'ptext'; t.textContent = msg; t.title = msg;
         s.className = 'pstate';
         s.textContent = behavior === 'queue' && status === 'running' ? 'queued, waiting for the turn to end' :
-          status === 'queued' ? label[behavior] + ', waiting for the box' : label[behavior] + '…';
+          status === 'queued' ? label[behavior] + ', waiting for the host' : label[behavior] + '…';
         li.append(t, s);
         return li;
       }));
@@ -461,7 +461,7 @@ const isWorking = st => st === 'running' || st === 'initializing';
   setInterval(poll, 4000);
   document.addEventListener('visibilitychange', poll);
 
-  // The agent's resources: the box reports each minute, so re-read them once a minute.
+  // The agent's resources: the host reports each minute, so re-read them once a minute.
   setInterval(async () => {
     const cur = document.getElementById('resources');
     if (!cur || document.hidden) return;

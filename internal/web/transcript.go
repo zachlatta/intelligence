@@ -44,14 +44,14 @@ var transcriptTmpl = template.Must(template.New("transcript").Funcs(template.Fun
 // blocksTmpl renders blocks alone, for live updates.
 var blocksTmpl = transcriptTmpl
 
-// agentContext finds an agent on box, its workspace and the other agents in that workspace.
-func agentContext(r *http.Request, reg *fleet.Registry, box, agentID string) (*fleet.AgentView, *fleet.WorkspaceAgents, []fleet.AgentView, error) {
-	boxes, err := reg.List(r.Context())
+// agentContext finds an agent on host, its workspace and the other agents in that workspace.
+func agentContext(r *http.Request, reg *fleet.Registry, host, agentID string) (*fleet.AgentView, *fleet.WorkspaceAgents, []fleet.AgentView, error) {
+	hosts, err := reg.List(r.Context())
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	for _, b := range boxes {
-		if b.Report.Name != box {
+	for _, b := range hosts {
+		if b.Report.Name != host {
 			continue
 		}
 		for i := range b.Workspaces {
@@ -83,8 +83,8 @@ type transcriptStats struct{ Entries, Turns, Tools int }
 
 // transcriptPage shows one agent's transcript as turns of messages, thinking and tool calls.
 func transcriptPage(cfg Config, reg *fleet.Registry, w http.ResponseWriter, r *http.Request) {
-	box, agentID := r.PathValue("box"), r.PathValue("agent")
-	agent, ws, siblings, err := agentContext(r, reg, box, agentID)
+	host, agentID := r.PathValue("host"), r.PathValue("agent")
+	agent, ws, siblings, err := agentContext(r, reg, host, agentID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -93,7 +93,7 @@ func transcriptPage(cfg Config, reg *fleet.Registry, w http.ResponseWriter, r *h
 		http.NotFound(w, r)
 		return
 	}
-	tr, err := reg.Transcript(r.Context(), box, agentID, 0)
+	tr, err := reg.Transcript(r.Context(), host, agentID, 0)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -107,33 +107,33 @@ func transcriptPage(cfg Config, reg *fleet.Registry, w http.ResponseWriter, r *h
 			stats.Tools++
 		}
 	}
-	base := "/devboxes/" + box + "/agents/" + agentID
+	base := "/hosts/" + host + "/agents/" + agentID
 	blocks := buildBlocks(tr.Entries)
-	res, rerr := agentUse(r, cfg, reg, box, agentID, live(agent))
+	res, rerr := agentUse(r, cfg, reg, host, agentID, live(agent))
 	if rerr != nil {
 		http.Error(w, rerr.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = transcriptTmpl.Execute(w, map[string]any{
-		"Box": box, "Agent": agent, "Workspace": ws, "Siblings": siblings, "Transcript": tr, "Synced": err == nil,
+		"Host": host, "Agent": agent, "Workspace": ws, "Siblings": siblings, "Transcript": tr, "Synced": err == nil,
 		"Now": cfg.Now(), "Base": base, "Stats": stats, "Live": err == nil && live(agent), "Blocks": blocks,
 		"BlocksData": blocksData{Base: base, Blocks: blocks, Now: cfg.Now()}, "Resources": res,
-		"Chat": map[string]string{"Commands": "/api/devboxes/" + box + "/commands", "PendingSQL": pendingMessagesSQL(box, agentID),
+		"Chat": map[string]string{"Commands": "/api/hosts/" + host + "/commands", "PendingSQL": pendingMessagesSQL(host, agentID),
 			"QueueTTL": queuedMessageTTL},
 	})
 }
 
 // transcriptBlocks sends the blocks from seq `from` on, for a live page to replace its tail with.
 func transcriptBlocks(cfg Config, reg *fleet.Registry, w http.ResponseWriter, r *http.Request) {
-	box, agentID := r.PathValue("box"), r.PathValue("agent")
+	host, agentID := r.PathValue("host"), r.PathValue("agent")
 	from, _ := strconv.Atoi(r.URL.Query().Get("from"))
-	agent, _, _, err := agentContext(r, reg, box, agentID)
+	agent, _, _, err := agentContext(r, reg, host, agentID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	tr, err := reg.Transcript(r.Context(), box, agentID, from)
+	tr, err := reg.Transcript(r.Context(), host, agentID, from)
 	if agent == nil || errors.Is(err, pgx.ErrNoRows) {
 		http.NotFound(w, r)
 		return
@@ -146,7 +146,7 @@ func transcriptBlocks(cfg Config, reg *fleet.Registry, w http.ResponseWriter, r 
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Epoch", tr.Epoch)
 	w.Header().Set("X-Agent-Status", agent.Status)
-	_ = blocksTmpl.ExecuteTemplate(w, "blocks", blocksData{Base: "/devboxes/" + box + "/agents/" + agentID,
+	_ = blocksTmpl.ExecuteTemplate(w, "blocks", blocksData{Base: "/hosts/" + host + "/agents/" + agentID,
 		Blocks: buildBlocks(tr.Entries), Now: cfg.Now()})
 }
 
@@ -166,13 +166,13 @@ var entryTmpl = template.Must(template.New("entry").Parse(`<!doctype html>
 
 // transcriptEntry shows one entry whole: its long texts as text, then its item as JSON.
 func transcriptEntry(reg *fleet.Registry, w http.ResponseWriter, r *http.Request) {
-	box, agentID := r.PathValue("box"), r.PathValue("agent")
+	host, agentID := r.PathValue("host"), r.PathValue("agent")
 	seq, err := strconv.Atoi(r.PathValue("seq"))
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	e, err := reg.TranscriptEntry(r.Context(), box, agentID, seq)
+	e, err := reg.TranscriptEntry(r.Context(), host, agentID, seq)
 	if errors.Is(err, pgx.ErrNoRows) {
 		http.NotFound(w, r)
 		return
@@ -201,7 +201,7 @@ func transcriptEntry(reg *fleet.Registry, w http.ResponseWriter, r *http.Request
 		item.Write(e.Item)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = entryTmpl.Execute(w, map[string]any{"Back": "/devboxes/" + box + "/agents/" + agentID + "#seq-" + strconv.Itoa(seq),
+	_ = entryTmpl.Execute(w, map[string]any{"Back": "/hosts/" + host + "/agents/" + agentID + "#seq-" + strconv.Itoa(seq),
 		"Kind": e.Kind, "Tool": e.Tool, "Seq": seq, "Texts": texts, "Item": item.String()})
 }
 

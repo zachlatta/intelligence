@@ -7,27 +7,27 @@ import (
 	"time"
 
 	"github.com/zachlatta/intelligence/internal/dbtest"
-	"github.com/zachlatta/intelligence/internal/devbox"
+	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
 var ctx = context.Background()
 
 var t1 = time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
 
-func full() devbox.Report {
-	return devbox.Report{Name: "devbox-1", Version: "c1", CollectedAt: t1,
-		Paseo: devbox.PaseoStatus{Connected: true, StatusError: "slow", Version: "0.15.3", Hostname: "devbox-1",
+func full() hostclient.Report {
+	return hostclient.Report{Name: "host-1", Version: "c1", CollectedAt: t1,
+		Paseo: hostclient.PaseoStatus{Connected: true, StatusError: "slow", Version: "0.15.3", Hostname: "host-1",
 			Listen: "0.0.0.0:6767", PID: 3029, StartedAt: t1.Add(-5 * time.Hour),
-			Providers:   []devbox.Provider{{Name: "claude", Available: true}, {Name: "pi", Error: "not installed"}},
+			Providers:   []hostclient.Provider{{Name: "claude", Available: true}, {Name: "pi", Error: "not installed"}},
 			ProvidersAt: t1.Add(-time.Minute),
-			Workspaces: []devbox.Workspace{
+			Workspaces: []hostclient.Workspace{
 				{ID: "w1", Name: "login fix", Kind: "worktree", Status: "running", Directory: "/w/w1", Project: "example/app",
 					Branch: "fix-login", Dirty: true, Additions: 12, Deletions: 3, CreatedAt: t1.Add(-2 * time.Hour),
 					ActivityAt: t1.Add(-time.Minute), LastUserMessageAt: t1.Add(-30 * time.Minute)},
 				{ID: "w2", Name: "docs", Kind: "directory", Status: "done", Directory: "/w/docs", CreatedAt: t1.Add(-48 * time.Hour)},
 				{ID: "w3", Name: "empty", Kind: "local_checkout", Status: "done", Directory: "/w/app", CreatedAt: t1.Add(-time.Hour)},
 			},
-			Agents: []devbox.Agent{
+			Agents: []hostclient.Agent{
 				{ID: "a1", WorkspaceID: "w1", Title: "Fix it", Provider: "claude", Model: "claude-opus-5-5", Thinking: "medium",
 					Status: "running", Cwd: "/w/w1", CreatedAt: t1.Add(-time.Hour), UpdatedAt: t1, LastUserMessageAt: t1.Add(-time.Minute)},
 				{ID: "a2", WorkspaceID: "w1", ParentID: "a1", Title: "Helper", Provider: "codex", Model: "gpt-6.1-sol",
@@ -36,38 +36,38 @@ func full() devbox.Report {
 			}}}
 }
 
-func record(t *testing.T, r *Registry, rep devbox.Report, at time.Time) {
+func record(t *testing.T, r *Registry, rep hostclient.Report, at time.Time) {
 	t.Helper()
 	if err := r.Record(ctx, rep, at); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func list(t *testing.T, r *Registry) []Box {
+func list(t *testing.T, r *Registry) []Host {
 	t.Helper()
-	boxes, err := r.List(ctx)
+	hosts, err := r.List(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return boxes
+	return hosts
 }
 
-func TestBoxWorkspacesAndAgentsRoundTrip(t *testing.T) {
+func TestHostWorkspacesAndAgentsRoundTrip(t *testing.T) {
 	r := New(dbtest.New(t).Owner)
 	want := full()
 	record(t, r, want, time.Now())
-	attach(t, r, "devbox-1", time.Now())
-	boxes := list(t, r)
-	if len(boxes) != 1 || !boxes[0].Online {
-		t.Fatalf("boxes = %+v", boxes)
+	attach(t, r, "host-1", time.Now())
+	hosts := list(t, r)
+	if len(hosts) != 1 || !hosts[0].Online {
+		t.Fatalf("hosts = %+v", hosts)
 	}
-	b := boxes[0]
+	b := hosts[0]
 	p, wp := b.Report.Paseo, want.Paseo
-	if b.Report.Name != "devbox-1" || b.Report.Version != "c1" || !b.Report.CollectedAt.Equal(t1) || !p.Connected ||
+	if b.Report.Name != "host-1" || b.Report.Version != "c1" || !b.Report.CollectedAt.Equal(t1) || !p.Connected ||
 		p.StatusError != "slow" || p.Version != wp.Version || p.Hostname != wp.Hostname || p.Listen != wp.Listen ||
 		p.PID != wp.PID || !p.StartedAt.Equal(wp.StartedAt) || !p.ProvidersAt.Equal(wp.ProvidersAt) ||
 		len(p.Providers) != 2 || p.Providers[1] != wp.Providers[1] {
-		t.Errorf("box = %+v", b.Report)
+		t.Errorf("host = %+v", b.Report)
 	}
 	if len(b.Workspaces) != 3 {
 		t.Fatalf("workspaces = %+v", b.Workspaces)
@@ -98,7 +98,7 @@ func TestWorkspacesWithWorkFirst(t *testing.T) {
 func TestAgentsAreRunningFirstThenNewest(t *testing.T) {
 	r := New(dbtest.New(t).Owner)
 	rep := full()
-	rep.Paseo.Agents = []devbox.Agent{
+	rep.Paseo.Agents = []hostclient.Agent{
 		{ID: "old", WorkspaceID: "w1", Status: "idle", CreatedAt: t1.Add(-3 * time.Hour)},
 		{ID: "run", WorkspaceID: "w1", Status: "running", CreatedAt: t1.Add(-4 * time.Hour)},
 		{ID: "new", WorkspaceID: "w1", Status: "idle", CreatedAt: t1.Add(-time.Hour)},
@@ -117,7 +117,7 @@ func TestAnAgentInAnUnlistedWorkspaceIsKept(t *testing.T) {
 	d := dbtest.New(t)
 	r := New(d.Owner)
 	rep := full()
-	rep.Paseo.Agents = append(rep.Paseo.Agents, devbox.Agent{ID: "a9", WorkspaceID: "gone", Status: "closed", Cwd: "/w/gone"})
+	rep.Paseo.Agents = append(rep.Paseo.Agents, hostclient.Agent{ID: "a9", WorkspaceID: "gone", Status: "closed", Cwd: "/w/gone"})
 	record(t, r, rep, time.Now())
 	var found *WorkspaceAgents
 	for _, w := range list(t, r)[0].Workspaces {
@@ -130,7 +130,7 @@ func TestAnAgentInAnUnlistedWorkspaceIsKept(t *testing.T) {
 	}
 }
 
-func TestEachReportReplacesTheBoxsWorkspacesAndAgents(t *testing.T) {
+func TestEachReportReplacesTheHostsWorkspacesAndAgents(t *testing.T) {
 	d := dbtest.New(t)
 	r := New(d.Owner)
 	record(t, r, full(), time.Now())
@@ -149,35 +149,35 @@ func TestEachReportReplacesTheBoxsWorkspacesAndAgents(t *testing.T) {
 	}
 }
 
-func TestADisconnectedBoxShowsNoStaleWork(t *testing.T) {
+func TestADisconnectedHostShowsNoStaleWork(t *testing.T) {
 	r := New(dbtest.New(t).Owner)
 	record(t, r, full(), time.Now())
-	record(t, r, devbox.Report{Name: "devbox-1", Paseo: devbox.PaseoStatus{Error: "connect: refused"}}, time.Now())
+	record(t, r, hostclient.Report{Name: "host-1", Paseo: hostclient.PaseoStatus{Error: "connect: refused"}}, time.Now())
 	b := list(t, r)[0]
 	if b.Report.Paseo.Connected || b.Report.Paseo.Error != "connect: refused" || len(b.Workspaces) != 0 {
-		t.Fatalf("box = %+v workspaces %d", b.Report.Paseo, len(b.Workspaces))
+		t.Fatalf("host = %+v workspaces %d", b.Report.Paseo, len(b.Workspaces))
 	}
 }
 
-func TestBoxesListByNameAndAreOnlineWhileStreaming(t *testing.T) {
+func TestHostsListByNameAndAreOnlineWhileStreaming(t *testing.T) {
 	r := New(dbtest.New(t).Owner)
 	now := time.Now()
-	record(t, r, devbox.Report{Name: "zeta"}, now) // reported, but no stream
-	record(t, r, devbox.Report{Name: "alpha"}, now)
+	record(t, r, hostclient.Report{Name: "zeta"}, now) // reported, but no stream
+	record(t, r, hostclient.Report{Name: "alpha"}, now)
 	attach(t, r, "alpha", now)
-	boxes := list(t, r)
-	if len(boxes) != 2 || boxes[0].Report.Name != "alpha" || boxes[1].Report.Name != "zeta" {
-		t.Fatalf("boxes = %+v", boxes)
+	hosts := list(t, r)
+	if len(hosts) != 2 || hosts[0].Report.Name != "alpha" || hosts[1].Report.Name != "zeta" {
+		t.Fatalf("hosts = %+v", hosts)
 	}
-	if !boxes[0].Online || boxes[1].Online {
-		t.Errorf("alpha online %v (want true), zeta online %v (want false)", boxes[0].Online, boxes[1].Online)
+	if !hosts[0].Online || hosts[1].Online {
+		t.Errorf("alpha online %v (want true), zeta online %v (want false)", hosts[0].Online, hosts[1].Online)
 	}
 }
 
-// attach gives box a stream, seen at at.
-func attach(t *testing.T, r *Registry, box string, at time.Time) {
+// attach gives host a stream, seen at at.
+func attach(t *testing.T, r *Registry, host string, at time.Time) {
 	t.Helper()
-	if err := r.Attach(ctx, box, "99999999-9999-4999-8999-999999999999", at); err != nil {
+	if err := r.Attach(ctx, host, "99999999-9999-4999-8999-999999999999", at); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -185,17 +185,17 @@ func attach(t *testing.T, r *Registry, box string, at time.Time) {
 func TestStatusViewsCountWork(t *testing.T) {
 	d := dbtest.New(t)
 	record(t, New(d.Owner), full(), time.Now())
-	attach(t, New(d.Owner), "devbox-1", time.Now())
+	attach(t, New(d.Owner), "host-1", time.Now())
 	var online bool
 	var nw, na, nr int
-	if err := dbtest.Reader(t, d, "devbox-1").QueryRow(ctx, "SELECT online, workspaces, agents, running_agents FROM devbox_status").Scan(&online, &nw, &na, &nr); err != nil {
+	if err := dbtest.Reader(t, d, "host-1").QueryRow(ctx, "SELECT online, workspaces, agents, running_agents FROM host_status").Scan(&online, &nw, &na, &nr); err != nil {
 		t.Fatal(err)
 	}
 	if !online || nw != 3 || na != 3 || nr != 1 {
-		t.Errorf("devbox_status: online %v workspaces %d agents %d running %d", online, nw, na, nr)
+		t.Errorf("host_status: online %v workspaces %d agents %d running %d", online, nw, na, nr)
 	}
 	var wa, wr int
-	if err := dbtest.Reader(t, d, "devbox-1").QueryRow(ctx, "SELECT agents, running_agents FROM workspace_status WHERE id = 'w1'").Scan(&wa, &wr); err != nil {
+	if err := dbtest.Reader(t, d, "host-1").QueryRow(ctx, "SELECT agents, running_agents FROM workspace_status WHERE id = 'w1'").Scan(&wa, &wr); err != nil {
 		t.Fatal(err)
 	}
 	if wa != 2 || wr != 1 {
@@ -203,16 +203,16 @@ func TestStatusViewsCountWork(t *testing.T) {
 	}
 }
 
-func TestDeletingABoxDeletesItsWorkspacesAndAgents(t *testing.T) {
+func TestDeletingAHostDeletesItsWorkspacesAndAgents(t *testing.T) {
 	d := dbtest.New(t)
 	record(t, New(d.Owner), full(), time.Now())
-	if _, err := d.Owner.Exec(ctx, "DELETE FROM devboxes"); err != nil {
+	if _, err := d.Owner.Exec(ctx, "DELETE FROM hosts"); err != nil {
 		t.Fatal(err)
 	}
 	var n int
 	d.Owner.QueryRow(ctx, "SELECT (SELECT count(*) FROM workspaces) + (SELECT count(*) FROM agents)").Scan(&n)
 	if n != 0 {
-		t.Fatalf("%d rows left after their box was deleted", n)
+		t.Fatalf("%d rows left after their host was deleted", n)
 	}
 }
 

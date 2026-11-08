@@ -34,7 +34,7 @@ func TestScanFlags(t *testing.T) {
 		{"private-ip", "host 192.168" + ".1.20"},
 		{"private-ip", "tailnet peer 100.101" + ".102.103"},
 		{"private-ip", "tailnet v6 fd7a:115c" + ":a1e0::1"},
-		{"tailnet-name", "https://box.tail1234" + ".ts" + ".net/"},
+		{"tailnet-name", "https://host.tail1234" + ".ts" + ".net/"},
 		{"home-path", "cd /home" + "/zach/dev"},
 		{"home-path", "open /Users" + "/zach/Desktop"},
 		{"email", "mail zach" + "@hackclub.com"},

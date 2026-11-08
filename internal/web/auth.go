@@ -146,9 +146,9 @@ func accountError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, accounts.ErrBadCredentials), errors.Is(err, accounts.ErrNoSession):
 		http.Error(w, err.Error(), http.StatusUnauthorized)
-	case errors.Is(err, accounts.ErrTaken), errors.Is(err, accounts.ErrBoxTaken):
+	case errors.Is(err, accounts.ErrTaken), errors.Is(err, accounts.ErrHostTaken):
 		http.Error(w, err.Error(), http.StatusConflict)
-	case errors.Is(err, accounts.ErrNoSuchCode), errors.Is(err, accounts.ErrNoSuchEnrollment), errors.Is(err, accounts.ErrNoSuchBox):
+	case errors.Is(err, accounts.ErrNoSuchCode), errors.Is(err, accounts.ErrNoSuchEnrollment), errors.Is(err, accounts.ErrNoSuchHost):
 		http.Error(w, err.Error(), http.StatusNotFound)
 	default:
 		log.Printf("accounts: %v", err)
