@@ -8,6 +8,15 @@ import (
 
 func env(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
 
+func TestVersionPrefersTheStampedCommit(t *testing.T) {
+	old := buildCommit
+	t.Cleanup(func() { buildCommit = old })
+	buildCommit = "stamped"
+	if got := version(env(map[string]string{"SOURCE_COMMIT": "deadbeef"})); got != "stamped" {
+		t.Fatalf("version = %q, want the commit stamped at build", got)
+	}
+}
+
 func TestVersionPrefersSourceCommit(t *testing.T) {
 	if got := version(env(map[string]string{"SOURCE_COMMIT": "deadbeef"})); got != "deadbeef" {
 		t.Fatalf("version = %q, want deadbeef", got)
@@ -30,7 +39,7 @@ func TestAddrDefaultsToPort8080(t *testing.T) {
 }
 
 func TestDevboxConfigNeedsServerAndToken(t *testing.T) {
-	host := func() (string, error) { return "mew-dev", nil }
+	host := func() (string, error) { return "devbox-1", nil }
 	if _, err := devboxConfig(env(map[string]string{"DEVBOX_TOKEN": "t"}), host); err == nil || !strings.Contains(err.Error(), "DEVBOX_SERVER") {
 		t.Errorf("err = %v, want DEVBOX_SERVER missing", err)
 	}
@@ -44,7 +53,7 @@ func TestDevboxConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Name != "mew-dev" || c.Interval != 15*time.Second || c.Server != "https://x" || c.Token != "t" {
+	if c.Name != "devbox-1" || c.Interval != 15*time.Second || c.Server != "https://x" || c.Token != "t" {
 		t.Errorf("config = %+v", c)
 	}
 }
@@ -61,5 +70,40 @@ func TestDevboxConfigOverrides(t *testing.T) {
 	if _, err := devboxConfig(env(map[string]string{"DEVBOX_SERVER": "https://x", "DEVBOX_TOKEN": "t", "DEVBOX_NAME": "bad name"}),
 		func() (string, error) { return "h", nil }); err == nil {
 		t.Errorf("an invalid DEVBOX_NAME should be refused")
+	}
+}
+
+func TestServerConfigNeedsBothDatabaseURLs(t *testing.T) {
+	if _, err := serverConfig(env(map[string]string{"READONLY_DATABASE_URL": "postgres://ro:p@db/app"})); err == nil || !strings.Contains(err.Error(), "DATABASE_URL") {
+		t.Errorf("err = %v, want DATABASE_URL missing", err)
+	}
+	if _, err := serverConfig(env(map[string]string{"DATABASE_URL": "postgres://app:p@db/app"})); err == nil || !strings.Contains(err.Error(), "READONLY_DATABASE_URL") {
+		t.Errorf("err = %v, want READONLY_DATABASE_URL missing", err)
+	}
+	if _, err := serverConfig(env(map[string]string{"DATABASE_URL": "postgres://app:p@db/app", "READONLY_DATABASE_URL": "postgres://db/app"})); err == nil {
+		t.Errorf("a read-only URL without a user and password should be refused")
+	}
+}
+
+func TestServerConfigReadsTheReadonlyRoleFromItsURL(t *testing.T) {
+	c, err := serverConfig(env(map[string]string{"DATABASE_URL": "postgres://app:p@db/app", "READONLY_DATABASE_URL": "postgres://intelligence_ro:s3cr%40t@db/app?sslmode=disable"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ReadonlyRole != "intelligence_ro" || c.ReadonlyPassword != "s3cr@t" || c.BinDir != "/usr/local/share/intelligence/devbox" {
+		t.Errorf("config = %+v", c)
+	}
+}
+
+func TestDevboxAutoUpdateCanBeTurnedOff(t *testing.T) {
+	base := map[string]string{"DEVBOX_SERVER": "https://x", "DEVBOX_TOKEN": "t"}
+	c, _ := devboxConfig(env(base), func() (string, error) { return "h", nil })
+	if !c.AutoUpdate {
+		t.Errorf("auto-update should default on")
+	}
+	base["DEVBOX_AUTOUPDATE"] = "off"
+	c, _ = devboxConfig(env(base), func() (string, error) { return "h", nil })
+	if c.AutoUpdate {
+		t.Errorf("DEVBOX_AUTOUPDATE=off should turn it off")
 	}
 }

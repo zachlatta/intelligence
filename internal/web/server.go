@@ -3,6 +3,7 @@ package web
 
 import (
 	"cmp"
+	"context"
 	"crypto/subtle"
 	_ "embed"
 	"encoding/json"
@@ -14,15 +15,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/zachlatta/intelligence/internal/devbox"
 	"github.com/zachlatta/intelligence/internal/fleet"
 )
 
-// Config is what the server needs.
+// Config is what the server needs. All app state is in DB, and Readonly reads it for the SQL API.
 type Config struct {
-	Version     string          // the deployed commit, shown on every page and by /healthz
-	Fleet       *fleet.Registry // dev boxes and their latest reports; nil = a fresh one
-	DevboxToken string          // the bearer token dev boxes report with; "" refuses every report
+	Version     string        // the deployed commit, shown on every page and by /healthz
+	DB          *pgxpool.Pool // the app's database, migrated (db.Migrate)
+	Readonly    *pgxpool.Pool // the same database as the read-only role (db.EnsureReadonlyRole)
+	DevboxToken string        // the bearer token dev boxes report with; "" refuses every report
+	SQLTimeout  time.Duration // per SQL API query; default 5s
+	BinDir      string        // dev box binaries, intelligence-<os>-<arch>, served for self-update; "" = none
 	Now         func() time.Time
 }
 
@@ -42,35 +48,61 @@ func New(cfg Config) http.Handler {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	if cfg.Fleet == nil {
-		cfg.Fleet = fleet.New(cfg.Now, time.Minute)
+	if cfg.SQLTimeout == 0 {
+		cfg.SQLTimeout = 5 * time.Second
 	}
+	reg := fleet.New(cfg.DB)
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, map[string]string{"status": "ok", "version": cfg.Version})
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+		if err := cfg.DB.Ping(ctx); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "database unreachable", "version": cfg.Version})
+			return
+		}
+		writeJSON(w, map[string]string{"status": "ok", "version": cfg.Version, "database": "ok"})
 	})
-	mux.HandleFunc("GET /api/devboxes", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, cfg.Fleet.List())
+	mux.HandleFunc("GET /api/devboxes", func(w http.ResponseWriter, r *http.Request) {
+		list, err := reg.List(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, list)
 	})
 	mux.HandleFunc("POST "+devbox.ReportPath, func(w http.ResponseWriter, r *http.Request) {
-		report(cfg, w, r)
+		report(cfg, reg, w, r)
 	})
+	mux.HandleFunc("GET /api/sql", sqlHandler(cfg))
+	mux.HandleFunc("POST /api/sql", sqlHandler(cfg))
+	mux.Handle("GET /api/devbox/binary/{os}/{arch}", binaries(cfg.BinDir))
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		list, err := reg.List(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_ = indexTmpl.Execute(w, map[string]any{
 			"Version": cfg.Version,
 			"Short":   short(cfg.Version),
 			// set by tailscale serve for requests from a tailnet user
 			"User":  cmp.Or(r.Header.Get("Tailscale-User-Name"), r.Header.Get("Tailscale-User-Login")),
-			"Boxes": cfg.Fleet.List(),
+			"Boxes": list,
 			"Now":   cfg.Now(),
 		})
 	})
-	return mux
+	// every response names the server's version, so a dev box sees on any call that it should update
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(devbox.VersionHeader, cfg.Version)
+		mux.ServeHTTP(w, r)
+	})
 }
 
 // report records a dev box's report, if it carries the dev-box token.
-func report(cfg Config, w http.ResponseWriter, r *http.Request) {
+func report(cfg Config, reg *fleet.Registry, w http.ResponseWriter, r *http.Request) {
 	if cfg.DevboxToken == "" {
 		http.Error(w, "dev box reports are not configured on this server", http.StatusServiceUnavailable)
 		return
@@ -93,7 +125,10 @@ func report(cfg Config, w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad dev box name", http.StatusBadRequest)
 		return
 	}
-	cfg.Fleet.Record(rep)
+	if err := reg.Record(r.Context(), rep, cfg.Now()); err != nil {
+		http.Error(w, "could not store the report: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

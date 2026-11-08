@@ -121,28 +121,30 @@ func (c *Collector) Paseo(ctx context.Context) PaseoStatus {
 	return s
 }
 
-// Send POSTs r to the server at base with the dev-box token.
-func Send(ctx context.Context, client *http.Client, base, token string, r Report) error {
+// SendReport POSTs r to the server at base with the dev-box token. It returns the server's version
+// (VersionHeader), also when the server refuses the report, so a box can update to a fixed server.
+func SendReport(ctx context.Context, client *http.Client, base, token string, r Report) (string, error) {
 	body, err := json.Marshal(r)
 	if err != nil {
-		return err
+		return "", err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(base, "/")+ReportPath, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
+	v := resp.Header.Get(VersionHeader)
 	if resp.StatusCode/100 != 2 {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("report refused: %s: %s", resp.Status, strings.TrimSpace(string(msg)))
+		return v, fmt.Errorf("report refused: %s: %s", resp.Status, strings.TrimSpace(string(msg)))
 	}
-	return nil
+	return v, nil
 }
 
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)

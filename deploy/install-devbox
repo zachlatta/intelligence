@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Install or update the dev box client on this machine, as a systemd user service.
+# Install the dev box client on this machine, as a systemd user service. After that it keeps itself
+# on the server's version (self-update), so this is needed once per box.
 # Run from a checkout of this repo, as the user whose Paseo daemon it reports:
 #
 #   deploy/install-devbox
@@ -23,12 +24,13 @@ fi
 
 rev=$(git -C "$repo" rev-parse HEAD)
 mkdir -p "$HOME/.local/bin" "$unit_dir"
-(cd "$repo" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$HOME/.local/bin/intelligence.new" ./cmd/intelligence)
+(cd "$repo" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.buildCommit=$rev" \
+  -o "$HOME/.local/bin/intelligence.new" ./cmd/intelligence)
 mv "$HOME/.local/bin/intelligence.new" "$HOME/.local/bin/intelligence"
-# the binary reports its commit as SOURCE_COMMIT, like the server's container
 install -m 644 "$repo/deploy/intelligence-devbox.service" "$unit_dir/intelligence-devbox.service"
-mkdir -p "$unit_dir/intelligence-devbox.service.d"
-printf '[Service]\nEnvironment=SOURCE_COMMIT=%s\n' "$rev" > "$unit_dir/intelligence-devbox.service.d/version.conf"
+# earlier installs set the version in a drop-in; the binary carries it now
+rm -f "$unit_dir/intelligence-devbox.service.d/version.conf"
+rmdir "$unit_dir/intelligence-devbox.service.d" 2>/dev/null || true
 
 systemctl --user daemon-reload
 systemctl --user enable intelligence-devbox.service >/dev/null

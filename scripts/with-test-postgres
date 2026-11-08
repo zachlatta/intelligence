@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Run a command with TEST_DATABASE_URL pointing at a throwaway Postgres 18 in Docker, removed after.
+#   scripts/with-test-postgres go test -race ./...
+set -euo pipefail
+name="intelligence-test-pg-$$"
+docker run -d --rm --name "$name" -e POSTGRES_PASSWORD=test -p 127.0.0.1::5432 postgres:18-alpine >/dev/null
+trap 'docker stop "$name" >/dev/null 2>&1 || true' EXIT
+for _ in $(seq 1 60); do
+  docker exec "$name" pg_isready -U postgres -h 127.0.0.1 >/dev/null 2>&1 && break
+  sleep 0.5
+done
+docker exec "$name" pg_isready -U postgres -h 127.0.0.1 >/dev/null
+port=$(docker port "$name" 5432/tcp | head -1 | sed 's/.*://')
+export TEST_DATABASE_URL="postgres://postgres:test@127.0.0.1:${port}/postgres?sslmode=disable"
+"$@"

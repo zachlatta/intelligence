@@ -1,10 +1,11 @@
 .PHONY: test run docker
 
-# what every commit must pass
+# What every commit must pass. Database tests need TEST_DATABASE_URL (a superuser URL); without it,
+# a throwaway Postgres runs in Docker for the length of the tests.
 test:
 	@test -z "$$(gofmt -l .)" || { gofmt -l .; echo "gofmt needed"; exit 1; }
 	go vet ./...
-	go test -race ./...
+	@if [ -n "$$TEST_DATABASE_URL" ]; then go test -race ./...; else scripts/with-test-postgres go test -race ./...; fi
 
 run:
 	go run ./cmd/intelligence

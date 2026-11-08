@@ -125,7 +125,7 @@ func TestSendPostsReportWithBearerToken(t *testing.T) {
 	}))
 	defer srv.Close()
 	r := Report{Name: "devbox-1", CollectedAt: t0, Version: "v1", Paseo: PaseoStatus{Daemon: "running"}}
-	if err := Send(context.Background(), srv.Client(), srv.URL+"/", "secret", r); err != nil {
+	if _, err := SendReport(context.Background(), srv.Client(), srv.URL+"/", "secret", r); err != nil {
 		t.Fatal(err)
 	}
 	if path != ReportPath || auth != "Bearer secret" || !strings.HasPrefix(ctype, "application/json") {
@@ -141,14 +141,14 @@ func TestSendFailsOnRejectedReport(t *testing.T) {
 		http.Error(w, "bad token", http.StatusUnauthorized)
 	}))
 	defer srv.Close()
-	err := Send(context.Background(), srv.Client(), srv.URL, "wrong", Report{Name: "x"})
+	_, err := SendReport(context.Background(), srv.Client(), srv.URL, "wrong", Report{Name: "x"})
 	if err == nil || !strings.Contains(err.Error(), "401") || !strings.Contains(err.Error(), "bad token") {
 		t.Fatalf("err = %v, want the status and the server's message", err)
 	}
 }
 
 func TestValidName(t *testing.T) {
-	for _, ok := range []string{"mew-dev", "box_1", "a.b"} {
+	for _, ok := range []string{"devbox-1", "box_1", "a.b"} {
 		if !ValidName(ok) {
 			t.Errorf("%q should be valid", ok)
 		}
