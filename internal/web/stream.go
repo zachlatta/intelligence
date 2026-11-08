@@ -2,13 +2,13 @@ package web
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -18,53 +18,14 @@ import (
 	"github.com/zachlatta/intelligence/internal/fleet"
 )
 
-// hub knows which boxes have a stream to this server, so a new command goes down at once. A
-// command queued on another server instance (during a deploy) is picked up by the poll instead.
-type hub struct {
-	mu    sync.Mutex
-	boxes map[string]*boxStream
-}
-
-type boxStream struct {
-	wake   chan struct{}
-	cancel context.CancelFunc
-}
-
-// attach makes s box's stream, ending the one before it (a box that dialed again).
-func (h *hub) attach(box string, s *boxStream) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.boxes == nil {
-		h.boxes = map[string]*boxStream{}
-	}
-	if old := h.boxes[box]; old != nil {
-		old.cancel()
-	}
-	h.boxes[box] = s
-}
-
-func (h *hub) detach(box string, s *boxStream) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.boxes[box] == s {
-		delete(h.boxes, box)
-	}
-}
-
-// wake tells box's stream, if it is here, that it has a command waiting.
-func (h *hub) wake(box string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if s := h.boxes[box]; s != nil {
-		select {
-		case s.wake <- struct{}{}:
-		default:
-		}
-	}
-}
+// streamPing is how often the server pings each box's stream: it notices a box that went away,
+// and records that the box is still there (it is online while seen within a minute).
+const streamPing = 20 * time.Second
 
 // stream serves a box's stream: hello, then the box's frames, each acked, while commands go down.
-func stream(cfg Config, reg *fleet.Registry, h *hub) http.HandlerFunc {
+// The stream takes the box over from any stream it had, on this server instance or another, and
+// ends when a newer one does.
+func stream(cfg Config, reg *fleet.Registry, changes *fleet.Changes) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !devboxAuthorized(cfg, w, r) {
 			return
@@ -87,17 +48,39 @@ func stream(cfg Config, reg *fleet.Registry, h *hub) http.HandlerFunc {
 		conn.SetReadLimit(devbox.MaxFrame)
 		ctx, cancel := context.WithCancel(r.Context())
 		defer cancel()
-		s := &boxStream{wake: make(chan struct{}, 1), cancel: cancel}
-		h.attach(box, s)
-		defer h.detach(box, s)
-		if err := devbox.WriteFrame(ctx, conn, devbox.Frame{Type: devbox.HelloFrame,
-			Hello: &devbox.Hello{Version: cfg.Version, Cursors: cursors}}); err != nil {
+		// subscribe before attaching, so a newer stream attaching meanwhile is not missed
+		replaced, stop := changes.Subscribe(fleet.StreamTopic(box))
+		defer stop()
+		id := newStreamID()
+		if err := reg.Attach(ctx, box, id, cfg.Now()); err != nil {
+			log.Printf("stream %s: %v", box, err)
+			return
+		}
+		defer func() {
+			dctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := reg.Detach(dctx, box, id); err != nil {
+				log.Printf("stream %s: %v", box, err)
+			}
+		}()
+		if err := devbox.WriteFrame(ctx, conn, devbox.Frame{Type: devbox.HelloFrame, Hello: &devbox.Hello{Cursors: cursors}}); err != nil {
 			return
 		}
 		go func() {
 			defer cancel()
-			if err := sendCommands(ctx, cfg, reg, conn, box, s.wake); err != nil && ctx.Err() == nil {
+			if err := sendCommands(ctx, cfg, reg, changes, conn, box, id, replaced); err != nil && ctx.Err() == nil {
 				log.Printf("stream %s: %v", box, err)
+			}
+		}()
+		// transcript batches are stored on their own, in order, so a large one does not hold up
+		// the box's reports and command updates behind it
+		transcripts := make(chan devbox.Frame, 16)
+		defer close(transcripts)
+		go func() {
+			for f := range transcripts {
+				if err := devbox.WriteFrame(ctx, conn, receive(ctx, cfg, reg, box, f)); err != nil {
+					cancel()
+				}
 			}
 		}()
 		for {
@@ -105,16 +88,32 @@ func stream(cfg Config, reg *fleet.Registry, h *hub) http.HandlerFunc {
 			if err != nil {
 				return // the box went away, or dialed again
 			}
-			ack := receive(ctx, cfg, reg, h, box, f)
-			if err := devbox.WriteFrame(ctx, conn, ack); err != nil {
+			if f.Type == devbox.TranscriptFrame {
+				select {
+				case transcripts <- f:
+				case <-ctx.Done():
+					return
+				}
+				continue
+			}
+			if err := devbox.WriteFrame(ctx, conn, receive(ctx, cfg, reg, box, f)); err != nil {
 				return
 			}
 		}
 	}
 }
 
+// newStreamID is a random (version 4) uuid naming one stream.
+func newStreamID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+}
+
 // receive stores one of the box's frames and says how it went.
-func receive(ctx context.Context, cfg Config, reg *fleet.Registry, h *hub, box string, f devbox.Frame) devbox.Frame {
+func receive(ctx context.Context, cfg Config, reg *fleet.Registry, box string, f devbox.Frame) devbox.Frame {
 	ack := devbox.Frame{Type: devbox.AckFrame, ID: f.ID}
 	var err error
 	switch {
@@ -154,12 +153,14 @@ func receive(ctx context.Context, cfg Config, reg *fleet.Registry, h *hub, box s
 }
 
 // sendCommands sends the box's commands down its stream: on connect every command without a
-// result (it may not have arrived), then each new one when woken or polled. It also pings, so a
-// stream whose box went away ends.
-func sendCommands(ctx context.Context, cfg Config, reg *fleet.Registry, conn *websocket.Conn, box string, wake <-chan struct{}) error {
-	poll := time.NewTicker(cfg.CommandPoll)
-	defer poll.Stop()
-	ping := time.NewTicker(30 * time.Second)
+// result (it may not have arrived), then each new one as it is queued, on any server instance.
+// It pings, so a stream whose box went away ends, and it ends the stream once a newer one has
+// taken the box (replaced).
+func sendCommands(ctx context.Context, cfg Config, reg *fleet.Registry, changes *fleet.Changes, conn *websocket.Conn,
+	box, id string, replaced <-chan struct{}) error {
+	queued, stop := changes.Subscribe(fleet.CommandsTopic(box))
+	defer stop()
+	ping := time.NewTicker(streamPing)
 	defer ping.Stop()
 	unfinished := true
 	for {
@@ -177,8 +178,9 @@ func sendCommands(ctx context.Context, cfg Config, reg *fleet.Registry, conn *we
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-wake:
-		case <-poll.C:
+		case <-queued:
+			continue
+		case <-replaced:
 		case <-ping.C:
 			pctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			err := conn.Ping(pctx)
@@ -186,6 +188,15 @@ func sendCommands(ctx context.Context, cfg Config, reg *fleet.Registry, conn *we
 			if err != nil {
 				return fmt.Errorf("ping: %w", err)
 			}
+		}
+		// seen: and still the box's stream?
+		current, err := reg.Seen(ctx, box, id, cfg.Now())
+		if err != nil {
+			return err
+		}
+		if !current {
+			conn.Close(websocket.StatusPolicyViolation, "a newer stream took over")
+			return nil
 		}
 	}
 }
@@ -197,7 +208,7 @@ const maxCommand = 1 << 20
 const maxCommandTTL = 24 * time.Hour
 
 // enqueueCommand queues a command for a box: {"kind", "args", "ttl"}. It needs the operator token.
-func enqueueCommand(cfg Config, reg *fleet.Registry, h *hub) http.HandlerFunc {
+func enqueueCommand(cfg Config, reg *fleet.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !operatorAuthorized(cfg, w, r) {
 			return
@@ -236,7 +247,6 @@ func enqueueCommand(cfg Config, reg *fleet.Registry, h *hub) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		h.wake(box)
 		w.Header().Set("Location", "/api/devboxes/"+box+"/commands/"+c.ID)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
@@ -248,7 +258,7 @@ func enqueueCommand(cfg Config, reg *fleet.Registry, h *hub) http.HandlerFunc {
 const maxCommandWait = time.Minute
 
 // showCommand returns a command; with ?wait=30s it waits up to that long for it to finish.
-func showCommand(reg *fleet.Registry) http.HandlerFunc {
+func showCommand(reg *fleet.Registry, changes *fleet.Changes) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var wait time.Duration
 		if v := r.URL.Query().Get("wait"); v != "" {
@@ -261,8 +271,11 @@ func showCommand(reg *fleet.Registry) http.HandlerFunc {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), wait)
 		defer cancel()
+		id := r.PathValue("id")
+		changed, stop := changes.Subscribe(fleet.CommandTopic(id)) // before reading: no change is missed
+		defer stop()
 		for {
-			c, err := reg.Command(r.Context(), r.PathValue("id"))
+			c, err := reg.Command(r.Context(), id)
 			if errors.Is(err, pgx.ErrNoRows) || (err == nil && c.Box != r.PathValue("box")) {
 				http.Error(w, "no such command", http.StatusNotFound)
 				return
@@ -277,7 +290,7 @@ func showCommand(reg *fleet.Registry) http.HandlerFunc {
 			}
 			select {
 			case <-ctx.Done():
-			case <-time.After(250 * time.Millisecond):
+			case <-changed:
 			}
 		}
 	}

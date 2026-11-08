@@ -146,7 +146,7 @@ type devboxSettings struct {
 	Server     string        // DEVBOX_SERVER: the server's base URL
 	Token      string        // DEVBOX_TOKEN: the server's dev-box token
 	Name       string        // DEVBOX_NAME: this box's name; default the lowercased hostname
-	Interval   time.Duration // DEVBOX_INTERVAL: time between reports; default 15s
+	Interval   time.Duration // DEVBOX_INTERVAL: how often to re-read the daemon's status; default 15s
 	PaseoHome  string        // DEVBOX_PASEO_HOME: the Paseo daemon's home; default ~/.paseo
 	AutoUpdate bool          // DEVBOX_AUTOUPDATE: "off" keeps this binary; default on
 }
@@ -183,136 +183,37 @@ func devboxConfig(getenv func(string) string, hostname func() (string, error)) (
 	return c, nil
 }
 
-// runDevbox follows the box's Paseo daemon over its protocol and holds one stream to the server.
-// Up the stream go reports (within a second of a change, and every interval, which also re-reads
-// the daemon's status), the transcripts of loaded agents that changed (every 2 seconds while one
-// is running) and command results; down it come the server's commands, which run against the
-// daemon. The box updates itself to the server's version when they differ (at most once a minute).
+// runDevbox runs the dev box client (devbox.Box): it follows the box's Paseo daemon and holds one
+// stream to the server, for reports, transcripts, plan usage and the server's commands, and stays
+// on the server's version.
 func runDevbox(ctx context.Context) error {
 	c, err := devboxConfig(os.Getenv, os.Hostname)
 	if err != nil {
 		return err
 	}
 	v := version(os.Getenv)
-	w := &devbox.Watcher{Dial: func(ctx context.Context) (*paseo.Client, error) {
-		// re-read each time: the daemon's listen address and credential change when it restarts
-		t, err := paseo.LocalTarget(c.PaseoHome, "intelligence-devbox")
-		if err != nil {
-			return nil, err
-		}
-		return paseo.Dial(ctx, t)
-	}}
-	go w.Run(ctx)
-	var up *devbox.Updater
+	b := &devbox.Box{Name: c.Name, Version: v, StatusEvery: c.Interval,
+		Watcher: &devbox.Watcher{Dial: func(ctx context.Context) (*paseo.Client, error) {
+			// re-read each time: the daemon's listen address and credential change when it restarts
+			t, err := paseo.LocalTarget(c.PaseoHome, "intelligence-devbox")
+			if err != nil {
+				return nil, err
+			}
+			return paseo.Dial(ctx, t)
+		}},
+		Link: &devbox.Link{Server: c.Server, Token: c.Token, Box: c.Name}}
 	if c.AutoUpdate {
-		if up, err = newUpdater(c, v); err != nil {
+		if up, err := newUpdater(c, v); err != nil {
 			log.Printf("self-update off: %v", err)
+		} else {
+			b.Update = up.Maybe
 		}
 	}
-	versions := make(chan string, 1)
-	link := &devbox.Link{Server: c.Server, Token: c.Token, Box: c.Name, ServerVersion: func(sv string) {
-		select {
-		case versions <- sv:
-		default:
-		}
-	}}
-	go link.Run(ctx)
-	runner := &devbox.Runner{Exec: w.Execute, Report: link.Update}
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case cmd := <-link.Commands():
-				log.Printf("command %s: %s", cmd.ID, cmd.Kind)
-				runner.Handle(ctx, cmd)
-			}
-		}
-	}()
 	// every 5 minutes: each plan's usage, per login, from each provider's own meter
 	home, _ := os.UserHomeDir()
-	plans := &usage.Reader{Home: home}
-	go (&devbox.UsageSync{Read: plans.Read, Send: link.Usage}).Run(ctx)
-	transcripts := &devbox.TranscriptSync{Box: c.Name, Timeline: w.Timeline, Cursors: link.TranscriptCursors, Send: link.Transcript}
-	log.Printf("intelligence devbox %s streaming as %s to %s (self-update %v)", v, c.Name, c.Server, up != nil)
-	heartbeat := time.NewTicker(c.Interval)
-	defer heartbeat.Stop()
-	live := time.NewTicker(2 * time.Second)
-	defer live.Stop()
-	lastErr, lastLinkErr, lastSyncErr := "", "", ""
-	for {
-		report := true
-		select {
-		case <-ctx.Done():
-			return nil
-		case sv := <-versions:
-			if up != nil {
-				if err := up.Maybe(ctx, sv); err != nil {
-					log.Printf("self-update failed: %v", err)
-				}
-			}
-			continue
-		case <-link.Connected():
-			log.Printf("stream to %s: connected", c.Server)
-			transcripts.Reset() // the server's copies may have changed while the stream was down
-		case <-heartbeat.C:
-			w.RefreshStatus(ctx)
-		case <-w.Changed():
-			// a burst of updates (an agent's turn starting, its workspace moving) goes in one report
-			select {
-			case <-ctx.Done():
-				return nil
-			case <-time.After(time.Second):
-			}
-		case <-live.C:
-			report = false // between reports, keep running agents' transcripts current
-		}
-		snap := w.Snapshot()
-		if snap.Error != lastErr {
-			if snap.Error != "" {
-				log.Printf("paseo daemon: %s", snap.Error)
-			} else {
-				log.Printf("paseo daemon: connected")
-			}
-			lastErr = snap.Error
-		}
-		if !report && !anyRunning(snap.Agents) {
-			continue
-		}
-		var err error
-		if report {
-			sendCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			err = link.Report(sendCtx, devbox.Report{Name: c.Name, Version: v, Paseo: snap, CollectedAt: time.Now()})
-			cancel()
-			if msg := fmt.Sprint(err); err != nil && msg != lastLinkErr && ctx.Err() == nil {
-				log.Printf("report failed: %v (stream: %s)", err, link.Err())
-				lastLinkErr = msg
-			} else if err == nil && lastLinkErr != "" {
-				log.Printf("reporting again")
-				lastLinkErr = ""
-			}
-		}
-		if snap.Connected && err == nil {
-			syncCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-			serr := transcripts.Sync(syncCtx, snap.Agents)
-			cancel()
-			if msg := fmt.Sprint(serr); serr != nil && msg != lastSyncErr && ctx.Err() == nil {
-				log.Printf("transcript sync: %v", serr)
-				lastSyncErr = msg
-			} else if serr == nil {
-				lastSyncErr = ""
-			}
-		}
-	}
-}
-
-func anyRunning(agents []devbox.Agent) bool {
-	for _, a := range agents {
-		if a.Status == "running" {
-			return true
-		}
-	}
-	return false
+	b.Usage = &devbox.UsageSync{Read: (&usage.Reader{Home: home}).Read}
+	log.Printf("intelligence devbox %s streaming as %s to %s (self-update %v)", v, c.Name, c.Server, b.Update != nil)
+	return b.Run(ctx)
 }
 
 func newUpdater(c devboxSettings, current string) (*devbox.Updater, error) {

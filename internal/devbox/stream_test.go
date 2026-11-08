@@ -24,6 +24,8 @@ type streamServer struct {
 	got    []Frame
 	conns  []*websocket.Conn
 	refuse bool                // answer 401 instead of upgrading
+	stall  bool                // after the hello, stop reading (and so answering pings), as a hung server does
+	async  bool                // answer each frame on its own goroutine, so a slow answer holds up no other
 	answer func(f Frame) Frame // the ack for a box frame; nil never acks
 }
 
@@ -51,8 +53,15 @@ func newStreamServer(t *testing.T) *streamServer {
 		s.conns = append(s.conns, c)
 		s.mu.Unlock()
 		ctx := r.Context()
-		WriteFrame(ctx, c, Frame{Type: HelloFrame, Hello: &Hello{Version: "srv-v2",
+		WriteFrame(ctx, c, Frame{Type: HelloFrame, Hello: &Hello{
 			Cursors: map[string]TranscriptCursor{"a1": {Epoch: "e1", LastSeqStart: 4, LastSeqEnd: 5}}}})
+		s.mu.Lock()
+		stall := s.stall
+		s.mu.Unlock()
+		if stall {
+			<-ctx.Done()
+			return
+		}
 		for {
 			f, err := ReadFrame(ctx, c)
 			if err != nil {
@@ -60,9 +69,12 @@ func newStreamServer(t *testing.T) *streamServer {
 			}
 			s.mu.Lock()
 			s.got = append(s.got, f)
-			answer := s.answer
+			answer, async := s.answer, s.async
 			s.mu.Unlock()
-			if answer != nil {
+			switch {
+			case answer != nil && async:
+				go func() { WriteFrame(ctx, c, answer(f)) }()
+			case answer != nil:
 				WriteFrame(ctx, c, answer(f))
 			}
 		}
@@ -191,6 +203,39 @@ func TestLinkRedialsWhenTheServerStopsAnswering(t *testing.T) {
 	s.mu.Unlock()
 	if n < 2 {
 		t.Errorf("%d connections, want a fresh one after the silent server", n)
+	}
+}
+
+// frames are the box frames of one type the server has received.
+func (s *streamServer) frames(typ string) []Frame {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Frame
+	for _, f := range s.got {
+		if f.Type == typ {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func (s *streamServer) connections() int { s.mu.Lock(); defer s.mu.Unlock(); return len(s.conns) }
+
+// TestLinkPingsAHungServer: a box with nothing to send still notices a server that stopped
+// answering, and dials again.
+func TestLinkPingsAHungServer(t *testing.T) {
+	s := newStreamServer(t)
+	s.stall = true
+	l := &Link{Server: s.srv.URL, Token: "tok", Box: "box", RetryEvery: 20 * time.Millisecond, PingEvery: 50 * time.Millisecond,
+		AckTimeout: 200 * time.Millisecond}
+	go l.Run(t.Context())
+	connected(t, l)
+	deadline := time.Now().Add(5 * time.Second)
+	for s.connections() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("never dialed again")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

@@ -53,10 +53,9 @@ const (
 	AckNotYet = "not_yet" // the server does not know the agent yet (ErrNotYet)
 )
 
-// Hello is what the server says first on each stream: its version and where its copies of the
-// box's transcripts end.
+// Hello is what the server says first on each stream: where its copies of the box's transcripts
+// end. (Its version comes in the dial's response header, which a refused dial has too.)
 type Hello struct {
-	Version string                      `json:"version"`
 	Cursors map[string]TranscriptCursor `json:"cursors"`
 }
 
@@ -79,6 +78,7 @@ type Link struct {
 	HTTP               *http.Client  // for the dial
 	RetryEvery         time.Duration // between dials; default 5s
 	AckTimeout         time.Duration // a frame not acked in this long drops the stream; default 30s
+	PingEvery          time.Duration // ping the server this often; one not answered in AckTimeout drops the stream; default 30s
 	// ServerVersion is called with the server's version after every dial, also a refused one, so
 	// a box can update to the server it cannot talk to.
 	ServerVersion func(v string)
@@ -104,6 +104,9 @@ func (l *Link) init() {
 		}
 		if l.AckTimeout == 0 {
 			l.AckTimeout = 30 * time.Second
+		}
+		if l.PingEvery == 0 {
+			l.PingEvery = 30 * time.Second
 		}
 		if l.HTTP == nil {
 			l.HTTP = http.DefaultClient
@@ -192,6 +195,7 @@ func (l *Link) session(ctx context.Context) error {
 		l.mu.Unlock()
 		conn.CloseNow()
 	}()
+	go l.ping(ctx, conn)
 	for {
 		var f Frame
 		if err := readFrame(ctx, conn, &f); err != nil {
@@ -214,6 +218,27 @@ func (l *Link) session(ctx context.Context) error {
 					return ctx.Err()
 				}
 			}
+		}
+	}
+}
+
+// ping pings the server until the stream ends, so a box with nothing to send still notices a
+// server that stopped answering: it drops the stream, and Run dials again.
+func (l *Link) ping(ctx context.Context, conn *websocket.Conn) {
+	t := time.NewTicker(l.PingEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		pctx, cancel := context.WithTimeout(ctx, l.AckTimeout)
+		err := conn.Ping(pctx)
+		cancel()
+		if err != nil {
+			conn.CloseNow() // ends the stream's read loop, if it has not ended already
+			return
 		}
 	}
 }

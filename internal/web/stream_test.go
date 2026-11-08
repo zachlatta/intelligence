@@ -104,11 +104,11 @@ func (b *rawBox) command() devbox.Command {
 	}
 }
 
-// sendReport sends rep on its box's stream and fails the test unless it is stored.
+// sendReport sends rep on its box's stream, which stays open (so the box is online), and fails
+// the test unless it is stored.
 func sendReport(t *testing.T, h http.Handler, rep devbox.Report) {
 	t.Helper()
 	b := openStream(t, h, rep.Name)
-	defer b.conn.Close(websocket.StatusNormalClosure, "")
 	if ack := b.call(devbox.Frame{Type: devbox.ReportFrame, Report: &rep}); ack.Error != "" {
 		t.Fatalf("report refused: %s", ack.Error)
 	}
@@ -141,7 +141,7 @@ func TestStreamNeedsTheToken(t *testing.T) {
 
 func TestStreamsRefusedWhenNoTokenIsConfigured(t *testing.T) {
 	d := dbtest.New(t)
-	srv := serve(t, New(Config{Version: "v", DB: d.Owner, Readonly: d.Readonly}))
+	srv := serve(t, New(Config{Context: t.Context(), Version: "v", DB: d.Owner, Readonly: d.Readonly}))
 	if _, resp, err := dialStream(t, srv, "devbox-1", ""); err == nil || resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("%v, want 503", err)
 	}
@@ -197,7 +197,7 @@ func TestStreamStoresTranscriptsAndHellosWithCursors(t *testing.T) {
 		t.Errorf("another box's transcript: ack %+v", ack)
 	}
 	again := openStream(t, h, "devbox-1")
-	if c := again.hello.Cursors[agentA1]; c.Epoch != "ep1" || c.LastSeqStart != 2 || again.hello.Version != "v" {
+	if c := again.hello.Cursors[agentA1]; c.Epoch != "ep1" || c.LastSeqStart != 2 {
 		t.Errorf("hello = %+v", again.hello)
 	}
 }
@@ -220,5 +220,47 @@ func TestStreamStoresUsage(t *testing.T) {
 	}
 	if ack := b.call(devbox.Frame{Type: devbox.UsageFrame}); ack.Error == "" {
 		t.Errorf("an empty usage frame was accepted")
+	}
+}
+
+func TestABoxIsOnlineWhileItsStreamIsOpen(t *testing.T) {
+	h, d := dbServer(t)
+	b := openStream(t, h, "devbox-1")
+	rep := sampleReport
+	b.call(devbox.Frame{Type: devbox.ReportFrame, Report: &rep})
+	if bs := boxes(t, d); len(bs) != 1 || !bs[0].Online {
+		t.Fatalf("with its stream open: %+v", bs)
+	}
+	b.conn.Close(websocket.StatusNormalClosure, "")
+	deadline := time.Now().Add(5 * time.Second)
+	for boxes(t, d)[0].Online {
+		if time.Now().After(deadline) {
+			t.Fatal("still online after its stream closed")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestANewStreamEndsTheOldOneOnAnyInstance: a box that dials again, even to another server
+// instance, takes over; the old stream ends without taking the box offline.
+func TestANewStreamEndsTheOldOneOnAnyInstance(t *testing.T) {
+	d := dbtest.New(t)
+	one := New(Config{Context: t.Context(), Version: "v", DB: d.Owner, Readonly: d.Readonly, DevboxToken: "secret"})
+	two := New(Config{Context: t.Context(), Version: "v", DB: dbtest.Pool(t, d), Readonly: d.Readonly, DevboxToken: "secret"})
+	old := openStream(t, one, "devbox-1")
+	openStream(t, two, "devbox-1")
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	for {
+		if _, err := devbox.ReadFrame(ctx, old.conn); err != nil {
+			if ctx.Err() != nil {
+				t.Fatal("the old stream never ended")
+			}
+			break
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	if bs := boxes(t, d); len(bs) != 1 || !bs[0].Online {
+		t.Fatalf("after the old stream ended: %+v", bs)
 	}
 }

@@ -166,3 +166,35 @@ func TestWatcherReadsTimelinesOnItsConnection(t *testing.T) {
 		t.Errorf("a watcher with no connection should refuse")
 	}
 }
+
+// TestRefreshStatusSignalsOnlyAChange: re-reading the daemon's status says the snapshot changed
+// only when the status did, so an unchanged daemon sends no report.
+func TestRefreshStatusSignalsOnlyAChange(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "agents", func(s PaseoStatus) bool { return len(s.Agents) == 2 })
+	drainChanged(w)
+	w.RefreshStatus(t.Context())
+	select {
+	case <-w.Changed():
+		t.Fatal("an unchanged status signalled a change")
+	case <-time.After(100 * time.Millisecond):
+	}
+	d.FailStatus("daemon busy")
+	w.RefreshStatus(t.Context())
+	select {
+	case <-w.Changed():
+	case <-time.After(time.Second):
+		t.Fatal("a failed status read did not signal a change")
+	}
+}
+
+func drainChanged(w *Watcher) {
+	for {
+		select {
+		case <-w.Changed():
+		case <-time.After(50 * time.Millisecond):
+			return
+		}
+	}
+}

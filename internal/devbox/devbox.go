@@ -1,6 +1,7 @@
-// Package devbox is the dev-box side of Intelligence: it watches the local Paseo daemon over its
-// own protocol (Watcher), holds one stream to the server (Link) for its reports, transcripts, plan
-// usage (UsageSync) and the server's commands (Runner), and keeps itself on the server's version
+// Package devbox is the dev-box side of Intelligence. A Box watches the local Paseo daemon over
+// its own protocol (Watcher), holds one stream to the server (Link) for its reports, transcripts
+// (TranscriptSync), plan usage (UsageSync) and the server's commands (Runner), and keeps itself on
+// the server's version
 // (Updater). A dev box dials out to the server, so it needs no inbound port.
 package devbox
 

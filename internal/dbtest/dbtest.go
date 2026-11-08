@@ -23,6 +23,7 @@ type DB struct {
 	Name     string // the database
 	Role     string // the read-only role
 
+	OwnerURL    string // how Owner connects
 	ReadonlyURL string // how Readonly connects
 }
 
@@ -51,7 +52,8 @@ func New(t testing.TB) DB {
 		_ = admin.Close(ctx)
 	})
 
-	owner := pool(t, withDB(t, base, name, "", ""))
+	ownerURL := withDB(t, base, name, "", "")
+	owner := pool(t, ownerURL)
 	if err := db.Migrate(ctx, owner); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -59,7 +61,13 @@ func New(t testing.TB) DB {
 		t.Fatalf("read-only role: %v", err)
 	}
 	roURL := withDB(t, base, name, role, pass)
-	return DB{Owner: owner, Readonly: pool(t, roURL), Name: name, Role: role, ReadonlyURL: roURL}
+	return DB{Owner: owner, Readonly: pool(t, roURL), Name: name, Role: role, OwnerURL: ownerURL, ReadonlyURL: roURL}
+}
+
+// Pool is another owner pool on d's database, as a second server instance would have.
+func Pool(t testing.TB, d DB) *pgxpool.Pool {
+	t.Helper()
+	return pool(t, d.OwnerURL)
 }
 
 // Reconnect gives d a fresh read-only pool, so role settings changed since apply.

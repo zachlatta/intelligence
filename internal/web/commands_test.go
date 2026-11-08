@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/zachlatta/intelligence/internal/dbtest"
 	"github.com/zachlatta/intelligence/internal/devbox"
 	"github.com/zachlatta/intelligence/internal/fleet"
@@ -15,15 +17,47 @@ import (
 	"github.com/zachlatta/intelligence/internal/paseo/paseotest"
 )
 
-// cmdServer takes commands with the operator token "op". It never polls for commands, so one
-// that arrives does so because the enqueue woke the box's stream.
+// cmdServer takes commands with the operator token "op".
 func cmdServer(t *testing.T) (http.Handler, dbtest.DB) {
 	t.Helper()
 	d := dbtest.New(t)
-	h := New(Config{Version: "v", DB: d.Owner, Readonly: d.Readonly, DevboxToken: "secret", OperatorToken: "op",
-		CommandPoll: time.Hour})
+	h := instance(t, d, d.Owner)
 	sendReport(t, h, sampleReport)
 	return h, d
+}
+
+// instance is one server instance on d's database, through p.
+func instance(t *testing.T, d dbtest.DB, p *pgxpool.Pool) http.Handler {
+	return New(Config{Context: t.Context(), Version: "v", DB: p, Readonly: d.Readonly, DevboxToken: "secret", OperatorToken: "op"})
+}
+
+// TestCommandsCrossServerInstances: during a deploy two instances run. A command queued on one
+// goes at once down a stream held by the other, and a wait on one returns as soon as the box's
+// result lands through the other. Neither polls.
+func TestCommandsCrossServerInstances(t *testing.T) {
+	h, d := cmdServer(t)
+	other := instance(t, d, dbtest.Pool(t, d))
+	b := openStream(t, h, "devbox-1")
+	start := time.Now()
+	_, c, _ := enqueue(t, other, "devbox-1", "op", archiveA1)
+	if got := b.command(); got.ID != c.ID {
+		t.Fatalf("command = %+v", got)
+	}
+	done := make(chan fleet.Command)
+	go func() { _, c := showCmd(t, other, "devbox-1", c.ID, "?wait=30s"); done <- c }()
+	time.Sleep(100 * time.Millisecond) // let the wait start
+	b.call(devbox.Frame{Type: devbox.CommandUpdateFrame, Update: &devbox.CommandUpdate{ID: c.ID, Status: devbox.CommandSucceeded}})
+	select {
+	case fin := <-done:
+		if fin.Status != devbox.CommandSucceeded {
+			t.Errorf("finished = %+v", fin)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("?wait never returned")
+	}
+	if took := time.Since(start); took > 3*time.Second {
+		t.Errorf("took %s: something waited on a poll", took)
+	}
 }
 
 func enqueue(t *testing.T, h http.Handler, box, token, body string) (int, fleet.Command, string) {
@@ -126,7 +160,11 @@ func TestACommandGoesDownTheStreamAtOnceAndItsResultComesBack(t *testing.T) {
 }
 
 func TestQueuedCommandsWaitForTheBoxAndUnfinishedOnesAreResent(t *testing.T) {
-	h, _ := cmdServer(t)
+	d := dbtest.New(t)
+	h := instance(t, d, d.Owner)
+	if err := fleet.New(d.Owner).Record(t.Context(), sampleReport, time.Now()); err != nil { // known, with no stream
+		t.Fatal(err)
+	}
 	_, c, _ := enqueue(t, h, "devbox-1", "op", archiveA1)
 	srv := serve(t, h)
 	first, _, err := dialStream(t, srv, "devbox-1", "secret")
@@ -156,47 +194,40 @@ func TestShowCommandWaitIsBounded(t *testing.T) {
 		t.Errorf("wait 2h: %d, want 400", code)
 	}
 	start := time.Now()
-	if code, got := showCmd(t, h, "devbox-1", c.ID, "?wait=200ms"); code != http.StatusOK || got.Status != devbox.CommandQueued {
-		t.Errorf("wait on a queued command: %d %+v", code, got)
+	if code, got := showCmd(t, h, "devbox-1", c.ID, "?wait=200ms"); code != http.StatusOK || got.Finished() {
+		t.Errorf("wait on an unfinished command: %d %+v", code, got)
 	}
 	if time.Since(start) < 200*time.Millisecond {
 		t.Errorf("returned before the wait was up")
 	}
 }
 
-// TestADevBoxRunsTheServersCommands is the whole path: the server queues a command, a dev box
-// (its Link, Runner and Watcher, on a fake Paseo daemon) receives and runs it, and the result
-// lands in Postgres.
+// TestADevBoxRunsTheServersCommands is the whole path: a dev box (devbox.Box, on a fake Paseo
+// daemon) connects and reports, the server queues a command, the box receives and runs it, and
+// the result lands in Postgres.
 func TestADevBoxRunsTheServersCommands(t *testing.T) {
-	h, d := cmdServer(t)
+	d := dbtest.New(t)
+	h := instance(t, d, d.Owner)
 	srv := serve(t, h)
 	daemon := paseotest.New(t, "tok")
 	daemon.SetWorkspaces(paseotest.Workspace("w-app", "worktree", "running"))
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	w := &devbox.Watcher{RetryEvery: 20 * time.Millisecond, Dial: func(ctx context.Context) (*paseo.Client, error) {
-		return paseo.Dial(ctx, paseo.Target{URL: daemon.URL(), Token: "tok", ClientID: "test"})
-	}}
-	go w.Run(ctx)
-	link := &devbox.Link{Server: srv.URL, Token: "secret", Box: "devbox-1", RetryEvery: 20 * time.Millisecond}
-	go link.Run(ctx)
-	runner := &devbox.Runner{Exec: w.Execute, Report: link.Update, Retry: 20 * time.Millisecond}
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case c := <-link.Commands():
-				runner.Handle(ctx, c)
-			}
+	box := &devbox.Box{Name: "devbox-1", Version: "v", Settle: 10 * time.Millisecond, Logf: t.Logf,
+		Watcher: &devbox.Watcher{RetryEvery: 20 * time.Millisecond, Dial: func(ctx context.Context) (*paseo.Client, error) {
+			return paseo.Dial(ctx, paseo.Target{URL: daemon.URL(), Token: "tok", ClientID: "test"})
+		}},
+		Link: &devbox.Link{Server: srv.URL, Token: "secret", Box: "devbox-1", RetryEvery: 20 * time.Millisecond}}
+	stopped := make(chan struct{})
+	go func() { box.Run(ctx); close(stopped) }()
+	t.Cleanup(func() { cancel(); <-stopped })
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if bs := boxes(t, d); len(bs) == 1 && bs[0].Online && bs[0].Report.Paseo.Connected && len(bs[0].Workspaces) == 1 {
+			break
 		}
-	}()
-	select {
-	case <-link.Connected():
-	case <-time.After(5 * time.Second):
-		t.Fatalf("box never connected: %s", link.Err())
-	}
-	for !w.Snapshot().Connected {
+		if time.Now().After(deadline) {
+			t.Fatalf("the box never reported its daemon: %+v", boxes(t, d))
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	_, c, _ := enqueue(t, h, "devbox-1", "op", `{"kind":"create_agent","args":{"workspaceId":"w-app","provider":"claude","prompt":"fix it"}}`)

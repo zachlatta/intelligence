@@ -16,8 +16,8 @@ import (
 // Report.Paseo carries the daemon's status; its Workspaces and Agents are empty here.
 type Box struct {
 	Report     devbox.Report     `json:"report"`
-	LastSeen   time.Time         `json:"lastSeen"` // when the server received the report
-	Online     bool              `json:"online"`   // it reported within the last minute
+	LastSeen   time.Time         `json:"lastSeen"` // when the server last heard from it
+	Online     bool              `json:"online"`   // it holds a stream to the server
 	Workspaces []WorkspaceAgents `json:"workspaces"`
 }
 

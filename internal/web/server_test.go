@@ -111,13 +111,13 @@ var t0 = time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
 func dbServer(t *testing.T) (http.Handler, dbtest.DB) {
 	t.Helper()
 	d := dbtest.New(t)
-	return New(Config{Version: "v", DB: d.Owner, Readonly: d.Readonly, DevboxToken: "secret"}), d
+	return New(Config{Context: t.Context(), Version: "v", DB: d.Owner, Readonly: d.Readonly, DevboxToken: "secret"}), d
 }
 
 func dbServerVersion(t *testing.T, v string) (http.Handler, dbtest.DB) {
 	t.Helper()
 	d := dbtest.New(t)
-	return New(Config{Version: v, DB: d.Owner, Readonly: d.Readonly, DevboxToken: "secret"}), d
+	return New(Config{Context: t.Context(), Version: v, DB: d.Owner, Readonly: d.Readonly, DevboxToken: "secret"}), d
 }
 
 func boxes(t *testing.T, d dbtest.DB) []fleet.Box {

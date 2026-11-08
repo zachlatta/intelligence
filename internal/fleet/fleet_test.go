@@ -56,6 +56,7 @@ func TestBoxWorkspacesAndAgentsRoundTrip(t *testing.T) {
 	r := New(dbtest.New(t).Owner)
 	want := full()
 	record(t, r, want, time.Now())
+	attach(t, r, "devbox-1", time.Now())
 	boxes := list(t, r)
 	if len(boxes) != 1 || !boxes[0].Online {
 		t.Fatalf("boxes = %+v", boxes)
@@ -158,11 +159,12 @@ func TestADisconnectedBoxShowsNoStaleWork(t *testing.T) {
 	}
 }
 
-func TestBoxesListByNameAndGoOfflineAfterAMinute(t *testing.T) {
+func TestBoxesListByNameAndAreOnlineWhileStreaming(t *testing.T) {
 	r := New(dbtest.New(t).Owner)
 	now := time.Now()
-	record(t, r, devbox.Report{Name: "zeta"}, now.Add(-2*time.Minute))
+	record(t, r, devbox.Report{Name: "zeta"}, now) // reported, but no stream
 	record(t, r, devbox.Report{Name: "alpha"}, now)
+	attach(t, r, "alpha", now)
 	boxes := list(t, r)
 	if len(boxes) != 2 || boxes[0].Report.Name != "alpha" || boxes[1].Report.Name != "zeta" {
 		t.Fatalf("boxes = %+v", boxes)
@@ -172,9 +174,18 @@ func TestBoxesListByNameAndGoOfflineAfterAMinute(t *testing.T) {
 	}
 }
 
+// attach gives box a stream, seen at at.
+func attach(t *testing.T, r *Registry, box string, at time.Time) {
+	t.Helper()
+	if err := r.Attach(ctx, box, "99999999-9999-4999-8999-999999999999", at); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestStatusViewsCountWork(t *testing.T) {
 	d := dbtest.New(t)
 	record(t, New(d.Owner), full(), time.Now())
+	attach(t, New(d.Owner), "devbox-1", time.Now())
 	var online bool
 	var nw, na, nr int
 	if err := d.Readonly.QueryRow(ctx, "SELECT online, workspaces, agents, running_agents FROM devbox_status").Scan(&online, &nw, &na, &nr); err != nil {

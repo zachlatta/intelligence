@@ -145,6 +145,8 @@ func (w *Watcher) apply(e paseo.Event) {
 }
 
 // RefreshStatus re-reads the daemon's status and providers. A failed read keeps the last one.
+// It signals Changed only when what it read differs from before (a status that failed, or came
+// back, counts).
 func (w *Watcher) RefreshStatus(ctx context.Context) {
 	w.init()
 	w.mu.Lock()
@@ -157,12 +159,22 @@ func (w *Watcher) RefreshStatus(ctx context.Context) {
 	defer cancel()
 	s, err := c.DaemonStatus(ctx)
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	before, beforeErr := w.status, w.statusErr
 	if err != nil {
 		w.statusErr = err.Error()
-		return
+	} else {
+		w.status, w.statusAt, w.statusErr = s, w.Now(), ""
 	}
-	w.status, w.statusAt, w.statusErr = s, w.Now(), ""
+	changed := w.statusErr != beforeErr || !sameStatus(w.status, before)
+	w.mu.Unlock()
+	if changed {
+		w.signal()
+	}
+}
+
+func sameStatus(a, b paseo.DaemonStatus) bool {
+	return a.Version == b.Version && a.Listen == b.Listen && a.PID == b.PID && a.ServerID == b.ServerID &&
+		a.StartedAt.Equal(b.StartedAt) && slices.Equal(a.Providers, b.Providers)
 }
 
 // Snapshot is the daemon as the watcher knows it now. Workspaces are in name order and agents

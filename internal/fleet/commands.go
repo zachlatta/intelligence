@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	// ErrUnknownBox refuses a command for a box that has never reported.
+	// ErrUnknownBox refuses a command for a box that has never connected.
 	ErrUnknownBox = errors.New("no such dev box")
 	// ErrUnknownCommand: no command with that id for that box.
 	ErrUnknownCommand = errors.New("no such command")
@@ -86,8 +86,18 @@ func (r *Registry) Enqueue(ctx context.Context, box, kind string, args json.RawM
 	if !known {
 		return Command{}, ErrUnknownBox
 	}
-	return scanCommand(r.p.QueryRow(ctx, `INSERT INTO commands (box, kind, args, created_at, expires_at)
-		VALUES ($1, $2, $3, $4, $5) RETURNING `+commandColumns, box, kind, []byte(args), at, at.Add(ttl)))
+	var c Command
+	err := pgx.BeginFunc(ctx, r.p, func(tx pgx.Tx) error {
+		var err error
+		c, err = scanCommand(tx.QueryRow(ctx, `INSERT INTO commands (box, kind, args, created_at, expires_at)
+			VALUES ($1, $2, $3, $4, $5) RETURNING `+commandColumns, box, kind, []byte(args), at, at.Add(ttl)))
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, notifySQL, CommandsTopic(box))
+		return err
+	})
+	return c, err
 }
 
 // Command is one command; pgx.ErrNoRows when there is none.
@@ -102,10 +112,11 @@ func (r *Registry) Command(ctx context.Context, id string) (Command, error) {
 // Queued ones are claimed; with unfinished (a new stream), so are those sent before with no result
 // yet, as the box may never have received them. Commands past their expiry expire instead.
 func (r *Registry) Claim(ctx context.Context, box string, unfinished bool, at time.Time) ([]Command, error) {
-	if _, err := r.p.Exec(ctx, `UPDATE commands SET status = 'expired', finished_at = $2,
+	if _, err := r.p.Exec(ctx, `WITH expired AS (UPDATE commands SET status = 'expired', finished_at = $2,
 		error = CASE status WHEN 'queued' THEN 'expired before the box was connected to receive it'
 		                    ELSE 'expired with no result from the box: it may or may not have run' END
-		WHERE box = $1 AND status IN ('queued', 'sent', 'running') AND expires_at <= $2`, box, at); err != nil {
+		WHERE box = $1 AND status IN ('queued', 'sent', 'running') AND expires_at <= $2 RETURNING id)
+		SELECT pg_notify('`+channel+`', 'command:' || id) FROM expired`, box, at); err != nil {
 		return nil, err
 	}
 	statuses := []string{devbox.CommandQueued}
@@ -156,8 +167,17 @@ func (r *Registry) UpdateCommand(ctx context.Context, box string, u devbox.Comma
 	default:
 		return fmt.Errorf("a box cannot set a command %q", u.Status)
 	}
-	tag, err := r.p.Exec(ctx, sql, args...)
-	if err != nil || tag.RowsAffected() > 0 {
+	var changed bool
+	err := pgx.BeginFunc(ctx, r.p, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, sql, args...)
+		if err != nil || tag.RowsAffected() == 0 {
+			return err
+		}
+		changed = true
+		_, err = tx.Exec(ctx, notifySQL, CommandTopic(u.ID))
+		return err
+	})
+	if err != nil || changed {
 		return err
 	}
 	var known bool

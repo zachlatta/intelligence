@@ -15,7 +15,8 @@ One binary, three commands:
   the local Paseo daemon over the daemon's own WebSocket protocol (`internal/paseo`), reads its
   status, workspaces and agents, then follows the updates the daemon pushes. It holds one
   WebSocket stream to the server (below) for its reports, its agents' transcripts, its plans' usage
-  and the server's commands. The box dials out, so it needs no inbound port, and the server never dials a box.
+  and the server's commands, each handled on its own (`devbox.Box`), so a slow transcript upload
+  holds up no report. The box dials out, so it needs no inbound port, and the server never dials a box.
 - `intelligence version`: prints the commit the binary was built from.
 
 ### State and the read-only SQL contract
@@ -47,29 +48,37 @@ The hierarchy is devboxes > workspaces > agents:
 - `schema_migrations`.
 
 Each report replaces its box's workspaces and agents. A box that cannot reach its daemon has none,
-so nothing stale reads as current. The `devbox_status` view adds `online` (reported within the last
-minute) and counts; `workspace_status` adds each workspace's agent counts.
+so nothing stale reads as current. The `devbox_status` view adds `online` (the box holds a stream
+to the server, `stream_id`, which was seen within the last minute) and counts; `workspace_status`
+adds each workspace's agent counts.
 
 ### The stream
 
 A dev box dials `GET /api/devboxes/{box}/stream` (a WebSocket, with the dev box token) and keeps it
 open, dialing again 5 seconds after it drops. Each frame is a JSON `devbox.Frame`:
 
-- server to box: `hello` first (the server's version and where its transcript copies end), then
-  `command`s.
-- box to server: `report` (within a second of a change and every 15 seconds, which also re-reads
-  the daemon's status), `transcript` batches, `usage` (every 5 minutes) and `command_update`s. Each carries an `id`, and the
-  server answers each with an `ack` once it is stored (or with why not). A box frame not acked in
-  30 seconds drops the stream, so a box notices a dead server on its next report; the server
-  pings every 30 seconds, so it notices a dead box.
+- server to box: `hello` first (where its transcript copies end), then `command`s. The server's
+  version is in the dial's `X-Intelligence-Version` header.
+- box to server: `report` (on each new stream, and within a second of a change; the box re-reads
+  the daemon's status every 15 seconds and reports it if it changed), `transcript` batches, `usage`
+  (every 5 minutes) and `command_update`s. Each carries an `id`, and the server answers each with an
+  `ack` once it is stored (or with why not), transcript batches on their own so a large one holds up
+  nothing else.
 
-A newer stream for the same box replaces the older one.
+Each side pings the other: the box every 30 seconds (an unanswered ping, or a frame not acked in 30
+seconds, drops the stream, and the box dials again) and the server every 20 seconds, recording the
+box as seen. A newer stream for the same box takes it over and ends the older one, on whichever
+server instance holds it.
+
+Server instances learn of each other's changes through Postgres `NOTIFY` on the `fleet` channel
+(`fleet.Changes`): a queued command, a command's update and a stream taking a box over. Nothing on
+the server polls.
 
 ### Commands
 
 The server tells a box what to do through its stream. A command is queued in `commands`
 (`POST /api/devboxes/{box}/commands`, below), goes down the box's stream at once if it is connected
-to this server instance (else within 5 seconds, or when the box next connects), and the box runs it
+(to any server instance; else when it next connects), and the box runs it
 against its daemon and reports `running`, then `succeeded` with a result (`{"workspaceId",
 "agentId"}`) or `failed` with the daemon's reason. Kinds and their args:
 
@@ -213,9 +222,9 @@ approval before CI runs.
 - `POST /api/devboxes/{box}/commands` with `{"kind": "...", "args": {...}, "ttl": "10m"}`: queue a
   command (kinds above; `ttl` from 1s to 24h). Needs `Authorization: Bearer <OPERATOR_TOKEN>`;
   refused with 503 while the server has none. 202 with the command and its `Location`; 400 for a
-  kind or args that do not parse, 404 for a box that has never reported.
+  kind or args that do not parse, 404 for a box that has never connected.
 - `GET /api/devboxes/{box}/commands/{id}`, optionally `?wait=30s` (at most 1m): the command, after
-  waiting until it finishes or the wait is up.
+  waiting until it finishes or the wait is up (woken by its update, not polling).
 - `GET /api/devboxes`: the same, as JSON.
 - `POST /api/sql` with `{"query": "...", "limit": 1000}`, or `GET /api/sql?q=...&limit=`: one
   read-only query. Returns `{"columns": [{"name", "type"}], "rows": [[...]], "rowCount",
@@ -246,7 +255,8 @@ Dev box (in `~/.config/intelligence/devbox.env`):
 - `DEVBOX_SERVER`: the server's base URL.
 - `DEVBOX_TOKEN`: the server's dev box token.
 - `DEVBOX_NAME`: optional; default the lowercased hostname.
-- `DEVBOX_INTERVAL`: optional time between reports; default `15s`.
+- `DEVBOX_INTERVAL`: optional time between re-reads of the daemon's status (reported when it
+  changes); default `15s`.
 - `DEVBOX_PASEO_HOME`: optional Paseo home; default `~/.paseo`.
 - `DEVBOX_AUTOUPDATE`: `off` keeps the installed binary; default on.
 

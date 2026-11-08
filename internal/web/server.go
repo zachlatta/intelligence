@@ -21,13 +21,14 @@ import (
 
 // Config is what the server needs. All app state is in DB, and Readonly reads it for the SQL API.
 type Config struct {
+	// Context is the server's lifetime: its listener for fleet changes stops when it ends. Default: never.
+	Context     context.Context
 	Version     string        // the deployed commit, shown on every page and by /healthz
 	DB          *pgxpool.Pool // the app's database, migrated (db.Migrate)
 	Readonly    *pgxpool.Pool // the same database as the read-only role (db.EnsureReadonlyRole)
 	DevboxToken string        // the bearer token dev boxes stream with; "" refuses every stream
 	// OperatorToken is the bearer token that may send dev boxes commands; "" refuses every command.
 	OperatorToken string
-	CommandPoll   time.Duration // how often a stream looks for commands queued elsewhere; default 5s
 	SQLTimeout    time.Duration // per SQL API query; default 5s
 	BinDir        string        // dev box binaries, intelligence-<os>-<arch>, served for self-update; "" = none
 	Now           func() time.Time
@@ -55,11 +56,12 @@ func New(cfg Config) http.Handler {
 	if cfg.SQLTimeout == 0 {
 		cfg.SQLTimeout = 5 * time.Second
 	}
-	if cfg.CommandPoll == 0 {
-		cfg.CommandPoll = 5 * time.Second
+	if cfg.Context == nil {
+		cfg.Context = context.Background()
 	}
 	reg := fleet.New(cfg.DB)
-	streams := &hub{}
+	changes := fleet.NewChanges(cfg.DB)
+	go changes.Run(cfg.Context)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
@@ -80,9 +82,9 @@ func New(cfg Config) http.Handler {
 		}
 		writeJSON(w, list)
 	})
-	mux.HandleFunc("GET "+devbox.StreamPath("{box}"), stream(cfg, reg, streams))
-	mux.HandleFunc("POST /api/devboxes/{box}/commands", enqueueCommand(cfg, reg, streams))
-	mux.HandleFunc("GET /api/devboxes/{box}/commands/{id}", showCommand(reg))
+	mux.HandleFunc("GET "+devbox.StreamPath("{box}"), stream(cfg, reg, changes))
+	mux.HandleFunc("POST /api/devboxes/{box}/commands", enqueueCommand(cfg, reg))
+	mux.HandleFunc("GET /api/devboxes/{box}/commands/{id}", showCommand(reg, changes))
 	mux.HandleFunc("GET /api/sql", sqlHandler(cfg))
 	mux.HandleFunc("POST /api/sql", sqlHandler(cfg))
 	mux.Handle("GET /api/devbox/binary/{os}/{arch}", binaries(cfg.BinDir))
