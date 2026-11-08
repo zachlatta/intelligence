@@ -1,30 +1,18 @@
 {{define "plan"}}{{/* one login's plan, with the time to measure from: planAt .Now plan */}}{{with .Login}}
 <div class="plan-head">
   <span class="name">{{.Label}}</span>
-  <span class="meta grow">{{.Provider}}{{if .Slot}} #{{.Slot}}{{end}}{{if .Plan}} · {{.Plan}}{{end}}{{if .ActiveOn}} · active on {{join .ActiveOn ", "}}{{end}}</span>
+  <span class="badge">{{.Provider}}{{if .Slot}} #{{.Slot}}{{end}}</span>
+  {{if .Plan}}<span class="badge blue">{{.Plan}}</span>{{end}}
+  <span class="meta grow">{{if .ActiveOn}}active on {{join .ActiveOn ", "}}{{end}}</span>
 </div>
-{{if .Error}}<p class="err">{{.Error}}</p>{{end}}
-{{if .Note}}<p class="meta note">{{.Note}}</p>{{end}}
+{{if .Error}}<p class="plan-err">{{.Error}}</p>{{end}}
+{{if .Note}}<p class="meta plan-note">{{.Note}}</p>{{end}}
 {{range .Windows}}
 <div class="win {{paceClass .}}" title="{{pct .UsedPct}} used{{if .Stale}}; last read {{ago $.Now .LastObserved}}{{end}}">
   <span class="wid">{{.ID}}</span>
-  <span class="bar"><span style="width: {{bar .}}%"></span></span>
+  <span class="meter"><span style="width: {{bar .}}%"></span></span>
   <span class="left">{{left .}}</span>
   <span class="meta">{{if not .ResetsAt.IsZero}}{{if not .Elapsed}}resets {{until $.Now .ResetsAt}}{{end}}{{end}}{{with paceText .}} · {{.}}{{end}}{{if .Stale}} · read {{ago $.Now .LastObserved}}{{end}}</span>
 </div>
 {{end}}
 {{end}}{{end}}
-{{define "plancss"}}
-  .plan-head { display: flex; flex-wrap: wrap; gap: 0 .5rem; align-items: baseline; }
-  .plan-head .name { font-weight: 600; }
-  .win { display: flex; flex-wrap: wrap; gap: 0 .5rem; align-items: center; font-size: .88rem; padding: .05rem 0; }
-  @media (max-width: 36rem) { .win .meta { flex-basis: 100%; padding-left: 6rem; } }
-  .win .wid { min-width: 5.5rem; opacity: .75; font-variant-numeric: tabular-nums; }
-  .win .left { min-width: 6.5rem; font-variant-numeric: tabular-nums; }
-  .bar { width: 6rem; height: .45rem; border-radius: .3rem; background: #8882; overflow: hidden; flex: none; }
-  .bar > span { display: block; height: 100%; background: #2a7; }
-  .win.low .bar > span { background: #e83; } .win.out .bar > span { background: #c33; }
-  .win.unknown { opacity: .55; } .win.unknown .bar > span { background: #888; }
-  .err { color: #c33; font-size: .85rem; margin: .1rem 0; }
-  .note { margin: .1rem 0; }
-{{end}}

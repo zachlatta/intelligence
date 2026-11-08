@@ -319,6 +319,8 @@ approval before CI runs.
   read-only query. Returns `{"columns": [{"name", "type"}], "rows": [[...]], "rowCount",
   "truncated"}`, or 400 with `{"error"}`. At most 10000 rows; 5 seconds per query.
 - `GET /api/devbox/binary/{os}/{arch}`: the dev box binary at the server's version.
+- `GET /ui.css`: the one stylesheet every page shares, with the top bar (`layout.html`) that links the
+  pages.
 - `GET /healthz`: `{"status":"ok","version":"<commit>","database":"ok"}`, 503 when the database is
   unreachable.
 

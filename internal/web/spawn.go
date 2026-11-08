@@ -40,7 +40,7 @@ var thinkingLevels = []string{"low", "medium", "high", "xhigh", "max"}
 //go:embed spawn.html
 var spawnHTML string
 
-var spawnTmpl = template.Must(template.New("spawn").Funcs(template.FuncMap{"short": short}).Parse(spawnHTML))
+var spawnTmpl = template.Must(template.New("spawn").Funcs(template.FuncMap{"short": short}).Parse(spawnHTML + layoutHTML))
 
 func sessionValue(token string) string {
 	sum := sha256.Sum256([]byte("intelligence operator session\x00" + token))

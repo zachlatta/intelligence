@@ -1,0 +1,13 @@
+{{define "css"}}<link rel="stylesheet" href="/ui.css">{{end}}
+{{define "top"}}{{/* the top bar, with the tab whose path is . marked */}}
+<header class="topbar"><div class="container">
+  <div class="brand-row">
+    <a class="brand" href="/"><svg viewBox="0 0 20 20" aria-hidden="true"><rect width="20" height="20" rx="5" fill="currentColor"/><path d="M6 13.5 10 6l4 7.5" fill="none" stroke="var(--bg)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Intelligence</a>
+  </div>
+  <nav class="topnav">
+    <a href="/"{{if eq . "/"}} aria-current="page"{{end}}>Dev boxes</a>
+    <a href="/usage"{{if eq . "/usage"}} aria-current="page"{{end}}>Plans</a>
+    <a href="/hosts"{{if eq . "/hosts"}} aria-current="page"{{end}}>Hosts</a>
+  </nav>
+</div></header>
+{{end}}

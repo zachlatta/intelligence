@@ -46,7 +46,7 @@ var indexTmpl = template.Must(template.Must(template.New("index").Funcs(template
 	"allAgents":      allAgents,
 	"idleWorkspaces": idleWorkspaces,
 	"openWorkspace":  openWorkspace,
-}).Funcs(usageFuncs).Funcs(hostFuncs).Parse(indexHTML)).Parse(planHTML))
+}).Funcs(usageFuncs).Funcs(hostFuncs).Parse(indexHTML)).Parse(planHTML + layoutHTML))
 
 // New returns the app's HTTP handler.
 func New(cfg Config) http.Handler {
@@ -105,6 +105,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /devboxes/{box}/agents/{agent}/entries/{seq}", func(w http.ResponseWriter, r *http.Request) {
 		transcriptEntry(reg, w, r)
 	})
+	mux.HandleFunc("GET /ui.css", stylesheet)
 	mux.HandleFunc("GET /usage", usagePage(cfg, reg))
 	mux.HandleFunc("GET /hosts", hostsPage(cfg, reg))
 	mux.HandleFunc("GET /api/hosts", hostsAPI(reg))

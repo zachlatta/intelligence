@@ -202,7 +202,7 @@ func TestHomePageLinksToSpawning(t *testing.T) {
 		}
 	}
 	c := signInAs(t, h)
-	if signedIn := call(t, h, http.MethodGet, "/", "", nil, c).Body.String(); !strings.Contains(signedIn, "sign out") {
+	if signedIn := call(t, h, http.MethodGet, "/", "", nil, c).Body.String(); !strings.Contains(signedIn, `id="sign-out"`) {
 		t.Errorf("a signed-in home page offers to sign out")
 	}
 }

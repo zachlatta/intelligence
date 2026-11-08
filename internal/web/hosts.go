@@ -30,7 +30,7 @@ var hostFuncs = template.FuncMap{
 	"div":  func(a, b int) int { return a / b },
 }
 
-var hostsTmpl = template.Must(template.New("hosts").Funcs(hostFuncs).Parse(hostsHTML))
+var hostsTmpl = template.Must(template.New("hosts").Funcs(hostFuncs).Parse(hostsHTML + layoutHTML))
 
 // gb is bytes in GB, one decimal.
 func gb(b int64) string { return fmt.Sprintf("%.1f GB", float64(b)/(1<<30)) }

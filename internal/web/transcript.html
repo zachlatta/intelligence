@@ -4,60 +4,49 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{or .Agent.Title "Agent"}} · Intelligence</title>
+{{template "css"}}
 <style>
   :root {
-    color-scheme: light dark;
-    --bg: #fbfbfa; --fg: #1d1d1f; --muted: #6e6e73; --line: #e3e3e0; --card: #ffffff;
-    --you: #eef4ff; --you-line: #c9dafb; --code: #f4f4f2; --accent: #2563eb;
-    --add: #0f7b3f; --add-bg: #e7f6ec; --del: #b42318; --del-bg: #fdecea; --hunk: #6941c6;
-    --run: #2563eb; --bad: #b42318;
-    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #141416; --fg: #e8e8ea; --muted: #9a9aa2; --line: #2c2c31; --card: #1b1b1f;
-      --you: #1a2438; --you-line: #2a3a5c; --code: #202025; --accent: #7aa2ff;
-      --add: #5fd38a; --add-bg: #12301f; --del: #ff8a7a; --del-bg: #3a1714; --hunk: #b9a2ff;
-      --run: #7aa2ff; --bad: #ff8a7a;
-    }
+    --card: var(--panel); --code: var(--bg-subtle);
+    --you: var(--accent-bg); --you-line: var(--accent-line);
+    --add: var(--green); --add-bg: var(--green-bg); --del: var(--red); --del-bg: var(--red-bg); --hunk: #7a5bc7;
+    --run: var(--accent); --bad: var(--red);
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--fg); line-height: 1.55; font-size: 15px; }
-  a { color: var(--accent); }
+  body { line-height: 1.55; }
   .wrap { max-width: 50rem; margin: 0 auto; padding: 0 1rem 2rem; }
   .muted { color: var(--muted); }
   .small { font-size: .8rem; }
-  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .82rem; }
+  code, pre { font-family: var(--mono); font-size: .82rem; }
 
-  header.top .wrap { padding-top: 1rem; padding-bottom: .4rem; }
+  header.top .wrap { padding-top: 1.5rem; padding-bottom: .6rem; }
   .bar { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 90%, transparent);
     backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
   .bar .wrap { padding-top: .45rem; padding-bottom: .45rem; }
-  .crumbs { font-size: .8rem; color: var(--muted); }
-  .crumbs a { color: inherit; text-decoration: none; } .crumbs a:hover { text-decoration: underline; }
-  h1 { font-size: 1.25rem; margin: .15rem 0 .35rem; line-height: 1.3; overflow-wrap: anywhere; }
+  h1 { font-size: 1.5rem; font-weight: 600; margin: .15rem 0 .5rem; line-height: 1.3; overflow-wrap: anywhere; }
   .meta { display: flex; flex-wrap: wrap; gap: .35rem .6rem; align-items: center; font-size: .8rem; color: var(--muted); }
-  .pill { display: inline-flex; align-items: center; gap: .3rem; padding: .05rem .55rem; border-radius: 1rem;
-    background: color-mix(in srgb, var(--muted) 15%, transparent); color: var(--fg); font-size: .75rem; }
-  .pill.running { background: color-mix(in srgb, var(--run) 18%, transparent); color: var(--run); }
-  .pill.error, .pill.attn { background: color-mix(in srgb, var(--bad) 15%, transparent); color: var(--bad); }
+  .pill { display: inline-flex; align-items: center; gap: .3rem; height: 1.3rem; padding: 0 .45rem; border-radius: 4px;
+    border: 1px solid var(--line-strong); background: var(--bg-subtle); color: var(--fg-2); font-size: 12px; font-weight: 500; }
+  .pill.running { background: var(--accent-bg); border-color: var(--accent-line); color: var(--accent); }
+  .pill.error { background: var(--red-bg); border-color: var(--red-line); color: var(--red); }
+  .pill.attn { background: var(--orange-bg); border-color: var(--orange-line); color: var(--orange); }
   .dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--muted); display: inline-block; }
   .dot.running { background: var(--run); } .dot.live { background: var(--add); animation: pulse 1.6s infinite; }
   @keyframes pulse { 50% { opacity: .3; } }
 
   .toolbar { display: flex; gap: .4rem; align-items: center; }
-  .toolbar input[type=search] { flex: 1 1 12rem; min-width: 0; padding: .35rem .6rem; border-radius: .5rem;
-    border: 1px solid var(--line); background: var(--card); color: var(--fg); font: inherit; font-size: .85rem; }
-  .toolbar button { padding: .3rem .65rem; border-radius: .5rem; border: 1px solid var(--line); background: var(--card);
-    color: var(--fg); font: inherit; font-size: .8rem; cursor: pointer; }
+  .toolbar input[type=search] { flex: 1 1 12rem; width: auto; min-width: 0; padding: .35rem .65rem; font-size: 13px; }
+  .toolbar button { height: 1.95rem; padding: 0 .7rem; border-radius: var(--radius); border: 1px solid var(--line-strong);
+    background: var(--panel); color: var(--fg); font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer; box-shadow: var(--shadow); }
+  .toolbar button:hover { background: var(--bg-subtle); }
   .toolbar button[aria-pressed=false] { color: var(--muted); text-decoration: line-through; }
   #hits { font-size: .75rem; color: var(--muted); white-space: nowrap; }
   .img { display: inline-flex; gap: .35rem; align-items: baseline; padding: .1rem .5rem; border: 1px dashed var(--line);
     border-radius: .4rem; font-size: .85rem; color: var(--muted); }
 
   .siblings { display: flex; flex-wrap: wrap; gap: .35rem; margin: .9rem 0 0; font-size: .8rem; }
-  .siblings a { text-decoration: none; color: var(--fg); padding: .1rem .55rem; border: 1px solid var(--line); border-radius: 1rem;
-    background: var(--card); max-width: 18rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .siblings a { text-decoration: none; color: var(--fg); padding: .1rem .55rem; border: 1px solid var(--line-strong); border-radius: 4px;
+    background: var(--bg-subtle); max-width: 18rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   main { padding-top: .5rem; }
   .blk { margin: .5rem 0; }
@@ -65,7 +54,7 @@
   .who { display: flex; align-items: baseline; gap: .5rem; font-size: .78rem; color: var(--muted); margin-bottom: .2rem; }
   .avatar { font-weight: 600; color: var(--fg); }
   .avatar.you { color: var(--accent); }
-  .bubble { background: var(--you); border: 1px solid var(--you-line); border-radius: .75rem; padding: .55rem .85rem;
+  .bubble { background: var(--you); border: 1px solid var(--you-line); border-radius: var(--radius); padding: .55rem .85rem;
     max-height: 32rem; overflow: auto; }
 
   .md > :first-child { margin-top: 0; } .md > :last-child { margin-bottom: 0; }
@@ -86,7 +75,7 @@
   .thought[open] .preview { display: none; }
   .thought .md { font-size: .85rem; color: var(--muted); border-left: 2px solid var(--line); padding: .2rem 0 .2rem .75rem; margin: .3rem 0 0 .3rem; }
 
-  .tools { border: 1px solid var(--line); border-radius: .6rem; background: var(--card); overflow: hidden; }
+  .tools { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); overflow: hidden; box-shadow: var(--shadow); }
   .tool + .tool { border-top: 1px solid var(--line); }
   .tool > summary { display: flex; align-items: center; gap: .45rem; padding: .32rem .65rem; font-size: .82rem; min-width: 0; }
   .tool > summary:hover { background: color-mix(in srgb, var(--muted) 8%, transparent); }
@@ -127,21 +116,20 @@
   .res .bad { color: var(--bad); }
   .res h3 { font-size: .8rem; font-weight: 600; color: var(--fg); margin: .7rem 0 .1rem; }
   .res table { border-collapse: collapse; } .res td { padding: .05rem .6rem .05rem 0; } .res td.n { text-align: right; }
-  .chart { width: 100%; height: auto; }
-  .chart .grid { stroke: var(--line); } .chart .axis { font-size: 10px; fill: currentColor; opacity: .8; }
 
   .chat { position: sticky; bottom: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 92%, transparent);
     backdrop-filter: blur(8px); border-top: 1px solid var(--line); }
   .chat .wrap { padding-top: .55rem; padding-bottom: .65rem; }
   .chat textarea { display: block; width: 100%; resize: vertical; min-height: 2.6rem; max-height: 40vh; padding: .5rem .7rem;
-    border-radius: .6rem; border: 1px solid var(--line); background: var(--card); color: var(--fg); font: inherit; font-size: .9rem; }
-  .chat textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); outline-offset: 0; }
+    font-size: 14px; }
   .chatbar { display: flex; gap: .4rem; align-items: center; margin-top: .4rem; }
   .chatbar .hint { flex: 1; min-width: 0; font-size: .75rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chatbar .hint.warn { color: var(--bad); white-space: normal; }
-  .chatbar button { padding: .3rem .75rem; border-radius: .5rem; border: 1px solid var(--line); background: var(--card);
-    color: var(--fg); font: inherit; font-size: .82rem; cursor: pointer; }
+  .chatbar button { height: 1.95rem; padding: 0 .8rem; border-radius: var(--radius); border: 1px solid var(--line-strong);
+    background: var(--panel); color: var(--fg); font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer; box-shadow: var(--shadow); }
+  .chatbar button:hover { background: var(--bg-subtle); }
   .chatbar button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .chatbar button.primary:hover { background: var(--accent-hover); }
   .chatbar button:disabled { opacity: .5; cursor: default; }
   .pending { list-style: none; margin: 0 0 .45rem; padding: 0; display: flex; flex-direction: column; gap: .25rem; }
   .pending li { display: flex; gap: .45rem; align-items: baseline; font-size: .8rem; padding: .2rem .55rem; border-radius: .45rem;
@@ -155,8 +143,9 @@
 </style>
 </head>
 <body>
+{{template "top" "/"}}
 <header class="top"><div class="wrap">
-  <div class="crumbs"><a href="/">Dev boxes</a> › {{.Box}} › {{if .Workspace.Listed}}{{or .Workspace.Name .Workspace.ID}}{{else}}{{.Workspace.ID}}{{end}}{{if .Workspace.Branch}} · <code>{{.Workspace.Branch}}</code>{{end}}</div>
+  <div class="crumbs"><a href="/">Dev boxes</a><span class="sep">/</span>{{.Box}}<span class="sep">/</span>{{if .Workspace.Listed}}{{or .Workspace.Name .Workspace.ID}}{{else}}{{.Workspace.ID}}{{end}}{{if .Workspace.Branch}} · <code>{{.Workspace.Branch}}</code>{{end}}</div>
   <h1>{{or .Agent.Title "(untitled)"}}</h1>
   <div class="meta">
     <span class="pill {{.Agent.Status}}" id="status"><span class="dot {{.Agent.Status}}"></span>{{.Agent.Status}}</span>

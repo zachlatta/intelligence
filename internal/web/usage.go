@@ -39,7 +39,7 @@ var usageFuncs = template.FuncMap{
 	"list":      func(xs ...int) []int { return xs },
 }
 
-var usageTmpl = template.Must(template.Must(template.New("usage").Funcs(usageFuncs).Parse(usageHTML)).Parse(planHTML))
+var usageTmpl = template.Must(template.Must(template.New("usage").Funcs(usageFuncs).Parse(usageHTML)).Parse(planHTML + layoutHTML))
 
 // usagePage shows every login's plan, a chart of each over the last ?days= (default 7), and how
 // much of each week each login used.
@@ -120,7 +120,7 @@ func usageAPI(reg *fleet.Registry) http.HandlerFunc {
 
 type legend struct{ Window, Color string }
 
-var chartColors = []string{"#27c", "#e83", "#2a7", "#a4c", "#c33", "#888"}
+var chartColors = []string{"#4b70cc", "#e0803a", "#1f9d63", "#8a63d2", "#d04841", "#8e8b8a"}
 
 // The chart's geometry: the plot is plotW by plotH at (chartLeft, chartTop), in a 640x150 box.
 const (

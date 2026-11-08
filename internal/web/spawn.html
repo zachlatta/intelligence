@@ -4,47 +4,37 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.}} · Intelligence</title>
+{{template "css"}}
 <style>
-  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-  body { max-width: 40rem; margin: 2.5rem auto; padding: 0 1rem; line-height: 1.5; }
-  h1 { font-size: 1.3rem; margin: 0 0 .25rem; }
-  .crumbs { font-size: .85rem; opacity: .7; margin-bottom: 1rem; }
-  a { color: inherit; } a:hover { color: #27c; }
-  label { display: block; margin: .9rem 0 .25rem; font-weight: 600; font-size: .9rem; }
-  label.check { display: flex; gap: .5rem; align-items: center; font-weight: normal; }
-  textarea, input:not([type=checkbox]), select { font: inherit; width: 100%; box-sizing: border-box; padding: .45rem .55rem;
-    border-radius: .35rem; border: 1px solid #8886; background: transparent; }
-  textarea { min-height: 10rem; resize: vertical; }
-  .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: .6rem; }
-  .row label { font-weight: normal; font-size: .8rem; opacity: .8; margin: .6rem 0 .15rem; }
-  fieldset { border: 1px solid #8884; border-radius: .4rem; margin: 1rem 0 0; padding: .2rem .8rem .8rem; }
-  legend { font-size: .85rem; opacity: .7; }
-  button { font: inherit; margin-top: 1.2rem; padding: .5rem 1.1rem; border-radius: .35rem; border: 0; background: #27c; color: white;
-    cursor: pointer; } button:disabled { opacity: .5; cursor: default; }
-  .meta { opacity: .6; font-size: .85rem; }
-  .warn { color: #c33; white-space: pre-wrap; }
-  #progress { margin-top: .8rem; }
-  footer { margin-top: 3rem; opacity: .6; font-size: .85rem; }
+  .card.form { padding: .25rem 1.25rem 1.25rem; }
+  #progress.meta::before { content: ""; display: inline-block; width: .5rem; height: .5rem; border-radius: 50%; margin-right: .45rem;
+    background: var(--accent); animation: pulse 1.2s infinite; }
+  #progress.warn { padding: .55rem .8rem; border-radius: var(--radius); border: 1px solid var(--red-line); background: var(--red-bg);
+    white-space: pre-wrap; font-size: 13px; }
+  @keyframes pulse { 50% { opacity: .3; } }
 </style>
 </head>
+<body>
+{{template "top" "/"}}
+<main class="container page narrow">
 {{end}}
 
 {{define "foot"}}<footer title="{{.Version}}">version {{short .Version}}</footer>
+</main>
 </body>
 </html>
 {{end}}
 
 {{define "login"}}{{template "head" "Sign in"}}
 <body>
-<div class="crumbs"><a href="/">Intelligence</a></div>
-<h1>Sign in</h1>
-{{if not .Configured}}<p class="warn">This server has no operator token (OPERATOR_TOKEN), so nobody can sign in.</p>
+<div class="page-head"><div><h1>Sign in</h1>
+<p class="sub">Starting workspaces and agents needs the operator token. This browser stays signed in for 30 days.</p></div></div>
+{{if not .Configured}}<p class="banner">This server has no operator token (OPERATOR_TOKEN), so nobody can sign in.</p>
 {{else}}
-<p class="meta">Starting workspaces and agents needs the operator token. This browser stays signed in for 30 days.</p>
-<form id="login" data-next="{{.Next}}">
+<form id="login" class="card form" data-next="{{.Next}}">
   <label for="token">Operator token</label>
   <input id="token" name="token" type="password" autocomplete="current-password" autofocus required>
-  <button>Sign in</button>
+  <div class="form-actions"><button class="btn primary">Sign in</button></div>
   <p id="progress"></p>
 </form>
 <script>
@@ -66,7 +56,7 @@ document.getElementById("login").addEventListener("submit", async (e) => {
   <textarea id="prompt" name="prompt" required autofocus></textarea>
   <label for="title">Title <span class="meta">(optional)</span></label>
   <input id="title" name="title" maxlength="200">
-  <div class="row">
+  <div class="fields">
     <div><label for="provider">Provider</label>
       <select id="provider" name="provider">{{range .Providers}}<option value="{{.}}"{{if eq . $.Agent.Provider}} selected{{end}}>{{.}}</option>{{else}}<option value="{{$.Agent.Provider}}">{{$.Agent.Provider}}</option>{{end}}</select></div>
     <div><label for="model">Model</label><input id="model" name="model" value="{{.Agent.Model}}" placeholder="provider default"></div>
@@ -74,7 +64,7 @@ document.getElementById("login").addEventListener("submit", async (e) => {
       <select id="thinking" name="thinking"><option value="">default</option>{{range .Thinking}}<option value="{{.}}"{{if eq . $.Agent.Thinking}} selected{{end}}>{{.}}</option>{{end}}</select></div>
     <div><label for="mode">Mode</label><input id="mode" name="mode" value="{{.Agent.Mode}}" placeholder="provider default"></div>
   </div>
-  {{if not .Providers}}<p class="warn">The box reports no available providers.</p>{{end}}
+  {{if not .Providers}}<p class="banner">The box reports no available providers.</p>{{end}}
 {{end}}
 
 {{define "spawnjs"}}
@@ -153,14 +143,14 @@ form.addEventListener("submit", async (e) => {
 
 {{define "agent"}}{{template "head" "New agent"}}
 <body>
-<div class="crumbs"><a href="/">Intelligence</a> › {{.Box}} › {{or .Workspace.Name .Workspace.ID}}</div>
-<h1>New agent in {{or .Workspace.Name .Workspace.ID}}</h1>
-<p class="meta">{{.Workspace.Directory}}{{if .Workspace.Branch}} · {{.Workspace.Branch}}{{end}}{{if .Workspace.Project}} · {{.Workspace.Project}}{{end}}</p>
-<form id="spawn" data-box="{{.Box}}" data-commands="{{.Commands}}" data-kind="create_agent" data-workspace="{{.Workspace.ID}}"
+<div class="crumbs"><a href="/">Dev boxes</a><span class="sep">/</span>{{.Box}}<span class="sep">/</span>{{or .Workspace.Name .Workspace.ID}}</div>
+<div class="page-head"><div><h1>New agent in {{or .Workspace.Name .Workspace.ID}}</h1>
+<p class="sub"><span class="mono">{{.Workspace.Directory}}</span>{{if .Workspace.Branch}} · <span class="mono">{{.Workspace.Branch}}</span>{{end}}{{if .Workspace.Project}} · {{.Workspace.Project}}{{end}}</p></div></div>
+<form id="spawn" class="card form" data-box="{{.Box}}" data-commands="{{.Commands}}" data-kind="create_agent" data-workspace="{{.Workspace.ID}}"
   data-default-provider="{{.Agent.Provider}}" data-default-model="{{.Agent.Model}}" data-default-mode="{{.Agent.Mode}}"
   data-progress-sql="{{.ProgressSQL}}">
   {{template "agentfields" .}}
-  <button>Start agent</button>
+  <div class="form-actions"><button class="btn primary">Start agent</button><a class="btn" href="/">Cancel</a></div>
   <p id="progress"></p>
 </form>
 <script>
@@ -173,9 +163,10 @@ function spawnArgs() {
 
 {{define "workspace"}}{{template "head" "New workspace"}}
 <body>
-<div class="crumbs"><a href="/">Intelligence</a> › {{.Box}}</div>
-<h1>New workspace on {{.Box}}</h1>
-<form id="spawn" data-box="{{.Box}}" data-commands="{{.Commands}}" data-kind="create_workspace"
+<div class="crumbs"><a href="/">Dev boxes</a><span class="sep">/</span>{{.Box}}</div>
+<div class="page-head"><div><h1>New workspace on {{.Box}}</h1>
+<p class="sub">A workspace with an agent in it, by default in a new git worktree.</p></div></div>
+<form id="spawn" class="card form" data-box="{{.Box}}" data-commands="{{.Commands}}" data-kind="create_workspace"
   data-default-provider="{{.Agent.Provider}}" data-default-model="{{.Agent.Model}}" data-default-mode="{{.Agent.Mode}}"
   data-progress-sql="{{.ProgressSQL}}">
   <label for="repo">Repository</label>
@@ -183,16 +174,16 @@ function spawnArgs() {
     {{range .Repositories}}<option value="{{.Root}}">{{if .Project}}{{.Project}} · {{end}}{{.Root}}</option>{{end}}
     <option value="">another directory…</option>
   </select>
-  <input id="cwd" name="cwd" placeholder="a directory on {{.Box}}"{{if .Repositories}} hidden{{end}}>
+  <input id="cwd" name="cwd" style="margin-top:.5rem" placeholder="a directory on {{.Box}}"{{if .Repositories}} hidden{{end}}>
   <label class="check"><input type="checkbox" name="worktree" checked> in a new git worktree</label>
-  <div class="row" id="worktree-fields">
+  <div class="fields" id="worktree-fields">
     <div><label for="branch">Branch</label><input id="branch" name="branch" placeholder="Paseo picks one"></div>
     <div><label for="base">From</label><input id="base" name="base" placeholder="the default branch"></div>
   </div>
   <fieldset><legend>Its agent</legend>
   {{template "agentfields" .}}
   </fieldset>
-  <button>Start workspace and agent</button>
+  <div class="form-actions"><button class="btn primary">Start workspace and agent</button><a class="btn" href="/">Cancel</a></div>
   <p id="progress"></p>
 </form>
 <script>

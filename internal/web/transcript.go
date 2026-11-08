@@ -38,7 +38,7 @@ var transcriptTmpl = template.Must(template.New("transcript").Funcs(template.Fun
 	"dur":      dur,
 	"size":     size,
 	"plural64": func(n int64, word string) string { return plural(int(n), word) },
-}).Parse(transcriptHTML + blocksHTML + resourcesHTML))
+}).Parse(transcriptHTML + blocksHTML + resourcesHTML + layoutHTML))
 
 // blocksTmpl renders blocks alone, for live updates.
 var blocksTmpl = transcriptTmpl
@@ -149,12 +149,16 @@ func transcriptBlocks(cfg Config, reg *fleet.Registry, w http.ResponseWriter, r 
 var entryTmpl = template.Must(template.New("entry").Parse(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Entry {{.Seq}} · Intelligence</title>
-<style>:root{color-scheme:light dark;font-family:system-ui,sans-serif}body{max-width:60rem;margin:1.5rem auto;padding:0 1rem}
-pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.8rem;background:#8881;padding:.75rem;border-radius:.5rem}</style></head>
-<body><p><a href="{{.Back}}">← Back to the transcript</a></p>
-<h1 style="font-size:1.1rem">{{.Kind}}{{if .Tool}} · {{.Tool}}{{end}} <small style="opacity:.6">seq {{.Seq}}</small></h1>
-{{range .Texts}}<h2 style="font-size:.9rem;opacity:.7">{{.Name}}</h2><pre>{{.Text}}</pre>{{end}}
-<h2 style="font-size:.9rem;opacity:.7">Item</h2><pre>{{.Item}}</pre></body></html>`))
+{{template "css"}}
+<style>pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; padding: .9rem 1rem; font-size: 12.5px; }
+.card-head .mono { font-size: 12.5px; }</style></head>
+<body>{{template "top" "/"}}
+<main class="container page">
+<div class="crumbs"><a href="{{.Back}}">← Back to the transcript</a></div>
+<div class="page-head"><h1>{{.Kind}}{{if .Tool}} · {{.Tool}}{{end}}</h1><span class="badge">seq {{.Seq}}</span></div>
+{{range .Texts}}<section class="card"><div class="card-head"><h2>{{.Name}}</h2></div><pre>{{.Text}}</pre></section>{{end}}
+<section class="card"><div class="card-head"><h2>Item</h2></div><pre>{{.Item}}</pre></section>
+</main></body></html>` + layoutHTML))
 
 // transcriptEntry shows one entry whole: its long texts as text, then its item as JSON.
 func transcriptEntry(reg *fleet.Registry, w http.ResponseWriter, r *http.Request) {

@@ -3,51 +3,42 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Usage · Intelligence</title>
+<title>Plans · Intelligence</title>
+{{template "css"}}
 <style>
-  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-  body { max-width: 52rem; margin: 2.5rem auto; padding: 0 1rem; line-height: 1.5; }
-  h1 { font-size: 1.4rem; margin: 0 0 1rem; }
-  h2 { font-size: 1.05rem; margin: 2rem 0 .5rem; }
-  a { color: inherit; } a:hover { color: #27c; }
-  nav { display: flex; gap: 1rem; font-size: .9rem; margin-bottom: 1rem; }
-  nav .on { font-weight: 600; text-decoration: none; }
-  .card { border: 1px solid #8883; border-radius: .5rem; padding: .6rem .8rem; margin: 0 0 1rem; }
-  .chart { width: 100%; height: auto; margin-top: .4rem; }
-  .chart .grid { stroke: #8883; } .chart .axis { font-size: 10px; fill: currentColor; opacity: .6; }
-  .legend { display: flex; gap: 1rem; font-size: .8rem; }
-  .legend i { display: inline-block; width: .8rem; height: .2rem; vertical-align: middle; margin-right: .3rem; }
-  table { border-collapse: collapse; font-size: .85rem; margin-top: .4rem; }
-  td, th { text-align: left; padding: .1rem .8rem .1rem 0; font-weight: normal; }
-  th { opacity: .6; }
-  .meta { opacity: .6; font-size: .85rem; font-weight: normal; }
-  .grow { flex: 1; }
-  .warn { color: #c33; font-size: .85rem; margin: .1rem 0; }
-  {{template "plancss"}}
-  footer { margin-top: 3rem; opacity: .6; font-size: .85rem; }
+  .card .plan-wrap { padding: .9rem 1rem .6rem; }
+  .card .chart-wrap { padding: 0 1rem .8rem; }
+  .card .table { border-top: 1px solid var(--line); }
 </style>
 </head>
 <body>
-<h1><a href="/" style="text-decoration:none">Intelligence</a> · Usage</h1>
-<nav>{{range $d := (list 1 7 30 90)}}<a href="/usage?days={{$d}}"{{if eq $d $.Days}} class="on"{{end}}>{{$d}}d</a>{{end}}</nav>
-{{range .Problems}}<p class="warn">{{.}}</p>{{end}}
+{{template "top" "/usage"}}
+<main class="container page mid">
+<div class="page-head">
+  <div><h1>Plans</h1><p class="sub">How much of each login's windows was used over time, and its weekly peaks.</p></div>
+  <nav class="segmented" aria-label="Range">{{range $d := (list 1 7 30 90)}}<a href="/usage?days={{$d}}"{{if eq $d $.Days}} class="on"{{end}}>{{$d}}d</a>{{end}}</nav>
+</div>
+{{range .Problems}}<p class="banner">{{.}}</p>{{end}}
 {{range .Cards}}
 <section class="card">
-  {{template "plan" (planAt $.Now .Plan)}}
+  <div class="plan-wrap">{{template "plan" (planAt $.Now .Plan)}}</div>
   {{if .Chart}}
+  <div class="chart-wrap">
   {{.Chart}}
   <div class="legend">{{range .Legend}}<span><i style="background: {{.Color}}"></i>{{.Window}} used</span>{{end}}</div>
+  </div>
   {{end}}
   {{if .Peaks}}
-  <table>
-    <tr><th>Weekly peaks: week to</th><th>window</th><th>most used</th></tr>
-    {{range .Peaks}}<tr><td>{{.ResetsAt.Format "Mon Jan 2 15:04 MST"}}</td><td>{{.Window}}</td><td>{{pct .Peak}}</td></tr>{{end}}
+  <table class="table">
+    <tr><th>Weekly peaks: week to</th><th>Window</th><th class="n">Most used</th></tr>
+    {{range .Peaks}}<tr><td>{{.ResetsAt.Format "Mon Jan 2 15:04 MST"}}</td><td><span class="mono">{{.Window}}</span></td><td class="n">{{pct .Peak}}</td></tr>{{end}}
   </table>
   {{end}}
 </section>
 {{else}}
-<p class="meta">No dev box has read any plan yet.</p>
+<p class="empty-state">No dev box has read any plan yet.</p>
 {{end}}
 <footer title="{{.Version}}">version {{.Short}}</footer>
+</main>
 </body>
 </html>
