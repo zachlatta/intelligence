@@ -5,49 +5,272 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{or .Agent.Title "Agent"}} · Intelligence</title>
 <style>
-  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-  body { max-width: 52rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
-  .muted { opacity: .6; }
-  .pill { font-size: .75rem; padding: .05rem .5rem; border-radius: 1rem; background: #8882; }
-  .e { margin: .75rem 0; padding: .5rem .75rem; border-radius: .5rem; border: 1px solid #8883; }
-  .user_message { background: #27c1; border-color: #27c4; }
-  .assistant_message { border-color: #8885; }
-  .reasoning, .tool_call, .other { font-size: .85rem; }
-  .text { white-space: pre-wrap; overflow-wrap: anywhere; margin: .25rem 0 0; font: inherit; }
-  .failed { color: #c33; }
-  pre.detail { font-size: .75rem; overflow-x: auto; max-height: 24rem; }
-  summary { cursor: pointer; }
-  code { font-size: .85em; }
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfbfa; --fg: #1d1d1f; --muted: #6e6e73; --line: #e3e3e0; --card: #ffffff;
+    --you: #eef4ff; --you-line: #c9dafb; --code: #f4f4f2; --accent: #2563eb;
+    --add: #0f7b3f; --add-bg: #e7f6ec; --del: #b42318; --del-bg: #fdecea; --hunk: #6941c6;
+    --run: #2563eb; --bad: #b42318;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141416; --fg: #e8e8ea; --muted: #9a9aa2; --line: #2c2c31; --card: #1b1b1f;
+      --you: #1a2438; --you-line: #2a3a5c; --code: #202025; --accent: #7aa2ff;
+      --add: #5fd38a; --add-bg: #12301f; --del: #ff8a7a; --del-bg: #3a1714; --hunk: #b9a2ff;
+      --run: #7aa2ff; --bad: #ff8a7a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); line-height: 1.55; font-size: 15px; }
+  a { color: var(--accent); }
+  .wrap { max-width: 50rem; margin: 0 auto; padding: 0 1rem 6rem; }
+  .muted { color: var(--muted); }
+  .small { font-size: .8rem; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .82rem; }
+
+  header.top .wrap { padding-top: 1rem; padding-bottom: .4rem; }
+  .bar { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 90%, transparent);
+    backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+  .bar .wrap { padding-top: .45rem; padding-bottom: .45rem; }
+  .crumbs { font-size: .8rem; color: var(--muted); }
+  .crumbs a { color: inherit; text-decoration: none; } .crumbs a:hover { text-decoration: underline; }
+  h1 { font-size: 1.25rem; margin: .15rem 0 .35rem; line-height: 1.3; overflow-wrap: anywhere; }
+  .meta { display: flex; flex-wrap: wrap; gap: .35rem .6rem; align-items: center; font-size: .8rem; color: var(--muted); }
+  .pill { display: inline-flex; align-items: center; gap: .3rem; padding: .05rem .55rem; border-radius: 1rem;
+    background: color-mix(in srgb, var(--muted) 15%, transparent); color: var(--fg); font-size: .75rem; }
+  .pill.running { background: color-mix(in srgb, var(--run) 18%, transparent); color: var(--run); }
+  .pill.error, .pill.attn { background: color-mix(in srgb, var(--bad) 15%, transparent); color: var(--bad); }
+  .dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .dot.running { background: var(--run); } .dot.live { background: var(--add); animation: pulse 1.6s infinite; }
+  @keyframes pulse { 50% { opacity: .3; } }
+
+  .toolbar { display: flex; gap: .4rem; align-items: center; }
+  .toolbar input[type=search] { flex: 1 1 12rem; min-width: 0; padding: .35rem .6rem; border-radius: .5rem;
+    border: 1px solid var(--line); background: var(--card); color: var(--fg); font: inherit; font-size: .85rem; }
+  .toolbar button { padding: .3rem .65rem; border-radius: .5rem; border: 1px solid var(--line); background: var(--card);
+    color: var(--fg); font: inherit; font-size: .8rem; cursor: pointer; }
+  .toolbar button[aria-pressed=false] { color: var(--muted); text-decoration: line-through; }
+  #hits { font-size: .75rem; color: var(--muted); white-space: nowrap; }
+  .img { display: inline-flex; gap: .35rem; align-items: baseline; padding: .1rem .5rem; border: 1px dashed var(--line);
+    border-radius: .4rem; font-size: .85rem; color: var(--muted); }
+
+  .siblings { display: flex; flex-wrap: wrap; gap: .35rem; margin: .9rem 0 0; font-size: .8rem; }
+  .siblings a { text-decoration: none; color: var(--fg); padding: .1rem .55rem; border: 1px solid var(--line); border-radius: 1rem;
+    background: var(--card); max-width: 18rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  main { padding-top: .5rem; }
+  .blk { margin: .5rem 0; }
+  .blk.turn { margin-top: 2rem; }
+  .who { display: flex; align-items: baseline; gap: .5rem; font-size: .78rem; color: var(--muted); margin-bottom: .2rem; }
+  .avatar { font-weight: 600; color: var(--fg); }
+  .avatar.you { color: var(--accent); }
+  .bubble { background: var(--you); border: 1px solid var(--you-line); border-radius: .75rem; padding: .55rem .85rem;
+    max-height: 32rem; overflow: auto; }
+
+  .md > :first-child { margin-top: 0; } .md > :last-child { margin-bottom: 0; }
+  .md p, .md ul, .md ol { margin: .45rem 0; }
+  .md pre { background: var(--code); padding: .6rem .75rem; border-radius: .5rem; overflow-x: auto; }
+  .md code { background: var(--code); padding: .05rem .3rem; border-radius: .3rem; }
+  .md pre code { background: none; padding: 0; }
+  .md table { border-collapse: collapse; display: block; overflow-x: auto; font-size: .85rem; }
+  .md th, .md td { border: 1px solid var(--line); padding: .25rem .5rem; text-align: left; }
+  .md blockquote { margin: .5rem 0; padding-left: .75rem; border-left: 3px solid var(--line); color: var(--muted); }
+  .md h1, .md h2, .md h3 { font-size: 1rem; margin: .9rem 0 .3rem; }
+  .md img { max-width: 100%; }
+
+  details > summary { list-style: none; cursor: pointer; }
+  details > summary::-webkit-details-marker { display: none; }
+  .thought summary { font-size: .82rem; display: flex; gap: .4rem; align-items: baseline; min-width: 0; }
+  .thought .preview { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; font-style: italic; }
+  .thought[open] .preview { display: none; }
+  .thought .md { font-size: .85rem; color: var(--muted); border-left: 2px solid var(--line); padding: .2rem 0 .2rem .75rem; margin: .3rem 0 0 .3rem; }
+
+  .tools { border: 1px solid var(--line); border-radius: .6rem; background: var(--card); overflow: hidden; }
+  .tool + .tool { border-top: 1px solid var(--line); }
+  .tool > summary { display: flex; align-items: center; gap: .45rem; padding: .32rem .65rem; font-size: .82rem; min-width: 0; }
+  .tool > summary:hover { background: color-mix(in srgb, var(--muted) 8%, transparent); }
+  .ticon { width: 1.1rem; text-align: center; flex: none; color: var(--muted); font-family: ui-monospace, monospace; }
+  .tsum { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .78rem; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; min-width: 0; flex: 1; }
+  .tname { color: var(--muted); font-size: .7rem; flex: none; }
+  .badge { flex: none; font-size: .7rem; padding: 0 .4rem; border-radius: .6rem; background: color-mix(in srgb, var(--muted) 15%, transparent); color: var(--muted); }
+  .badge.err { background: color-mix(in srgb, var(--bad) 15%, transparent); color: var(--bad); }
+  .badge.run { background: color-mix(in srgb, var(--run) 15%, transparent); color: var(--run); }
+  .tool.bad > summary .ticon { color: var(--bad); }
+  .tbody { padding: .2rem .75rem .7rem 2.2rem; }
+  .tbody pre { margin: .35rem 0; background: var(--code); border-radius: .45rem; padding: .5rem .65rem; overflow-x: auto;
+    max-height: 26rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .tbody pre.cmd { white-space: pre-wrap; }
+  .prompt { color: var(--muted); user-select: none; }
+  .path code { font-size: .78rem; }
+  .diff { white-space: pre !important; }
+  .diff .add { color: var(--add); background: var(--add-bg); display: block; }
+  .diff .del { color: var(--del); background: var(--del-bg); display: block; }
+  .diff .hunk { color: var(--hunk); }
+  .errtext { color: var(--bad); }
+  .more { font-size: .78rem; }
+  .note { font-size: .8rem; color: var(--muted); text-align: center; padding: .25rem; }
+
+  body.hide-reasoning .blk-reasoning, body.hide-tools .blk-tools { display: none; }
+  .blk.miss { display: none; }
+  mark { background: color-mix(in srgb, #facc15 45%, transparent); color: inherit; }
+
+  #latest { position: fixed; right: 1rem; bottom: 1rem; padding: .45rem .8rem; border-radius: 1.2rem; border: 1px solid var(--line);
+    background: var(--card); color: var(--fg); box-shadow: 0 2px 10px #0002; font: inherit; font-size: .8rem; cursor: pointer; display: none; }
+  .empty { margin: 3rem 0; color: var(--muted); }
+  @media (max-width: 40rem) {
+    .tname { display: none; } .tbody { padding-left: .75rem; } body { font-size: 14px; }
+    .toolbar button { padding: .3rem .45rem; } .wide { display: none; }
+  }
 </style>
 </head>
 <body>
-<p><a href="/">← Dev boxes</a></p>
-<h1>{{or .Agent.Title "(untitled)"}}</h1>
-<p class="muted">
-  {{.Box}} · {{if .Workspace.Listed}}{{or .Workspace.Name .Workspace.ID}}{{else}}workspace {{.Workspace.ID}} (not listed by Paseo){{end}}
-  · <span class="pill">{{.Agent.Status}}</span> · {{.Agent.Provider}}{{if .Agent.Model}}/{{.Agent.Model}}{{end}}
-  · <code title="{{.Agent.ID}}">{{shortID .Agent.ID}}</code>
-  {{if not .Agent.CreatedAt.IsZero}}· started {{ago .Now .Agent.CreatedAt}}{{end}}
-</p>
+<header class="top"><div class="wrap">
+  <div class="crumbs"><a href="/">Dev boxes</a> › {{.Box}} › {{if .Workspace.Listed}}{{or .Workspace.Name .Workspace.ID}}{{else}}{{.Workspace.ID}}{{end}}{{if .Workspace.Branch}} · <code>{{.Workspace.Branch}}</code>{{end}}</div>
+  <h1>{{or .Agent.Title "(untitled)"}}</h1>
+  <div class="meta">
+    <span class="pill {{.Agent.Status}}" id="status"><span class="dot {{.Agent.Status}}"></span>{{.Agent.Status}}</span>
+    {{if .Agent.RequiresAttention}}<span class="pill attn">needs attention{{if .Agent.AttentionReason}}: {{.Agent.AttentionReason}}{{end}}</span>{{end}}
+    <span>{{.Agent.Provider}}{{if .Agent.Model}} · {{.Agent.Model}}{{end}}{{if .Agent.Thinking}} · {{.Agent.Thinking}}{{end}}</span>
+    {{if not .Agent.CreatedAt.IsZero}}<span>started {{ago .Now .Agent.CreatedAt}}</span>{{end}}
+    {{if .Synced}}<span>{{plural .Stats.Turns "turn"}} · {{plural .Stats.Tools "tool call"}} · {{plural .Stats.Entries "entry"}}</span>{{end}}
+    <span title="{{.Agent.ID}}"><code>{{shortID .Agent.ID}}</code></span>
+    {{if .Live}}<span title="New entries appear as the agent works"><span class="dot live"></span> live</span>{{end}}
+  </div>
+</div></header>
 {{if .Synced}}
-<p class="muted">{{len .Transcript.Entries}} entries · synced {{ago .Now .Transcript.SyncedAt}}</p>
-{{range .Transcript.Entries}}
-{{if or (eq .Kind "user_message") (eq .Kind "assistant_message")}}
-<div class="e {{.Kind}}"><span class="muted">{{if eq .Kind "user_message"}}user{{else}}agent{{end}}{{if not .At.IsZero}} · {{ago $.Now .At}}{{end}}</span><pre class="text">{{.Text}}</pre></div>
-{{else if eq .Kind "reasoning"}}
-<details class="e reasoning"><summary class="muted">reasoning</summary><pre class="text">{{.Text}}</pre></details>
-{{else if eq .Kind "tool_call"}}
-<details class="e tool_call"><summary><code>{{.Tool}}</code> <span class="{{.Status}}">{{.Status}}</span></summary><pre class="detail">{{detail .Item}}</pre></details>
-{{else}}
-<div class="e other muted">{{.Kind}}{{if .Text}}: {{.Text}}{{end}}</div>
+<div class="bar"><div class="wrap toolbar">
+  <input type="search" id="search" placeholder="Search" autocomplete="off" aria-label="Search this transcript">
+  <span id="hits"></span>
+  <button type="button" data-toggle="reasoning" aria-pressed="true">Thinking</button>
+  <button type="button" data-toggle="tools" aria-pressed="true">Tools</button>
+  <button type="button" id="expand">Expand<span class="wide"> all</span></button>
+</div></div>
 {{end}}
-{{end}}
-{{else if eq .Agent.Status "closed"}}
-<p class="muted">No transcript synced: this agent was closed before syncing reached it. Reading a closed
-agent's transcript from Paseo would start it again, so it is synced only once it is open in Paseo.</p>
-{{else}}
-<p class="muted">No transcript synced yet: it arrives with the box's next sync.</p>
-{{end}}
-<footer class="muted" style="margin-top:3rem;font-size:.85rem">version {{.Version}}</footer>
+
+<div class="wrap">
+  {{if .Siblings}}
+  <nav class="siblings" aria-label="Other agents in this workspace">
+    {{range .Siblings}}<a href="/devboxes/{{$.Box}}/agents/{{.ID}}" title="{{.Status}}"><span class="dot {{.Status}}"></span> {{or .Title "(untitled)"}}</a>{{end}}
+  </nav>
+  {{end}}
+  <main id="transcript" data-base="{{.Base}}" data-epoch="{{.Transcript.Epoch}}" data-live="{{if .Live}}1{{end}}">
+  {{if .Synced}}
+    {{if .Blocks}}{{template "blocks" .BlocksData}}{{else}}<p class="empty">Nothing in this transcript yet.</p>{{end}}
+  {{else if eq .Agent.Status "closed"}}
+    <p class="empty">No transcript synced: this agent was closed before syncing reached it. Reading a closed
+    agent's transcript from Paseo would start it again, so it is synced once it is open in Paseo.</p>
+  {{else}}
+    <p class="empty">No transcript synced yet: it arrives with the box's next sync.</p>
+  {{end}}
+  </main>
+</div>
+<button id="latest" type="button">↓ Latest</button>
+
+<script>
+(() => {
+  const body = document.body, main = document.getElementById('transcript');
+  const nearBottom = () => window.innerHeight + window.scrollY > document.body.scrollHeight - 200;
+  const toBottom = () => window.scrollTo({ top: document.body.scrollHeight });
+
+  // Times in the reader's zone, on hover.
+  const localize = root => root.querySelectorAll('time[datetime]').forEach(t => { t.title = new Date(t.dateTime).toLocaleString(); });
+  localize(document);
+
+  // Thinking and tool toggles, remembered.
+  document.querySelectorAll('[data-toggle]').forEach(b => {
+    const k = 'hide-' + b.dataset.toggle, set = on => { body.classList.toggle(k, !on); b.setAttribute('aria-pressed', on); };
+    set(localStorage.getItem(k) !== '1');
+    b.onclick = () => { const on = b.getAttribute('aria-pressed') !== 'true'; set(on); localStorage.setItem(k, on ? '0' : '1'); };
+  });
+  const expand = document.getElementById('expand');
+  if (expand) expand.onclick = () => {
+    const open = expand.textContent.startsWith('Expand');
+    main.querySelectorAll('details').forEach(d => d.open = open);
+    expand.firstChild.textContent = open ? 'Collapse' : 'Expand';
+  };
+
+  // Search: blocks without the text hide; matches are marked, and folded ones holding a match open.
+  const search = document.getElementById('search'), hits = document.getElementById('hits');
+  const unmark = () => main.querySelectorAll('mark').forEach(m => { const p = m.parentNode; m.replaceWith(m.textContent); p.normalize(); });
+  const mark = (root, q) => {
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), found = [];
+    for (let t; (t = w.nextNode()) && found.length < 400;) if (t.data.toLowerCase().includes(q)) found.push(t);
+    let n = 0;
+    found.forEach(t => {
+      const lower = t.data.toLowerCase(), frag = document.createDocumentFragment();
+      let i = 0, j;
+      while ((j = lower.indexOf(q, i)) >= 0) {
+        frag.append(t.data.slice(i, j));
+        const m = document.createElement('mark'); m.textContent = t.data.slice(j, j + q.length); frag.append(m);
+        i = j + q.length; n++;
+      }
+      frag.append(t.data.slice(i));
+      t.replaceWith(frag);
+    });
+    return n;
+  };
+  let timer;
+  const filter = () => {
+    const q = (search?.value || '').trim().toLowerCase();
+    unmark();
+    let blocks = 0, marks = 0;
+    main.querySelectorAll('.blk').forEach(b => {
+      const hit = !q || b.textContent.toLowerCase().includes(q);
+      b.classList.toggle('miss', !hit);
+      if (hit && q) {
+        blocks++;
+        b.querySelectorAll('details').forEach(d => { if (d.textContent.toLowerCase().includes(q)) d.open = true; });
+        if (marks < 2000) marks += mark(b, q);
+      }
+    });
+    hits.textContent = q ? blocks + (blocks === 1 ? ' match' : ' matches') : '';
+  };
+  if (search) search.oninput = () => { clearTimeout(timer); timer = setTimeout(filter, 150); };
+
+  // Jump to the latest entry.
+  const latest = document.getElementById('latest');
+  latest.onclick = toBottom;
+  const showLatest = () => { latest.style.display = nearBottom() ? 'none' : 'block'; };
+  window.addEventListener('scroll', showLatest, { passive: true });
+  if (!location.hash) toBottom();
+  showLatest();
+
+  // Live: re-fetch from the last block's start (it may still be growing) and replace from there.
+  if (!main.dataset.live) return;
+  const status = document.getElementById('status');
+  let busy = false;
+  const poll = async () => {
+    if (busy || document.hidden) return;
+    busy = true;
+    try {
+      const blocks = main.querySelectorAll(':scope > .blk');
+      const from = blocks.length ? blocks[blocks.length - 1].dataset.seq : 0;
+      const r = await fetch(main.dataset.base + '/blocks?from=' + from, { cache: 'no-store' });
+      if (!r.ok) return;
+      if (r.headers.get('X-Epoch') !== main.dataset.epoch) { location.reload(); return; }
+      const st = r.headers.get('X-Agent-Status');
+      if (st && status) { status.className = 'pill ' + st; status.innerHTML = '<span class="dot ' + st + '"></span>' + st; }
+      const html = await r.text(), stick = nearBottom();
+      const tpl = document.createElement('template');
+      tpl.innerHTML = html;
+      const open = new Set([...main.querySelectorAll('details[open]')].map(d => d.closest('[data-seq]')?.dataset.seq + ':' + d.className));
+      blocks.forEach(b => { if (+b.dataset.seq >= +from) b.remove(); });
+      main.querySelector('.empty')?.remove();
+      tpl.content.querySelectorAll('details').forEach(d => {
+        if (open.has(d.closest('[data-seq]')?.dataset.seq + ':' + d.className)) d.open = true;
+      });
+      localize(tpl.content);
+      main.append(tpl.content);
+      filter();
+      if (stick) toBottom();
+      showLatest();
+    } finally { busy = false; }
+  };
+  setInterval(poll, 4000);
+  document.addEventListener('visibilitychange', poll);
+})();
+</script>
 </body>
 </html>

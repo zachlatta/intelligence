@@ -98,8 +98,9 @@ func (r *Registry) TranscriptCursors(ctx context.Context, box string) (map[strin
 	return out, err
 }
 
-// Transcript is agentID's transcript on box, in seq order; pgx.ErrNoRows when none is synced.
-func (r *Registry) Transcript(ctx context.Context, box, agentID string) (Transcript, error) {
+// Transcript is agentID's transcript on box from seq fromSeq on (0 for all), in seq order;
+// pgx.ErrNoRows when none is synced.
+func (r *Registry) Transcript(ctx context.Context, box, agentID string, fromSeq int) (Transcript, error) {
 	var t Transcript
 	if err := r.p.QueryRow(ctx, "SELECT epoch, synced_at FROM transcripts WHERE box = $1 AND agent_id = $2", box, agentID).
 		Scan(&t.Epoch, &t.SyncedAt); err != nil {
@@ -107,7 +108,7 @@ func (r *Registry) Transcript(ctx context.Context, box, agentID string) (Transcr
 	}
 	t.SyncedAt = t.SyncedAt.UTC()
 	rows, err := r.p.Query(ctx, `SELECT seq_start, seq_end, turn_id, provider, at, item, kind, tool, status, text
-		FROM transcript_entries WHERE box = $1 AND agent_id = $2 ORDER BY seq_start`, box, agentID)
+		FROM transcript_entries WHERE box = $1 AND agent_id = $2 AND seq_start >= $3 ORDER BY seq_start`, box, agentID, fromSeq)
 	if err != nil {
 		return t, err
 	}
@@ -163,4 +164,16 @@ func replaceNUL(v any) any {
 		return out
 	}
 	return v
+}
+
+// TranscriptEntry is the entry of agentID's transcript that starts at seq; pgx.ErrNoRows when none.
+func (r *Registry) TranscriptEntry(ctx context.Context, box, agentID string, seq int) (Entry, error) {
+	var e Entry
+	var at *time.Time
+	var item []byte
+	err := r.p.QueryRow(ctx, `SELECT seq_start, seq_end, turn_id, provider, at, item, kind, tool, status, text
+		FROM transcript_entries WHERE box = $1 AND agent_id = $2 AND seq_start = $3`, box, agentID, seq).
+		Scan(&e.SeqStart, &e.SeqEnd, &e.TurnID, &e.Provider, &at, &item, &e.Kind, &e.Tool, &e.Status, &e.Text)
+	e.At, e.Item = deref(at), json.RawMessage(item)
+	return e, err
 }

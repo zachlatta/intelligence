@@ -45,7 +45,7 @@ func TestTranscriptStoresEntriesWithReadableColumns(t *testing.T) {
 		Scan(&kind, &text); err != nil || kind != "assistant_message" || text != "on it" {
 		t.Errorf("message row: %q %q %v", kind, text, err)
 	}
-	tr, err := r.Transcript(ctx, "devbox-1", "a1")
+	tr, err := r.Transcript(ctx, "devbox-1", "a1", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,14 +70,14 @@ func TestTranscriptAppendsReplacesTheLastEntryAndResets(t *testing.T) {
 	if c := cur["a1"]; c.Epoch != "ep1" || c.LastSeqStart != 5 || c.LastSeqEnd != 5 {
 		t.Errorf("cursor = %+v", c)
 	}
-	tr, _ := r.Transcript(ctx, "devbox-1", "a1")
+	tr, _ := r.Transcript(ctx, "devbox-1", "a1", 0)
 	if len(tr.Entries) != 3 || tr.Entries[1].Text != "on it" || tr.Entries[1].SeqEnd != 4 {
 		t.Fatalf("entries = %+v", tr.Entries)
 	}
 	// a new epoch replaces everything
 	storeT(t, r, devbox.TranscriptBatch{Box: "devbox-1", AgentID: "a1", Epoch: "ep2", Replace: true,
 		Entries: []devbox.TranscriptEntry{entry(1, 1, `{"type": "user_message", "text": "start over"}`)}})
-	tr, _ = r.Transcript(ctx, "devbox-1", "a1")
+	tr, _ = r.Transcript(ctx, "devbox-1", "a1", 0)
 	if tr.Epoch != "ep2" || len(tr.Entries) != 1 || tr.Entries[0].Text != "start over" {
 		t.Fatalf("after reset = %+v", tr)
 	}

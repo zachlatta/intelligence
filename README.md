@@ -94,7 +94,16 @@ database and read-only role (`internal/dbtest`) on the server in `TEST_DATABASE_
 
 - `GET /`: dev boxes, their workspaces with agents (running first), and their Paseo daemons. Workspaces
   without agents are folded under a count. Refreshes every 15 seconds.
-- `GET /devboxes/{box}/agents/{id}`: one agent's transcript, oldest first.
+- `GET /devboxes/{box}/agents/{id}`: one agent's transcript as turns: messages rendered as Markdown
+  (raw HTML shown as text, unsafe links dropped, images named rather than loaded), thinking folded to
+  a line, and runs of tool calls as a compact list that opens per call (commands with exit codes,
+  diffs, reads, writes, searches). Long output is cut, with a link to the whole entry. Search,
+  thinking and tool toggles, and the other agents in the workspace. While the agent is loaded the
+  page re-fetches from its last block every 4 seconds and replaces it, so a growing message updates
+  in place.
+- `GET /devboxes/{box}/agents/{id}/blocks?from={seq}`: the blocks from a seq on, as HTML, for the live
+  page (`X-Epoch`, `X-Agent-Status`).
+- `GET /devboxes/{box}/agents/{id}/entries/{seq}`: one entry whole.
 - `POST /api/devboxes/transcripts`, `GET /api/devboxes/{box}/transcripts`: a box's transcript uploads
   and where the server's copies end. Need the dev box token.
 - `GET /api/devboxes`: the same, as JSON.

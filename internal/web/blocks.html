@@ -1,0 +1,77 @@
+{{define "blocks"}}{{range .Blocks}}{{template "block" (pair $ .)}}{{end}}{{end}}
+
+{{define "block"}}{{$d := .A}}{{$b := .B}}
+<section class="blk blk-{{$b.Kind}}{{if $b.TurnStart}} turn{{end}}" data-seq="{{$b.Seq}}" data-kind="{{$b.Kind}}">
+{{if eq $b.Kind "user"}}{{$e := index $b.Entries 0}}
+  <div class="who"><span class="avatar you">You</span>{{template "when" (pair $d $e)}}</div>
+  <div class="bubble md">{{md $e.Text}}</div>
+{{else if eq $b.Kind "assistant"}}{{$e := index $b.Entries 0}}
+  <div class="who"><span class="avatar agent">Agent</span>{{template "when" (pair $d $e)}}</div>
+  <div class="md">{{md $e.Text}}</div>
+{{else if eq $b.Kind "reasoning"}}{{$e := index $b.Entries 0}}
+  <details class="thought">
+    <summary><span class="ticon">✦</span> <span class="muted">Thinking</span> <span class="preview">{{preview $e.Text}}</span></summary>
+    <div class="md">{{md $e.Text}}</div>
+  </details>
+{{else if eq $b.Kind "tools"}}
+  <div class="tools">
+  {{range $b.Entries}}{{template "tool" (pair $d .)}}{{end}}
+  </div>
+{{else}}{{$e := index $b.Entries 0}}
+  <div class="note">{{noteText $e}}</div>
+{{end}}
+</section>
+{{end}}
+
+{{define "when"}}{{if not .B.At.IsZero}}<time datetime="{{iso .B.At}}" title="{{iso .B.At}}">{{ago .A.Now .B.At}}</time>{{end}}{{end}}
+
+{{define "tool"}}{{$d := .A}}{{$e := .B}}{{$t := $e.Tool}}
+<details class="tool st-{{$t.Status}}{{if or (eq $t.Status "failed") (and $t.ExitCode (ne (deref $t.ExitCode) 0))}} bad{{end}}" data-seq="{{$e.SeqStart}}">
+  <summary>
+    <span class="ticon">{{$t.Icon}}</span>
+    <span class="tsum">{{$t.Summary}}</span>
+    {{if eq $t.Status "running"}}<span class="badge run">running</span>{{end}}
+    {{if eq $t.Status "failed"}}<span class="badge err">failed</span>{{end}}
+    {{if $t.ExitCode}}{{if ne (deref $t.ExitCode) 0}}<span class="badge err">exit {{deref $t.ExitCode}}</span>{{end}}{{end}}
+    {{if $t.Counts}}<span class="badge">{{$t.Counts}}</span>{{end}}
+    {{if $t.Code}}<span class="badge">{{$t.Code}}</span>{{end}}
+    {{if $t.Lines}}<span class="badge">{{$t.Lines}}</span>{{end}}
+    <span class="tname">{{$t.Kind}}</span>
+  </summary>
+  <div class="tbody">
+  {{if eq $t.Type "shell"}}
+    <pre class="cmd"><span class="prompt">$</span> {{$t.Command}}</pre>
+    {{if $t.Cwd}}<div class="muted small">in <code>{{$t.Cwd}}</code></div>{{end}}
+    {{if $t.Output.Text}}{{template "cut" (pair $d (pair $e $t.Output))}}{{end}}
+  {{else if eq $t.Type "edit"}}
+    <div class="path"><code>{{$t.Path}}</code></div>
+    <pre class="diff">{{range $t.Diff}}<span class="{{.Class}}">{{.Text}}</span>
+{{end}}</pre>
+    {{if $t.DiffCut}}<div class="more"><a href="{{$d.Base}}/entries/{{$e.SeqStart}}">{{$t.DiffCut}} more lines</a></div>{{end}}
+  {{else if or (eq $t.Type "read") (eq $t.Type "write")}}
+    <div class="path"><code>{{$t.Path}}</code></div>
+    {{if $t.Content.Text}}{{template "cut" (pair $d (pair $e $t.Content))}}{{end}}
+  {{else if eq $t.Type "search"}}
+    <div class="path"><code>{{$t.Query}}</code></div>
+    {{if $t.Content.Text}}{{template "cut" (pair $d (pair $e $t.Content))}}{{end}}
+  {{else if eq $t.Type "fetch"}}
+    <div class="path"><a href="{{$t.URL}}" rel="noreferrer noopener" target="_blank">{{$t.URL}}</a></div>
+    {{if $t.Content.Text}}{{template "cut" (pair $d (pair $e $t.Content))}}{{end}}
+  {{else if or (eq $t.Type "sub_agent") (eq $t.Type "plain_text") (eq $t.Type "plan")}}
+    {{if $t.Markdown}}<div class="md">{{$t.Markdown}}</div>{{end}}
+  {{else if eq $t.Type "worktree_setup"}}
+    <div class="path"><code>{{$t.Path}}</code></div>
+    {{if $t.Output.Text}}{{template "cut" (pair $d (pair $e $t.Output))}}{{end}}
+  {{else}}
+    {{if $t.Input.Text}}<div class="muted small">input</div>{{template "cut" (pair $d (pair $e $t.Input))}}{{end}}
+    {{if $t.Result.Text}}<div class="muted small">output</div>{{template "cut" (pair $d (pair $e $t.Result))}}{{end}}
+  {{end}}
+  {{if $t.Error}}<pre class="out errtext">{{$t.Error}}</pre>{{end}}
+  </div>
+</details>
+{{end}}
+
+{{define "cut"}}{{$d := .A}}{{$e := .B.A}}{{$c := .B.B}}
+<pre class="out">{{$c.Text}}</pre>
+{{if $c.Cut}}<div class="more"><a href="{{$d.Base}}/entries/{{$e.SeqStart}}">{{if $c.MoreLines}}{{$c.MoreLines}} more lines{{else}}{{$c.MoreBytes}} more bytes{{end}} — show all</a></div>{{end}}
+{{end}}

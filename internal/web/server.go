@@ -100,6 +100,12 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /devboxes/{box}/agents/{agent}", func(w http.ResponseWriter, r *http.Request) {
 		transcriptPage(cfg, reg, w, r)
 	})
+	mux.HandleFunc("GET /devboxes/{box}/agents/{agent}/blocks", func(w http.ResponseWriter, r *http.Request) {
+		transcriptBlocks(cfg, reg, w, r)
+	})
+	mux.HandleFunc("GET /devboxes/{box}/agents/{agent}/entries/{seq}", func(w http.ResponseWriter, r *http.Request) {
+		transcriptEntry(reg, w, r)
+	})
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		list, err := reg.List(r.Context())
 		if err != nil {
@@ -228,6 +234,11 @@ func plural(n int, word string) string {
 	}
 	if stem, ok := strings.CutSuffix(word, "y"); ok {
 		return fmt.Sprintf("%d %sies", n, stem)
+	}
+	for _, end := range []string{"ch", "sh", "s", "x"} {
+		if strings.HasSuffix(word, end) {
+			return fmt.Sprintf("%d %ses", n, word)
+		}
 	}
 	return fmt.Sprintf("%d %ss", n, word)
 }

@@ -5,6 +5,7 @@ go 1.27.3
 require (
 	github.com/coder/websocket v1.8.15
 	github.com/jackc/pgx/v5 v5.12.0
+	github.com/yuin/goldmark v1.8.7
 )
 
 require (
