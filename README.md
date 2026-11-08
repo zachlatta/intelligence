@@ -97,8 +97,16 @@ against its daemon and reports `running`, then `succeeded` with a result (`{"wor
   message) and `labels`. The agent is labelled `intelligence.command=<command id>`.
 - `rename_workspace`: `workspaceId`, `title` (`""` goes back to the derived name).
 - `archive_workspace`: `workspaceId`. A Paseo-made worktree is removed with it.
-- `rename_agent`: `agentId`, `title`. `send_message`: `agentId`, `text`. `cancel_agent` (stops its
-  current turn) and `archive_agent`: `agentId`.
+- `rename_agent`: `agentId`, `title`. `cancel_agent` (stops its current turn) and `archive_agent`:
+  `agentId`.
+- `send_message`: `agentId`, `text`, and optionally `behavior`, which says what happens to a turn
+  the agent is running: `steer` (the default) adds the message to it (Paseo interrupts instead
+  when the provider cannot steer), `interrupt` stops it and starts a new one, and `queue` waits
+  for it to end. Paseo has no queue of its own, so the box holds queued messages: one stays
+  `running` until its agent is not running and every message queued for that agent before it
+  (by creation time) has gone, then starts a turn. It waits until the command expires, so give it
+  a longer `ttl`; one whose agent is archived meanwhile fails. On an agent that is not running,
+  all three start a turn.
 
 Delivery is at least once: a command sent down a stream that dropped before its result arrived is
 sent again when the box reconnects. Each kind is safe to repeat. Creations and messages carry the
@@ -283,9 +291,12 @@ approval before CI runs.
   diffs, reads, writes, searches). Long output is cut, with a link to the whole entry. Search,
   thinking and tool toggles, and the other agents in the workspace. While the agent is loaded the
   page re-fetches from its last block every 4 seconds and replaces it, so a growing message updates
-  in place. Under its title, the agent's resources from `agent_minutes` and `oom_kills`: its CPU
-  time (average and peak cores), memory now and at its peak, most processes, commands started and
-  OOM kills, opening to charts of its CPU and memory over its life; re-read every minute while live.
+  in place. A chat box at the bottom sends the agent a message through the commands API: Enter
+  (or Steer) steers its running turn, Queue (Alt+Enter) waits for the turn to end, and Interrupt
+  (Cmd/Ctrl+Enter) stops it; Shift+Enter is a new line. Messages not yet delivered are listed
+  above it, read through `/api/sql`; one that fails says why and comes back into the box.
+  Under its title, the agent's resources from `agent_minutes` and `oom_kills`: its CPU time (average
+  and peak cores), memory now and at its peak, most processes, commands started and OOM kills, opening to charts of its CPU and memory over its life; re-read every minute while live.
 - `GET /devboxes/{box}/agents/{id}/resources`: those resources alone, as HTML, for the live page.
 - `GET /devboxes/{box}/agents/{id}/blocks?from={seq}`: the blocks from a seq on, as HTML, for the live
   page (`X-Epoch`, `X-Agent-Status`).

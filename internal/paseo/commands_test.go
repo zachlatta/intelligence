@@ -94,7 +94,7 @@ func TestDaemonRefusalsAreErrors(t *testing.T) {
 	if err := c.RenameAgent(ctx5(t), "missing", "x"); err == nil {
 		t.Errorf("rename a missing agent: no error")
 	}
-	if err := c.SendMessage(ctx5(t), "missing", "hi", "m1"); err == nil {
+	if err := c.SendMessage(ctx5(t), "missing", "hi", "m1", ""); err == nil {
 		t.Errorf("message a missing agent: no error")
 	}
 }
@@ -108,7 +108,7 @@ func TestWorkspaceAndAgentActions(t *testing.T) {
 	for name, err := range map[string]error{
 		"title":   c.SetWorkspaceTitle(ctx, "wks_1", "Login fix"),
 		"rename":  c.RenameAgent(ctx, "a1", "Fixer"),
-		"message": c.SendMessage(ctx, "a1", "keep going", "cmd-9"),
+		"message": c.SendMessage(ctx, "a1", "keep going", "cmd-9", Steer),
 		"cancel":  c.CancelAgent(ctx, "a1"),
 		"archA":   c.ArchiveAgent(ctx, "a1"),
 		"archW":   c.ArchiveWorkspace(ctx, "wks_1"),
@@ -123,7 +123,8 @@ func TestWorkspaceAndAgentActions(t *testing.T) {
 	if r := f.Requests("update_agent_request")[0]; r["agentId"] != "a1" || r["name"] != "Fixer" {
 		t.Errorf("rename request = %v", r)
 	}
-	if r := f.Requests("send_agent_message_request")[0]; r["agentId"] != "a1" || r["text"] != "keep going" || r["messageId"] != "cmd-9" {
+	if r := f.Requests("send_agent_message_request")[0]; r["agentId"] != "a1" || r["text"] != "keep going" || r["messageId"] != "cmd-9" ||
+		r["activeTurnBehavior"] != "steer" {
 		t.Errorf("message request = %v", r)
 	}
 	if r := f.Requests("cancel_agent_request")[0]; r["agentId"] != "a1" {
@@ -134,5 +135,39 @@ func TestWorkspaceAndAgentActions(t *testing.T) {
 	}
 	if r := f.Requests("archive_workspace_request")[0]; r["workspaceId"] != "wks_1" {
 		t.Errorf("archive workspace request = %v", r)
+	}
+}
+
+func TestSendMessageSaysHowToTreatARunningTurn(t *testing.T) {
+	f := paseotest.New(t, token)
+	f.SetAgents(paseotest.Agent("a1", "wks_1", "idle"))
+	c := dial(t, f)
+	if err := c.SendMessage(ctx5(t), "a1", "stop that", "m1", Interrupt); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SendMessage(ctx5(t), "a1", "plain", "m2", ""); err != nil {
+		t.Fatal(err)
+	}
+	reqs := f.Requests("send_agent_message_request")
+	if reqs[0]["activeTurnBehavior"] != "interrupt" {
+		t.Errorf("interrupt request = %v", reqs[0])
+	}
+	if _, ok := reqs[1]["activeTurnBehavior"]; ok {
+		t.Errorf("no behavior sent none, leaving the daemon's default: %v", reqs[1])
+	}
+	if err := c.SendMessage(ctx5(t), "a1", "x", "m3", "later"); err == nil {
+		t.Errorf("an unknown behavior was sent")
+	}
+}
+
+func TestTheDaemonStartsATurnForAMessage(t *testing.T) {
+	f := paseotest.New(t, token)
+	f.SetAgents(paseotest.Agent("a1", "wks_1", "idle"))
+	c := dial(t, f)
+	if err := c.SendMessage(ctx5(t), "a1", "go", "m1", Steer); err != nil {
+		t.Fatal(err)
+	}
+	if st := f.AgentStatus("a1"); st != "running" {
+		t.Errorf("status after a message = %q, want running", st)
 	}
 }

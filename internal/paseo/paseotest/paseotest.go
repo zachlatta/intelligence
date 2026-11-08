@@ -74,6 +74,17 @@ func (f *Daemon) SetAgents(a ...map[string]any) { f.mu.Lock(); f.agents = a; f.m
 // SetWorkspaces sets the workspace descriptors fetch_workspaces serves (see Workspace).
 func (f *Daemon) SetWorkspaces(w ...map[string]any) { f.mu.Lock(); f.workspaces = w; f.mu.Unlock() }
 
+// AgentStatus is an agent's status as the daemon has it ("" for none).
+func (f *Daemon) AgentStatus(id string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if i := f.find(f.agents, id); i >= 0 {
+		s, _ := f.agents[i]["status"].(string)
+		return s
+	}
+	return ""
+}
+
 // FailStatus makes daemon.get_status answer rpc_error with msg ("" answers normally).
 func (f *Daemon) FailStatus(msg string) { f.mu.Lock(); f.statusErr = msg; f.mu.Unlock() }
 
@@ -302,6 +313,14 @@ func (f *Daemon) change(c *websocket.Conn, id string, msg map[string]any) bool {
 			f.agents[i]["title"] = msg["name"]
 			f.write(c, session("update_agent_response", map[string]any{"requestId": id, "agentId": ag, "ok": true, "error": nil}))
 		case "send_agent_message_request":
+			if b, ok := msg["activeTurnBehavior"]; ok && b != "steer" && b != "interrupt" { // the daemon's schema refuses it
+				f.write(c, session("rpc_error", map[string]any{"requestId": id, "requestType": msg["type"],
+					"error": "Invalid message", "code": "invalid_message"}))
+				return true
+			}
+			// a message starts a turn (or joins the running one)
+			f.agents[i]["status"] = "running"
+			f.pushLocked("agent_update", map[string]any{"kind": "upsert", "agent": f.agents[i]})
 			f.write(c, session("send_agent_message_response", map[string]any{"requestId": id, "agentId": ag, "accepted": true, "error": nil}))
 		case "cancel_agent_request":
 			f.write(c, session("cancel_agent_response", map[string]any{"requestId": id, "agentId": ag, "agent": f.agents[i], "error": nil}))

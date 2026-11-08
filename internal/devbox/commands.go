@@ -86,11 +86,29 @@ type WorkspaceArgs struct {
 	Title       string `json:"title,omitempty"`
 }
 
-// AgentArgs name an agent: archive_agent, cancel_agent, rename_agent with Title, send_message with Text.
+// AgentArgs name an agent: archive_agent, cancel_agent, rename_agent with Title, send_message with
+// Text and, optionally, Behavior.
 type AgentArgs struct {
-	AgentID string `json:"agentId"`
-	Title   string `json:"title,omitempty"`
-	Text    string `json:"text,omitempty"`
+	AgentID  string `json:"agentId"`
+	Title    string `json:"title,omitempty"`
+	Text     string `json:"text,omitempty"`
+	Behavior string `json:"behavior,omitempty"` // send_message: steer (""), interrupt or queue
+}
+
+// How a message treats the agent's running turn. Each starts a turn when the agent is not running.
+const (
+	Steer     = "steer"     // joins the running turn (Paseo interrupts when the provider cannot steer)
+	Interrupt = "interrupt" // stops the running turn and starts a new one
+	Queue     = "queue"     // waits for the running turn, and the messages queued before it, to end
+)
+
+// waitsForTurn: a queued message, which may wait as long as the command lives.
+func (c Command) waitsForTurn() bool {
+	if c.Kind != SendMessageKind {
+		return false
+	}
+	var a AgentArgs
+	return json.Unmarshal(c.Args, &a) == nil && a.Behavior == Queue
 }
 
 // CommandResult is what a command made or changed.
@@ -165,6 +183,10 @@ func ParseCommand(kind string, args json.RawMessage) (any, error) {
 			return nil, errors.New("rename_agent needs title")
 		case kind == SendMessageKind && a.Text == "":
 			return nil, errors.New("send_message needs text")
+		case kind == SendMessageKind && a.Behavior != "" && a.Behavior != Steer && a.Behavior != Interrupt && a.Behavior != Queue:
+			return nil, fmt.Errorf("send_message: behavior %q is not steer, interrupt or queue", a.Behavior)
+		case kind != SendMessageKind && a.Behavior != "":
+			return nil, fmt.Errorf("%s takes no behavior", kind)
 		case kind != RenameAgentKind && a.Title != "", kind != SendMessageKind && a.Text != "":
 			return nil, fmt.Errorf("%s takes only agentId", kind)
 		}
@@ -226,7 +248,13 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 		case RenameAgentKind:
 			return r, c.RenameAgent(ctx, a.AgentID, a.Title)
 		case SendMessageKind:
-			return r, c.SendMessage(ctx, a.AgentID, a.Text, cmd.ID)
+			switch a.Behavior {
+			case Queue:
+				return r, w.sendQueued(ctx, cmd, a)
+			case Interrupt:
+				return r, c.SendMessage(ctx, a.AgentID, a.Text, cmd.ID, paseo.Interrupt)
+			}
+			return r, c.SendMessage(ctx, a.AgentID, a.Text, cmd.ID, paseo.Steer)
 		}
 	}
 	return CommandResult{}, fmt.Errorf("unknown command kind %q", cmd.Kind)
@@ -315,7 +343,11 @@ func (r *Runner) run(ctx context.Context, cmd Command) CommandUpdate {
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
-	ectx, cancel := context.WithTimeout(ctx, timeout)
+	deadline := now().Add(timeout)
+	if cmd.waitsForTurn() && cmd.ExpiresAt.After(deadline) {
+		deadline = cmd.ExpiresAt
+	}
+	ectx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	res, err := r.Exec(ectx, cmd)
 	var b json.RawMessage

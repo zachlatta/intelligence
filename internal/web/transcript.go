@@ -115,6 +115,8 @@ func transcriptPage(cfg Config, reg *fleet.Registry, w http.ResponseWriter, r *h
 		"Box": box, "Agent": agent, "Workspace": ws, "Siblings": siblings, "Transcript": tr, "Synced": err == nil,
 		"Now": cfg.Now(), "Base": base, "Stats": stats, "Live": err == nil && live(agent), "Blocks": blocks,
 		"BlocksData": blocksData{Base: base, Blocks: blocks, Now: cfg.Now()}, "Resources": res,
+		"Chat": map[string]string{"Commands": "/api/devboxes/" + box + "/commands", "PendingSQL": pendingMessagesSQL(box, agentID),
+			"QueueTTL": queuedMessageTTL},
 	})
 }
 

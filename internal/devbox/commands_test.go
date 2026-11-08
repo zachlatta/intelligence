@@ -8,20 +8,26 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/zachlatta/intelligence/internal/paseo/paseotest"
 )
 
 func TestParseCommandChecksEachKind(t *testing.T) {
 	good := map[string]string{
-		CreateWorkspaceKind:  `{"cwd":"/w/app","worktree":true,"branch":"fix","base":"main","title":"Fix","agent":{"provider":"claude","prompt":"go"}}`,
-		CreateAgentKind:      `{"workspaceId":"w1","provider":"claude","prompt":"go"}`,
-		ArchiveWorkspaceKind: `{"workspaceId":"w1"}`,
-		RenameWorkspaceKind:  `{"workspaceId":"w1","title":"New"}`,
-		ArchiveAgentKind:     `{"agentId":"a1"}`,
-		CancelAgentKind:      `{"agentId":"a1"}`,
-		RenameAgentKind:      `{"agentId":"a1","title":"New"}`,
-		SendMessageKind:      `{"agentId":"a1","text":"hi"}`,
+		CreateWorkspaceKind:            `{"cwd":"/w/app","worktree":true,"branch":"fix","base":"main","title":"Fix","agent":{"provider":"claude","prompt":"go"}}`,
+		CreateAgentKind:                `{"workspaceId":"w1","provider":"claude","prompt":"go"}`,
+		ArchiveWorkspaceKind:           `{"workspaceId":"w1"}`,
+		RenameWorkspaceKind:            `{"workspaceId":"w1","title":"New"}`,
+		ArchiveAgentKind:               `{"agentId":"a1"}`,
+		CancelAgentKind:                `{"agentId":"a1"}`,
+		RenameAgentKind:                `{"agentId":"a1","title":"New"}`,
+		SendMessageKind:                `{"agentId":"a1","text":"hi"}`,
+		SendMessageKind + " steer":     `{"agentId":"a1","text":"hi","behavior":"steer"}`,
+		SendMessageKind + " interrupt": `{"agentId":"a1","text":"hi","behavior":"interrupt"}`,
+		SendMessageKind + " queue":     `{"agentId":"a1","text":"hi","behavior":"queue"}`,
 	}
-	for kind, args := range good {
+	for name, args := range good {
+		kind, _, _ := strings.Cut(name, " ")
 		if _, err := ParseCommand(kind, json.RawMessage(args)); err != nil {
 			t.Errorf("%s %s: %v", kind, args, err)
 		}
@@ -39,6 +45,8 @@ func TestParseCommandChecksEachKind(t *testing.T) {
 		ArchiveAgentKind + " text":                 `{"agentId":"a1","text":"x"}`,
 		RenameAgentKind + " no title":              `{"agentId":"a1"}`,
 		SendMessageKind + " no text":               `{"agentId":"a1"}`,
+		SendMessageKind + " unknown behavior":      `{"agentId":"a1","text":"hi","behavior":"later"}`,
+		CancelAgentKind + " behavior":              `{"agentId":"a1","behavior":"queue"}`,
 		"delete_everything x":                      `{}`,
 		CreateWorkspaceKind + " not an object":     `[1]`,
 	}
@@ -240,5 +248,135 @@ func TestRunnerDoesNotStartAnExpiredCommand(t *testing.T) {
 	r.Wait()
 	if got := u.statuses(); len(got) != 1 || got[0] != "c1:failed" {
 		t.Errorf("updates = %v", got)
+	}
+}
+
+func TestASentMessageSteersByDefaultOrInterrupts(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	for _, args := range []string{`{"agentId":"a1","text":"one"}`, `{"agentId":"a1","text":"two","behavior":"steer"}`,
+		`{"agentId":"a1","text":"three","behavior":"interrupt"}`} {
+		if _, err := execute(t, w, SendMessageKind, args); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got []string
+	for _, r := range d.Requests("send_agent_message_request") {
+		got = append(got, r["text"].(string)+":"+r["activeTurnBehavior"].(string))
+	}
+	if strings.Join(got, " ") != "one:steer two:steer three:interrupt" {
+		t.Errorf("sent %v", got)
+	}
+}
+
+// sendQueued executes a queued message in the background and returns its result.
+func sendQueued(w *Watcher, id string, created time.Time, text string) <-chan error {
+	done := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err := w.Execute(ctx, Command{ID: id, Kind: SendMessageKind, CreatedAt: created,
+			Args: json.RawMessage(`{"agentId":"a1","text":"` + text + `","behavior":"queue"}`)})
+		done <- err
+	}()
+	return done
+}
+
+func sentTexts(d interface {
+	Requests(string) []map[string]any
+}) []string {
+	var got []string
+	for _, r := range d.Requests("send_agent_message_request") {
+		got = append(got, r["text"].(string))
+	}
+	return got
+}
+
+func TestAQueuedMessageWaitsForTheTurnToEndAndQueuedOnesGoInOrder(t *testing.T) {
+	d := daemon(t) // a1 is running
+	w := watcher(t, d)
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	second := sendQueued(w, "q2", t0.Add(time.Second), "second") // arrives first, but was sent later
+	time.Sleep(50 * time.Millisecond)
+	first := sendQueued(w, "q1", t0, "first")
+	time.Sleep(200 * time.Millisecond)
+	if got := sentTexts(d); len(got) != 0 {
+		t.Fatalf("sent %v while the agent was running", got)
+	}
+
+	d.Push("agent_update", map[string]any{"kind": "upsert", "agent": paseotest.Agent("a1", "w1", "idle")})
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond) // the first message's turn is running: the second waits for it
+	if got := sentTexts(d); strings.Join(got, " ") != "first" {
+		t.Fatalf("sent %v, want only the first", got)
+	}
+	if r := d.Requests("send_agent_message_request")[0]; r["messageId"] != "q1" {
+		t.Errorf("message id = %v", r["messageId"])
+	}
+
+	d.Push("agent_update", map[string]any{"kind": "upsert", "agent": paseotest.Agent("a1", "w1", "idle")})
+	if err := <-second; err != nil {
+		t.Fatal(err)
+	}
+	if got := sentTexts(d); strings.Join(got, " ") != "first second" {
+		t.Errorf("sent %v", got)
+	}
+}
+
+func TestAQueuedMessageToAnIdleAgentGoesAtOnce(t *testing.T) {
+	d := daemon(t) // a2 is idle
+	w := watcher(t, d)
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	if _, err := execute(t, w, SendMessageKind, `{"agentId":"a2","text":"now","behavior":"queue"}`); err != nil {
+		t.Fatal(err)
+	}
+	if r := d.Requests("send_agent_message_request"); len(r) != 1 || r[0]["activeTurnBehavior"] != "steer" {
+		t.Errorf("requests = %v", r)
+	}
+}
+
+func TestAQueuedMessageFailsWhenItsAgentIsGone(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	if _, err := execute(t, w, SendMessageKind, `{"agentId":"nope","text":"x","behavior":"queue"}`); err == nil {
+		t.Errorf("queued for an agent the box does not have: no error")
+	}
+	waiting := sendQueued(w, "q1", t0, "x")
+	time.Sleep(100 * time.Millisecond)
+	d.Push("agent_update", map[string]any{"kind": "remove", "agentId": "a1"})
+	select {
+	case err := <-waiting:
+		if err == nil || !strings.Contains(err.Error(), "archived") {
+			t.Errorf("err = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("still waiting for an archived agent")
+	}
+	if got := sentTexts(d); len(got) != 0 {
+		t.Errorf("sent %v", got)
+	}
+}
+
+func TestRunnerLetsAQueuedMessageWaitUntilItExpires(t *testing.T) {
+	expires := time.Now().Add(time.Hour)
+	var deadlines []time.Time
+	r := &Runner{Exec: func(ctx context.Context, c Command) (CommandResult, error) {
+		d, _ := ctx.Deadline()
+		deadlines = append(deadlines, d)
+		return CommandResult{}, nil
+	}, Report: (&updates{}).report, Timeout: time.Minute}
+	r.run(context.Background(), Command{ID: "q", Kind: SendMessageKind, ExpiresAt: expires,
+		Args: json.RawMessage(`{"agentId":"a1","text":"x","behavior":"queue"}`)})
+	r.run(context.Background(), Command{ID: "s", Kind: SendMessageKind, ExpiresAt: expires,
+		Args: json.RawMessage(`{"agentId":"a1","text":"x"}`)})
+	if !deadlines[0].Equal(expires) {
+		t.Errorf("queued deadline = %v, want its expiry %v", deadlines[0], expires)
+	}
+	if time.Until(deadlines[1]) > time.Minute {
+		t.Errorf("a steering message's deadline = %v, want the runner's timeout", deadlines[1])
 	}
 }

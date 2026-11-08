@@ -30,6 +30,12 @@ type Watcher struct {
 	agents     map[string]paseo.Agent
 	changed    chan struct{}
 	once       sync.Once
+
+	// queued messages (queue.go): each agent's, in order; when a queued one was last sent, until
+	// word of its turn arrives; and a channel closed (and replaced) on every change to look again
+	queues   map[string][]queuedMessage
+	settling map[string]time.Time
+	wake     chan struct{}
 }
 
 func (w *Watcher) init() {
@@ -67,6 +73,7 @@ func (w *Watcher) Run(ctx context.Context) {
 		if ctx.Err() == nil {
 			w.err = err.Error()
 		}
+		w.wakeLocked()
 		w.mu.Unlock()
 		w.signal()
 		select {
@@ -113,6 +120,7 @@ func (w *Watcher) session(ctx context.Context) error {
 	for _, a := range agents {
 		w.agents[a.ID] = a
 	}
+	w.wakeLocked()
 	w.mu.Unlock()
 	cancel()
 	w.signal()
@@ -133,6 +141,7 @@ func (w *Watcher) apply(e paseo.Event) {
 	switch {
 	case e.Agent != nil:
 		w.agents[e.Agent.ID] = *e.Agent
+		delete(w.settling, e.Agent.ID) // word of the turn a queued message started
 	case e.AgentRemoved != "":
 		delete(w.agents, e.AgentRemoved)
 	case e.Workspace != nil:
@@ -140,6 +149,7 @@ func (w *Watcher) apply(e paseo.Event) {
 	case e.WorkspaceRemoved != "":
 		delete(w.workspaces, e.WorkspaceRemoved)
 	}
+	w.wakeLocked()
 	w.mu.Unlock()
 	w.signal()
 }

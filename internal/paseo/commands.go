@@ -131,11 +131,27 @@ func (c *Client) RenameAgent(ctx context.Context, id, title string) error {
 	return c.command(ctx, map[string]any{"type": "update_agent_request", "agentId": id, "name": title}, nil)
 }
 
+// How a message treats a turn the agent is running: Steer joins it (the daemon falls back to
+// interrupting when the provider cannot steer), Interrupt stops it and starts a new one. Either
+// starts a turn on an agent that is not running.
+const (
+	Steer     = "steer"
+	Interrupt = "interrupt"
+)
+
 // SendMessage sends an agent a message. messageID makes a repeat of the same message a no-op.
-func (c *Client) SendMessage(ctx context.Context, agentID, text, messageID string) error {
+// turn is Steer, Interrupt or "" (the daemon's default, which interrupts).
+func (c *Client) SendMessage(ctx context.Context, agentID, text, messageID, turn string) error {
 	req := map[string]any{"type": "send_agent_message_request", "agentId": agentID, "text": text}
 	if messageID != "" {
 		req["messageId"] = messageID
+	}
+	switch turn {
+	case "":
+	case Steer, Interrupt:
+		req["activeTurnBehavior"] = turn
+	default:
+		return fmt.Errorf("send message: unknown turn behavior %q", turn)
 	}
 	return c.command(ctx, req, nil)
 }
