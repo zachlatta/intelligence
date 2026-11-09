@@ -97,10 +97,11 @@ type WorkspaceArgs struct {
 // AgentArgs name an agent: archive_agent, cancel_agent, rename_agent with Title, send_message with
 // Text and, optionally, Behavior.
 type AgentArgs struct {
-	AgentID  string `json:"agentId"`
-	Title    string `json:"title,omitempty"`
-	Text     string `json:"text,omitempty"`
-	Behavior string `json:"behavior,omitempty"` // send_message: steer (""), interrupt or queue
+	Attachments []attachment.Image `json:"attachments,omitempty"`
+	AgentID     string             `json:"agentId"`
+	Title       string             `json:"title,omitempty"`
+	Text        string             `json:"text,omitempty"`
+	Behavior    string             `json:"behavior,omitempty"` // send_message: steer (""), interrupt or queue
 }
 
 // How a message treats the agent's running turn. Each starts a turn when the agent is not running.
@@ -196,6 +197,8 @@ func ParseCommand(kind string, args json.RawMessage) (any, error) {
 			return nil, errors.New("send_message needs text")
 		case kind == SendMessageKind && a.Behavior != "" && a.Behavior != Steer && a.Behavior != Interrupt && a.Behavior != Queue:
 			return nil, fmt.Errorf("send_message: behavior %q is not steer, interrupt or queue", a.Behavior)
+		case kind != SendMessageKind && len(a.Attachments) > 0:
+			return nil, fmt.Errorf("%s takes no attachments", kind)
 		case kind != SendMessageKind && a.Behavior != "":
 			return nil, fmt.Errorf("%s takes no behavior", kind)
 		case kind != RenameAgentKind && a.Title != "", kind != SendMessageKind && a.Text != "":
@@ -267,6 +270,11 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 		case RenameAgentKind:
 			return r, c.RenameAgent(ctx, a.AgentID, a.Title)
 		case SendMessageKind:
+			if a.Behavior != Queue {
+				if err := w.prepareMessageImages(a); err != nil {
+					return r, err
+				}
+			}
 			switch a.Behavior {
 			case Queue:
 				return r, w.sendQueued(ctx, cmd, a)

@@ -19,27 +19,39 @@ func resolveImages(ctx context.Context, tx pgx.Tx, host, kind string, args json.
 	if err != nil {
 		return nil, err
 	}
-	var agent *hostclient.CreateAgentArgs
+	var text *string
+	var images *[]attachment.Image
 	switch a := parsed.(type) {
 	case hostclient.CreateAgentArgs:
-		agent = &a
+		parsed = &a
+		text = &a.Prompt
+		images = &a.Attachments
 	case hostclient.CreateWorkspaceArgs:
-		agent = a.Agent
+		if a.Agent == nil {
+			return args, nil
+		}
+		parsed = &a
+		text = &a.Agent.Prompt
+		images = &a.Agent.Attachments
+	case hostclient.AgentArgs:
+		if kind != hostclient.SendMessageKind {
+			return args, nil
+		}
+		parsed = &a
+		text = &a.Text
+		images = &a.Attachments
 	default:
 		return args, nil
 	}
-	if agent == nil {
-		return args, nil
-	}
-	if len(agent.Attachments) > 0 {
+	if len(*images) > 0 {
 		return nil, fmt.Errorf("upload images through /api/attachments and use their references")
 	}
-	if !attachment.Reference.MatchString(agent.Prompt) {
+	if !attachment.Reference.MatchString(*text) {
 		return args, nil
 	}
 	seen := map[string]bool{}
 	total := 0
-	for _, m := range attachment.Reference.FindAllStringSubmatch(agent.Prompt, -1) {
+	for _, m := range attachment.Reference.FindAllStringSubmatch(*text, -1) {
 		id := m[1]
 		if seen[id] {
 			continue
@@ -55,15 +67,8 @@ func resolveImages(ctx context.Context, tx pgx.Tx, host, kind string, args json.
 		if len(seen) > attachment.MaxCount || total > attachment.MaxTotal {
 			return nil, fmt.Errorf("attach at most 8 images, 8 MiB total")
 		}
-		agent.Attachments = append(agent.Attachments, img)
-		agent.Prompt = strings.ReplaceAll(agent.Prompt, m[0], "Image (open this file; pass its path to any sub-agents): "+img.Path())
+		*images = append(*images, img)
+		*text = strings.ReplaceAll(*text, m[0], "Image (open this file; pass its path to any sub-agents): "+img.Path())
 	}
-	switch a := parsed.(type) {
-	case hostclient.CreateAgentArgs:
-		return json.Marshal(agent)
-	case hostclient.CreateWorkspaceArgs:
-		a.Agent = agent
-		return json.Marshal(a)
-	}
-	return args, nil
+	return json.Marshal(parsed)
 }

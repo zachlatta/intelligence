@@ -61,6 +61,24 @@ func TestImageAttachments(t *testing.T) {
 		t.Fatalf("spawn: %d %s", rec.Code, rec.Body)
 	}
 	b.command()
+	for _, behavior := range []string{"steer", "interrupt", "queue"} {
+		message, _ := json.Marshal(map[string]any{"kind": "send_message", "args": map[string]string{"agentId": agentA1, "text": "Inspect " + out.Reference, "behavior": behavior}})
+		rec = call(t, h, http.MethodPost, "/api/hosts/host-1/commands", string(message), sameOriginFetch)
+		if rec.Code != 202 {
+			t.Fatalf("message %s: %d %s", behavior, rec.Code, rec.Body)
+		}
+		command := b.command()
+		var delivered struct {
+			Text        string `json:"text"`
+			Attachments []struct {
+				Data []byte `json:"data"`
+			} `json:"attachments"`
+		}
+		json.Unmarshal(command.Args, &delivered)
+		if len(delivered.Attachments) != 1 || !bytes.Equal(delivered.Attachments[0].Data, img.Bytes()) || strings.Contains(delivered.Text, "attachment:") || !strings.Contains(delivered.Text, ".factory-scratch/attachments/") {
+			t.Fatalf("message delivery: %s", command.Args)
+		}
+	}
 	for _, data := range []string{`{"name":"x.svg","data":"PHN2Zz4="}`, `{"name":"x.png","data":"bad"}`} {
 		rec = call(t, h, http.MethodPost, "/api/attachments", data, sameOriginFetch)
 		if rec.Code != 400 {
@@ -92,13 +110,18 @@ func TestImageAttachments(t *testing.T) {
 	if rec.Code != 400 {
 		t.Fatalf("cross-account image launch: %d %s", rec.Code, rec.Body)
 	}
+	message, _ := json.Marshal(map[string]any{"kind": "send_message", "args": map[string]string{"agentId": agentA1, "text": out.Reference, "behavior": "queue"}})
+	rec = call(t, h, http.MethodPost, "/api/hosts/bobs-host/commands", string(message), sameOriginFetch, asBob)
+	if rec.Code != 400 {
+		t.Fatalf("cross-account message image: %d %s", rec.Code, rec.Body)
+	}
 }
 
 func TestAttachmentControlsOnTaskAndSpawnForms(t *testing.T) {
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	wf := createWorkflow(t, h, workflow.Starting)
-	for _, path := range []string{"/workflows", "/workflows/" + wf, newAgentPath, "/hosts/host-1/workspaces/new"} {
+	for _, path := range []string{"/workflows", "/workflows/" + wf, newAgentPath, "/hosts/host-1/workspaces/new", "/hosts/host-1/agents/" + agentA1} {
 		page := get(t, h, path, nil)
 		if page.Code != 200 || !strings.Contains(page.Body.String(), `src="/attachments.js"`) || !strings.Contains(page.Body.String(), `imageAttachments(`) {
 			t.Errorf("missing attachments on %s", path)
@@ -133,5 +156,10 @@ func TestTooManyImageAttachmentsRefusesRun(t *testing.T) {
 	code, rows := sqlPost(t, h, q("SELECT id FROM workflow_runs"))
 	if code != 200 || len(rows.Rows) != 0 {
 		t.Fatal("refused run left persisted state")
+	}
+	message, _ := json.Marshal(map[string]any{"kind": "send_message", "args": map[string]string{"agentId": agentA1, "text": input, "behavior": "queue"}})
+	rec = call(t, h, http.MethodPost, "/api/hosts/host-1/commands", string(message), sameOriginFetch)
+	if rec.Code != 400 {
+		t.Fatalf("message image limit: %d %s", rec.Code, rec.Body)
 	}
 }

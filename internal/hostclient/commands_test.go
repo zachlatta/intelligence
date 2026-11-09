@@ -33,6 +33,7 @@ func TestParseCommandChecksEachKind(t *testing.T) {
 		}
 	}
 	bad := map[string]string{
+		ArchiveAgentKind + " attachments":          `{"agentId":"a1","attachments":[{"id":"image"}]}`,
 		CreateWorkspaceKind + " no cwd":            `{}`,
 		CreateWorkspaceKind + " branch":            `{"cwd":"/w","branch":"x"}`,
 		CreateWorkspaceKind + " agent no provider": `{"cwd":"/w","agent":{"prompt":"go"}}`,

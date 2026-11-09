@@ -11,10 +11,10 @@ function imageAttachments(text, zone = text.closest('form') || text.parentElemen
   const previews = document.createElement('div'); previews.className = 'attachment-previews';
   const error = document.createElement('p'); error.className = 'warn'; error.setAttribute('role', 'alert');
   panel.append(pick, input, hint, previews, error); text.after(panel);
-  let files = [], busy = false;
+  let files = [], busy = false, disabled = false;
   const warn = msg => { error.textContent = msg; };
   function add(incoming) {
-    if (busy) return;
+    if (busy || disabled) return;
     warn('');
     for (const file of incoming) {
       if (!['image/png', 'image/jpeg', 'image/gif'].includes(file.type)) { warn('Use PNG, JPEG or GIF images.'); continue; }
@@ -25,7 +25,7 @@ function imageAttachments(text, zone = text.closest('form') || text.parentElemen
       const preview = document.createElement('div'), img = document.createElement('img'), remove = document.createElement('button');
       img.src = url; img.alt = file.name;
       remove.type = 'button'; remove.className = 'btn'; remove.textContent = 'Remove ' + file.name;
-      remove.onclick = () => { if (busy) return; files = files.filter(f => f !== item); URL.revokeObjectURL(url); preview.remove(); };
+      remove.onclick = () => { if (busy || disabled) return; files = files.filter(f => f !== item); URL.revokeObjectURL(url); preview.remove(); };
       preview.append(img, remove); previews.append(preview); files.push(item);
     }
   }
@@ -37,6 +37,12 @@ function imageAttachments(text, zone = text.closest('form') || text.parentElemen
   text.addEventListener('paste', e => { if (e.clipboardData.files.length) { e.preventDefault(); add(e.clipboardData.files); } });
   window.addEventListener('pagehide', () => files.forEach(f => URL.revokeObjectURL(f.url)));
   return {
+    hasImages: () => files.length > 0,
+    setDisabled(value) { disabled = value; pick.disabled = value; },
+    clear() {
+      files.forEach(f => URL.revokeObjectURL(f.url)); files = [];
+      previews.replaceChildren(); input.value = ''; warn('');
+    },
     async prompt(value) {
       if (busy) throw new Error('Images are still uploading.');
       busy = true; pick.disabled = true; warn('');
@@ -53,7 +59,7 @@ function imageAttachments(text, zone = text.closest('form') || text.parentElemen
         }
         return value + (files.length ? '\n\nAttached images:\n' + files.map(f => f.reference).join('\n') : '');
       } catch (e) { warn(e.message); throw e; }
-      finally { busy = false; pick.disabled = false; }
+      finally { busy = false; pick.disabled = disabled; }
     }
   };
 }

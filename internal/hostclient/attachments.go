@@ -71,3 +71,22 @@ func materializeImages(cwd string, images []attachment.Image) error {
 	}
 	return nil
 }
+
+// Resolve the session's current directory when actually sending, including after a queue wait.
+func (w *Watcher) prepareMessageImages(a AgentArgs) error {
+	if len(a.Attachments) == 0 {
+		return nil
+	}
+	w.mu.Lock()
+	ag, ok := w.agents[a.AgentID]
+	cwd := ag.Cwd
+	if cwd == "" {
+		cwd = w.workspaces[ag.WorkspaceID].Directory
+	}
+	w.mu.Unlock()
+	if !ok || cwd == "" {
+		return fmt.Errorf("cannot locate agent %s for image delivery", a.AgentID)
+	}
+	home, _ := os.UserHomeDir()
+	return materializeImages(expandHome(cwd, home), a.Attachments)
+}

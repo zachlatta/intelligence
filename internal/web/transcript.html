@@ -462,12 +462,15 @@
   </div>
 </div></form>
 
+<script src="/attachments.js"></script>
 <script>
 const isWorking = st => st === 'running' || st === 'initializing';
 // The chat box writes through the commands API (send_message with a behavior) and reads back the
 // messages not yet delivered through the read-only SQL API.
 (() => {
   const form = document.getElementById('chat'), text = form.elements.text;
+  const images = imageAttachments(text, form);
+  let sending = false;
   const hint = document.getElementById('chat-hint'), pendingList = document.getElementById('pending');
   const { commands, agent, pendingSql, queueTtl } = form.dataset;
   const steerButton = form.querySelector('[data-behavior=steer]');
@@ -554,13 +557,17 @@ const isWorking = st => st === 'running' || st === 'initializing';
   refresh();
 
   async function send(behavior) {
+    if (sending) return;
     const msg = text.value;
-    if (!msg.trim()) { text.focus(); return; }
+    if (!msg.trim() && !images.hasImages()) { text.focus(); return; }
+    sending = true;
+    images.setDisabled(true);
     const buttons = form.querySelectorAll('button');
     buttons.forEach(b => b.disabled = true);
     say('Sending…');
     try {
-      const body = { kind: 'send_message', args: { agentId: agent, text: msg, behavior } };
+      const message = await images.prompt(msg);
+      const body = { kind: 'send_message', args: { agentId: agent, text: message, behavior } };
       if (behavior === 'queue') body.ttl = queueTtl;
       const res = await fetch(commands, { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body) });
@@ -568,13 +575,16 @@ const isWorking = st => st === 'running' || st === 'initializing';
       if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
       const { id } = await res.json();
       if (!/^[0-9a-f-]{36}$/.test(id)) throw new Error('the server returned a bad command id');
-      sent.set(id, msg);
+      sent.set(id, message);
+      images.clear();
       text.value = ''; sessionStorage.removeItem(draftKey);
       say();
       refresh();
     } catch (err) {
       say('Not sent: ' + err.message, true);
     } finally {
+      sending = false;
+      images.setDisabled(false);
       buttons.forEach(b => b.disabled = false);
       text.focus();
     }
