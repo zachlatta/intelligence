@@ -89,6 +89,10 @@ The hierarchy is hosts > workspaces > agents:
   `host_enrollments` (hosts waiting for their code to be entered). An account reads only its own.
 - `workflows`, `workflow_versions` (every saved definition), `workflow_runs` and
   `workflow_run_events` (what happened in each run, in order): Workflows, below.
+- `gmail_connections` (the account's Gmail mailbox: its address, the account holder's own
+  addresses, how far it is read, and its Google token, sealed with `CONNECTIONS_KEY`, so reading it
+  gives nothing) and `emails` (every email it received, and what it did and why): Email triggers,
+  below.
 - `schema_migrations`.
 
 Each report replaces its host's workspaces and agents. A host that cannot reach its daemon has none,
@@ -339,6 +343,31 @@ workspace) through their results: a failed one fails the run.
 
 Variables in instructions: `{{input}}`, `{{repo}}`, `{{branch}}` and `{{run}}`.
 
+### Email triggers
+
+A workflow's trigger can be email (`internal/email`). An account connects one Gmail mailbox with
+Google's sign-in (read-only scope, offline, PKCE; the state is signed and names the account), and
+the server reads it every 15 seconds: Gmail's history since the last read, then, once, the last 30
+days, kept as `before` for the editor's preview. Each new email is stored in `emails` with what it
+did, in the transaction that does it, so it does it once:
+
+1. **In the thread of a run** (an earlier email in its Gmail thread started one), the workflow's
+   `replies` decides: `run` (the default) adds it to the run as a message to its orchestrator; if
+   the run waits on a question and the email is from one of the account holder's own addresses,
+   it is the answer; if the run is over, it starts a new run of the workflow. `new` starts a new
+   run; `ignore` does nothing.
+2. **Otherwise** it starts the workflow whose filter (`definition.email`: `from` addresses or
+   `@domain`s, `to`, `subject`, `words`, `without`, `attachment`) it matches, like a Gmail filter:
+   every filled field must match. When two match, the narrower wins (more fields; an address beats
+   its domain). Saving a filter that another workflow already has, sharing a sender with nothing to
+   tell them apart, is refused.
+
+A sender counts only if Gmail verified it: the first `Authentication-Results` (Gmail's own) must
+say `dmarc=pass` for the From domain. Forged mail never starts or steers a run; nor does a mailing
+list or newsletter (`List-Id`, `List-Unsubscribe`, `Precedence: bulk`), nor the mailbox's own mail.
+A run's input is the email (its subject is the run's title), marked, unless it is from the account
+holder, as information, not instructions. The mailbox is only read: nothing is labeled or sent.
+
 ### Transcripts
 
 After each report, and every 2 seconds while an agent is running, the host syncs the transcripts of
@@ -545,6 +574,17 @@ origin (another site's request is refused with 403), and those with a body must 
   "note"}` and `Authorization: Bearer <the run's host's key>`: `intelligence workflow`. Answers
   `{"message"}`, what the agent reads next; 400 or 409 (with the reason as the message) for a move
   that cannot be made, 404 for a run not on that host.
+- `GET /workflows/email`: the mailbox (connect, the account holder's own addresses, disconnect) and
+  what each email did.
+- `POST /api/gmail/sign-in` with `{}`: `{"url", "paste"}`, Google's consent page; `paste` when the
+  client is a Desktop one, whose redirect to `http://localhost` does not load and is pasted back.
+  503 when email triggers are off.
+- `GET /gmail/callback`: where Google sends a web client's browser. The session cookie is
+  SameSite=Strict, so it is not sent on that redirect: the page posts the code from this origin.
+- `POST /api/gmail/connect` with `{"code", "state"}` or `{"url"}` (where Google sent the browser):
+  connects the mailbox, `{"address"}`; 400 for a sign-in started by another account or expired.
+- `PUT /api/gmail/owners` with `{"owners": [addresses]}` (204), and `DELETE /api/gmail` (204;
+  its emails stay).
 - `GET /healthz`: `{"status":"ok","version":"<commit>","database":"ok"}`, 503 when the database is
   unreachable.
 
@@ -562,6 +602,12 @@ Server:
 - `HOST_BINARIES`: where the host binaries are; default `/usr/local/share/intelligence/host`.
 - `ASSEMBLYAI_API_KEY`: optional; turns on dictation in the chat box, new agent and workspace forms,
   and workflow run dialog. Unset, there is none.
+- `GOOGLE_OAUTH_CLIENT_JSON` and `CONNECTIONS_KEY`: optional, together; turn on email triggers. The
+  first is a Google OAuth client's JSON (raw or base64), Desktop ("installed") or web (with
+  `<PUBLIC_URL>/gmail/callback` as a redirect URI), with the Gmail API enabled. The second is 32
+  random bytes in base64 (`openssl rand -base64 32`); it seals each mailbox's token, so changing
+  it means connecting again.
+- `PUBLIC_URL`: optional; the server's origin, for Google's redirect. Default each request's.
 
 The version is stamped at build (`-X main.buildCommit`, from Coolify's `SOURCE_COMMIT` build
 argument); else `SOURCE_COMMIT` at run time, else Go's VCS stamp, else `dev`.

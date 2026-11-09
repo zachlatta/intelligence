@@ -94,6 +94,9 @@ func (e *Engine) CreateWorkflow(ctx context.Context, account int64, name, descri
 		if err := ownsHost(ctx, tx, account, d.Host); err != nil {
 			return err
 		}
+		if err := uniqueEmailTrigger(ctx, tx, account, "", d); err != nil {
+			return err
+		}
 		if err := tx.QueryRow(ctx, `INSERT INTO workflows (account_id, name, description, version, created_at, updated_at)
 			VALUES ($1, $2, $3, 1, $4, $4) RETURNING id::text`, account, name, strings.TrimSpace(description), at).Scan(&id); err != nil {
 			return err
@@ -166,6 +169,9 @@ func (e *Engine) UpdateWorkflow(ctx context.Context, account int64, id, name, de
 		if err := ownsHost(ctx, tx, account, d.Host); err != nil {
 			return err
 		}
+		if err := uniqueEmailTrigger(ctx, tx, account, id, d); err != nil {
+			return err
+		}
 		err := tx.QueryRow(ctx, `UPDATE workflows SET name = $3, description = $4, version = version + 1, updated_at = $5,
 			is_default = is_default AND $6
 			WHERE id = $1 AND account_id = $2 RETURNING version`, id, account, name, strings.TrimSpace(description), at, d.Trigger == TriggerTask).Scan(&version)
@@ -180,6 +186,63 @@ func (e *Engine) UpdateWorkflow(ctx context.Context, account int64, id, name, de
 		return err
 	})
 	return version, err
+}
+
+// uniqueEmailTrigger refuses an email trigger that another of account's workflows (not id) has
+// already, with nothing to tell the two apart: one email starts one run.
+func uniqueEmailTrigger(ctx context.Context, tx pgx.Tx, account int64, id string, d Definition) error {
+	if d.Trigger != TriggerEmail || d.Email == nil {
+		return nil
+	}
+	others, err := EmailWorkflows(ctx, tx, account)
+	if err != nil {
+		return err
+	}
+	for _, o := range others {
+		if o.ID == id || !d.Email.Overlaps(*o.Def.Email) {
+			continue
+		}
+		if shared := d.Email.Shared(*o.Def.Email); len(shared) > 0 {
+			return bad("email from %s already starts “%s”. Remove it from one of them, or add a field (subject, words, To) to tell them apart",
+				strings.Join(shared, ", "), o.Name)
+		}
+		return bad("“%s” already starts for the same email. Add a field (sender, subject, words, To) to tell them apart", o.Name)
+	}
+	return nil
+}
+
+// EmailWorkflow is a workflow whose latest version an email starts.
+type EmailWorkflow struct {
+	ID, Name string
+	Def      Definition
+}
+
+// EmailWorkflows are account's workflows whose trigger is email, oldest first.
+func EmailWorkflows(ctx context.Context, q interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}, account int64) ([]EmailWorkflow, error) {
+	rows, err := q.Query(ctx, `SELECT w.id::text, w.name, v.definition FROM workflows w
+		JOIN workflow_versions v ON v.workflow_id = w.id AND v.version = w.version
+		WHERE w.account_id = $1 AND v.definition ->> 'trigger' = 'email' ORDER BY w.created_at, w.id`, account)
+	if err != nil {
+		return nil, err
+	}
+	list, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (EmailWorkflow, error) {
+		var w EmailWorkflow
+		var def []byte
+		err := row.Scan(&w.ID, &w.Name, &def)
+		if err == nil {
+			err = json.Unmarshal(def, &w.Def)
+		}
+		return w, err
+	})
+	out := list[:0]
+	for _, w := range list {
+		if w.Def.Email != nil {
+			out = append(out, w)
+		}
+	}
+	return out, err
 }
 
 // ownsHost refuses a host that is not account's.
@@ -270,6 +333,17 @@ func agentMode(provider string) string {
 // StartRun starts account's workflow with input, on the host its definition names, and returns
 // the run's id. A matched project starts its finder agent; a fixed one, the orchestrator.
 func (e *Engine) StartRun(ctx context.Context, account int64, workflowID, input string) (string, error) {
+	var id string
+	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		var err error
+		id, err = e.StartRunTx(ctx, tx, account, workflowID, input)
+		return err
+	})
+	return id, err
+}
+
+// StartRunTx is StartRun in tx.
+func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workflowID, input string) (string, error) {
 	if strings.TrimSpace(input) == "" {
 		return "", bad("a run needs input: what should be done")
 	}
@@ -278,7 +352,7 @@ func (e *Engine) StartRun(ctx context.Context, account int64, workflowID, input 
 	}
 	at := e.Now()
 	var id, host string
-	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+	err := func() error {
 		var version int
 		var def []byte
 		err := tx.QueryRow(ctx, `SELECT w.version, v.definition FROM workflows w JOIN workflow_versions v ON v.workflow_id = w.id AND v.version = w.version
@@ -329,7 +403,7 @@ func (e *Engine) StartRun(ctx context.Context, account int64, workflowID, input 
 		}
 		_, err = tx.Exec(ctx, "UPDATE workflow_runs SET pending_command = $2, project_command = $2 WHERE id = $1", id, c.ID)
 		return err
-	})
+	}()
 	if errors.Is(err, fleet.ErrUnknownHost) {
 		return "", bad("host %s has not reported yet", host)
 	}
@@ -578,24 +652,83 @@ func (e *Engine) archiveFinder(ctx context.Context, tx pgx.Tx, r run) error {
 
 // Reply sends Zach's reply to the note account's run is waiting on, to its orchestrator.
 func (e *Engine) Reply(ctx context.Context, account int64, runID, text string) error {
+	if !uuidRe.MatchString(runID) {
+		return ErrNotFound
+	}
+	return pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error { return e.ReplyTx(ctx, tx, account, runID, text) })
+}
+
+// ReplyTx is Reply in tx.
+func (e *Engine) ReplyTx(ctx context.Context, tx pgx.Tx, account int64, runID, text string) error {
 	if strings.TrimSpace(text) == "" {
 		return bad("a reply needs text")
 	}
-	return e.forAccount(ctx, account, runID, func(tx pgx.Tx, r run) error {
-		if r.Status != Waiting {
-			return conflict("this run is not waiting for a reply (%s)", r.Status)
-		}
-		args, _ := json.Marshal(hostclient.AgentArgs{AgentID: r.Orchestrator, Text: fmt.Sprintf("Zach replied to your note:\n\n%s\n\n"+
-			"Decide what it means for the run, then move it with intelligence workflow (next, back, skip, ask or fail) --run %s.", text, r.ID)})
-		if _, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.SendMessageKind, args, replyTTL, e.Now()); err != nil {
-			return err
-		}
-		if err := e.event(ctx, tx, r, "reply", ptr(r.Step), nil, text); err != nil {
-			return err
-		}
-		_, err := tx.Exec(ctx, "UPDATE workflow_runs SET status = $2, note = '', updated_at = $3 WHERE id = $1", r.ID, Running, e.Now())
+	r, err := e.lockRun(ctx, tx, account, runID)
+	if err != nil {
 		return err
-	})
+	}
+	if r.Status != Waiting {
+		return conflict("this run is not waiting for a reply (%s)", r.Status)
+	}
+	args, _ := json.Marshal(hostclient.AgentArgs{AgentID: r.Orchestrator, Text: fmt.Sprintf("Zach replied to your note:\n\n%s\n\n"+
+		"Decide what it means for the run, then move it with intelligence workflow (next, back, skip, ask or fail) --run %s.", text, r.ID)})
+	if _, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.SendMessageKind, args, replyTTL, e.Now()); err != nil {
+		return err
+	}
+	if err := e.event(ctx, tx, r, "reply", ptr(r.Step), nil, text); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, "UPDATE workflow_runs SET status = $2, note = '', updated_at = $3 WHERE id = $1", r.ID, Running, e.Now())
+	return err
+}
+
+// MessageTx gives account's live run more to go on: what arrived later in the thread that started
+// it (an email). While its project is being found, it joins the run's input, which the orchestrator
+// starts with; once the orchestrator runs, it goes to it as a message. It cannot reach an
+// orchestrator that is being started, and refuses a run that is over.
+func (e *Engine) MessageTx(ctx context.Context, tx pgx.Tx, account int64, runID, what, text string) error {
+	r, err := e.lockRun(ctx, tx, account, runID)
+	if err != nil {
+		return err
+	}
+	switch r.Status {
+	case Succeeded, Failed, Canceled:
+		return conflict("the run is over (%s)", r.Status)
+	case StartingOrchestrator:
+		return conflict("the run's orchestrator was still starting")
+	case FindingProject:
+		if _, err := tx.Exec(ctx, "UPDATE workflow_runs SET input = input || $2, updated_at = $3 WHERE id = $1",
+			r.ID, "\n\n"+what+":\n\n"+text, e.Now()); err != nil {
+			return err
+		}
+		return e.event(ctx, tx, r, "message", nil, nil, what)
+	}
+	waiting := ""
+	if r.Status == Waiting {
+		waiting = "\n\nYou are still waiting on Zach's reply to your note: this is not it."
+	}
+	args, _ := json.Marshal(hostclient.AgentArgs{AgentID: r.Orchestrator, Text: fmt.Sprintf("%s:\n\n%s%s\n\n"+
+		"Decide what it means for the run, and carry on.", what, text, waiting)})
+	if _, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.SendMessageKind, args, replyTTL, e.Now()); err != nil {
+		return err
+	}
+	return e.event(ctx, tx, r, "message", ptr(r.Step), nil, what)
+}
+
+// RunStatus is account's run's status and workflow.
+func (e *Engine) RunStatus(ctx context.Context, tx pgx.Tx, account int64, runID string) (status, workflowID string, err error) {
+	err = tx.QueryRow(ctx, "SELECT status, workflow_id::text FROM workflow_runs WHERE id = $1 AND account_id = $2", runID, account).Scan(&status, &workflowID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = ErrNotFound
+	}
+	return status, workflowID, err
+}
+
+func (e *Engine) lockRun(ctx context.Context, tx pgx.Tx, account int64, runID string) (run, error) {
+	if !uuidRe.MatchString(runID) {
+		return run{}, ErrNotFound
+	}
+	return scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id = $1 AND r.account_id = $2 FOR UPDATE OF r", runID, account))
 }
 
 // Cancel ends account's run and stops its agent (the orchestrator, or the project finder).

@@ -202,3 +202,24 @@ func TestServerConfigReadsTheAssemblyAIKey(t *testing.T) {
 		t.Errorf("AssemblyAIKey = %q, %v; want k", c.AssemblyAIKey, err)
 	}
 }
+
+func TestServerConfigTurnsEmailTriggersOnWithBothGoogleSettings(t *testing.T) {
+	base := map[string]string{"DATABASE_URL": "postgres://app:p@db/app", "READONLY_DATABASE_URL": "postgres://ro:p@db/app"}
+	if c, err := serverConfig(env(base)); err != nil || c.Google != nil || c.EmailKey != nil {
+		t.Errorf("without settings: %+v, %v; want email off", c, err)
+	}
+	base["GOOGLE_OAUTH_CLIENT_JSON"] = `{"installed":{"client_id":"id","client_secret":"s"}}`
+	if _, err := serverConfig(env(base)); err == nil || !strings.Contains(err.Error(), "CONNECTIONS_KEY") {
+		t.Errorf("a client without a key: %v", err)
+	}
+	base["CONNECTIONS_KEY"] = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+	base["PUBLIC_URL"] = "https://intelligence.example.com"
+	c, err := serverConfig(env(base))
+	if err != nil || c.Google == nil || !c.Google.Installed || c.EmailKey == nil || c.PublicURL != "https://intelligence.example.com" {
+		t.Errorf("with both: %+v, %v", c, err)
+	}
+	base["CONNECTIONS_KEY"] = "short"
+	if _, err := serverConfig(env(base)); err == nil {
+		t.Error("a bad key: no error")
+	}
+}

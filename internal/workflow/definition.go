@@ -22,8 +22,9 @@ import (
 // Definition is one version of a workflow: the host it runs on, what starts it, how its project
 // is found, its orchestrator, and its steps, in order.
 type Definition struct {
-	Host         string       `json:"host"`    // the account's host every run happens on
-	Trigger      string       `json:"trigger"` // task (submitted on the Workflows page) or manual
+	Host         string       `json:"host"`            // the account's host every run happens on
+	Trigger      string       `json:"trigger"`         // task (submitted on the Workflows page), manual or email
+	Email        *EmailFilter `json:"email,omitempty"` // email: which email starts a run
 	Project      Project      `json:"project"`
 	Orchestrator Orchestrator `json:"orchestrator"`
 	Steps        []Step       `json:"steps"`
@@ -61,6 +62,7 @@ type Step struct {
 const (
 	TriggerTask   = "task"
 	TriggerManual = "manual"
+	TriggerEmail  = "email" // an email to the account's connected Gmail matches Email
 	ProjectMatch  = "match"
 	ProjectFixed  = "fixed"
 	KindStep      = "step"
@@ -89,8 +91,12 @@ func (d Definition) Validate() error {
 		return errors.New("a workflow needs a host to run on")
 	case !hostclient.ValidName(d.Host):
 		return fmt.Errorf("host %q is not a host's name", d.Host)
-	case d.Trigger != TriggerTask && d.Trigger != TriggerManual:
-		return fmt.Errorf("trigger %q: want %s or %s", d.Trigger, TriggerTask, TriggerManual)
+	case d.Trigger != TriggerTask && d.Trigger != TriggerManual && d.Trigger != TriggerEmail:
+		return fmt.Errorf("trigger %q: want %s, %s or %s", d.Trigger, TriggerTask, TriggerManual, TriggerEmail)
+	case d.Trigger == TriggerEmail && d.Email == nil:
+		return errors.New("an email trigger needs an email filter: which senders, address or words start a run")
+	case d.Trigger != TriggerEmail && d.Email != nil:
+		return fmt.Errorf("only an email trigger has an email filter, not %s", d.Trigger)
 	case d.Project.Mode == ProjectFixed && (d.Project.Directory == "" || !path.IsAbs(d.Project.Directory)):
 		return errors.New("a fixed project needs the absolute directory of its repository on the host")
 	case d.Project.Mode == ProjectMatch && blank(d.Project.Provider):
@@ -105,6 +111,11 @@ func (d Definition) Validate() error {
 		return errors.New("the orchestrator needs instructions")
 	case len(d.Steps) == 0:
 		return errors.New("a workflow needs at least one step")
+	}
+	if d.Email != nil {
+		if err := d.Email.Normalize(); err != nil {
+			return err
+		}
 	}
 	seen := map[string]bool{}
 	for i, s := range d.Steps {

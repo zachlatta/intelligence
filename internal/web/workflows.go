@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,7 +26,7 @@ import (
 var workflowsHTML string
 
 var workflowsTmpl = template.Must(template.New("workflows").Funcs(template.FuncMap{
-	"short": short, "ago": ago, "markdown": markdown, "plural": plural,
+	"short": short, "ago": ago, "markdown": markdown, "plural": plural, "emailSummary": emailSummary,
 	"json": func(v any) (template.JS, error) {
 		b, err := json.Marshal(v)
 		return template.JS(b), err //nolint:gosec // JSON from the server's own values, in a script
@@ -508,7 +509,7 @@ func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 }
 
 // workflowPage: GET /workflows/{id}: the editor.
-func workflowPage(cfg Config, v viewer) http.HandlerFunc {
+func workflowPage(cfg Config, a *app, v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if !workflowIDRe.MatchString(id) {
@@ -534,7 +535,29 @@ func workflowPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		mb, err := readMailbox(r.Context(), v.pool)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		emails, err := readEmails(r.Context(), v.pool, "", 300)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		all, err := readWorkflows(r.Context(), v.pool, "")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		others := []workflowRow{} // the other workflows email starts: the preview says which email they would take
+		for _, o := range all {
+			if o.ID != id && o.Definition.Trigger == workflow.TriggerEmail && o.Definition.Email != nil {
+				others = append(others, o)
+			}
+		}
 		renderWorkflows(w, "editor", map[string]any{"Version": cfg.Version, "Workflow": wfs[0], "Hosts": hosts, "Repos": repos,
+			"EmailOn": a.mail != nil, "Mailbox": mb.Address, "Emails": previews(emails), "Others": others,
 			"Dictation": dictationPath(cfg)})
 	}
 }
@@ -588,8 +611,14 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 				before = append(before, e)
 			}
 		}
+		emails, err := readEmails(ctx, v.pool, id, 100)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		slices.Reverse(emails) // oldest first, as a thread reads
 		renderWorkflows(w, "run", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Run": run, "Steps": stepViews(run, events),
-			"Agents": agents, "Before": before, "Events": events})
+			"Agents": agents, "Before": before, "Events": events, "Emails": emails})
 	}
 }
 
@@ -617,6 +646,8 @@ func (e runEvent) Line() string {
 		return "Asked Zach"
 	case "reply":
 		return "Zach replied: " + e.Text
+	case "message":
+		return e.Text
 	case "fail":
 		return "Failed: " + e.Text
 	case "cancel":
