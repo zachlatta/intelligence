@@ -298,6 +298,23 @@ func (c *Client) Agents(ctx context.Context) ([]Agent, error) {
 	return out, err
 }
 
+// Project is a registered project, whether or not it has a workspace.
+type Project struct {
+	ID        string `json:"projectId"`
+	Name      string `json:"projectDisplayName"`
+	Kind      string `json:"projectKind"`
+	Directory string `json:"projectRootPath"`
+}
+
+// Projects reads the full registered project catalog, independent of workspaces.
+func (c *Client) Projects(ctx context.Context) ([]Project, error) {
+	var out struct {
+		Projects []Project `json:"projects"`
+	}
+	err := c.request(ctx, map[string]any{"type": "project.list.request"}, &out)
+	return out.Projects, err
+}
+
 // Workspaces reads every workspace and subscribes to their updates.
 func (c *Client) Workspaces(ctx context.Context) ([]Workspace, error) {
 	var out []Workspace

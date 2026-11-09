@@ -96,6 +96,9 @@ The hierarchy is hosts > workspaces > agents:
   gives nothing) and `emails` (every email it received, and what it did and why): Email triggers,
   below.
 - `schema_migrations`.
+- `hosts.projects`: Paseo's registered project catalog, including projects with no workspaces.
+  `host_repositories` combines its git projects with workspaces' repository roots for older hosts.
+  Workflow project matching and the fixed-project picker both read this view.
 
 Each report replaces its host's workspaces and agents. A host that cannot reach its daemon has none,
 so nothing stale reads as current. The `host_status` view adds `online` (the host holds a stream

@@ -30,6 +30,7 @@ type Daemon struct {
 	conns      []*websocket.Conn
 	agents     []map[string]any
 	workspaces []map[string]any
+	projects   []map[string]any
 	statusErr  string // daemon.get_status answers rpc_error with this
 	silent     bool   // never answers requests
 	accepted   int
@@ -45,6 +46,12 @@ type Daemon struct {
 	catalogSet bool
 
 	diffs map[string]diff // diff.go, by checkout directory
+}
+
+func (f *Daemon) SetProjects(projects ...map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.projects = projects
 }
 
 type timeline struct {
@@ -194,6 +201,8 @@ func (f *Daemon) answer(c *websocket.Conn, msg map[string]any) {
 			return
 		}
 		f.write(c, session("agent_permission_resolved", map[string]any{"requestId": id, "agentId": msg["agentId"], "resolution": response}))
+	case "project.list.request":
+		f.write(c, session("project.list.response", map[string]any{"requestId": id, "projects": f.projects}))
 	case "daemon.get_status.request":
 		if f.statusErr != "" {
 			f.write(c, session("rpc_error", map[string]any{"requestId": id, "error": f.statusErr, "code": "boom"}))

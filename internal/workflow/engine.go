@@ -407,9 +407,9 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 	return id, err
 }
 
-// repositories are host's repositories: its workspaces' main checkouts.
+// repositories includes registered git projects without workspaces, with workspace roots as fallback.
 func repositories(ctx context.Context, tx pgx.Tx, host string) ([]string, error) {
-	rows, err := tx.Query(ctx, "SELECT DISTINCT project_root FROM workspaces WHERE host = $1 AND project_root <> '' ORDER BY 1", host)
+	rows, err := tx.Query(ctx, "SELECT DISTINCT directory FROM host_repositories WHERE host = $1 ORDER BY 1", host)
 	if err != nil {
 		return nil, err
 	}

@@ -519,8 +519,8 @@ type repoOption struct {
 }
 
 func readRepos(ctx context.Context, p *pgxpool.Pool) ([]repoOption, error) {
-	rows, err := p.Query(ctx, `SELECT project_root, max(project), array_agg(DISTINCT host ORDER BY host) FROM workspaces
-		WHERE project_root <> '' GROUP BY project_root ORDER BY lower(max(project)), project_root`)
+	rows, err := p.Query(ctx, `SELECT directory, max(project), array_agg(DISTINCT host ORDER BY host) FROM host_repositories
+		GROUP BY directory ORDER BY lower(max(project)), directory`)
 	if err != nil {
 		return nil, err
 	}

@@ -68,6 +68,13 @@ func (r *Registry) Record(ctx context.Context, rep hostclient.Report, at time.Ti
 		if err := CaptureWorkflowAgents(ctx, tx, rep.Name, "", at); err != nil {
 			return err
 		}
+		projects, err := json.Marshal(nonNil(ps.Projects))
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, "UPDATE hosts SET projects = $2 WHERE name = $1", rep.Name, projects); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, "DELETE FROM workspaces WHERE host = $1", rep.Name); err != nil { // and their agents
 			return err
 		}
@@ -149,7 +156,8 @@ func (r *Registry) list(ctx context.Context, history bool) ([]Host, error) {
 		agentTable, workspaceTable = "recorded_agents", "recorded_workspace_status"
 	}
 	rows, err := r.p.Query(ctx, `SELECT name, client_version, collected_at, last_seen, online, connected, paseo_error,
-		status_error, paseo_version, hostname, listen, pid, started_at, providers, providers_at
+		status_error, paseo_version, hostname, listen, pid, started_at, providers, providers_at,
+		(SELECT projects FROM hosts WHERE hosts.name = host_status.name)
 		FROM host_status ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -157,15 +165,18 @@ func (r *Registry) list(ctx context.Context, history bool) ([]Host, error) {
 	hosts, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Host, error) {
 		var b Host
 		var collected, started, providersAt *time.Time
-		var providers []byte
+		var providers, projects []byte
 		p := &b.Report.Paseo
 		if err := row.Scan(&b.Report.Name, &b.Report.Version, &collected, &b.LastSeen, &b.Online, &p.Connected, &p.Error,
-			&p.StatusError, &p.Version, &p.Hostname, &p.Listen, &p.PID, &started, &providers, &providersAt); err != nil {
+			&p.StatusError, &p.Version, &p.Hostname, &p.Listen, &p.PID, &started, &providers, &providersAt, &projects); err != nil {
 			return b, err
 		}
 		b.Report.CollectedAt, p.StartedAt, p.ProvidersAt = deref(collected), deref(started), deref(providersAt)
 		b.LastSeen = b.LastSeen.UTC()
 		if err := json.Unmarshal(providers, &p.Providers); err != nil {
+			return b, err
+		}
+		if err := json.Unmarshal(projects, &p.Projects); err != nil {
 			return b, err
 		}
 		if len(p.Providers) == 0 {

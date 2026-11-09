@@ -63,6 +63,15 @@ func TestParseRefusesWhatCannotRun(t *testing.T) {
 	}
 }
 
+func TestOrchestratorPinsWorkersToItsWorkspace(t *testing.T) {
+	p := OrchestratorPrompt("Tasks", Starting, Vars{Run: "run-1", Repo: "/w/files", Branch: "fix-files"})
+	for _, want := range []string{"--workspace", "paseo inspect", "working directory", "Stop a misplaced worker"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("missing %q in prompt", want)
+		}
+	}
+}
+
 func TestTheProjectFinderIsToldTheRepositoriesAndHowToAnswer(t *testing.T) {
 	p := ProjectPrompt("run-1", Starting, "Show each agent's model", []string{"/srv/dev/app", "/srv/dev/site"})
 	for _, want := range []string{Starting.Project.Instructions, "Show each agent's model", "- /srv/dev/app\n- /srv/dev/site",

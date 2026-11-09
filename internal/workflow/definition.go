@@ -202,6 +202,7 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 	if v.Repo != "" {
 		fmt.Fprintf(&b, ", in a worktree of %s on branch %s", v.Repo, v.Branch)
 	}
+	b.WriteString(".\n\nBefore starting workers, find this agent's workspace ID with Paseo's workspace listing. Pass --workspace <id> explicitly to every worker so it uses this workspace's working directory; --cwd alone can inherit the parent's workspace. Verify each worker with paseo inspect before it edits files. Stop a misplaced worker and relaunch it in the correct workspace. Do not create a replacement worktree in another repository or fall back to a main checkout; if the task names a repository that differs from this run's project, ask Zach before proceeding")
 	fmt.Fprintf(&b, ".\n\nWhat started it:\n\n%s\n\nIts steps:\n\n", strings.TrimSpace(v.Input))
 	for i, s := range d.Steps {
 		fmt.Fprintf(&b, "%d. %s (%s, id %s)\n", i+1, s.Title, s.Kind, s.ID)

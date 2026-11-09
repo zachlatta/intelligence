@@ -74,6 +74,25 @@ func TestWatcherReadsTheDaemon(t *testing.T) {
 	}
 }
 
+func TestWatcherReportsProjectsWithoutWorkspacesAndRefreshesThem(t *testing.T) {
+	d := daemon(t)
+	project := func(name string) map[string]any {
+		return map[string]any{"projectId": "p1", "projectDisplayName": name, "projectKind": "git", "projectRootPath": "/w/files"}
+	}
+	d.SetProjects(project("files"))
+	w := watcher(t, d)
+	s := eventually(t, w, "projects", func(s PaseoStatus) bool { return len(s.Projects) == 1 })
+	if p := s.Projects[0]; p.ID != "p1" || p.Name != "files" || p.Kind != "git" || p.Directory != "/w/files" {
+		t.Fatalf("project = %+v", p)
+	}
+	d.SetProjects(project("renamed"))
+	w.RefreshStatus(t.Context())
+	eventually(t, w, "renamed project", func(s PaseoStatus) bool { return len(s.Projects) == 1 && s.Projects[0].Name == "renamed" })
+	d.SetProjects()
+	w.RefreshStatus(t.Context())
+	eventually(t, w, "removed project", func(s PaseoStatus) bool { return len(s.Projects) == 0 })
+}
+
 func TestWatcherAppliesPushedUpdatesAndSignalsThem(t *testing.T) {
 	d := daemon(t)
 	w := watcher(t, d)

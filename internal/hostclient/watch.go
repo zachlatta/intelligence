@@ -31,6 +31,7 @@ type Watcher struct {
 	statusAt   time.Time
 	statusErr  string
 	catalog    map[string]paseo.ProviderEntry // each provider's last ready entry, kept across connections
+	projects   []paseo.Project
 	workspaces map[string]paseo.Workspace
 	agents     map[string]paseo.Agent
 	tags       map[string][]string // each workspace's, kept across connections: they do not change
@@ -112,6 +113,7 @@ func (w *Watcher) session(ctx context.Context) error {
 	// status too, so the first snapshot of this connection is whole
 	status, statusErr := c.DaemonStatus(readCtx)
 	catalog, _ := c.ProviderCatalog(readCtx) // a failure keeps the last; the next status read tries again
+	projects, _ := c.Projects(readCtx)
 	ids := make([]string, len(workspaces))
 	for i, x := range workspaces {
 		ids[i] = x.ID
@@ -124,6 +126,7 @@ func (w *Watcher) session(ctx context.Context) error {
 		w.status, w.statusAt, w.statusErr = status, w.Now(), ""
 	}
 	w.mergeCatalogLocked(catalog)
+	w.projects = projects
 	w.client, w.err, w.info = c, "", c.Info()
 	w.workspaces = make(map[string]paseo.Workspace, len(workspaces))
 	for _, x := range workspaces {
@@ -186,6 +189,7 @@ func (w *Watcher) RefreshStatus(ctx context.Context) {
 	defer cancel()
 	s, err := c.DaemonStatus(ctx)
 	catalog, _ := c.ProviderCatalog(ctx) // a failure keeps the last
+	projects, projectsErr := c.Projects(ctx)
 	w.mu.Lock()
 	before, beforeErr := w.status, w.statusErr
 	if err != nil {
@@ -194,7 +198,11 @@ func (w *Watcher) RefreshStatus(ctx context.Context) {
 		w.status, w.statusAt, w.statusErr = s, w.Now(), ""
 	}
 	catalogChanged := w.mergeCatalogLocked(catalog)
-	changed := catalogChanged || w.statusErr != beforeErr || !sameStatus(w.status, before)
+	projectsChanged := projectsErr == nil && !reflect.DeepEqual(w.projects, projects)
+	if projectsErr == nil {
+		w.projects = projects
+	}
+	changed := projectsChanged || catalogChanged || w.statusErr != beforeErr || !sameStatus(w.status, before)
 	w.mu.Unlock()
 	if changed {
 		w.signal()
@@ -246,6 +254,9 @@ func (w *Watcher) Snapshot() PaseoStatus {
 		Workspaces: []Workspace{}, Agents: []Agent{}}
 	for _, p := range w.status.Providers {
 		s.Providers = append(s.Providers, withCatalog(Provider{Name: p.Provider, Available: p.Available, Error: p.Error}, w.catalog[p.Provider]))
+	}
+	for _, p := range w.projects {
+		s.Projects = append(s.Projects, Project{ID: p.ID, Name: p.Name, Kind: p.Kind, Directory: p.Directory})
 	}
 	for _, x := range w.workspaces {
 		s.Workspaces = append(s.Workspaces, Workspace{ID: x.ID, Name: cmp.Or(x.Title, x.Name), Kind: x.Kind, Status: x.Status,

@@ -31,7 +31,16 @@ type PaseoStatus struct {
 	Providers   []Provider  `json:"providers,omitempty"`
 	ProvidersAt time.Time   `json:"providersAt,omitzero"` // when the status (and Providers) was read
 	Workspaces  []Workspace `json:"workspaces,omitempty"`
+	Projects    []Project   `json:"projects,omitempty"`
 	Agents      []Agent     `json:"agents,omitempty"` // every unarchived agent
+}
+
+// Project is a registered Paseo project, including those without a workspace.
+type Project struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Kind      string `json:"kind"`
+	Directory string `json:"directory"`
 }
 
 // Provider is one agent provider, whether the daemon can run it, and its catalog: the models

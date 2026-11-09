@@ -121,6 +121,47 @@ func commandsByKind(t *testing.T, b *rawHost, n int) map[string]hostclient.Comma
 	return out
 }
 
+func TestWorkflowFindsAProjectWithoutAWorkspace(t *testing.T) {
+	h, _ := dbServer(t)
+	rep := wfReport()
+	b, _ := json.Marshal(rep)
+	var raw map[string]any
+	json.Unmarshal(b, &raw)
+	raw["paseo"].(map[string]any)["projects"] = []any{
+		map[string]any{"id": "p-empty", "name": "files", "kind": "git", "directory": "/w/files"},
+		map[string]any{"id": "p-dir", "name": "folder", "kind": "non_git", "directory": "/w/folder"},
+	}
+	b, _ = json.Marshal(raw)
+	json.Unmarshal(b, &rep)
+	sendReport(t, h, rep)
+	key := keyOf(t, h, "host-1")
+	stream := openStream(t, h, "host-1")
+	wf := createWorkflow(t, h, workflow.Starting)
+	run := startRun(t, h, wf, "Fix files")
+	finder := stream.command()
+	var fa hostclient.CreateAgentArgs
+	json.Unmarshal(finder.Args, &fa)
+	if !strings.Contains(fa.Prompt, "- /w/files") {
+		t.Fatalf("project with no workspace missing: %s", fa.Prompt)
+	}
+	if strings.Contains(fa.Prompt, "/w/folder") {
+		t.Fatal("non-git directory offered as a repository")
+	}
+	if page := get(t, h, "/workflows/"+wf, nil); !strings.Contains(page.Body.String(), "/w/files") {
+		t.Fatal("editor omitted project without workspace")
+	}
+	succeed(t, stream, finder, `{"agentId":"finder-1"}`)
+	if code, msg := move(t, h, key, run, map[string]string{"move": "project", "directory": "/w/files"}); code != http.StatusOK {
+		t.Fatalf("choose project: %d %s", code, msg)
+	}
+	stream.command() // archive finder
+	var ws hostclient.CreateWorkspaceArgs
+	json.Unmarshal(stream.command().Args, &ws)
+	if ws.Cwd != "/w/files" || !ws.Worktree {
+		t.Fatalf("workspace = %+v", ws)
+	}
+}
+
 func TestAWorkflowRunFindsItsProjectThenTheOrchestratorMovesItThroughTheSteps(t *testing.T) {
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
