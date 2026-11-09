@@ -1048,3 +1048,98 @@ func TestSuccessfulArchiveStaysReadOnlyBeforeNextConnectedReport(t *testing.T) {
 		t.Error("successful archive shows chat during outage")
 	}
 }
+
+// TestDeletingAWorkflowKeepsItsRuns: a deleted workflow leaves the list, the editor and the task
+// picker, and cannot be edited, chosen or run; its finished runs stay readable. A workflow with a
+// run still going is not deleted until that run ends.
+func TestDeletingAWorkflowKeepsItsRuns(t *testing.T) {
+	h, _ := dbServer(t)
+	ts := h.(*testServer)
+	sendReport(t, h, wfReport())
+	keep := createWorkflow(t, h, workflow.Starting)
+	wf := createWorkflow(t, h, workflow.Starting)
+	if rec := call(t, h, http.MethodPut, "/api/workflows/"+wf+"/default", `{"default":true}`, sameOriginFetch); rec.Code != http.StatusNoContent {
+		t.Fatalf("set default = %d", rec.Code)
+	}
+	run := startRun(t, h, wf, "Delete me later")
+	path := "/api/workflows/" + wf
+
+	// a run still going holds the workflow
+	if rec := call(t, h, http.MethodDelete, path, "", sameOriginFetch); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "cancel") {
+		t.Fatalf("delete with a live run = %d %s", rec.Code, rec.Body)
+	}
+	if rec := call(t, h, http.MethodPost, "/api/workflow-runs/"+run+"/cancel", `{}`, sameOriginFetch); rec.Code != http.StatusNoContent {
+		t.Fatalf("cancel = %d %s", rec.Code, rec.Body)
+	}
+
+	// only its own account, from the same origin, signed in
+	bob, err := ts.store.Create(t.Context(), "bob", testPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := call(t, h, http.MethodDelete, path, "", sameOriginFetch, sessionFor(t, ts.store, bob)); rec.Code != http.StatusNotFound {
+		t.Errorf("bob deleted someone's workflow: %d", rec.Code)
+	}
+	if rec := call(t, anon(h), http.MethodDelete, path, "", sameOriginFetch); rec.Code != http.StatusUnauthorized {
+		t.Errorf("anonymous delete: %d", rec.Code)
+	}
+	if rec := call(t, h, http.MethodDelete, path, "", map[string]string{"Content-Type": "application/json", "Origin": "https://other.example.com"}); rec.Code != http.StatusForbidden {
+		t.Errorf("cross-origin delete: %d", rec.Code)
+	}
+	for _, id := range []string{"bad-id", "00000000-0000-4000-8000-000000000000"} {
+		if rec := call(t, h, http.MethodDelete, "/api/workflows/"+id, "", sameOriginFetch); rec.Code != http.StatusNotFound {
+			t.Errorf("delete %s = %d", id, rec.Code)
+		}
+	}
+
+	if rec := call(t, h, http.MethodDelete, path, "", sameOriginFetch); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete = %d %s", rec.Code, rec.Body)
+	}
+	if rec := call(t, h, http.MethodDelete, path, "", sameOriginFetch); rec.Code != http.StatusNotFound {
+		t.Errorf("deleted twice: %d", rec.Code)
+	}
+
+	// readable with SQL: when it was deleted, and it is no longer the default
+	code, rows := sqlPost(t, h, q("SELECT deleted_at IS NOT NULL, is_default FROM workflows WHERE id = '"+wf+"'"))
+	if code != http.StatusOK || len(rows.Rows) != 1 || rows.Rows[0][0] != true || rows.Rows[0][1] != false {
+		t.Fatalf("deleted workflow through SQL: %d %+v", code, rows)
+	}
+	if r := readRun(t, h, run); r["status"] != "canceled" {
+		t.Errorf("run = %v", r)
+	}
+
+	// it can no longer be edited, chosen or run
+	if rec := call(t, h, http.MethodPut, path, wfBody(t, "back", workflow.Starting), sameOriginFetch); rec.Code != http.StatusNotFound {
+		t.Errorf("edit deleted: %d", rec.Code)
+	}
+	if rec := call(t, h, http.MethodPut, path+"/default", `{"default":true}`, sameOriginFetch); rec.Code != http.StatusNotFound {
+		t.Errorf("default deleted: %d", rec.Code)
+	}
+	body, _ := json.Marshal(map[string]string{"workflowId": wf, "input": "x"})
+	if rec := call(t, h, http.MethodPost, "/api/workflow-runs", string(body), sameOriginFetch); rec.Code != http.StatusNotFound {
+		t.Errorf("run deleted: %d", rec.Code)
+	}
+
+	// pages: gone from the list and the editor; its run is still there, without a link to it
+	if rec := get(t, h, "/workflows/"+wf, nil); rec.Code != http.StatusNotFound {
+		t.Errorf("editor of deleted = %d", rec.Code)
+	}
+	list := get(t, h, "/workflows", nil).Body.String()
+	if strings.Contains(list, `href="/workflows/`+wf+`"`) || strings.Contains(list, `value="`+wf+`"`) {
+		t.Error("the list still offers the deleted workflow")
+	}
+	if !strings.Contains(list, `href="/workflows/`+keep+`"`) || !strings.Contains(list, "Delete me later") {
+		t.Error("the list lost the other workflow or the deleted one's run")
+	}
+	rp := get(t, h, "/workflow-runs/"+run, nil)
+	if rp.Code != http.StatusOK || strings.Contains(rp.Body.String(), `href="/workflows/`+wf+`"`) || !strings.Contains(rp.Body.String(), "(deleted)") {
+		t.Errorf("run page of a deleted workflow = %d", rp.Code)
+	}
+
+	// the pages offer Delete, behind a confirmation, through the API
+	for _, page := range []string{list, get(t, h, "/workflows/"+keep, nil).Body.String()} {
+		if !strings.Contains(page, `"DELETE"`) || !strings.Contains(page, "confirm(") || !strings.Contains(page, ">Delete<") {
+			t.Error("a workflows page lacks the Delete action")
+		}
+	}
+}

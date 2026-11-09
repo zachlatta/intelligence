@@ -287,3 +287,33 @@ func TestTheEmailPageShowsTheMailboxAndWhatEachEmailDid(t *testing.T) {
 		t.Error("the workflows page does not say what email starts the workflow")
 	}
 }
+
+// TestADeletedEmailWorkflowStartsNothingAndFreesItsSender: once deleted, an email workflow starts
+// no run, from a new email or a reply in an old run's thread, and its senders can start another.
+func TestADeletedEmailWorkflowStartsNothingAndFreesItsSender(t *testing.T) {
+	h, fake := emailServer(t)
+	sendReport(t, h, wfReport())
+	wf := christina(t, h)
+	connectGmail(t, h, fake)
+	fake.Add(mailMsg("m1", "t1", "christina@example.com", "Q4 board deck", "Numbers for slide 6, please."))
+	run, _ := decided(t, h, "m1")["run_id"].(string)
+	if run == "" {
+		t.Fatal("m1 started no run")
+	}
+	if rec := call(t, h, http.MethodPost, "/api/workflow-runs/"+run+"/cancel", `{}`, sameOriginFetch); rec.Code != http.StatusNoContent {
+		t.Fatalf("cancel = %d %s", rec.Code, rec.Body)
+	}
+	if rec := call(t, h, http.MethodDelete, "/api/workflows/"+wf, "", sameOriginFetch); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete = %d %s", rec.Code, rec.Body)
+	}
+
+	fake.Add(mailMsg("m2", "t1", "christina@example.com", "Re: Q4 board deck", "And slide 7."))
+	if r := decided(t, h, "m2"); r["decision"] != "ignored" || !strings.Contains(r["reason"].(string), "gone") {
+		t.Errorf("a reply to a deleted workflow's run = %v", r)
+	}
+	fake.Add(mailMsg("m3", "t3", "christina@example.com", "New request", "Hi."))
+	if r := decided(t, h, "m3"); r["decision"] != "ignored" || !strings.Contains(r["reason"].(string), "no workflow") {
+		t.Errorf("a new email for a deleted workflow = %v", r)
+	}
+	christina(t, h) // her address is free again
+}

@@ -381,9 +381,9 @@ func (s *Service) reply(ctx context.Context, tx pgx.Tx, account int64, fromZach 
 	var def workflow.Definition
 	var raw []byte
 	err := tx.QueryRow(ctx, `SELECT w.name, v.definition FROM workflows w JOIN workflow_versions v ON v.workflow_id = w.id AND v.version = w.version
-		WHERE w.id = $1 AND w.account_id = $2`, wf, account).Scan(&name, &raw)
+		WHERE w.id = $1 AND w.account_id = $2 AND w.deleted_at IS NULL`, wf, account).Scan(&name, &raw)
 	if errors.Is(err, pgx.ErrNoRows) {
-		d.Decision, d.Reason = "ignored", "the workflow of this thread's run is gone"
+		d.Decision, d.Reason = "ignored", "the workflow of this thread's run is gone (deleted)"
 		return d, nil
 	}
 	if err != nil {
