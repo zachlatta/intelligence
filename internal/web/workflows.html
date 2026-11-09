@@ -239,7 +239,7 @@ setInterval(async () => {
     <textarea id="s-input" required></textarea>
     <p class="hint">Runs the saved version.</p>
     <p class="banner" id="s-error" role="alert" hidden></p>
-    <div class="form-actions"><button class="btn primary" value="ok">Start</button><button class="btn" value="cancel" formnovalidate>Cancel</button>{{if .Dictation}}<button type="button" class="btn ghost mic" id="dictate" style="margin-left:auto" title="Dictate (⌘D): into the box if it has text, else to start" aria-label="Dictate">{{template "micicon"}}</button>{{end}}</div>
+    <div class="form-actions"><button class="btn primary" value="ok">Start</button><button class="btn" value="cancel" formnovalidate>Cancel</button>{{if .Dictation}}{{template "dictationbutton"}}{{end}}</div>
   </form>
 </dialog>
 <script>

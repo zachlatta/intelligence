@@ -114,6 +114,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--line);
 .btn.sm { height: 1.75rem; padding: 0 .6rem; font-size: 12.5px; }
 .btn.ghost { border-color: transparent; background: transparent; box-shadow: none; color: var(--muted); }
 .btn.ghost:hover { background: var(--bg-muted); color: var(--fg); }
+.btn[hidden] { display: none; }
 .btn:disabled { opacity: .55; cursor: default; }
 .btn.danger, .btn.danger:hover { background: var(--red-bg); border-color: var(--red-line); color: var(--red); }
 .segmented { display: inline-flex; border: 1px solid var(--line-strong); border-radius: var(--radius); overflow: hidden;
@@ -177,8 +178,8 @@ legend { font-size: 13px; font-weight: 600; padding: 0 .35rem; }
 }
 
 /* Dictation (dictation.js): the bar that stands in for a form's buttons while it listens. */
+.form-actions .mic { margin-left: auto; }
 .mic svg { width: 15px; height: 15px; }
-.btn[hidden] { display: none; }
 .form-actions[hidden], .dictation[hidden] { display: none; }
 .dictation { display: flex; gap: .4rem; align-items: center; }
 .dictation .dstatus { flex: 1; min-width: 0; font-size: .75rem; color: var(--muted); display: flex; gap: .45rem; align-items: center; }

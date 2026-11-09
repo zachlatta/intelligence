@@ -229,7 +229,7 @@ form.addEventListener("submit", async (e) => {
   data-default-provider="{{.Agent.Provider}}" data-default-model="{{.Agent.Model}}" data-default-mode="{{.Agent.Mode}}"
   data-progress-sql="{{.ProgressSQL}}"{{if .Dictation}} data-dictation="{{.Dictation}}"{{end}}>
   {{template "agentfields" .}}
-  <div class="form-actions"><button class="btn primary">Start agent</button><a class="btn" href="/">Cancel</a>{{if .Dictation}}<button type="button" class="btn ghost mic" id="dictate" style="margin-left:auto" title="Dictate (⌘D): into the box if it has text, else to start" aria-label="Dictate">{{template "micicon"}}</button>{{end}}</div>
+  <div class="form-actions"><button class="btn primary">Start agent</button><a class="btn" href="/">Cancel</a>{{if .Dictation}}{{template "dictationbutton"}}{{end}}</div>
   <p id="progress"></p>
 </form>
 <script>
@@ -263,7 +263,7 @@ function spawnArgs() {
   <fieldset><legend>Its agent</legend>
   {{template "agentfields" .}}
   </fieldset>
-  <div class="form-actions"><button class="btn primary">Start workspace and agent</button><a class="btn" href="/">Cancel</a>{{if .Dictation}}<button type="button" class="btn ghost mic" id="dictate" style="margin-left:auto" title="Dictate (⌘D): into the box if it has text, else to start" aria-label="Dictate">{{template "micicon"}}</button>{{end}}</div>
+  <div class="form-actions"><button class="btn primary">Start workspace and agent</button><a class="btn" href="/">Cancel</a>{{if .Dictation}}{{template "dictationbutton"}}{{end}}</div>
   <p id="progress"></p>
 </form>
 <script>
