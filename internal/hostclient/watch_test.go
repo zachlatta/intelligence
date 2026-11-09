@@ -2,6 +2,7 @@ package hostclient
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -196,5 +197,52 @@ func drainChanged(w *Watcher) {
 		case <-time.After(50 * time.Millisecond):
 			return
 		}
+	}
+}
+
+// TestProvidersCarryTheirCatalog: each provider comes with the models (and their thinking levels)
+// and modes the daemon offers. A provider still loading, or failing, keeps the last catalog read.
+func TestProvidersCarryTheirCatalog(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	s := eventually(t, w, "a catalog", func(s PaseoStatus) bool { return len(s.Providers) == 2 && len(s.Providers[0].Models) > 0 })
+	cl := s.Providers[0]
+	if cl.Name != "claude" || cl.Label != "Claude" || cl.DefaultMode != "auto" || len(cl.Models) != 2 || len(cl.Modes) != 2 {
+		t.Fatalf("claude = %+v", cl)
+	}
+	if m := cl.Models[0]; m.ID != "claude-opus-5-5" || m.Label != "Opus 5.5" || !m.Default || m.DefaultThinking != "medium" ||
+		!slices.Equal(m.Thinking, []string{"low", "medium", "high"}) {
+		t.Errorf("model = %+v", m)
+	}
+	if m := cl.Modes[1]; m.ID != "bypassPermissions" || m.Label != "Bypass" {
+		t.Errorf("mode = %+v", m)
+	}
+	if p := s.Providers[1]; p.Name != "pi" || p.Models != nil {
+		t.Errorf("pi = %+v", p)
+	}
+
+	d.SetCatalog(map[string]any{"provider": "claude", "status": "loading", "enabled": true})
+	drainChanged(w)
+	w.RefreshStatus(t.Context())
+	if got := w.Snapshot().Providers[0]; len(got.Models) != 2 {
+		t.Errorf("a loading provider lost its catalog: %+v", got)
+	}
+	select {
+	case <-w.Changed():
+		t.Error("a loading provider signalled a change")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	e := paseotest.CatalogEntry("claude")
+	e["models"] = e["models"].([]any)[1:2]
+	d.SetCatalog(e)
+	w.RefreshStatus(t.Context())
+	select {
+	case <-w.Changed():
+	case <-time.After(time.Second):
+		t.Fatal("a changed catalog did not signal a change")
+	}
+	if got := w.Snapshot().Providers[0].Models; len(got) != 1 || got[0].ID != "claude-sonnet-5-5" {
+		t.Errorf("models = %+v", got)
 	}
 }

@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -66,7 +67,7 @@ func TestHostWorkspacesAndAgentsRoundTrip(t *testing.T) {
 	if b.Report.Name != "host-1" || b.Report.Version != "c1" || !b.Report.CollectedAt.Equal(t1) || !p.Connected ||
 		p.StatusError != "slow" || p.Version != wp.Version || p.Hostname != wp.Hostname || p.Listen != wp.Listen ||
 		p.PID != wp.PID || !p.StartedAt.Equal(wp.StartedAt) || !p.ProvidersAt.Equal(wp.ProvidersAt) ||
-		len(p.Providers) != 2 || p.Providers[1] != wp.Providers[1] {
+		len(p.Providers) != 2 || !reflect.DeepEqual(p.Providers[1], wp.Providers[1]) {
 		t.Errorf("host = %+v", b.Report)
 	}
 	if len(b.Workspaces) != 3 {
@@ -261,5 +262,56 @@ func TestWorkspacesKeepTheirTags(t *testing.T) {
 	var untagged int
 	if err := dbtest.Reader(t, d, "host-1").QueryRow(ctx, "SELECT count(*) FROM workspaces WHERE tags = '{}'").Scan(&untagged); err != nil || untagged != 2 {
 		t.Errorf("untagged = %d, %v", untagged, err)
+	}
+}
+
+// TestProviderCatalogReadsAsRows: each provider's models and modes are kept with the host and
+// read, one row each, through the provider_models and provider_modes views.
+func TestProviderCatalogReadsAsRows(t *testing.T) {
+	r := New(dbtest.New(t).Owner)
+	rep := full()
+	rep.Paseo.Providers[0] = hostclient.Provider{Name: "claude", Available: true, Label: "Claude", DefaultMode: "auto",
+		Models: []hostclient.Model{
+			{ID: "claude-opus-5-5", Label: "Opus 5.5", Description: "Latest", Default: true, Thinking: []string{"low", "medium"}, DefaultThinking: "medium"},
+			{ID: "claude-sonnet-5-5", Label: "Sonnet 5.5"},
+		},
+		Modes: []hostclient.Mode{{ID: "auto", Label: "Auto mode"}, {ID: "bypassPermissions", Label: "Bypass", Description: "No prompts"}}}
+	record(t, r, rep, time.Now())
+	if got := list(t, r)[0].Report.Paseo.Providers[0]; !reflect.DeepEqual(got, rep.Paseo.Providers[0]) {
+		t.Errorf("provider = %+v", got)
+	}
+	rows, err := r.p.Query(ctx, `SELECT host, provider, position, id, label, description, is_default, thinking, default_thinking
+		FROM provider_models ORDER BY host, provider, position`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type model struct {
+		Host, Provider  string
+		Position        int
+		ID, Label, Desc string
+		Default         bool
+		Thinking        []string
+		DefaultThinking string
+	}
+	var models []model
+	for rows.Next() {
+		var m model
+		if err := rows.Scan(&m.Host, &m.Provider, &m.Position, &m.ID, &m.Label, &m.Desc, &m.Default, &m.Thinking, &m.DefaultThinking); err != nil {
+			t.Fatal(err)
+		}
+		models = append(models, m)
+	}
+	want := []model{{"host-1", "claude", 1, "claude-opus-5-5", "Opus 5.5", "Latest", true, []string{"low", "medium"}, "medium"},
+		{"host-1", "claude", 2, "claude-sonnet-5-5", "Sonnet 5.5", "", false, []string{}, ""}}
+	if !reflect.DeepEqual(models, want) {
+		t.Errorf("provider_models = %+v", models)
+	}
+	var modes, defaults int
+	if err := r.p.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE is_default) FROM provider_modes
+		WHERE host = 'host-1' AND provider = 'claude'`).Scan(&modes, &defaults); err != nil {
+		t.Fatal(err)
+	}
+	if modes != 2 || defaults != 1 {
+		t.Errorf("provider_modes: %d modes, %d default", modes, defaults)
 	}
 }

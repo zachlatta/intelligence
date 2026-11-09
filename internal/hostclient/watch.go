@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"sync"
 	"time"
@@ -29,6 +30,7 @@ type Watcher struct {
 	status     paseo.DaemonStatus
 	statusAt   time.Time
 	statusErr  string
+	catalog    map[string]paseo.ProviderEntry // each provider's last ready entry, kept across connections
 	workspaces map[string]paseo.Workspace
 	agents     map[string]paseo.Agent
 	tags       map[string][]string // each workspace's, kept across connections: they do not change
@@ -109,6 +111,7 @@ func (w *Watcher) session(ctx context.Context) error {
 	}
 	// status too, so the first snapshot of this connection is whole
 	status, statusErr := c.DaemonStatus(readCtx)
+	catalog, _ := c.ProviderCatalog(readCtx) // a failure keeps the last; the next status read tries again
 	ids := make([]string, len(workspaces))
 	for i, x := range workspaces {
 		ids[i] = x.ID
@@ -120,6 +123,7 @@ func (w *Watcher) session(ctx context.Context) error {
 	} else {
 		w.status, w.statusAt, w.statusErr = status, w.Now(), ""
 	}
+	w.mergeCatalogLocked(catalog)
 	w.client, w.err, w.info = c, "", c.Info()
 	w.workspaces = make(map[string]paseo.Workspace, len(workspaces))
 	for _, x := range workspaces {
@@ -181,6 +185,7 @@ func (w *Watcher) RefreshStatus(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	s, err := c.DaemonStatus(ctx)
+	catalog, _ := c.ProviderCatalog(ctx) // a failure keeps the last
 	w.mu.Lock()
 	before, beforeErr := w.status, w.statusErr
 	if err != nil {
@@ -188,11 +193,38 @@ func (w *Watcher) RefreshStatus(ctx context.Context) {
 	} else {
 		w.status, w.statusAt, w.statusErr = s, w.Now(), ""
 	}
-	changed := w.statusErr != beforeErr || !sameStatus(w.status, before)
+	catalogChanged := w.mergeCatalogLocked(catalog)
+	changed := catalogChanged || w.statusErr != beforeErr || !sameStatus(w.status, before)
 	w.mu.Unlock()
 	if changed {
 		w.signal()
 	}
+}
+
+// mergeCatalogLocked takes each ready provider's entry from entries and drops a provider the
+// daemon says it cannot run; one still loading or failing keeps its last. It says whether the
+// catalog changed. Called with w.mu held.
+func (w *Watcher) mergeCatalogLocked(entries []paseo.ProviderEntry) bool {
+	if w.catalog == nil {
+		w.catalog = map[string]paseo.ProviderEntry{}
+	}
+	changed := false
+	for _, e := range entries {
+		old, had := w.catalog[e.Provider]
+		switch {
+		case e.Status == "ready" && (e.Enabled == nil || *e.Enabled):
+			e.Enabled, e.Error = nil, ""
+			if !had || !reflect.DeepEqual(old, e) {
+				w.catalog[e.Provider], changed = e, true
+			}
+		case e.Status == "unavailable" || (e.Enabled != nil && !*e.Enabled):
+			if had {
+				delete(w.catalog, e.Provider)
+				changed = true
+			}
+		}
+	}
+	return changed
 }
 
 func sameStatus(a, b paseo.DaemonStatus) bool {
@@ -213,7 +245,7 @@ func (w *Watcher) Snapshot() PaseoStatus {
 		Hostname: w.info.Hostname, Listen: w.status.Listen, PID: w.status.PID, StartedAt: w.status.StartedAt, ProvidersAt: w.statusAt,
 		Workspaces: []Workspace{}, Agents: []Agent{}}
 	for _, p := range w.status.Providers {
-		s.Providers = append(s.Providers, Provider{Name: p.Provider, Available: p.Available, Error: p.Error})
+		s.Providers = append(s.Providers, withCatalog(Provider{Name: p.Provider, Available: p.Available, Error: p.Error}, w.catalog[p.Provider]))
 	}
 	for _, x := range w.workspaces {
 		s.Workspaces = append(s.Workspaces, Workspace{ID: x.ID, Name: cmp.Or(x.Title, x.Name), Kind: x.Kind, Status: x.Status,
@@ -230,6 +262,22 @@ func (w *Watcher) Snapshot() PaseoStatus {
 	}
 	slices.SortFunc(s.Agents, func(a, b Agent) int { return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), cmp.Compare(a.ID, b.ID)) })
 	return s
+}
+
+// withCatalog is p with the models and modes of its catalog entry e.
+func withCatalog(p Provider, e paseo.ProviderEntry) Provider {
+	p.Label, p.DefaultMode = e.Label, e.DefaultModeID
+	for _, m := range e.Models {
+		x := Model{ID: m.ID, Label: m.Label, Description: m.Description, Default: m.IsDefault, DefaultThinking: m.DefaultThinking}
+		for _, o := range m.ThinkingOptions {
+			x.Thinking = append(x.Thinking, o.ID)
+		}
+		p.Models = append(p.Models, x)
+	}
+	for _, m := range e.Modes {
+		p.Modes = append(p.Modes, Mode{ID: m.ID, Label: m.Label, Description: m.Description})
+	}
+	return p
 }
 
 // Timeline reads an agent's timeline on the current connection (see paseo.Client.Timeline: only

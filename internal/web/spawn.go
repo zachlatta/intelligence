@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/zachlatta/intelligence/internal/fleet"
+	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
 // commandProgressSQL is how the spawn pages follow their command, through the read-only SQL API
@@ -68,9 +69,22 @@ func availableProviders(b fleet.Host) []string {
 	return out
 }
 
+// providerCatalog is each provider the host can run, by name, with the models (and their thinking
+// levels) and modes its daemon lists: what the forms offer as choices (providerPickers in
+// spawn.html). A provider whose daemon has listed none yet gets free text.
+func providerCatalog(b fleet.Host) map[string]hostclient.Provider {
+	out := map[string]hostclient.Provider{}
+	for _, p := range b.Report.Paseo.Providers {
+		if p.Available {
+			out[p.Name] = p
+		}
+	}
+	return out
+}
+
 func spawnData(cfg Config, b fleet.Host) map[string]any {
 	host := b.Report.Name
-	return map[string]any{"Version": cfg.Version, "Host": host, "Providers": availableProviders(b), "Agent": newAgent,
+	return map[string]any{"Version": cfg.Version, "Host": host, "Providers": availableProviders(b), "Catalog": providerCatalog(b), "Agent": newAgent,
 		"Thinking": thinkingLevels, "Commands": "/api/hosts/" + host + "/commands", "ProgressSQL": commandProgressSQL,
 		"Dictation": dictationPath(cfg)}
 }

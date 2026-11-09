@@ -293,3 +293,55 @@ func TestCommandProgressIsReadableThroughSQL(t *testing.T) {
 		t.Errorf("reported: %v", row)
 	}
 }
+
+// pageCatalog is the provider catalog a page carries for its model, thinking and mode pickers.
+func pageCatalog(t *testing.T, page string) map[string]hostclient.Provider {
+	t.Helper()
+	const open = `<script id="provider-catalog" type="application/json">`
+	i := strings.Index(page, open)
+	if i < 0 {
+		t.Fatalf("the page carries no provider catalog")
+	}
+	rest := page[i+len(open):]
+	var out map[string]hostclient.Provider
+	if err := json.Unmarshal([]byte(rest[:strings.Index(rest, "</script>")]), &out); err != nil {
+		t.Fatalf("provider catalog: %v", err)
+	}
+	return out
+}
+
+// TestSpawnFormsKnowEachProvidersModels: the forms that start an agent carry the models, thinking
+// levels and modes of each provider the host can run, so they offer them as choices.
+func TestSpawnFormsKnowEachProvidersModels(t *testing.T) {
+	h, _ := cmdServer(t)
+	rep := sampleReport
+	rep.Paseo.Providers = []hostclient.Provider{{Name: "claude", Available: true, Label: "Claude", DefaultMode: "auto",
+		Models: []hostclient.Model{{ID: "claude-opus-5-5", Label: "Opus 5.5", Default: true, Thinking: []string{"low", "medium"}, DefaultThinking: "medium"},
+			{ID: "claude-sonnet-5-5", Label: "Sonnet 5.5"}},
+		Modes: []hostclient.Mode{{ID: "auto", Label: "Auto mode"}, {ID: "bypassPermissions", Label: "Bypass"}}},
+		{Name: "codex", Available: true}, {Name: "copilot", Models: []hostclient.Model{{ID: "gpt"}}}}
+	sendReport(t, h, rep)
+	sendSchedules(t, h, sampleSchedules)
+	c := signInAs(t, h)
+	for _, path := range []string{"/hosts/host-1/workspaces/new", newAgentPath, "/hosts/host-1/schedules/new", "/hosts/host-1/schedules/sch-nightly"} {
+		rec := call(t, h, http.MethodGet, path, "", nil, c)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", path, rec.Code, rec.Body)
+		}
+		page := rec.Body.String()
+		cat := pageCatalog(t, page)
+		if cl := cat["claude"]; len(cl.Models) != 2 || cl.Models[0].Label != "Opus 5.5" || !cl.Models[0].Default ||
+			cl.Models[0].DefaultThinking != "medium" || len(cl.Modes) != 2 || cl.DefaultMode != "auto" {
+			t.Errorf("%s: claude = %+v", path, cl)
+		}
+		if _, ok := cat["codex"]; !ok {
+			t.Errorf("%s: a provider with no catalog yet is left out: %v", path, cat)
+		}
+		if _, ok := cat["copilot"]; ok {
+			t.Errorf("%s: an unavailable provider's catalog is offered", path)
+		}
+		if !strings.Contains(page, "providerPickers(") {
+			t.Errorf("%s: the form does not turn its fields into pickers", path)
+		}
+	}
+}

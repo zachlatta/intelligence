@@ -52,7 +52,10 @@ checks it again against production when it starts.
 The hierarchy is hosts > workspaces > agents:
 
 - `hosts`: each host's latest report: whether it is connected to its daemon (`connected`, else
-  why in `paseo_error`), the daemon's version, listen address, pid, start and providers.
+  why in `paseo_error`), the daemon's version, listen address, pid, start and providers. Each
+  provider carries its catalog, the models (with the thinking levels each takes) and permission
+  modes the daemon lists for it (`get_providers_snapshot`, re-read with the status; a provider still
+  loading keeps the last), read one row each through the views `provider_models` and `provider_modes`.
 - `workspaces`: each host's Paseo workspaces: a directory, local checkout or git worktree that agents
   run in (`kind`), with its status, project and its repository's main checkout (`project_root`),
   branch, diff, directory and `tags`. `listed = false` is a
@@ -385,7 +388,10 @@ the account and enrollment routes, the host binaries and the streams (with a hos
   default a new git worktree of one of the host's repositories (its workspaces' `project_root`s), or
   of a directory typed in. The home page links to both. Each asks what the agent should do, an
   optional title, and the provider (those the host reports available), model, thinking and mode,
-  which start as Opus 5.5, medium thinking, `bypassPermissions`. The page sends a command to the
+  which start as Opus 5.5, medium thinking, `bypassPermissions`. Model and mode are picked from the
+  provider's catalog, with "other…" for a name it does not list, and thinking offers the chosen
+  model's levels; a provider whose daemon lists no catalog takes free text. The schedule forms do the
+  same. The page sends a command to the
   commands API, follows it through `/api/sql`, then opens the new agent's transcript; a failure
   shows Paseo's reason. The prompt takes dictation as the chat box does (below): ⌘D or Enter again
   in an empty prompt starts the agent.

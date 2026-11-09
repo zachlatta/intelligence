@@ -258,6 +258,7 @@ document.querySelectorAll("input[type=datetime-local][data-utc]").forEach((i) =>
       <select id="thinking" name="thinking"><option value="">unchanged</option>{{range .Thinking}}<option value="{{.}}"{{if eq . $.S.Thinking}} selected{{end}}>{{.}}</option>{{end}}</select></div>
     <div><label for="mode">Mode</label><input id="mode" name="mode" value="{{.S.Mode}}" placeholder="unchanged"></div>
   </div>
+  {{template "catalog" .Catalog}}
   {{template "runfields" .S}}
   <div class="form-actions"><button class="btn primary" type="submit">Save</button></div>
 </form>
@@ -266,10 +267,12 @@ document.querySelectorAll("input[type=datetime-local][data-utc]").forEach((i) =>
 </main>
 <script>document.body.dataset.commandSql = {{.CommandSQL}}; document.body.dataset.page = "schedule";</script>
 {{template "schedjs"}}
+{{template "pickersjs"}}
 <script>
 const edit = document.getElementById("edit");
 if (edit) {
   const kind = cadenceFields(edit);
+  providerPickers(edit, "unchanged");
   edit.addEventListener("submit", async (e) => {
     e.preventDefault();
     const o = edit.dataset, f = edit, args = { scheduleId: o.id }, agent = {};
@@ -334,16 +337,13 @@ if (edit) {
 </main>
 <script>document.body.dataset.commandSql = {{.CommandSQL}};</script>
 {{template "schedjs"}}
+{{template "pickersjs"}}
 <script>
 const form = document.getElementById("schedule");
 const kind = cadenceFields(form);
 const dir = form.dir, cwd = form.cwd;
 dir.addEventListener("change", () => { cwd.hidden = dir.value !== ""; });
-form.provider.addEventListener("change", () => { // model and mode names belong to a provider
-  const def = form.provider.value === form.dataset.defaultProvider;
-  form.model.value = def ? form.dataset.defaultModel : "";
-  form.mode.value = def ? form.dataset.defaultMode : "";
-});
+providerPickers(form, "default");
 form.prompt.labels[0].textContent = "What should each run do?";
 form.addEventListener("submit", async (e) => {
   e.preventDefault();

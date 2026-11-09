@@ -40,6 +40,9 @@ type Daemon struct {
 	schedules   []map[string]any  // schedules.go
 	noSchedules bool              // every schedule request fails, as on a daemon without them
 	runOnce     map[string]waiter // run-once requests waiting for their run to end, by run id
+
+	catalog    []map[string]any // catalog.go
+	catalogSet bool
 }
 
 type timeline struct {
@@ -191,6 +194,9 @@ func (f *Daemon) answer(c *websocket.Conn, msg map[string]any) {
 			"serverId": "srv_test", "startedAt": "2026-11-08T07:00:00.000Z", "version": "0.15.3",
 			"providers": []any{map[string]any{"provider": "claude", "available": true, "error": nil},
 				map[string]any{"provider": "pi", "available": false, "error": "not installed"}}}))
+	case "get_providers_snapshot_request":
+		f.write(c, session("get_providers_snapshot_response", map[string]any{"requestId": id, "entries": f.catalogLocked(),
+			"generatedAt": "2026-11-08T07:00:00.000Z"}))
 	case "fetch_agents_request":
 		entries, page := pageOf(f.agents, msg)
 		for i := range entries {

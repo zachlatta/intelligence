@@ -355,3 +355,36 @@ func TestCreatedInTheApp(t *testing.T) {
 		}
 	}
 }
+
+func TestProviderCatalog(t *testing.T) {
+	f := paseotest.New(t, token)
+	loading := map[string]any{"provider": "codex", "status": "loading", "enabled": true}
+	f.SetCatalog(paseotest.CatalogEntry("claude"), loading, map[string]any{"provider": "pi", "status": "error", "error": "boom"})
+	c := dial(t, f)
+	got, err := c.ProviderCatalog(ctx5(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("catalog = %+v", got)
+	}
+	cl := got[0]
+	if cl.Provider != "claude" || cl.Status != "ready" || cl.Label != "Claude" || cl.DefaultModeID != "auto" {
+		t.Errorf("claude = %+v", cl)
+	}
+	// a model the daemon marks unselectable is left out, as Paseo's own pickers do
+	if len(cl.Models) != 2 || cl.Models[0].ID != "claude-opus-5-5" || !cl.Models[0].IsDefault || cl.Models[0].Label != "Opus 5.5" ||
+		cl.Models[0].DefaultThinking != "medium" || len(cl.Models[0].ThinkingOptions) != 3 || cl.Models[0].ThinkingOptions[1].ID != "medium" ||
+		cl.Models[1].ID != "claude-sonnet-5-5" {
+		t.Errorf("claude models = %+v", cl.Models)
+	}
+	if len(cl.Modes) != 2 || cl.Modes[1].ID != "bypassPermissions" || cl.Modes[1].Label != "Bypass" {
+		t.Errorf("claude modes = %+v", cl.Modes)
+	}
+	if got[1].Status != "loading" || got[2].Status != "error" || got[2].Error != "boom" {
+		t.Errorf("others = %+v", got[1:])
+	}
+	if r := f.Requests("get_providers_snapshot_request"); len(r) != 1 {
+		t.Errorf("requests = %v", r)
+	}
+}

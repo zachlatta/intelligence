@@ -34,11 +34,33 @@ type PaseoStatus struct {
 	Agents      []Agent     `json:"agents,omitempty"` // every unarchived agent
 }
 
-// Provider is one agent provider and whether the daemon can run it.
+// Provider is one agent provider, whether the daemon can run it, and its catalog: the models
+// and modes an agent of it can start with, as the daemon last listed them.
 type Provider struct {
-	Name      string `json:"name"`
-	Available bool   `json:"available"`
-	Error     string `json:"error,omitempty"`
+	Name        string  `json:"name"`
+	Available   bool    `json:"available"`
+	Error       string  `json:"error,omitempty"`
+	Label       string  `json:"label,omitempty"`
+	DefaultMode string  `json:"defaultMode,omitempty"`
+	Models      []Model `json:"models,omitempty"`
+	Modes       []Mode  `json:"modes,omitempty"`
+}
+
+// Model is a model a provider offers, with the thinking levels it takes.
+type Model struct {
+	ID              string   `json:"id"`
+	Label           string   `json:"label,omitempty"`
+	Description     string   `json:"description,omitempty"`
+	Default         bool     `json:"default,omitempty"` // the provider's default model
+	Thinking        []string `json:"thinking,omitempty"`
+	DefaultThinking string   `json:"defaultThinking,omitempty"`
+}
+
+// Mode is a provider's permission mode.
+type Mode struct {
+	ID          string `json:"id"`
+	Label       string `json:"label,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // Workspace is a directory, local checkout or git worktree on the host that agents run in.

@@ -38,24 +38,118 @@
       <select id="thinking" name="thinking"><option value="">default</option>{{range .Thinking}}<option value="{{.}}"{{if eq . $.Agent.Thinking}} selected{{end}}>{{.}}</option>{{end}}</select></div>
     <div><label for="mode">Mode</label><input id="mode" name="mode" value="{{.Agent.Mode}}" placeholder="provider default"></div>
   </div>
+  {{template "catalog" .Catalog}}
   {{if not .Providers}}<p class="banner">The host reports no available providers.</p>{{end}}
 {{end}}
 
+{{/* The host's provider catalog (providerCatalog) for providerPickers. */}}
+{{define "catalog"}}<script id="provider-catalog" type="application/json">{{.}}</script>{{end}}
+
+{{define "pickersjs"}}
+<script>
+// providerPickers turns a form's model and mode fields into choices from the host's provider
+// catalog (#provider-catalog), each with "other…" for a name the catalog does not list, and offers
+// the chosen model's thinking levels. A provider whose catalog has no models (or modes) keeps free
+// text. The text inputs stay the fields' values: a choice writes its id into them. blank names the
+// empty choice ("default" adds which one it is).
+function providerPickers(form, blank) {
+  const catalog = JSON.parse(document.getElementById("provider-catalog").textContent || "null") || {};
+  const OTHER = "\u0000other";
+  const { defaultProvider, defaultModel, defaultMode } = form.dataset;
+  const named = blank === "default";
+  const genericThinking = [...form.thinking.options].map((o) => o.value).filter(Boolean);
+  const pickers = {};
+  const option = (select, value, text, title) => {
+    const o = document.createElement("option");
+    o.value = value;
+    o.textContent = text;
+    if (title) o.title = title;
+    select.append(o);
+  };
+  for (const name of ["model", "mode"]) {
+    const input = form[name], select = document.createElement("select");
+    select.id = input.id + "-pick";
+    select.setAttribute("aria-label", name);
+    input.before(select);
+    select.addEventListener("change", () => {
+      const other = select.value === OTHER;
+      input.hidden = !other;
+      input.value = other ? "" : select.value;
+      if (other) input.focus();
+      if (name === "model") thinking();
+    });
+    pickers[name] = { input, select, label: input.labels[0] };
+  }
+  form.model.addEventListener("input", () => thinking());
+
+  // fill offers items (each {id, label, description}) for one field, with current chosen: an id
+  // not among them is "other…" with its text shown.
+  function fill(name, items, def, current) {
+    const { input, select, label } = pickers[name];
+    if (!items || !items.length) {
+      select.hidden = true;
+      input.hidden = false;
+      input.value = current;
+      input.style.marginTop = "";
+      if (label) label.htmlFor = input.id;
+      return;
+    }
+    if (label) label.htmlFor = select.id;
+    select.replaceChildren();
+    const d = items.find((i) => i.id === def);
+    option(select, "", named && d ? blank + " · " + (d.label || d.id) : blank);
+    for (const i of items) option(select, i.id, i.label || i.id, [i.id, i.description].filter(Boolean).join(" · "));
+    option(select, OTHER, "other…");
+    const known = current === "" || items.some((i) => i.id === current);
+    select.value = known ? current : OTHER;
+    select.hidden = false;
+    input.hidden = known;
+    input.value = current;
+    input.style.marginTop = ".4rem"; // under its picker
+  }
+
+  // thinking offers the levels of the chosen model (the provider's default model when none is
+  // chosen), keeping the chosen level while the model has it.
+  function thinking() {
+    const p = catalog[form.provider.value] || {};
+    const models = p.models || [];
+    const id = form.model.value.trim();
+    const m = id ? models.find((x) => x.id === id) : models.find((x) => x.default);
+    const levels = m && m.thinking && m.thinking.length ? m.thinking : genericThinking;
+    const current = form.thinking.value;
+    form.thinking.replaceChildren();
+    option(form.thinking, "", named && m && m.defaultThinking ? blank + " · " + m.defaultThinking : blank);
+    for (const l of levels) option(form.thinking, l, l);
+    form.thinking.value = levels.includes(current) ? current : "";
+  }
+
+  // provider fills the pickers for the chosen provider: the form's own values at first, then (model
+  // and mode names belong to a provider) the fleet's defaults for the default provider, else none.
+  function provider(initial) {
+    const p = catalog[form.provider.value] || {};
+    const def = form.provider.value === defaultProvider;
+    const model = initial ? form.model.value : def ? defaultModel || "" : "";
+    const mode = initial ? form.mode.value : def ? defaultMode || "" : "";
+    fill("model", p.models, ((p.models || []).find((m) => m.default) || {}).id, model);
+    fill("mode", p.modes, p.defaultMode, mode);
+    thinking();
+  }
+  form.provider.addEventListener("change", () => provider(false));
+  provider(true);
+}
+</script>
+{{end}}
+
 {{define "spawnjs"}}
+{{template "pickersjs"}}
 <script>
 // The form writes through the commands API and follows its command through the read-only SQL API,
 // then opens the new agent's transcript.
 const form = document.getElementById("spawn");
-const { host, commands, kind, defaultProvider, defaultModel, defaultMode } = form.dataset;
+const { host, commands, kind } = form.dataset;
 const progressSQL = form.dataset.progressSql;
 const out = document.getElementById("progress");
-
-// model and mode names belong to a provider: keep the defaults only for the default provider
-form.provider.addEventListener("change", () => {
-  const def = form.provider.value === defaultProvider;
-  form.model.value = def ? defaultModel : "";
-  form.mode.value = def ? defaultMode : "";
-});
+providerPickers(form, "default");
 
 function agentArgs() {
   const a = { provider: form.provider.value, prompt: form.prompt.value };
