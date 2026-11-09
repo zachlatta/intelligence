@@ -608,3 +608,22 @@ Probe (in `/etc/intelligence/probe.env`, written by `deploy/install-probe`):
 ## License
 
 MIT. See `LICENSE`.
+
+### Image attachments
+
+Workflow task submission (including the Run dialog) and new agent/workspace forms share an image
+picker: click **Attach images**, drop files onto the form, or paste into the prompt. Thumbnails
+can be removed before submission. PNG, JPEG and GIF are supported, up to 8 images, 4 MiB per image,
+8 MiB total and 40 megapixels per image. Images upload when the task is submitted.
+
+`POST /api/attachments` takes JSON `{"name":"screenshot.png","data":"<base64 image bytes>"}`
+and returns 201 with `{"id","reference"}`. Append the returned `[attachment:<uuid>]` reference to
+a workflow's input or an agent's prompt. Image bytes, media type, name and owner are stored in
+`public.attachments`; all are readable through `/api/sql`, restricted to their account by RLS.
+The command queue resolves references only for the destination host's account and carries images
+in the authenticated host stream. Before starting an agent, the host writes private delivery
+copies under `.factory-scratch/attachments/` in its working directory and replaces references in
+the prompt with those file paths. Workflows deliver copies to both the project finder and the
+orchestrator in its new workspace; the prompt tells it to pass the paths to sub-agents. Images
+are files for the agent's image-reading tools, rather than base64 in the model prompt. Host copies
+and uploaded images currently remain until their directory or account is removed.

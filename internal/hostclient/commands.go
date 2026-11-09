@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/zachlatta/intelligence/internal/attachment"
 	"github.com/zachlatta/intelligence/internal/paseo"
 )
 
@@ -75,15 +76,16 @@ type CreateWorkspaceArgs struct {
 
 // CreateAgentArgs: an agent in WorkspaceID (its directory unless Cwd is given), or in Cwd.
 type CreateAgentArgs struct {
-	WorkspaceID string            `json:"workspaceId,omitempty"`
-	Cwd         string            `json:"cwd,omitempty"`
-	Provider    string            `json:"provider"`
-	Model       string            `json:"model,omitempty"`
-	Thinking    string            `json:"thinking,omitempty"`
-	Mode        string            `json:"mode,omitempty"`
-	Title       string            `json:"title,omitempty"`
-	Prompt      string            `json:"prompt,omitempty"`
-	Labels      map[string]string `json:"labels,omitempty"`
+	Attachments []attachment.Image `json:"attachments,omitempty"`
+	WorkspaceID string             `json:"workspaceId,omitempty"`
+	Cwd         string             `json:"cwd,omitempty"`
+	Provider    string             `json:"provider"`
+	Model       string             `json:"model,omitempty"`
+	Thinking    string             `json:"thinking,omitempty"`
+	Mode        string             `json:"mode,omitempty"`
+	Title       string             `json:"title,omitempty"`
+	Prompt      string             `json:"prompt,omitempty"`
+	Labels      map[string]string  `json:"labels,omitempty"`
 }
 
 // WorkspaceArgs name a workspace: archive_workspace, and rename_workspace with Title ("" resets it).
@@ -319,6 +321,9 @@ func expandHome(path, home string) string {
 
 // createAgent starts a in a.Cwd, labelled with the command that asked for it.
 func createAgent(ctx context.Context, c *paseo.Client, a CreateAgentArgs, cmdID, key string) (CommandResult, error) {
+	if err := materializeImages(a.Cwd, a.Attachments); err != nil {
+		return CommandResult{}, err
+	}
 	labels := map[string]string{"intelligence.command": cmdID}
 	for k, v := range a.Labels {
 		labels[k] = v

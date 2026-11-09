@@ -49,3 +49,12 @@ func dictationScript(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("ETag", dictationETag)
 	http.ServeContent(w, r, "dictation.js", time.Time{}, bytes.NewReader(dictationJS))
 }
+
+//go:embed attachments.js
+var attachmentsJS []byte
+
+func attachmentsScript(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	http.ServeContent(w, r, "attachments.js", time.Time{}, bytes.NewReader(attachmentsJS))
+}
