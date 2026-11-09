@@ -22,7 +22,7 @@ func materializeImages(cwd string, images []attachment.Image) error {
 	}
 	total := 0
 	for _, img := range images {
-		if !attachment.Reference.MatchString("[attachment:" + img.ID + "]") {
+		if len(img.ID) != 36 || !attachment.Reference.MatchString("[attachment:"+img.ID+"]") {
 			return fmt.Errorf("invalid attachment ID")
 		}
 		media, err := attachment.Validate(img.Data)

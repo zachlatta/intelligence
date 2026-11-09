@@ -7,12 +7,36 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/zachlatta/intelligence/internal/attachment"
 	"github.com/zachlatta/intelligence/internal/paseo/paseotest"
 )
+
+func TestImageDeliveryRejectsMalformedID(t *testing.T) {
+	scratch := filepath.Join("..", "..", ".factory-scratch")
+	if err := os.MkdirAll(scratch, 0700); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(scratch, "invalid-image-id-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	var data bytes.Buffer
+	if err := png.Encode(&data, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	img := attachment.Image{ID: "00000000-0000-4000-8000-000000000001]", Data: data.Bytes(), MediaType: "image/png"}
+	if err := materializeImages(dir, []attachment.Image{img}); err == nil || !strings.Contains(err.Error(), "invalid attachment ID") {
+		t.Fatalf("malformed ID accepted: %v", err)
+	}
+	if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
+		t.Fatalf("invalid ID created files: %v, %v", entries, err)
+	}
+}
 
 func TestImageDeliveryBeforeAgentStarts(t *testing.T) {
 	scratch := filepath.Join("..", "..", ".factory-scratch")
