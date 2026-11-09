@@ -443,7 +443,7 @@ Variables in instructions: `{{input}}`, `{{repo}}`, `{{branch}}` and `{{run}}`.
 ### Attachments
 
 Workflow task submission (including the Run dialog), new agent/workspace forms, and existing-session
-chat boxes share an image picker: click **Attach images**, drop files onto the form, or paste into the prompt. Thumbnails
+chat boxes share an image picker: click **＋ Attach**, drop files onto the form, or paste into the prompt. Thumbnails
 can be removed before submission. PNG, JPEG and GIF are supported, up to 8 images, 4 MiB per image,
 8 MiB total and 40 megapixels per image. Images upload when the task is submitted.
 

@@ -68,8 +68,7 @@ function imageAttachments(text, zone = text.closest('form') || text.parentElemen
           item.reference = (await res.json()).reference;
         }
         return value + (files.length ? '\n\nAttached images:\n' + files.map(f => f.reference).join('\n') : '');
-      } catch (e) { warn(e.message); throw e; }
-      finally { busy = false; pick.disabled = disabled; }
+      } finally { busy = false; pick.disabled = disabled; }
     }
   };
 }

@@ -68,5 +68,14 @@ assert.equal(previews.children.length,2,'total size limit');
  const prompt=await picker.prompt('task'); assert.equal(uploads,2); assert(prompt.includes('attachment:1'));
  await picker.prompt('retry'); assert.equal(uploads,2,'retry reuses uploads');
  picker.clear(); assert(!picker.hasImages());
+ input.files=[file('retry.png')]; input.onchange();
+ const upload=global.fetch;
+ global.fetch=async()=>({ok:false,text:async()=> 'Upload unavailable'});
+ await assert.rejects(picker.prompt('task'), /Upload unavailable/);
+ assert.equal(error.textContent,'','submit caller owns upload errors; do not show a duplicate alert');
+ assert(picker.hasImages(),'failed upload keeps the draft');
+ assert(!pick.disabled,'failed upload unlocks the picker');
+ global.fetch=upload;
+ assert((await picker.prompt('task')).includes('attachment:3'),'failed image can be retried');
 })();
 `
