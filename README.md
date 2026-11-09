@@ -518,6 +518,9 @@ origin (another site's request is refused with 403), and those with a body must 
 - `GET /api/host/binary/{os}/{arch}`: the host binary at the server's version.
 - `GET /dictation.js`: the dictation engine shared by the chat box, the new agent and workspace forms,
   and the workflow run dialog.
+- `GET /submitkeys.js`: loaded by every page with its stylesheet. Cmd/Ctrl+Enter in any text box
+  sends it: the default button of its form, or, for a box outside a form, the button named by the
+  nearest `data-submit` ancestor. A disabled button sends nothing; plain Enter is unchanged.
 - `GET /ui.css`: the one stylesheet every page shares, with the top bar (`layout.html`) that links the
   pages.
 - `GET /workflows`: a new task (for workflows triggered by a task: pick the workflow, which names

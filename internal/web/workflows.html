@@ -128,12 +128,12 @@
 {{else}}
 {{if .Tasks}}
 <section class="card"><div class="card-body">
-  <div class="composer">
+  <div class="composer" data-submit="#submit-task">
     <textarea id="task" placeholder="New task: describe what you want done. Its project is found for you."></textarea>
     <div class="side">
       <div class="pick"><label for="task-workflow">Workflow</label>
         <select id="task-workflow">{{range .Tasks}}<option value="{{.ID}}"{{if .IsDefault}} selected{{end}}>{{.Name}}{{with .Definition.Host}} · {{.}}{{end}}</option>{{end}}</select></div>
-      <button class="btn primary" id="submit-task">Submit task</button>
+      <button class="btn primary" id="submit-task" title="⌘/Ctrl Enter">Submit task</button>
     </div>
   </div>
 </div></section>
@@ -214,7 +214,7 @@ setInterval(async () => {
 {{template "wffoot" .}}{{end}}
 
 {{define "editor"}}{{template "wfhead" .Workflow.Name}}
-<main class="container page">
+<main class="container page" data-submit="#save">
 <div class="crumbs"><a href="/workflows">Workflows</a><span class="sep">/</span><span id="crumb">{{.Workflow.Name}}</span></div>
 <div class="page-head">
   <div style="flex:1;min-width:16rem">
@@ -225,7 +225,7 @@ setInterval(async () => {
     <span class="meta" id="saved"></span>
     <div class="segmented"><a href="#" id="v-vis" class="on">Visual</a><a href="#" id="v-json">JSON</a></div>
     <button class="btn sm" id="discard" disabled>Discard</button>
-    <button class="btn sm" id="save" disabled>Save</button>
+    <button class="btn sm" id="save" title="⌘/Ctrl Enter" disabled>Save</button>
     <button class="btn sm primary" id="run">Run…</button>
   </div>
 </div>
@@ -362,7 +362,7 @@ function inspector() {
 function render() {
   head();
   if (json) {
-    $("#editor").innerHTML = `<div class="card"><div class="card-head"><h2>As JSON</h2><span class="meta grow">What <code>PUT /api/workflows/{id}</code> takes as <code>definition</code>.</span><button class="btn sm" id="json-apply">Apply</button></div>
+    $("#editor").innerHTML = `<div class="card" data-submit="#json-apply"><div class="card-head"><h2>As JSON</h2><span class="meta grow">What <code>PUT /api/workflows/{id}</code> takes as <code>definition</code>.</span><button class="btn sm" id="json-apply" title="⌘/Ctrl Enter">Apply</button></div>
       <div class="card-body"><textarea class="json" id="json" spellcheck="false">${esc(JSON.stringify(def(), null, 2))}</textarea></div></div>`;
     $("#json-apply").onclick = () => { try { wf.definition = JSON.parse($("#json").value); json = false; err(""); markDirty(true); } catch (e) { err("JSON: " + e.message); } };
     return;
@@ -495,8 +495,8 @@ render();
 <div id="ask">{{if eq .Run.Status "waiting"}}
 <section class="card note"><div class="card-head"><h2>The orchestrator is asking you</h2><span class="meta grow">at {{(index .Run.Steps .Run.Step).Title}}</span></div>
   <div class="card-body"><div class="md" id="note">{{markdown .Run.Note}}</div>
-    <div class="reply-host"><textarea id="reply" placeholder="Reply in your own words. The orchestrator reads it and decides what to do."></textarea>
-      <div class="side"><button class="btn primary sm" id="send">Send</button><button class="btn sm mic" id="mic" hidden>Dictate</button></div></div>
+    <div class="reply-host" data-submit="#send"><textarea id="reply" placeholder="Reply in your own words. The orchestrator reads it and decides what to do."></textarea>
+      <div class="side"><button class="btn primary sm" id="send" title="⌘/Ctrl Enter">Send</button><button class="btn sm mic" id="mic" hidden>Dictate</button></div></div>
   </div></section>{{end}}</div>
 <div id="steps" class="builder">
   <div class="pipe">

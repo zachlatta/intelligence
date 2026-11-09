@@ -14,7 +14,8 @@ import (
 //go:embed ui.css
 var uiCSS []byte
 
-// layoutHTML holds what every page shares: the stylesheet link ("css") and the top bar ("top").
+// layoutHTML holds what every page shares: the stylesheet link and ⌘/Ctrl Enter script ("css") and
+// the top bar ("top").
 //
 //go:embed layout.html
 var layoutHTML string
@@ -48,4 +49,22 @@ func dictationScript(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("ETag", dictationETag)
 	http.ServeContent(w, r, "dictation.js", time.Time{}, bytes.NewReader(dictationJS))
+}
+
+// submitKeysJS is the ⌘/Ctrl Enter handler every page loads with its stylesheet ("css").
+//
+//go:embed submitkeys.js
+var submitKeysJS []byte
+
+var submitKeysETag = func() string {
+	sum := sha256.Sum256(submitKeysJS)
+	return `"` + hex.EncodeToString(sum[:8]) + `"`
+}()
+
+// submitKeysScript serves submitkeys.js, revalidated on each load like ui.css.
+func submitKeysScript(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("ETag", submitKeysETag)
+	http.ServeContent(w, r, "submitkeys.js", time.Time{}, bytes.NewReader(submitKeysJS))
 }
