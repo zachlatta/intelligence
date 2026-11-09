@@ -123,7 +123,7 @@ func TestDictationBarWrapsOnNarrowScreens(t *testing.T) {
 		t.Error("dictation.js does not group the bar's buttons")
 	}
 	css := string(uiCSS)
-	for _, want := range []string{`.dictation { display: flex; flex-wrap: wrap;`, `.dictation .dstatus { flex: 1 1 8rem;`,
+	for _, want := range []string{`.form-actions + .dictation { margin-top: 1.4rem; }`, `.dictation { display: flex; flex-wrap: wrap;`, `.dictation .dstatus { flex: 1 1 8rem;`,
 		`.dictation .dactions { display: flex; flex-wrap: wrap; justify-content: flex-end;`} {
 		if !strings.Contains(css, want) {
 			t.Errorf("ui.css misses %s", want)
@@ -152,8 +152,7 @@ func TestEveryTaskEntryPointOffersDictation(t *testing.T) {
 			`send: () => submit.click()`, `#task-dictation .dictation`, `.composer .task-actions[hidden] { display: none; }`}, nil},
 		{"workflow run", "/workflows/{id}", []string{`<textarea id="s-input"`, `text: document.getElementById("s-input")`,
 			`send: () => form.requestSubmit(start)`, `active: () => dlg.open`, `onstart: clearWarning`,
-			`dlg.addEventListener("toggle", clearWarning)`, `error.textContent = ""; error.hidden = true;`,
-			`#start .dictation { margin-top: 1.4rem; }`}, nil},
+			`dlg.addEventListener("toggle", clearWarning)`, `error.textContent = ""; error.hidden = true;`}, nil},
 		{"new agent", newAgentPath, []string{`id="spawn"`, `text: form.prompt`}, nil},
 		{"new workspace", "/hosts/host-1/workspaces/new", []string{`id="spawn"`, `text: form.prompt`}, nil},
 		{"new schedule", "/hosts/host-1/schedules/new", []string{`id="schedule"`, `text: form.prompt`,
@@ -161,7 +160,7 @@ func TestEveryTaskEntryPointOffersDictation(t *testing.T) {
 		// editing a schedule, dictation only puts words in the prompt: saving stays a click on Save,
 		// even when the prompt was cleared first
 		{"schedule edit", "/hosts/host-1/schedules/sch-nightly", []string{`id="edit"`, `text: edit.prompt`,
-			`insertOnly: true`, `#edit .dictation`}, []string{`send: () => edit.requestSubmit()`}},
+			`insertOnly: true`}, []string{`send: () => edit.requestSubmit()`}},
 		{"reply to a waiting run", "/workflow-runs/{run}", []string{`<textarea id="reply"`, `text: reply`,
 			`send: () => send.click()`, `active: () => reply.isConnected`, `.reply-host .side[hidden] { display: none; }`,
 			`reply.classList.contains("listening")`,
@@ -204,6 +203,11 @@ func TestEveryTaskEntryPointOffersDictation(t *testing.T) {
 				if !strings.Contains(page, w) {
 					t.Errorf("%s misses %s", e.name, w)
 				}
+			}
+			// a form's bar stands in for its .form-actions row and takes its spacing from ui.css's
+			// one rule, not from a copy on each page
+			if strings.Contains(page, `.dictation { margin-top:`) {
+				t.Errorf("%s spaces its dictation bar itself", e.name)
 			}
 			if n := strings.Count(page, `id="dictate"`); n != 1 {
 				t.Errorf("%s has %d dictation buttons, want 1", e.name, n)

@@ -314,8 +314,7 @@ if (edit) {
     row: edit.querySelector(".form-actions"), label: () => "Done", insertOnly: true,
     warn: (msg) => say(msg, true) });
 })();
-</script>
-<style>#edit .dictation { margin-top: 1.4rem; }</style>{{end}}
+</script>{{end}}
 </body>
 </html>
 {{end}}
@@ -390,8 +389,7 @@ form.addEventListener("submit", async (e) => {
     row: form.querySelector(".form-actions"), label: () => start.textContent, send: () => form.requestSubmit(),
     warn: (msg) => say(msg, true) });
 })();
-</script>
-<style>#schedule .dictation { margin-top: 1.4rem; }</style>{{end}}
+</script>{{end}}
 </body>
 </html>
 {{end}}

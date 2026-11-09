@@ -181,6 +181,8 @@ legend { font-size: 13px; font-weight: 600; padding: 0 .35rem; }
 .form-actions .mic { margin-left: auto; }
 .mic svg { width: 15px; height: 15px; }
 .form-actions[hidden], .dictation[hidden] { display: none; }
+/* A form's dictation bar stands in for its .form-actions row, so it keeps that row's spacing. */
+.form-actions + .dictation { margin-top: 1.4rem; }
 /* On a narrow screen the buttons, as one group, wrap under the status rather than squeeze it. */
 .dictation { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
 .dictation .dactions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .4rem; margin-left: auto; }
