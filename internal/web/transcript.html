@@ -138,12 +138,12 @@
   .chatbar { display: flex; gap: .4rem; align-items: center; margin-top: .4rem; }
   .chatbar .hint { flex: 1; min-width: 0; font-size: .75rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chatbar .hint.warn { color: var(--bad); white-space: normal; }
-  .chatbar button, .dictation button { height: 1.95rem; padding: 0 .8rem; border-radius: var(--radius); border: 1px solid var(--line-strong);
+  .chatbar button { height: 1.95rem; padding: 0 .8rem; border-radius: var(--radius); border: 1px solid var(--line-strong);
     background: var(--panel); color: var(--fg); font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer; box-shadow: var(--shadow); }
-  .chatbar button:hover, .dictation button:hover { background: var(--bg-subtle); }
-  .chatbar button.primary, .dictation button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .chatbar button.primary:hover, .dictation button.primary:hover { background: var(--accent-hover); }
-  .chatbar button:disabled, .dictation button:disabled { opacity: .5; cursor: default; }
+  .chatbar button:hover { background: var(--bg-subtle); }
+  .chatbar button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .chatbar button.primary:hover { background: var(--accent-hover); }
+  .chatbar button:disabled { opacity: .5; cursor: default; }
   .pending { list-style: none; margin: 0 0 .45rem; padding: 0; display: flex; flex-direction: column; gap: .25rem; }
   .pending li { display: flex; gap: .45rem; align-items: baseline; font-size: .8rem; padding: .2rem .55rem; border-radius: .45rem;
     border: 1px dashed var(--you-line); background: color-mix(in srgb, var(--you) 60%, transparent); min-width: 0; }
@@ -151,15 +151,8 @@
   .pending .pstate { flex: none; color: var(--muted); font-size: .72rem; }
   .chatbar button.mic { width: 1.95rem; padding: 0; display: inline-grid; place-items: center; color: var(--muted); }
   .chatbar button.mic:hover { color: var(--fg); }
-  .chatbar button.mic svg { width: 15px; height: 15px; }
-  .dictation { display: flex; gap: .4rem; align-items: center; margin-top: .4rem; }
-  .dictation[hidden], .chatbar[hidden] { display: none; }
-  .dictation .dstatus { flex: 1; min-width: 0; font-size: .75rem; color: var(--muted); display: flex; gap: .45rem; align-items: center; }
-  .dictation .rec { flex: none; width: .55rem; height: .55rem; border-radius: 50%; background: var(--bad); animation: rec 1.2s ease-in-out infinite; }
-  .dictation.finishing .rec { animation: none; opacity: .4; }
-  @keyframes rec { 50% { opacity: .3; } }
-  .dictation kbd { font: inherit; font-size: .7rem; opacity: .75; margin-left: .3rem; }
-  .chat textarea.listening { border-color: var(--bad); box-shadow: 0 0 0 1px color-mix(in srgb, var(--bad) 35%, transparent); }
+  .chatbar[hidden] { display: none; }
+  .chat .dictation { margin-top: .4rem; } .chat .dictation .btn { height: 1.95rem; }
   @media (max-width: 40rem) {
     .tname { display: none; } .tbody { padding-left: .75rem; } body { font-size: 14px; }
     .toolbar button { padding: .3rem .45rem; } .wide { display: none; }
@@ -221,17 +214,11 @@
     <span id="working" class="working" title="The agent is working"{{if not (working .Agent.Status)}} hidden{{end}}><span class="spinner"></span>working<span
       id="working-for"{{if not .Agent.LastUserMessageAt.IsZero}} data-since="{{iso .Agent.LastUserMessageAt}}"{{end}}></span></span>
     <span id="chat-hint" class="hint">Enter steers · ⌥ Enter queues · ⌘/Ctrl Enter interrupts{{if .Chat.Dictation}} · ⌘D dictates{{end}}</span>
-    {{if .Chat.Dictation}}<button type="button" id="dictate" class="mic" title="Dictate (⌘D): into the box if it has text, else to send" aria-label="Dictate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>{{end}}
+    {{if .Chat.Dictation}}<button type="button" id="dictate" class="mic" title="Dictate (⌘D): into the box if it has text, else to send" aria-label="Dictate">{{template "micicon"}}</button>{{end}}
     <button type="submit" data-behavior="queue" title="Send once the current turn (and anything queued before) ends (⌥ Enter)">Queue</button>
     <button type="submit" data-behavior="interrupt" title="Stop the current turn and send this now (⌘/Ctrl Enter)">Interrupt</button>
     <button type="submit" data-behavior="steer" class="primary" title="Add this to the current turn, or start one (Enter)">Steer</button>
   </div>
-  {{if .Chat.Dictation}}<div id="dictation" class="dictation" hidden>
-    <span class="dstatus"><span class="rec"></span><span id="dictation-status">Listening…</span></span>
-    <button type="button" data-dictation-action="cancel" title="Stop and discard (Esc)">Cancel</button>
-    <button type="button" data-dictation-action="edit" title="Stop and put the words in the box to edit">Edit</button>
-    <button type="button" data-dictation-action="send" class="primary" title="Stop and send (⌘D or Enter)">Send<kbd>⌘D</kbd></button>
-  </div>{{end}}
 </div></form>
 
 <script>
@@ -361,157 +348,16 @@ const isWorking = st => st === 'running' || st === 'initializing';
 })();
 </script>
 
+{{if .Chat.Dictation}}<script src="/dictation.js"></script>
 <script>
-// Dictation (⌘D or the mic): the microphone streams to AssemblyAI with a short-lived token from the
-// server, and the words come back into the box. With text already in the box they go in at the
-// cursor and stay there; in an empty box, stopping sends them (⌘D, Enter or Send), or Edit leaves
-// them to change first, or Cancel (Esc) drops them.
 (() => {
-  const form = document.getElementById('chat'), tokenPath = form.dataset.dictation;
-  if (!tokenPath) return;
-  const text = form.elements.text, mic = document.getElementById('dictate'), bar = document.getElementById('dictation');
-  const chatbar = form.querySelector('.chatbar'), status = document.getElementById('dictation-status');
+  const form = document.getElementById('chat'), steer = form.querySelector('[data-behavior=steer]');
   const hint = document.getElementById('chat-hint');
-  const sendButton = bar.querySelector('[data-dictation-action=send]'), editButton = bar.querySelector('[data-dictation-action=edit]');
-  const tap = 'class Tap extends AudioWorkletProcessor { process(inputs) { const c = inputs[0] && inputs[0][0];' +
-    ' if (c) this.port.postMessage(c.slice(0)); return true; } } registerProcessor("tap", Tap);';
-  let session = null;
-
-  const warn = msg => { hint.textContent = 'Dictation: ' + msg; hint.className = 'hint warn'; };
-  const words = s => [...s.turns.keys()].sort((a, b) => a - b).map(k => s.turns.get(k).trim()).filter(Boolean).join(' ');
-  function render(s) {
-    const said = words(s);
-    const sep = said && s.before && !/\s$/.test(s.before) ? ' ' : '';
-    const tail = said && s.after && !/^\s/.test(s.after) ? ' ' : '';
-    text.value = s.before + sep + said + tail + s.after;
-    const at = (s.before + sep + said).length;
-    text.setSelectionRange(at, at);
-    text.dispatchEvent(new Event('input'));
-  }
-  function show(s) {
-    const on = !!s;
-    bar.hidden = !on; chatbar.hidden = on;
-    text.readOnly = on; text.classList.toggle('listening', on);
-    if (!on) return;
-    bar.classList.remove('finishing');
-    status.textContent = 'Starting…';
-    editButton.hidden = s.mode === 'append';
-    sendButton.firstChild.textContent = s.mode === 'append' ? 'Done' : form.querySelector('[data-behavior=steer]').textContent;
-    sendButton.title = s.mode === 'append' ? 'Stop dictating (⌘D or Enter)' : 'Stop and send (⌘D or Enter)';
-  }
-  function release(s) {
-    s.stream?.getTracks().forEach(t => t.stop());
-    s.ctx?.close().catch(() => {});
-    s.stream = s.ctx = null;
-  }
-
-  async function start() {
-    const mode = text.value.trim() ? 'append' : 'send';
-    const s = session = { mode, original: text.value, before: text.value.slice(0, text.selectionStart),
-      after: text.value.slice(text.selectionEnd), turns: new Map(), queue: [], ws: null, stopping: false };
-    let closed; s.closed = new Promise(r => closed = r);
-    show(s);
-    try {
-      const token = fetch(tokenPath, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then(async res => {
-        if (res.status === 401) { location.href = '/login?next=' + encodeURIComponent(location.pathname); throw new Error('signed out'); }
-        if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
-        return res.json();
-      });
-      token.catch(() => {});
-      s.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
-      if (session !== s) return release(s);
-      const ctx = s.ctx = new AudioContext();
-      const mod = URL.createObjectURL(new Blob([tap], { type: 'application/javascript' }));
-      await ctx.audioWorklet.addModule(mod);
-      URL.revokeObjectURL(mod);
-      if (session !== s) return release(s);
-      // 16-bit PCM in 50ms chunks, queued until the stream opens so nothing said early is lost
-      const per = Math.round(ctx.sampleRate / 20);
-      let buf = new Int16Array(per), n = 0;
-      const push = chunk => s.ws?.readyState === WebSocket.OPEN ? s.ws.send(chunk) : s.queue.length < 1200 && s.queue.push(chunk);
-      s.flush = () => { if (n) push(buf.slice(0, n).buffer); n = 0; };
-      const node = new AudioWorkletNode(ctx, 'tap');
-      node.port.onmessage = e => {
-        if (!s.stream) return;
-        for (const v of e.data) {
-          buf[n++] = Math.max(-32768, Math.min(32767, Math.round(v * 32768)));
-          if (n === per) { push(buf.buffer); buf = new Int16Array(per); n = 0; }
-        }
-      };
-      ctx.createMediaStreamSource(s.stream).connect(node);
-      node.connect(ctx.destination); // silent; keeps the node pulled
-      status.textContent = 'Connecting…';
-      const { token: t, url } = await token;
-      if (s.mode === 'cancel') return release(s);
-      const ws = s.ws = new WebSocket(url + '&sample_rate=' + ctx.sampleRate + '&token=' + encodeURIComponent(t));
-      ws.binaryType = 'arraybuffer';
-      ws.onopen = () => {
-        s.queue.forEach(c => ws.send(c)); s.queue = [];
-        if (s.stopping) s.end(); else status.textContent = 'Listening…';
-      };
-      ws.onmessage = e => {
-        const m = JSON.parse(e.data);
-        if (m.type === 'Turn') { s.turns.set(m.turn_order, m.transcript || ''); if (s.mode !== 'cancel') render(s); }
-        else if (m.type === 'Termination') closed();
-      };
-      ws.onclose = e => {
-        if (!s.stopping && e.code !== 1000) { warn(e.reason || 'the stream closed (' + e.code + ')'); finish(s, 'edit'); }
-        closed();
-      };
-      ws.onerror = () => {};
-    } catch (err) {
-      closed();
-      if (session !== s) return;
-      warn(err.name === 'NotAllowedError' ? 'the browser was not allowed to use the microphone' : err.message);
-      release(s); session = null; text.value = s.original; show(null); text.focus();
-    }
-  }
-
-  // finish stops the microphone, waits for the last words, then sends, keeps (edit, done) or drops them.
-  async function finish(s, action) {
-    if (s.stopping) return;
-    s.stopping = true;
-    s.flush?.();
-    release(s);
-    if (action === 'cancel') {
-      s.mode = 'cancel';
-      s.ws?.close();
-    } else {
-      bar.classList.add('finishing');
-      status.textContent = 'Finishing…';
-      s.end = () => { try { s.ws.send(JSON.stringify({ type: 'ForceEndpoint' })); s.ws.send(JSON.stringify({ type: 'Terminate' })); } catch {} };
-      if (s.ws?.readyState === WebSocket.OPEN) s.end();
-      await Promise.race([s.closed, new Promise(r => setTimeout(r, 8000))]);
-      s.ws?.close();
-    }
-    if (session === s) session = null;
-    if (action === 'cancel') text.value = s.original; else render(s);
-    text.dispatchEvent(new Event('input'));
-    show(null);
-    text.focus();
-    if (action === 'send') {
-      if (words(s)) form.requestSubmit(form.querySelector('[data-behavior=steer]'));
-      else warn('heard nothing');
-    }
-  }
-
-  const toggle = () => session ? finish(session, session.mode === 'append' ? 'done' : 'send') : start();
-  mic.addEventListener('click', toggle);
-  bar.addEventListener('click', e => {
-    const a = e.target.closest('[data-dictation-action]')?.dataset.dictationAction;
-    if (a && session) finish(session, a === 'send' && session.mode === 'append' ? 'done' : a);
-  });
-  // capture, so these win over the box's own keys while dictating
-  document.addEventListener('keydown', e => {
-    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'd') {
-      e.preventDefault(); e.stopImmediatePropagation(); toggle(); return;
-    }
-    if (!session || e.isComposing) return;
-    if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); finish(session, 'cancel'); }
-    else if (e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); toggle(); }
-  }, true);
+  dictation({ text: form.elements.text, tokenPath: form.dataset.dictation, mic: document.getElementById('dictate'),
+    row: form.querySelector('.chatbar'), label: () => steer.textContent, send: () => form.requestSubmit(steer),
+    warn: msg => { hint.textContent = msg; hint.className = 'hint warn'; } });
 })();
-</script>
+</script>{{end}}
 
 <script>
 (() => {

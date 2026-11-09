@@ -387,7 +387,8 @@ the account and enrollment routes, the host binaries and the streams (with a hos
   optional title, and the provider (those the host reports available), model, thinking and mode,
   which start as Opus 5.5, medium thinking, `bypassPermissions`. The page sends a command to the
   commands API, follows it through `/api/sql`, then opens the new agent's transcript; a failure
-  shows Paseo's reason.
+  shows Paseo's reason. The prompt takes dictation as the chat box does (below): ⌘D or Enter again
+  in an empty prompt starts the agent.
 - `GET /login`: signs a browser in, or makes an account, through the account APIs.
 - `GET /account`: the account's hosts (online, when each joined and last used its key), how to
   install one, the form that adds a host by its code, and the password form.
@@ -447,6 +448,7 @@ origin (another site's request is refused with 403), and those with a body must 
   read-only query, as the account's own role, so it reads only the account's rows. Returns `{"columns": [{"name", "type"}], "rows": [[...]], "rowCount",
   "truncated"}`, or 400 with `{"error"}`. At most 10000 rows; 5 seconds per query.
 - `GET /api/host/binary/{os}/{arch}`: the host binary at the server's version.
+- `GET /dictation.js`: the dictation engine the chat box and the new agent and workspace forms share.
 - `GET /ui.css`: the one stylesheet every page shares, with the top bar (`layout.html`) that links the
   pages.
 - `GET /healthz`: `{"status":"ok","version":"<commit>","database":"ok"}`, 503 when the database is

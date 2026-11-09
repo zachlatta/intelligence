@@ -71,7 +71,8 @@ func availableProviders(b fleet.Host) []string {
 func spawnData(cfg Config, b fleet.Host) map[string]any {
 	host := b.Report.Name
 	return map[string]any{"Version": cfg.Version, "Host": host, "Providers": availableProviders(b), "Agent": newAgent,
-		"Thinking": thinkingLevels, "Commands": "/api/hosts/" + host + "/commands", "ProgressSQL": commandProgressSQL}
+		"Thinking": thinkingLevels, "Commands": "/api/hosts/" + host + "/commands", "ProgressSQL": commandProgressSQL,
+		"Dictation": dictationPath(cfg)}
 }
 
 // newAgentPage is the form that starts an agent in a workspace.

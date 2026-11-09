@@ -93,7 +93,7 @@ func TestDictationTokenFailsClearly(t *testing.T) {
 func TestChatBoxOffersDictationOnlyWithAKey(t *testing.T) {
 	aai := fakeAssemblyAI(t, "k", "t")
 	page := get(t, dictationServer(t, "k", aai.URL), "/hosts/host-1/agents/"+agentA1, nil).Body.String()
-	for _, want := range []string{`data-dictation="/api/dictation/token"`, `id="dictate"`, `id="dictation"`} {
+	for _, want := range []string{`data-dictation="/api/dictation/token"`, `id="dictate"`, `src="/dictation.js"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("with a key, the page misses %s", want)
 		}
@@ -101,5 +101,29 @@ func TestChatBoxOffersDictationOnlyWithAKey(t *testing.T) {
 	page = get(t, dictationServer(t, "", aai.URL), "/hosts/host-1/agents/"+agentA1, nil).Body.String()
 	if strings.Contains(page, `id="dictate"`) {
 		t.Error("without a key, the page offers dictation")
+	}
+}
+
+func TestSpawnPagesOfferDictationOnlyWithAKey(t *testing.T) {
+	aai := fakeAssemblyAI(t, "k", "t")
+	for _, p := range []string{newAgentPath, "/hosts/host-1/workspaces/new"} {
+		page := get(t, dictationServer(t, "k", aai.URL), p, nil).Body.String()
+		for _, want := range []string{`data-dictation="/api/dictation/token"`, `id="dictate"`, `src="/dictation.js"`} {
+			if !strings.Contains(page, want) {
+				t.Errorf("%s with a key misses %s", p, want)
+			}
+		}
+		page = get(t, dictationServer(t, "", aai.URL), p, nil).Body.String()
+		if strings.Contains(page, `id="dictate"`) || strings.Contains(page, `/dictation.js`) {
+			t.Errorf("%s without a key offers dictation", p)
+		}
+	}
+}
+
+func TestDictationScriptIsServed(t *testing.T) {
+	rec := get(t, dictationServer(t, "", ""), "/dictation.js", nil)
+	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/javascript") ||
+		!strings.Contains(rec.Body.String(), "AudioWorklet") || rec.Header().Get("ETag") == "" {
+		t.Errorf("/dictation.js: %d %q, etag %q", rec.Code, rec.Header().Get("Content-Type"), rec.Header().Get("ETag"))
 	}
 }

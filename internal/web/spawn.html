@@ -115,6 +115,17 @@ form.addEventListener("submit", async (e) => {
 </script>
 {{end}}
 
+{{define "dictationjs"}}{{if .Dictation}}<script src="/dictation.js"></script>
+<script>
+(() => {
+  const form = document.getElementById("spawn"), start = form.querySelector(".form-actions .primary");
+  dictation({ text: form.prompt, tokenPath: form.dataset.dictation, mic: document.getElementById("dictate"),
+    row: form.querySelector(".form-actions"), label: () => start.textContent, send: () => form.requestSubmit(),
+    warn: (msg) => say(msg, true) });
+})();
+</script>
+<style>#spawn .dictation { margin-top: 1.4rem; }</style>{{end}}{{end}}
+
 {{define "agent"}}{{template "head" "New agent"}}
 <body>
 <div class="crumbs"><a href="/">Hosts</a><span class="sep">/</span>{{.Host}}<span class="sep">/</span>{{or .Workspace.Name .Workspace.ID}}</div>
@@ -122,9 +133,9 @@ form.addEventListener("submit", async (e) => {
 <p class="sub"><span class="mono">{{.Workspace.Directory}}</span>{{if .Workspace.Branch}} · <span class="mono">{{.Workspace.Branch}}</span>{{end}}{{if .Workspace.Project}} · {{.Workspace.Project}}{{end}}</p></div></div>
 <form id="spawn" class="card form" data-host="{{.Host}}" data-commands="{{.Commands}}" data-kind="create_agent" data-workspace="{{.Workspace.ID}}"
   data-default-provider="{{.Agent.Provider}}" data-default-model="{{.Agent.Model}}" data-default-mode="{{.Agent.Mode}}"
-  data-progress-sql="{{.ProgressSQL}}">
+  data-progress-sql="{{.ProgressSQL}}"{{if .Dictation}} data-dictation="{{.Dictation}}"{{end}}>
   {{template "agentfields" .}}
-  <div class="form-actions"><button class="btn primary">Start agent</button><a class="btn" href="/">Cancel</a></div>
+  <div class="form-actions"><button class="btn primary">Start agent</button><a class="btn" href="/">Cancel</a>{{if .Dictation}}<button type="button" class="btn ghost mic" id="dictate" style="margin-left:auto" title="Dictate (⌘D): into the box if it has text, else to start" aria-label="Dictate">{{template "micicon"}}</button>{{end}}</div>
   <p id="progress"></p>
 </form>
 <script>
@@ -133,6 +144,7 @@ function spawnArgs() {
 }
 </script>
 {{template "spawnjs"}}
+{{template "dictationjs" .}}
 {{template "foot" .}}{{end}}
 
 {{define "workspace"}}{{template "head" "New workspace"}}
@@ -142,7 +154,7 @@ function spawnArgs() {
 <p class="sub">A workspace with an agent in it, by default in a new git worktree.</p></div></div>
 <form id="spawn" class="card form" data-host="{{.Host}}" data-commands="{{.Commands}}" data-kind="create_workspace"
   data-default-provider="{{.Agent.Provider}}" data-default-model="{{.Agent.Model}}" data-default-mode="{{.Agent.Mode}}"
-  data-progress-sql="{{.ProgressSQL}}">
+  data-progress-sql="{{.ProgressSQL}}"{{if .Dictation}} data-dictation="{{.Dictation}}"{{end}}>
   <label for="repo">Repository</label>
   <select id="repo" name="repo">
     {{range .Repositories}}<option value="{{.Root}}">{{if .Project}}{{.Project}} · {{end}}{{.Root}}</option>{{end}}
@@ -157,7 +169,7 @@ function spawnArgs() {
   <fieldset><legend>Its agent</legend>
   {{template "agentfields" .}}
   </fieldset>
-  <div class="form-actions"><button class="btn primary">Start workspace and agent</button><a class="btn" href="/">Cancel</a></div>
+  <div class="form-actions"><button class="btn primary">Start workspace and agent</button><a class="btn" href="/">Cancel</a>{{if .Dictation}}<button type="button" class="btn ghost mic" id="dictate" style="margin-left:auto" title="Dictate (⌘D): into the box if it has text, else to start" aria-label="Dictate">{{template "micicon"}}</button>{{end}}</div>
   <p id="progress"></p>
 </form>
 <script>
@@ -182,4 +194,5 @@ function spawnArgs() {
 }
 </script>
 {{template "spawnjs"}}
+{{template "dictationjs" .}}
 {{template "foot" .}}{{end}}

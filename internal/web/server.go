@@ -101,6 +101,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("PUT /api/account/password", a.write(a.changePassword))
 	mux.HandleFunc("GET /login", loginPage(cfg))
 	mux.HandleFunc("GET /ui.css", stylesheet)
+	mux.HandleFunc("GET /dictation.js", dictationScript)
 	mux.HandleFunc("GET /account", a.page(func(v viewer) http.HandlerFunc { return accountPage(cfg, v) }))
 	// hosts: joining an account, and their streams
 	mux.HandleFunc("POST /api/host-enrollments", a.enroll)

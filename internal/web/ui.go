@@ -31,3 +31,21 @@ func stylesheet(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("ETag", uiETag)
 	http.ServeContent(w, r, "ui.css", time.Time{}, bytes.NewReader(uiCSS))
 }
+
+// dictationJS is the dictation engine every page with a text box to dictate into loads.
+//
+//go:embed dictation.js
+var dictationJS []byte
+
+var dictationETag = func() string {
+	sum := sha256.Sum256(dictationJS)
+	return `"` + hex.EncodeToString(sum[:8]) + `"`
+}()
+
+// dictationScript serves dictation.js, revalidated on each load like ui.css.
+func dictationScript(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("ETag", dictationETag)
+	http.ServeContent(w, r, "dictation.js", time.Time{}, bytes.NewReader(dictationJS))
+}
