@@ -23,3 +23,11 @@ SELECT t.run_id, a.host, a.id, to_jsonb(a), to_jsonb(w), now()
 FROM tree t JOIN agents a ON a.host = t.host AND a.id = t.agent_id
 JOIN workspaces w ON w.host = a.host AND w.id = a.workspace_id
 ON CONFLICT DO NOTHING;
+
+-- Confirm absence only when the daemon or a completed archive command establishes it.
+UPDATE workflow_run_agents h SET archived = true
+WHERE NOT EXISTS (SELECT 1 FROM agents a WHERE a.host = h.host AND a.id = h.agent_id)
+    AND (EXISTS (SELECT 1 FROM hosts b WHERE b.name = h.host AND b.connected)
+        OR EXISTS (SELECT 1 FROM workflow_runs r JOIN commands c ON c.id = r.archive_command
+            WHERE r.id = h.run_id AND c.status = 'succeeded' AND r.workspace_id = h.agent->>'workspace_id'));
+

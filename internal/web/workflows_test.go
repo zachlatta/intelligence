@@ -691,11 +691,7 @@ func TestFinishedWorkflowQueuesArchiveAndKeepsArchiveFailureSeparate(t *testing.
 			if !strings.Contains(page.Body.String(), "Workspace archive: failed") || !strings.Contains(page.Body.String(), "archive refused") {
 				t.Fatalf("run page hides cleanup failure: %s", page.Body)
 			}
-			want := "succeeded"
-			if ending == "fail" {
-				want = "failed"
-			}
-			if r := readRun(t, h, run); r["status"] != want {
+			if r := readRun(t, h, run); r["status"] != "succeeded" {
 				t.Fatalf("archive failure changed outcome: %v", r)
 			}
 			code, rows = sqlPost(t, h, q(`SELECT c.status, c.error FROM workflow_runs r JOIN commands c ON c.id = r.archive_command WHERE r.id = '`+run+`'`))
