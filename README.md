@@ -349,10 +349,11 @@ version it started with. A run:
    Chinese, say) leaves the branch only the workflow and the run. In the branch the workflow (up to
    24 characters) and the task (up to 40) are cut between the parts of their words
    (“dependency-vulnerability-review” keeps `dependency-vulnerability`), and a first part longer
-   than that is truncated, never dropped. The task, computed once when the run starts, is the run's
-   title (`workflow_runs.title`): its pages show it, and its agents are named from it (“Find the
-   project · Factory Task: Fix the login page”, “Orchestrator · Factory Task: Fix the login page”),
-   as are the workspace title and branch, also on the run (`workflow_runs.workspace_title`,
+   than that is truncated, never dropped. The task, made from the input when the run starts (and
+   made again, the same, when its workspace is queued, which renames runs started before it), is the
+   run's title (`workflow_runs.title`): its pages show it, and its agents are named from it (“Find
+   the project · Factory Task: Fix the login page”, “Orchestrator · Factory Task: Fix the login
+   page”), as are the workspace title and branch, also on the run (`workflow_runs.workspace_title`,
    `branch`) and its page. The orchestrator's first message is its standing instructions, the input,
    the list of steps, the commands below, and the first step.
 3. **The orchestrator moves through the steps.** It never does the work itself: it starts
