@@ -233,11 +233,12 @@ setInterval(async () => {
 <div id="menu" class="menu" hidden></div>
 <dialog id="start">
   <div class="card-head"><h2>Run this workflow</h2></div>
-  <form method="dialog">
+  <form method="dialog"{{if .Dictation}} data-dictation="{{.Dictation}}"{{end}}>
     <label for="s-input">What should it do?</label>
     <textarea id="s-input" required></textarea>
     <p class="hint">Runs the saved version.</p>
-    <div class="form-actions"><button class="btn primary" value="ok">Start</button><button class="btn" value="cancel" formnovalidate>Cancel</button></div>
+    <p class="banner" id="s-error" role="alert" hidden></p>
+    <div class="form-actions"><button class="btn primary" value="ok">Start</button><button class="btn" value="cancel" formnovalidate>Cancel</button>{{if .Dictation}}<button type="button" class="btn ghost mic" id="dictate" style="margin-left:auto" title="Dictate (⌘D): into the box if it has text, else to start" aria-label="Dictate">{{template "micicon"}}</button>{{end}}</div>
   </form>
 </dialog>
 <script>
@@ -459,6 +460,17 @@ $("#start").addEventListener("close", async () => {
 window.addEventListener("beforeunload", (e) => { if (dirty) e.preventDefault(); });
 render();
 </script>
+{{if .Dictation}}<script src="/dictation.js"></script>
+<script>
+(() => {
+  const dlg = document.getElementById("start"), form = dlg.querySelector("form");
+  const start = form.querySelector('[value="ok"]'), error = document.getElementById("s-error");
+  dictation({ text: document.getElementById("s-input"), tokenPath: form.dataset.dictation,
+    mic: document.getElementById("dictate"), row: form.querySelector(".form-actions"),
+    label: () => start.textContent, send: () => form.requestSubmit(start), active: () => dlg.open,
+    warn: (msg) => { error.textContent = msg; error.hidden = false; } });
+})();
+</script>{{end}}
 {{template "wffoot" .}}{{end}}
 
 {{define "run"}}{{template "wfhead" .Run.Title}}

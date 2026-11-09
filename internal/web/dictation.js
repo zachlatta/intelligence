@@ -12,7 +12,8 @@
 //   label()   the send button's name now ("Send", "Start agent")
 //   send()    sends what the box holds
 //   warn(msg) shows a problem
-window.dictation = ({ text, tokenPath, mic, row, label, send, warn }) => {
+//   active()  optional: whether keyboard shortcuts should act on this box (e.g. an open dialog)
+window.dictation = ({ text, tokenPath, mic, row, label, send, warn, active = () => true }) => {
   const bar = document.createElement('div');
   bar.className = 'dictation';
   bar.hidden = true;
@@ -152,6 +153,7 @@ window.dictation = ({ text, tokenPath, mic, row, label, send, warn }) => {
   });
   // capture, so these win over the page's own keys while dictating
   document.addEventListener('keydown', e => {
+    if (!active()) return;
     if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'd') {
       e.preventDefault(); e.stopImmediatePropagation(); toggle(); return;
     }

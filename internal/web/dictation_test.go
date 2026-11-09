@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/zachlatta/intelligence/internal/dbtest"
+	"github.com/zachlatta/intelligence/internal/workflow"
 )
 
 // fakeAssemblyAI is AssemblyAI's token endpoint: it checks the key and the request, and hands out tok.
@@ -125,5 +126,30 @@ func TestDictationScriptIsServed(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/javascript") ||
 		!strings.Contains(rec.Body.String(), "AudioWorklet") || rec.Header().Get("ETag") == "" {
 		t.Errorf("/dictation.js: %d %q, etag %q", rec.Code, rec.Header().Get("Content-Type"), rec.Header().Get("ETag"))
+	}
+}
+
+func TestWorkflowRunOffersDictationOnlyWithAKey(t *testing.T) {
+	for _, key := range []string{"k", ""} {
+		t.Run("key="+key, func(t *testing.T) {
+			h := dictationServer(t, key, "")
+			id := createWorkflow(t, h, workflow.Starting)
+			rec := get(t, h, "/workflows/"+id, nil)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("workflow page: %d %s", rec.Code, rec.Body)
+			}
+			page := rec.Body.String()
+			if key == "" {
+				if strings.Contains(page, `id="dictate"`) || strings.Contains(page, `/dictation.js`) {
+					t.Error("without a key, the workflow run box offers dictation")
+				}
+				return
+			}
+			for _, want := range []string{`data-dictation="/api/dictation/token"`, `id="dictate"`, `src="/dictation.js"`, `text: document.getElementById("s-input")`, `send: () => form.requestSubmit(start)`, `active: () => dlg.open`} {
+				if !strings.Contains(page, want) {
+					t.Errorf("workflow run box misses %s", want)
+				}
+			}
+		})
 	}
 }
