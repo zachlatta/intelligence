@@ -259,6 +259,7 @@ const allRepos = {{json .Repos}};
 const hosts = {{json .Hosts}};
 // email triggers: the mailbox, its recent email (the preview matches it), and the other workflows email starts
 const emailOn = {{json .EmailOn}}, mailbox = {{json .Mailbox}}, recentEmail = {{json .Emails}}, otherEmailWorkflows = {{json .Others}};
+const providers = {{json .Providers}}; // workflow.Providers: each runs its agents without asking
 let typingDir = false; // "Another directory…" chosen: the directory is typed
 const repoLabel = (r) => `${r.project || r.directory.split("/").pop()} · ${r.directory}`;
 let wf = structuredClone(saved), sel = "__trigger", json = false, dirty = false;
@@ -413,7 +414,7 @@ function inspector() {
       <div><label>Provider</label><input data-${pre}="provider" value="${esc(o.provider)}" list="providers"></div>
       <div><label>Model</label><input data-${pre}="model" value="${esc(o.model)}" placeholder="provider default"></div>
       <div><label>Thinking</label><select data-${pre}="thinking">${opts(THINKING.map((t) => [t, t || "default"]), o.thinking || "")}</select></div></div>
-      <datalist id="providers"><option>claude</option><option>codex</option><option>muse</option><option>antigravity</option></datalist>`;
+      <datalist id="providers">${providers.map((p) => `<option>${esc(p)}</option>`).join("")}</datalist>`;
   const panel = (ttl, sub, body) => `<div class="card-head"><h2>${ttl}</h2>${sub ? `<span class="meta grow">${sub}</span>` : ""}</div><div class="card-body">${body}</div>`;
   if (sel === "__trigger") {
     const hostOpts = hosts.map((h) => [h, h]);

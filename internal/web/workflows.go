@@ -558,7 +558,7 @@ func workflowPage(cfg Config, a *app, v viewer) http.HandlerFunc {
 		}
 		renderWorkflows(w, "editor", map[string]any{"Version": cfg.Version, "Workflow": wfs[0], "Hosts": hosts, "Repos": repos,
 			"EmailOn": a.mail != nil, "Mailbox": mb.Address, "Emails": previews(emails), "Others": others,
-			"Dictation": dictationPath(cfg)})
+			"Dictation": dictationPath(cfg), "Providers": workflow.Providers()})
 	}
 }
 

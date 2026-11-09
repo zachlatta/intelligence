@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"path"
 	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/zachlatta/intelligence/internal/hostclient"
@@ -174,26 +173,43 @@ func ProjectPrompt(run string, d Definition, input string, repos []string) strin
 	return b.String()
 }
 
-// unattendedModes are the paseo modes in which each provider's agents run without asking: every
-// agent of a run works unattended, so a permission prompt would stall it.
-var unattendedModes = map[string]string{"claude": "bypassPermissions", "codex": "full-access"}
+// unattendedModes are the providers a workflow's agents run on, in the order the editor offers
+// them, each with the paseo mode its catalog marks unattended (it never asks for permission):
+// every agent of a run works unattended, so a permission prompt would stall it.
+var unattendedModes = []struct{ provider, mode string }{
+	{"claude", "bypassPermissions"},
+	{"codex", "full-access"},
+	{"muse", "allowAll"},
+	{"antigravity", "full-access"},
+}
+
+// Providers are the providers the workflow editor offers: those with a mode that never asks.
+func Providers() []string {
+	ps := make([]string, len(unattendedModes))
+	for i, m := range unattendedModes {
+		ps[i] = m.provider
+	}
+	return ps
+}
 
 // agentMode is the mode an agent of provider starts in: its unattended mode, or, for a provider
 // without one, its default ("").
-func agentMode(provider string) string { return unattendedModes[provider] }
+func agentMode(provider string) string {
+	for _, m := range unattendedModes {
+		if m.provider == provider {
+			return m.mode
+		}
+	}
+	return ""
+}
 
 // subAgentModes tells the orchestrator which mode to start each provider's sub-agents in. It is
 // in the prompt, not only the instructions, so definitions saved before it get it too: `paseo
-// run` starts an agent in its provider's default mode, which asks, unless given --mode.
+// run` starts an agent in its provider's default mode, which may ask, unless given --mode.
 func subAgentModes() string {
-	providers := make([]string, 0, len(unattendedModes))
-	for p := range unattendedModes {
-		providers = append(providers, p)
-	}
-	sort.Strings(providers)
-	modes := make([]string, len(providers))
-	for i, p := range providers {
-		modes[i] = fmt.Sprintf("--mode %s for %s", unattendedModes[p], p)
+	modes := make([]string, len(unattendedModes))
+	for i, m := range unattendedModes {
+		modes[i] = fmt.Sprintf("--mode %s for %s", m.mode, m.provider)
 	}
 	return "Every sub-agent works unattended, so start each in the mode that never asks for permission: " +
 		strings.Join(modes, ", ") + " (paseo run --mode <mode>). Without it, a permission prompt stalls the run."

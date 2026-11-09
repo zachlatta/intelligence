@@ -111,10 +111,21 @@ func onHost(d Definition) Definition {
 }
 
 func TestWorkflowAgentsStartInTheModeThatNeverAsks(t *testing.T) {
-	// The ids are paseo's unattended modes (provider ls / its provider manifest).
-	for provider, want := range map[string]string{"claude": "bypassPermissions", "codex": "full-access", "other": ""} {
+	// The ids are the modes paseo's provider catalogs mark isUnattended.
+	for provider, want := range map[string]string{"claude": "bypassPermissions", "codex": "full-access",
+		"muse": "allowAll", "antigravity": "full-access", "other": ""} {
 		if got := agentMode(provider); got != want {
 			t.Errorf("agentMode(%q) = %q, want %q", provider, got, want)
+		}
+	}
+	// Providers is what the editor offers: each has a mode that never asks, Claude first.
+	ps := Providers()
+	if len(ps) != 4 || ps[0] != "claude" {
+		t.Errorf("Providers() = %v", ps)
+	}
+	for _, p := range ps {
+		if agentMode(p) == "" {
+			t.Errorf("provider %q has no mode that never asks", p)
 		}
 	}
 }
@@ -127,7 +138,7 @@ func TestTheOrchestratorStartsSubAgentsInTheModeThatNeverAsks(t *testing.T) {
 	d := clone(Starting)
 	d.Orchestrator.Instructions = "You run a workflow. Start sub-agents with paseo run."
 	p := OrchestratorPrompt("Task", d, Vars{Run: "run-1", Input: "x"})
-	for _, want := range []string{"--mode bypassPermissions", "claude", "--mode full-access", "codex"} {
+	for _, want := range []string{"--mode bypassPermissions for claude", "--mode full-access for codex", "--mode allowAll for muse", "--mode full-access for antigravity"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("orchestrator prompt misses %q:\n%s", want, p)
 		}
