@@ -315,8 +315,13 @@ version it started with. A run:
    (its workspaces' `project_root`s) and answers with `intelligence workflow project --run <id>
    <directory>|none`. A definition can name its repository instead (`"mode": "fixed"`).
 2. **Starts the orchestrator in the worktree.** The server archives the finder and queues
-   `create_workspace`: a git worktree of the repository on branch `wf-<run>-<title>` (or the home
-   directory, for none) with the orchestrator in it. Its first message is its standing
+   `create_workspace`: a git worktree of the repository (or the home directory, for none) with the
+   orchestrator in it. Its names say which workflow runs and what for: the task's first line,
+   filler words dropped, gives a few key words, so “For workflows, automatically name the
+   workspaces…” in Factory Task is the workspace “Factory Task: Workflows automatically name
+   workspaces branches” on branch `wf-factory-task-workflows-automatically-name-workspaces-<run>`
+   (`<run>` is the run id's first 8 characters, which keeps branches unique). Both are on the run
+   (`workflow_runs.workspace_title`, `branch`). Its first message is its standing
    instructions, the input, the list of steps, the commands below, and the first step.
 3. **The orchestrator moves through the steps.** It never does the work itself: it starts
    sub-agents for it (`paseo run` in its workspace, so they are its sub-agents), and decides when a

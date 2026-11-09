@@ -84,7 +84,7 @@ func move(t *testing.T, h http.Handler, key, run string, m map[string]string) (i
 // readRun reads the run through the account's SQL API.
 func readRun(t *testing.T, h http.Handler, run string) map[string]any {
 	t.Helper()
-	code, r := sqlPost(t, h, q(`SELECT status, step, repo, branch, workspace_id, orchestrator_id, project_agent_id, note, error
+	code, r := sqlPost(t, h, q(`SELECT status, step, repo, branch, workspace_title, workspace_id, orchestrator_id, project_agent_id, note, error
 		FROM workflow_runs WHERE id = '`+run+`'`))
 	if code != http.StatusOK || len(r.Rows) != 1 {
 		t.Fatalf("run %s: %d %+v", run, code, r)
@@ -262,10 +262,14 @@ func TestAFixedProjectStartsTheOrchestratorAtOnce(t *testing.T) {
 	d.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
 	run := startRun(t, h, createWorkflow(t, h, d), "Fix the login page")
 	ws := b.command()
-	if ws.Kind != hostclient.CreateWorkspaceKind || !strings.Contains(string(ws.Args), `"cwd":"/w/app"`) {
-		t.Fatalf("command = %s %s", ws.Kind, ws.Args)
+	var wa hostclient.CreateWorkspaceArgs
+	json.Unmarshal(ws.Args, &wa)
+	// the workspace and branch name the workflow and the task, and the branch the run
+	wantTitle, wantBranch := "Task from Intelligence: Fix login page", "wf-task-from-intelligence-fix-login-page-"+run[:8]
+	if ws.Kind != hostclient.CreateWorkspaceKind || wa.Cwd != "/w/app" || wa.Title != wantTitle || wa.Branch != wantBranch {
+		t.Fatalf("command = %s %+v", ws.Kind, wa)
 	}
-	if r := readRun(t, h, run); r["status"] != "starting" || r["repo"] != "/w/app" {
+	if r := readRun(t, h, run); r["status"] != "starting" || r["repo"] != "/w/app" || r["branch"] != wantBranch || r["workspace_title"] != wantTitle {
 		t.Fatalf("run = %v", r)
 	}
 }
@@ -283,7 +287,8 @@ func TestNoProjectRunsTheOrchestratorInTheHomeDirectory(t *testing.T) {
 	ws := b.command()
 	var wa hostclient.CreateWorkspaceArgs
 	json.Unmarshal(ws.Args, &wa)
-	if ws.Kind != hostclient.CreateWorkspaceKind || wa.Cwd != "~" || wa.Worktree || wa.Agent == nil {
+	if ws.Kind != hostclient.CreateWorkspaceKind || wa.Cwd != "~" || wa.Worktree || wa.Branch != "" || wa.Agent == nil ||
+		wa.Title != "Task from Intelligence: Pay hosting October" {
 		t.Fatalf("command = %s %+v", ws.Kind, wa)
 	}
 }

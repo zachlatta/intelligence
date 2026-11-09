@@ -245,19 +245,6 @@ func title(input string) string {
 
 var nonSlug = regexp.MustCompile(`[^a-z0-9]+`)
 
-// branch is a run's worktree branch: wf-<its id's first 8>-<its title, as a slug>.
-func branch(id, title string) string {
-	s := strings.Trim(nonSlug.ReplaceAllString(strings.ToLower(title), "-"), "-")
-	if len(s) > 32 {
-		s = strings.TrimRight(s[:32], "-")
-	}
-	b := "wf-" + id[:8]
-	if s != "" {
-		b += "-" + s
-	}
-	return b
-}
-
 // agentMode is the mode an agent of provider starts in: Claude runs without asking (its turns
 // are unattended); other providers keep their default.
 func agentMode(provider string) string {
@@ -349,16 +336,17 @@ func repositories(ctx context.Context, tx pgx.Tx, host string) ([]string, error)
 // orchestrator in it: a worktree of repo on the run's branch, or the home directory.
 func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo string) error {
 	r.Repo = repo
+	wsTitle, branch := runNames(r.ID, r.Name, r.Input)
 	if repo != "" {
-		r.Branch = branch(r.ID, r.Title)
+		r.Branch = branch
 	}
 	o := r.Def.Orchestrator
 	agent := &hostclient.CreateAgentArgs{Provider: o.Provider, Model: o.Model, Thinking: o.Thinking, Mode: agentMode(o.Provider),
 		Title: "Orchestrator: " + r.Title, Prompt: OrchestratorPrompt(r.Name, r.Def, r.vars()),
 		Labels: map[string]string{"intelligence.run": r.ID, "intelligence.role": "orchestrator"}}
-	ws := hostclient.CreateWorkspaceArgs{Cwd: "~", Title: r.Title, Agent: agent}
+	ws := hostclient.CreateWorkspaceArgs{Cwd: "~", Title: wsTitle, Agent: agent}
 	if repo != "" {
-		ws = hostclient.CreateWorkspaceArgs{Cwd: repo, Worktree: true, Branch: r.Branch, Title: r.Title, Agent: agent}
+		ws = hostclient.CreateWorkspaceArgs{Cwd: repo, Worktree: true, Branch: r.Branch, Title: wsTitle, Agent: agent}
 	}
 	args, _ := json.Marshal(ws)
 	c, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.CreateWorkspaceKind, args, commandTTL, e.Now())
@@ -372,8 +360,8 @@ func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo s
 	if err := e.event(ctx, tx, r, "project", nil, nil, text); err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, repo = $3, branch = $4, pending_command = $5, updated_at = $6 WHERE id = $1`,
-		r.ID, StartingOrchestrator, repo, r.Branch, c.ID, e.Now())
+	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, repo = $3, branch = $4, workspace_title = $5, pending_command = $6, updated_at = $7
+		WHERE id = $1`, r.ID, StartingOrchestrator, repo, r.Branch, wsTitle, c.ID, e.Now())
 	return err
 }
 
