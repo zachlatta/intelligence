@@ -345,9 +345,8 @@ type stepView struct {
 	N      int    // 1-based
 	State  string // pending, running, asking, done, skipped, sent-back
 	Label  string
-	Times  int // how often the orchestrator was handed it
 	Events []runEvent
-	Visits []time.Duration // how long each time on it took, the current one so far
+	Visits []time.Duration // how long each time the orchestrator was handed it took, the current one so far
 	Spent  time.Duration   // all of them
 	OnIt   bool            // the run is on it now
 }
@@ -388,30 +387,12 @@ func (s stepView) SpentDetail() string {
 	return fmt.Sprintf("%d visits: %s", len(s.Visits), strings.Join(parts, ", "))
 }
 
-// humanDuration reads as 42s, 5m 0s or 1h 4m.
-func humanDuration(d time.Duration) string {
-	d = max(0, d).Truncate(time.Second)
-	switch {
-	case d >= time.Hour:
-		return fmt.Sprintf("%dh %dm", int(d.Hours()), int(d.Minutes())%60)
-	case d >= time.Minute:
-		return fmt.Sprintf("%dm %ds", int(d.Minutes()), int(d.Seconds())%60)
-	}
-	return fmt.Sprintf("%ds", int(d.Seconds()))
-}
-
 func stepViews(r runRow, events []runEvent, visits []stepVisit, now time.Time) []stepView {
 	out := make([]stepView, len(r.Steps))
 	for i, s := range r.Steps {
 		out[i] = stepView{Step: s, N: i + 1, State: "pending", Label: "waiting"}
 	}
 	for _, e := range events {
-		if e.Kind == "workspace" && len(out) > 0 {
-			out[0].Times++
-		}
-		if e.ToStep != nil && *e.ToStep < len(out) {
-			out[*e.ToStep].Times++
-		}
 		if e.Step == nil || *e.Step >= len(out) {
 			continue
 		}
@@ -667,7 +648,7 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		rows, err = v.pool.Query(ctx, "SELECT step, started_at, ended_at FROM workflow_run_step_visits WHERE run_id = $1 ORDER BY started_at", id)
+		rows, err = v.pool.Query(ctx, "SELECT step, started_at, ended_at FROM workflow_run_step_visits WHERE run_id = $1 ORDER BY step, visit", id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

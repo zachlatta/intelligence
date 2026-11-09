@@ -632,20 +632,10 @@ func TestARunShowsHowLongEachStepTook(t *testing.T) {
 		`<span class="spent" title="2 visits: 5m 0s, 2m 15s">7m 15s</span>`,
 		`<span class="spent" title="2 visits: 3m 0s, 1h 4m">1h 7m</span>`,
 		`<span class="spent" title="so far">42s so far</span>`,
+		`<span class="meta">2 times</span>`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("run page misses %q", want)
-		}
-	}
-}
-
-func TestHumanDuration(t *testing.T) {
-	for d, want := range map[time.Duration]string{
-		0: "0s", 400 * time.Millisecond: "0s", 42 * time.Second: "42s", 5 * time.Minute: "5m 0s",
-		2*time.Minute + 15*time.Second: "2m 15s", time.Hour + 4*time.Minute + 59*time.Second: "1h 4m", 30 * time.Hour: "30h 0m",
-	} {
-		if got := humanDuration(d); got != want {
-			t.Errorf("humanDuration(%v) = %q, want %q", d, got, want)
 		}
 	}
 }
