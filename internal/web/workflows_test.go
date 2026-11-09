@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/zachlatta/intelligence/internal/dbtest"
 	"github.com/zachlatta/intelligence/internal/hostclient"
 	"github.com/zachlatta/intelligence/internal/workflow"
 )
@@ -556,5 +559,93 @@ func TestDefaultWorkflowRespectsAccountAndRequestBoundaries(t *testing.T) {
 	id := createWorkflow(t, h, manual)
 	if rec := call(t, h, http.MethodPut, "/api/workflows/"+id+"/default", `{"default":true}`, sameOriginFetch); rec.Code != http.StatusBadRequest {
 		t.Errorf("manual workflow default: %d", rec.Code)
+	}
+}
+
+// fakeClock is a clock a test moves by hand.
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *fakeClock) Now() time.Time      { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
+func (c *fakeClock) Add(d time.Duration) { c.mu.Lock(); defer c.mu.Unlock(); c.t = c.t.Add(d) }
+
+// TestARunShowsHowLongEachStepTook: each step's visits are readable with SQL, and the run page
+// shows the time spent on each step, summed over its visits, with the current step's time so far.
+func TestARunShowsHowLongEachStepTook(t *testing.T) {
+	d := dbtest.New(t)
+	clock := &fakeClock{t: time.Date(2026, 11, 9, 9, 0, 0, 0, time.UTC)}
+	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.Now = clock.Now })
+	sendReport(t, h, wfReport())
+	key := keyOf(t, h, "host-1")
+	b := openStream(t, h, "host-1")
+	def := workflow.Starting
+	def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+	run := startRun(t, h, createWorkflow(t, h, def), "Time the steps")
+	clock.Add(30 * time.Second) // making the worktree is not a step
+	succeed(t, b, b.command(), `{"workspaceId":"w-run","agentId":"orch-1"}`)
+
+	moveAfter := func(d time.Duration, m map[string]string) {
+		t.Helper()
+		clock.Add(d)
+		if code, msg := move(t, h, key, run, m); code != http.StatusOK {
+			t.Fatalf("%v: %d %s", m, code, msg)
+		}
+	}
+	moveAfter(5*time.Minute, map[string]string{"move": "next", "summary": "built"})                       // build: 5m
+	moveAfter(3*time.Minute, map[string]string{"move": "back", "step": "build", "why": "missing a test"}) // meets: 3m
+	moveAfter(2*time.Minute+15*time.Second, map[string]string{"move": "next", "summary": "added it"})     // build again: 2m15s
+	moveAfter(time.Hour+4*time.Minute, map[string]string{"move": "skip", "why": "n/a"})                   // meets again: 1h4m
+	clock.Add(42 * time.Second)                                                                           // fit, so far
+
+	code, r := sqlPost(t, h, q(`SELECT step, visit, extract(epoch FROM ended_at - started_at)::int, ended_by
+		FROM workflow_run_step_visits WHERE run_id = '`+run+`' ORDER BY started_at`))
+	if code != http.StatusOK {
+		t.Fatalf("visits: %d %+v", code, r)
+	}
+	want := [][]any{{0, 1, 300, "next"}, {1, 1, 180, "back"}, {0, 2, 135, "next"}, {1, 2, 3840, "skip"}, {2, 1, nil, nil}}
+	if len(r.Rows) != len(want) {
+		t.Fatalf("visits = %v, want %v", r.Rows, want)
+	}
+	for i, row := range r.Rows {
+		for j, v := range want[i] {
+			if f, ok := v.(int); ok {
+				v = float64(f)
+			}
+			if row[j] != v {
+				t.Errorf("visit %d = %v, want %v", i, row, want[i])
+				break
+			}
+		}
+	}
+
+	code, r = sqlPost(t, h, q(`SELECT step, step_id, title, visits, extract(epoch FROM time_spent)::int, current
+		FROM workflow_run_step_times WHERE run_id = '`+run+`' AND step < 2 ORDER BY step`))
+	if code != http.StatusOK || len(r.Rows) != 2 || r.Rows[0][1] != "build" || r.Rows[0][2] != "Do the work" || r.Rows[0][3] != float64(2) ||
+		r.Rows[0][4] != float64(435) || r.Rows[0][5] != false || r.Rows[1][4] != float64(4020) {
+		t.Errorf("step times = %d %v", code, r.Rows)
+	}
+
+	page := get(t, h, "/workflow-runs/"+run, nil).Body.String()
+	for _, want := range []string{
+		`<span class="spent" title="2 visits: 5m 0s, 2m 15s">7m 15s</span>`,
+		`<span class="spent" title="2 visits: 3m 0s, 1h 4m">1h 7m</span>`,
+		`<span class="spent" title="so far">42s so far</span>`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("run page misses %q", want)
+		}
+	}
+}
+
+func TestHumanDuration(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		0: "0s", 400 * time.Millisecond: "0s", 42 * time.Second: "42s", 5 * time.Minute: "5m 0s",
+		2*time.Minute + 15*time.Second: "2m 15s", time.Hour + 4*time.Minute + 59*time.Second: "1h 4m", 30 * time.Hour: "30h 0m",
+	} {
+		if got := humanDuration(d); got != want {
+			t.Errorf("humanDuration(%v) = %q, want %q", d, got, want)
+		}
 	}
 }

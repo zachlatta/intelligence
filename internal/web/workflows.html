@@ -53,6 +53,7 @@
   .node.k-gate { border-left: 3px solid var(--orange-line); } .node.k-signoff { border-left: 3px solid var(--accent-line); }
   .node.r-pending { opacity: .6; } .node.r-running { border-color: var(--accent-line); } .node.r-asking { border-color: var(--orange); }
   .node .grow-r { margin-left: auto; display: flex; gap: .4rem; align-items: center; }
+  .node .spent { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; cursor: help; }
   .node .grip { color: var(--faint); cursor: grab; user-select: none; }
   .node.dragging { opacity: .4; }
   .node.drop-before { host-shadow: 0 -3px 0 var(--accent); } .node.drop-after { host-shadow: 0 3px 0 var(--accent); }
@@ -621,7 +622,7 @@ render();
     <div class="link{{if .Run.Orchestrator}} done{{end}}"></div>
     {{range $i, $s := .Steps}}
     <div class="node k-{{.Kind}} r-{{.State}}"><div class="nh"><div style="min-width:0"><div class="kind">{{kind .Kind}} {{.N}}</div><div class="ttl">{{.Title}}</div></div>
-      <span class="grow-r">{{if gt .Times 1}}<span class="meta">{{.Times}} times</span>{{end}}<span class="status st-{{.State}}">{{.Label}}</span></span></div>
+      <span class="grow-r">{{with .SpentLabel}}<span class="spent" title="{{$s.SpentDetail}}">{{.}}</span>{{end}}{{if gt .Times 1}}<span class="meta">{{.Times}} times</span>{{end}}<span class="status st-{{.State}}">{{.Label}}</span></span></div>
       <div class="nb"><details><summary class="meta">Instructions</summary><div class="instr" style="-webkit-line-clamp:unset">{{.Instructions}}</div></details>
         {{if .Events}}<ul class="events">{{range .Events}}<li><span class="t">{{.At.Format "15:04"}}</span>{{.Line}}</li>{{end}}</ul>{{end}}</div></div>
     {{if lt (add $i 1) (len $.Steps)}}<div class="link{{if eq .State "done" "skipped"}} done{{end}}"></div>{{end}}

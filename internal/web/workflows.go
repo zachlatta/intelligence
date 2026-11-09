@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html/template"
 	"net/http"
 	"regexp"
@@ -346,9 +347,60 @@ type stepView struct {
 	Label  string
 	Times  int // how often the orchestrator was handed it
 	Events []runEvent
+	Visits []time.Duration // how long each time on it took, the current one so far
+	Spent  time.Duration   // all of them
+	OnIt   bool            // the run is on it now
 }
 
-func stepViews(r runRow, events []runEvent) []stepView {
+// stepVisit is one time a run was on a step (workflow_run_step_visits); End is nil while it is on it.
+type stepVisit struct {
+	Step  int
+	Start time.Time
+	End   *time.Time
+}
+
+// SpentLabel is the time spent on the step, as its node shows it; "" for a step not yet reached.
+func (s stepView) SpentLabel() string {
+	if len(s.Visits) == 0 {
+		return ""
+	}
+	if s.OnIt {
+		return humanDuration(s.Spent) + " so far"
+	}
+	return humanDuration(s.Spent)
+}
+
+// SpentDetail is the time on each visit, for the label's tooltip.
+func (s stepView) SpentDetail() string {
+	if len(s.Visits) < 2 {
+		if s.OnIt {
+			return "so far"
+		}
+		return "1 visit"
+	}
+	parts := make([]string, len(s.Visits))
+	for i, d := range s.Visits {
+		parts[i] = humanDuration(d)
+	}
+	if s.OnIt {
+		parts[len(parts)-1] += " so far"
+	}
+	return fmt.Sprintf("%d visits: %s", len(s.Visits), strings.Join(parts, ", "))
+}
+
+// humanDuration reads as 42s, 5m 0s or 1h 4m.
+func humanDuration(d time.Duration) string {
+	d = max(0, d).Truncate(time.Second)
+	switch {
+	case d >= time.Hour:
+		return fmt.Sprintf("%dh %dm", int(d.Hours()), int(d.Minutes())%60)
+	case d >= time.Minute:
+		return fmt.Sprintf("%dm %ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+	return fmt.Sprintf("%ds", int(d.Seconds()))
+}
+
+func stepViews(r runRow, events []runEvent, visits []stepVisit, now time.Time) []stepView {
 	out := make([]stepView, len(r.Steps))
 	for i, s := range r.Steps {
 		out[i] = stepView{Step: s, N: i + 1, State: "pending", Label: "waiting"}
@@ -386,6 +438,21 @@ func stepViews(r runRow, events []runEvent) []stepView {
 		if r.Status == workflow.Waiting {
 			v.State, v.Label = "asking", "asking you"
 		}
+	}
+	for _, sv := range visits {
+		if sv.Step < 0 || sv.Step >= len(out) {
+			continue
+		}
+		v := &out[sv.Step]
+		end := now
+		if sv.End != nil {
+			end = *sv.End
+		} else {
+			v.OnIt = true
+		}
+		d := max(0, end.Sub(sv.Start))
+		v.Visits = append(v.Visits, d)
+		v.Spent += d
 	}
 	return out
 }
@@ -600,6 +667,20 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		rows, err = v.pool.Query(ctx, "SELECT step, started_at, ended_at FROM workflow_run_step_visits WHERE run_id = $1 ORDER BY started_at", id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		visits, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (stepVisit, error) {
+			var s stepVisit
+			err := row.Scan(&s.Step, &s.Start, &s.End)
+			return s, err
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		agents, err := runAgents(ctx, v.pool, run)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -617,7 +698,7 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 			return
 		}
 		slices.Reverse(emails) // oldest first, as a thread reads
-		renderWorkflows(w, "run", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Run": run, "Steps": stepViews(run, events),
+		renderWorkflows(w, "run", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Run": run, "Steps": stepViews(run, events, visits, cfg.Now()),
 			"Agents": agents, "Before": before, "Events": events, "Emails": emails})
 	}
 }
