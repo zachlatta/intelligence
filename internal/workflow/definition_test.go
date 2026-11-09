@@ -144,3 +144,25 @@ func TestTheOrchestratorStartsSubAgentsInTheModeThatNeverAsks(t *testing.T) {
 		}
 	}
 }
+
+// Saved workflows can have older standing instructions. The generated prompt must still
+// tell the orchestrator to pass the current step's limits to workers.
+func TestSavedWorkflowsKeepWorkersInsideTheirAssignedStep(t *testing.T) {
+	d := clone(Starting)
+	d.Orchestrator.Instructions = "Coordinate this task."
+	p := OrchestratorPrompt("Saved workflow", d, Vars{Run: "run-1"})
+	for _, want := range []string{
+		"Workflow instructions take precedence over conflicting shared skill defaults",
+		"Pass each sub-agent its role, current step, run id, task context and limits",
+		"Only the orchestrator moves the run",
+		"Builders may edit, test and commit in the worktree",
+		"do not push, land, deploy or change external systems before the step that authorizes it",
+		"Follow this workflow's model choices",
+		"After a successful ask, end your turn",
+		"his reply comes as your next message",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("saved workflow prompt misses %q", want)
+		}
+	}
+}
