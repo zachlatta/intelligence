@@ -5,9 +5,11 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html/template"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,7 +27,7 @@ import (
 var workflowsHTML string
 
 var workflowsTmpl = template.Must(template.New("workflows").Funcs(template.FuncMap{
-	"short": short, "ago": ago, "markdown": markdown, "plural": plural,
+	"short": short, "ago": ago, "markdown": markdown, "plural": plural, "emailSummary": emailSummary,
 	"json": func(v any) (template.JS, error) {
 		b, err := json.Marshal(v)
 		return template.JS(b), err //nolint:gosec // JSON from the server's own values, in a script
@@ -356,22 +358,54 @@ type stepView struct {
 	N      int    // 1-based
 	State  string // pending, running, asking, done, skipped, sent-back
 	Label  string
-	Times  int // how often the orchestrator was handed it
 	Events []runEvent
+	Visits []time.Duration // how long each time the orchestrator was handed it took, the current one so far
+	Spent  time.Duration   // all of them
+	OnIt   bool            // the run is on it now
 }
 
-func stepViews(r runRow, events []runEvent) []stepView {
+// stepVisit is one time a run was on a step (workflow_run_step_visits); End is nil while it is on it.
+type stepVisit struct {
+	Step  int
+	Start time.Time
+	End   *time.Time
+}
+
+// SpentLabel is the time spent on the step, as its node shows it; "" for a step not yet reached.
+func (s stepView) SpentLabel() string {
+	if len(s.Visits) == 0 {
+		return ""
+	}
+	if s.OnIt {
+		return humanDuration(s.Spent) + " so far"
+	}
+	return humanDuration(s.Spent)
+}
+
+// SpentDetail is the time on each visit, for the label's tooltip.
+func (s stepView) SpentDetail() string {
+	if len(s.Visits) < 2 {
+		if s.OnIt {
+			return "so far"
+		}
+		return "1 visit"
+	}
+	parts := make([]string, len(s.Visits))
+	for i, d := range s.Visits {
+		parts[i] = humanDuration(d)
+	}
+	if s.OnIt {
+		parts[len(parts)-1] += " so far"
+	}
+	return fmt.Sprintf("%d visits: %s", len(s.Visits), strings.Join(parts, ", "))
+}
+
+func stepViews(r runRow, events []runEvent, visits []stepVisit, now time.Time) []stepView {
 	out := make([]stepView, len(r.Steps))
 	for i, s := range r.Steps {
 		out[i] = stepView{Step: s, N: i + 1, State: "pending", Label: "waiting"}
 	}
 	for _, e := range events {
-		if e.Kind == "workspace" && len(out) > 0 {
-			out[0].Times++
-		}
-		if e.ToStep != nil && *e.ToStep < len(out) {
-			out[*e.ToStep].Times++
-		}
 		if e.Step == nil || *e.Step >= len(out) {
 			continue
 		}
@@ -399,6 +433,21 @@ func stepViews(r runRow, events []runEvent) []stepView {
 			v.State, v.Label = "asking", "asking you"
 		}
 	}
+	for _, sv := range visits {
+		if sv.Step < 0 || sv.Step >= len(out) {
+			continue
+		}
+		v := &out[sv.Step]
+		end := now
+		if sv.End != nil {
+			end = *sv.End
+		} else {
+			v.OnIt = true
+		}
+		d := max(0, end.Sub(sv.Start))
+		v.Visits = append(v.Visits, d)
+		v.Spent += d
+	}
 	return out
 }
 
@@ -420,15 +469,21 @@ func runAgents(ctx context.Context, p *pgxpool.Pool, r runRow) ([]agentRow, erro
 		return nil, nil
 	}
 	// path orders the tree: each agent under its parent, siblings by when they started
-	rows, err := p.Query(ctx, `WITH RECURSIVE tree AS (
+	rows, err := p.Query(ctx, `WITH RECURSIVE members AS (
+        SELECT a.* FROM recorded_agents a WHERE a.host=$1 AND ($3::boolean OR
+            (NOT EXISTS (SELECT 1 FROM workflow_run_agents h WHERE h.run_id=$4)
+                AND EXISTS (SELECT 1 FROM agents live WHERE live.host=a.host AND live.id=a.id)
+                AND (a.created_at IS NULL OR a.created_at <= $5::timestamptz OR a.id=ANY($2))) OR EXISTS
+            (SELECT 1 FROM workflow_run_agents h WHERE h.run_id=$4 AND h.host=a.host AND h.agent_id=a.id))
+    ), tree AS (
 		SELECT a.id, a.title, a.provider, a.model, a.status, a.parent_id, 0 AS depth,
 			ARRAY[lpad(array_position($2::text[], a.id)::text, 3, '0')] AS path
-		FROM agents a WHERE a.host = $1 AND a.id = ANY($2)
+		FROM members a WHERE a.host = $1 AND a.id = ANY($2)
 		UNION ALL
 		SELECT a.id, a.title, a.provider, a.model, a.status, a.parent_id, t.depth + 1,
 			t.path || (coalesce(to_char(a.created_at AT TIME ZONE 'UTC', 'YYYYMMDDHH24MISSUS'), '') || a.id)
-		FROM agents a JOIN tree t ON a.parent_id = t.id WHERE a.host = $1 AND t.depth < 6)
-		SELECT id, title, provider, model, status, parent_id, depth FROM tree ORDER BY path`, r.Host, roots)
+		FROM members a JOIN tree t ON a.parent_id = t.id WHERE a.host = $1 AND t.depth < 6)
+		SELECT id, title, provider, model, status, parent_id, depth FROM tree ORDER BY path`, r.Host, roots, r.Live(), r.ID, r.FinishedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -516,12 +571,12 @@ func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 			}
 		}
 		renderWorkflows(w, "list", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Workflows": wfs, "Runs": runs,
-			"Hosts": hosts, "Tasks": tasks, "Starting": workflow.Starting})
+			"Hosts": hosts, "Tasks": tasks, "Starting": workflow.Starting, "Dictation": dictationPath(cfg)})
 	}
 }
 
 // workflowPage: GET /workflows/{id}: the editor.
-func workflowPage(cfg Config, v viewer) http.HandlerFunc {
+func workflowPage(cfg Config, a *app, v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if !workflowIDRe.MatchString(id) {
@@ -547,8 +602,30 @@ func workflowPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		mb, err := readMailbox(r.Context(), v.pool)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		emails, err := readEmails(r.Context(), v.pool, "", 300)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		all, err := readWorkflows(r.Context(), v.pool, "")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		others := []workflowRow{} // the other workflows email starts: the preview says which email they would take
+		for _, o := range all {
+			if o.ID != id && o.Definition.Trigger == workflow.TriggerEmail && o.Definition.Email != nil {
+				others = append(others, o)
+			}
+		}
 		renderWorkflows(w, "editor", map[string]any{"Version": cfg.Version, "Workflow": wfs[0], "Hosts": hosts, "Repos": repos,
-			"Dictation": dictationPath(cfg)})
+			"EmailOn": a.mail != nil, "Mailbox": mb.Address, "Emails": previews(emails), "Others": others,
+			"Dictation": dictationPath(cfg), "Providers": workflow.Providers()})
 	}
 }
 
@@ -590,6 +667,27 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		rows, err = v.pool.Query(ctx, "SELECT step, started_at, ended_at FROM workflow_run_step_visits WHERE run_id = $1 ORDER BY step, visit", id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		visits, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (stepVisit, error) {
+			var s stepVisit
+			err := row.Scan(&s.Step, &s.Start, &s.End)
+			return s, err
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		var archiveStatus, archiveError string
+		err = v.pool.QueryRow(ctx, `SELECT COALESCE(c.status, ''), COALESCE(c.error, '')
+            FROM workflow_runs r LEFT JOIN commands c ON c.id = r.archive_command WHERE r.id = $1`, id).Scan(&archiveStatus, &archiveError)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		agents, err := runAgents(ctx, v.pool, run)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -601,8 +699,14 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 				before = append(before, e)
 			}
 		}
-		renderWorkflows(w, "run", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Run": run, "Steps": stepViews(run, events),
-			"Agents": agents, "Before": before, "Events": events})
+		emails, err := readEmails(ctx, v.pool, id, 100)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		slices.Reverse(emails) // oldest first, as a thread reads
+		renderWorkflows(w, "run", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Run": run, "Steps": stepViews(run, events, visits, cfg.Now()),
+			"Agents": agents, "Before": before, "Events": events, "Emails": emails, "ArchiveStatus": archiveStatus, "ArchiveError": archiveError, "Dictation": dictationPath(cfg)})
 	}
 }
 
@@ -630,6 +734,8 @@ func (e runEvent) Line() string {
 		return "Asked Zach"
 	case "reply":
 		return "Zach replied: " + e.Text
+	case "message":
+		return e.Text
 	case "fail":
 		return "Failed: " + e.Text
 	case "cancel":

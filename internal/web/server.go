@@ -16,6 +16,7 @@ import (
 
 	"github.com/zachlatta/intelligence/internal/accounts"
 	"github.com/zachlatta/intelligence/internal/db"
+	"github.com/zachlatta/intelligence/internal/email"
 	"github.com/zachlatta/intelligence/internal/fleet"
 	"github.com/zachlatta/intelligence/internal/hostclient"
 	"github.com/zachlatta/intelligence/internal/workflow"
@@ -35,6 +36,12 @@ type Config struct {
 	AssemblyAIKey      string
 	AssemblyAITokenURL string // default AssemblyAI's own
 	Now                func() time.Time
+	// Google (GOOGLE_OAUTH_CLIENT_JSON) and EmailKey (CONNECTIONS_KEY) turn email triggers on: an
+	// account connects a Gmail mailbox, read every EmailInterval (default email.Interval).
+	Google        *email.Google
+	EmailKey      *email.Keyring
+	EmailInterval time.Duration
+	PublicURL     string // PUBLIC_URL: the server's origin for Google's redirect; default the request's
 }
 
 // app is the server's shared parts.
@@ -44,6 +51,7 @@ type app struct {
 	reg     *fleet.Registry // as the owner: for the host streams and for writes
 	changes *fleet.Changes
 	wf      *workflow.Engine // as the owner: workflows and their runs
+	mail    *email.Service   // reads connected mailboxes; nil when email triggers are off
 }
 
 //go:embed index.html
@@ -84,6 +92,14 @@ func New(cfg Config) http.Handler {
 	context.AfterFunc(cfg.Context, roles.Close)
 	store := accounts.New(cfg.DB, roles)
 	a := &app{cfg: cfg, store: store, reg: reg, changes: changes, wf: workflow.NewEngine(cfg.DB, cfg.Now)}
+	if cfg.Google != nil && cfg.EmailKey != nil {
+		a.mail = &email.Service{DB: cfg.DB, Engine: a.wf, Google: cfg.Google, Key: cfg.EmailKey, Now: cfg.Now}
+		interval := cfg.EmailInterval
+		if interval == 0 {
+			interval = email.Interval
+		}
+		go a.mail.Run(cfg.Context, interval)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
@@ -165,7 +181,14 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("POST /api/workflow-runs/{id}/cancel", a.write(a.cancelRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/moves", a.moveRun)
 	mux.HandleFunc("GET /workflows", a.page(func(v viewer) http.HandlerFunc { return workflowsPage(cfg, v) }))
-	mux.HandleFunc("GET /workflows/{id}", a.page(func(v viewer) http.HandlerFunc { return workflowPage(cfg, v) }))
+	// email triggers: the account's Gmail mailbox, connected through Google's sign-in
+	mux.HandleFunc("POST /api/gmail/sign-in", a.write(a.gmailSignIn))
+	mux.HandleFunc("POST /api/gmail/connect", a.write(a.gmailConnect))
+	mux.HandleFunc("PUT /api/gmail/owners", a.write(a.gmailOwners))
+	mux.HandleFunc("DELETE /api/gmail", a.write(a.gmailDisconnect))
+	mux.HandleFunc("GET /gmail/callback", gmailCallback)
+	mux.HandleFunc("GET /workflows/email", a.page(func(v viewer) http.HandlerFunc { return emailPage(cfg, a, v) }))
+	mux.HandleFunc("GET /workflows/{id}", a.page(func(v viewer) http.HandlerFunc { return workflowPage(cfg, a, v) }))
 	mux.HandleFunc("GET /workflow-runs/{id}", a.page(func(v viewer) http.HandlerFunc { return runPage(cfg, v) }))
 	mux.HandleFunc("GET /usage", a.page(func(v viewer) http.HandlerFunc { return usagePage(cfg, v.reg) }))
 	mux.HandleFunc("GET /resources", a.page(func(v viewer) http.HandlerFunc { return hostResourcesPage(cfg, v.reg) }))
@@ -224,6 +247,18 @@ func short(v string) string {
 		return v[:12]
 	}
 	return v
+}
+
+// humanDuration reads as 42s, 5m 0s or 1h 4m.
+func humanDuration(d time.Duration) string {
+	d = max(0, d).Truncate(time.Second)
+	switch {
+	case d >= time.Hour:
+		return fmt.Sprintf("%dh %dm", int(d.Hours()), int(d.Minutes())%60)
+	case d >= time.Minute:
+		return fmt.Sprintf("%dm %ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+	return fmt.Sprintf("%ds", int(d.Seconds()))
 }
 
 // ago says how long before now t was, in whole seconds, minutes, hours or days.

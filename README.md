@@ -88,7 +88,13 @@ The hierarchy is hosts > workspaces > agents:
   of each cookie's token), `host_keys` (each host's account and a hash of its key) and
   `host_enrollments` (hosts waiting for their code to be entered). An account reads only its own.
 - `workflows`, `workflow_versions` (every saved definition), `workflow_runs` and
-  `workflow_run_events` (what happened in each run, in order): Workflows, below.
+  `workflow_run_events` (what happened in each run, in order), with the views
+  `workflow_run_step_visits` (each time a run was on a step, from its moves) and
+  `workflow_run_step_times` (each step's visits and time spent, the current one to now): Workflows, below.
+- `gmail_connections` (the account's Gmail mailbox: its address, the account holder's own
+  addresses, how far it is read, and its Google token, sealed with `CONNECTIONS_KEY`, so reading it
+  gives nothing) and `emails` (every email it received, and what it did and why): Email triggers,
+  below.
 - `schema_migrations`.
 
 Each report replaces its host's workspaces and agents. A host that cannot reach its daemon has none,
@@ -159,7 +165,8 @@ against its daemon and reports `running`, then `succeeded` with a result (`{"wor
 - `archive_workspace`: `workspaceId`. The host archives each of the workspace's agents first, then the
   workspace (Paseo 0.15 archives a workspace's agents itself; an older daemon left them running in a
   workspace it no longer listed), skipping one already gone. The result counts them
-  (`archivedAgents`). A Paseo-made worktree is removed with it.
+  (`archivedAgents`). A Paseo-made worktree is removed with it. Optional `waitForAgent` waits for
+  that agent to end its turn first, up to the command expiry.
 - `rename_agent`: `agentId`, `title`. `cancel_agent` (stops its current turn) and `archive_agent`:
   `agentId`.
 - `send_message`: `agentId`, `text`, and optionally `behavior`, which says what happens to a turn
@@ -317,11 +324,21 @@ version it started with. A run:
 2. **Starts the orchestrator in the worktree.** The server archives the finder and queues
    `create_workspace`: a git worktree of the repository on branch `wf-<run>-<title>` (or the home
    directory, for none) with the orchestrator in it. Its first message is its standing
-   instructions, the input, the list of steps, the commands below, and the first step.
+   instructions, the input, the list of steps, the commands below, the workflow contract and
+   the first step.
+   The contract sets role and model handoffs, limits work to the assigned step, and assigns
+   approved external changes to landing.
 3. **The orchestrator moves through the steps.** It never does the work itself: it starts
    sub-agents for it (`paseo run` in its workspace, so they are its sub-agents), and decides when a
-   step is done. A step is only instructions to it; its kind (`step`, `gate` or `signoff`) changes
-   how it reads, not what the server does. The orchestrator moves the run with:
+   step is done. Every agent of a run works unattended, so each starts in its provider's mode that
+   never asks for permission (the one its paseo catalog marks unattended): `bypassPermissions`
+   for Claude, `full-access` for Codex, `allowAll` for Muse, `full-access` for Antigravity. The
+   editor offers these providers (`workflow.Providers`); one typed in by hand keeps its default.
+   The server starts the finder and the orchestrator in it; `paseo run` would start a sub-agent in
+   the provider's default mode, which may ask, so the orchestrator's first message tells it to pass
+   `--mode` (in the prompt, not the saved instructions, so every version gets it). A step is only
+   instructions to it; its kind (`step`, `gate` or `signoff`) changes how it reads, not what the
+   server does. The orchestrator moves the run with:
    - `intelligence workflow next --run <id> --summary "..."`: the step is done; prints the next
      step's instructions (after the last step, the run is finished).
    - `back --run <id> <step id> --why "..."`: back to an earlier step, with what is missing.
@@ -337,7 +354,76 @@ key as the host client does (`HOST_SERVER` from `~/.config/intelligence/host.env
 `host.key`, or their `devbox` names). The run follows the commands it queued (the finder, the
 workspace) through their results: a failed one fails the run.
 
+A run is on a step from the move that hands it the step (the orchestrator starting, for the first;
+`next`, `skip` or `back`) to the move that leaves it (`next`, `skip`, `back`, `done`, `fail`, or a
+cancel); waiting for Zach's reply counts toward the step. `workflow_run_step_visits` reads each visit.
+
+After the last step (`next` or `skip`), or explicit `done`, the server queues
+`archive_workspace` for the run's workspace. The host waits for the orchestrator's turn to end,
+so its final CLI reply returns before its workspace and agents are archived. It retries daemon
+restarts and temporary read failures until the cleanup command expires. The final reply tells
+it to archive any sub-agents it started outside this workspace, then end its turn. A failed
+orchestrator start also archives any workspace it made. Explicit `fail` and cancellation leave
+the workspace for inspection; cancellation stops the orchestrator.
+
+Cleanup is durable across server and host restarts, with a 24-hour expiry. `workflow_runs.archive_command`
+links to `commands` for its progress, error and result; the run page shows that status too. An archive
+failure or expiry leaves the run's outcome intact. A stuck orchestrator is never forcibly archived
+by this cleanup after the deadline; the failure can be inspected and archiving retried with the
+existing workspace command.
+
+A run keeps the last reported metadata for its orchestrator, project finder and sub-agents,
+including descendants in other workspaces and agents archived before the last step. Host reports
+save these snapshots in `workflow_run_agents`. `recorded_agents`, `recorded_workspaces` and
+`recorded_workspace_status` combine live rows with history. Each account can read only its own runs.
+The run page still lists these agents after archiving, and their transcript links still work.
+Their synced transcripts and last workspace diffs remain in `transcripts`, `transcript_entries`
+and `workspace_diffs`; late transcript batches are accepted too. History preserves what the host
+reported, not unsynced messages. Archived agents appear closed in history and stay off the live
+fleet page. Confirmed archived transcript pages are read-only: they show neither Archive nor chat controls,
+and the commands API refuses agent writes with 409. `workflow_run_agents.archived` records absence
+from a connected daemon's complete agent list. `archived_workflow_agents` also recognizes a
+successful archive command for that agent's workspace. An outage alone does not mark an agent
+archived or disable its controls; a prior confirmation survives an outage. Live closed agents
+remain writable.
+
+The upgrade backfills runs without history from their still-live orchestrator, finder, workspace
+agents and descendants. Known creation times exclude agents started after the run ended. A
+finished run without snapshots also falls back to its live agent tree, so legacy links remain
+available. This cannot recover metadata or transcripts already removed before the upgrade.
+
+Report-time capture runs once, before replacing live rows, and uses only unfinished runs with a listed workspace or live project finder,
+with an index on unfinished runs. It takes a final snapshot when a run ends, then freezes membership
+and stops recapturing it. Agents started later in a failed or canceled run's retained workspace
+belong to later work, not that ended run's history. The history follows its run and host when
+either is deleted.
+
 Variables in instructions: `{{input}}`, `{{repo}}`, `{{branch}}` and `{{run}}`.
+
+### Email triggers
+
+A workflow's trigger can be email (`internal/email`). An account connects one Gmail mailbox with
+Google's sign-in (read-only scope, offline, PKCE; the state is signed and names the account), and
+the server reads it every 15 seconds: Gmail's history since the last read, then, once, the last 30
+days, kept as `before` for the editor's preview. Each new email is stored in `emails` with what it
+did, in the transaction that does it, so it does it once:
+
+1. **In the thread of a run** (an earlier email in its Gmail thread started one), the workflow's
+   `replies` decides: `run` (the default) adds it to the run as a message to its orchestrator; if
+   the run waits on a question and the email is from one of the account holder's own addresses,
+   it is the answer; if the run is over, it starts a new run of the workflow. `new` starts a new
+   run; `ignore` does nothing.
+2. **Otherwise** it starts the workflow whose filter (`definition.email`: `from` addresses or
+   `@domain`s, `to`, `subject`, `words`, `without`, `attachment`) it matches, like a Gmail filter:
+   every filled field must match. When two match, the narrower wins (more fields; an address beats
+   its domain). Saving a filter that another workflow already has, sharing a sender with nothing to
+   tell them apart, is refused.
+
+A sender counts only if Gmail verified it: the first `Authentication-Results` (Gmail's own) must
+say `dmarc=pass` for the From domain. Forged mail never starts or steers a run; nor does a mailing
+list or newsletter (`List-Id`, `List-Unsubscribe`, `Precedence: bulk`), nor the mailbox's own mail.
+A run's input is the email (its subject is the run's title), marked, unless it is from the account
+holder, as information, not instructions. The mailbox is only read: nothing is labeled or sent.
 
 ### Transcripts
 
@@ -351,8 +437,8 @@ timeline) replaces the copy.
 **A closed agent's transcript is never read:** the daemon answers a timeline read by loading the
 agent, which starts a closed agent again. An agent's transcript is copied while it is loaded and
 kept after Paseo closes it; one closed before syncing reached it has none until it is opened again.
-A transcript goes when its agent is gone from a connected host's report (archived); a host that loses
-its daemon keeps its transcripts.
+A transcript goes when its agent is gone from a connected host's report (archived), unless a
+workflow run retains that agent; a host that loses its daemon keeps its transcripts.
 
 ### Talking to Paseo
 
@@ -425,11 +511,13 @@ the account and enrollment routes, the host binaries and the streams (with a hos
   Pause or Resume, Run now and Delete, and a link to make one on each host.
 - `GET /hosts/{host}/schedules/{id}`: one schedule: its agent, directory, isolation, cadence,
   limits and prompt, every run kept (status, start, duration, error, output, and the transcript
-  while its agent is on the host), and the form that edits it (sending only what changed).
+  while its agent is on the host), and the form that edits it (sending only what changed). Its
+  prompt takes dictation, which only puts words in: the edit is saved with Save.
 - `GET /hosts/{host}/schedules/new`: the form that makes a schedule: a name, the prompt, cron (with
   the browser's time zone) or every, the directory (the host's repositories and its schedules'
   directories), the agent (Opus 5.5, medium thinking, `bypassPermissions` by default), a new git
   worktree each run or the directory, archive on finish, a run limit, an end, and run once now.
+  The prompt takes dictation as the new agent form does.
   Each of these pages sends its commands to the commands API and follows them through `/api/sql`.
 - `GET /usage?days=7` (1 to 365): every login with a chart of each window's used % over the days,
   and its weekly peaks.
@@ -517,12 +605,14 @@ origin (another site's request is refused with 403), and those with a body must 
   "truncated"}`, or 400 with `{"error"}`. At most 10000 rows; 5 seconds per query.
 - `GET /api/host/binary/{os}/{arch}`: the host binary at the server's version.
 - `GET /dictation.js`: the dictation engine shared by the chat box, the new agent and workspace forms,
-  and the workflow run dialog.
+  the new and edit schedule forms, the new task box, the workflow run dialog and the reply to a
+  waiting run.
 - `GET /ui.css`: the one stylesheet every page shares, with the top bar (`layout.html`) that links the
   pages.
 - `GET /workflows`: a new task (for workflows triggered by a task: pick the workflow, which names
   its host, with the default first and selected), the account's workflows and their runs. Without
   workflows, a button adds the starting one (`workflow.Starting`) on the account's first host.
+  The task box takes dictation: ⌘D or Enter again in an empty box submits the task.
 - Task workflow cards offer Make default (one per account) and Clear default; without a default,
   the task picker keeps creation order. The choice is readable as `workflows.is_default`.
 - `DELETE /api/workflows/{id}`: deletes the workflow (204), from its card on `/workflows` or its
@@ -530,7 +620,8 @@ origin (another site's request is refused with 403), and those with a body must 
   finish); 404 for another account's or an already deleted one. The row and its versions stay,
   marked `workflows.deleted_at`, so its runs and their events stay readable (marked “deleted”); it
   leaves the list, the editor and the task picker, stops being the default, and cannot be edited,
-  chosen or run again.
+  chosen or run again. Email no longer starts it (a reply in one of its runs' threads is ignored),
+  and its senders are free for another workflow.
 - `PUT /api/workflows/{id}/default` with `{"default": true}` (or `false` to clear):
   chooses the account's default task workflow (204); 404 for another account's workflow.
 - `GET /workflows/{id}`: the editor: the host and trigger, how the project is found, the orchestrator, and
@@ -539,7 +630,9 @@ origin (another site's request is refused with 403), and those with a body must 
   (its workspaces' `project_root`s), or typed. The “Run this workflow” dialog takes the run's task;
   with `ASSEMBLYAI_API_KEY` set, its mic button or ⌘D/Ctrl+D uses the shared dictation controls.
 - `GET /workflow-runs/{id}`: a run: its project, the orchestrator and its sub-agents, each step's
-  state and what happened in it, and, while it waits, the orchestrator's note with a reply box.
+  state, how long the run spent on it (summed over its visits, each visit in the tooltip; the
+  current step so far) and what happened in it, and, while it waits, the orchestrator's note with a reply box,
+  which takes dictation.
 - `POST /api/workflows` with `{"name", "description", "definition"}`: 201 `{"id", "version": 1}`;
   400 for a definition that cannot run. `PUT /api/workflows/{id}`, the same body: the next version.
 - `POST /api/workflow-runs` with `{"workflowId", "input"}`: starts a run on the workflow's host
@@ -551,6 +644,17 @@ origin (another site's request is refused with 403), and those with a body must 
   "note"}` and `Authorization: Bearer <the run's host's key>`: `intelligence workflow`. Answers
   `{"message"}`, what the agent reads next; 400 or 409 (with the reason as the message) for a move
   that cannot be made, 404 for a run not on that host.
+- `GET /workflows/email`: the mailbox (connect, the account holder's own addresses, disconnect) and
+  what each email did.
+- `POST /api/gmail/sign-in` with `{}`: `{"url", "paste"}`, Google's consent page; `paste` when the
+  client is a Desktop one, whose redirect to `http://localhost` does not load and is pasted back.
+  503 when email triggers are off.
+- `GET /gmail/callback`: where Google sends a web client's browser. The session cookie is
+  SameSite=Strict, so it is not sent on that redirect: the page posts the code from this origin.
+- `POST /api/gmail/connect` with `{"code", "state"}` or `{"url"}` (where Google sent the browser):
+  connects the mailbox, `{"address"}`; 400 for a sign-in started by another account or expired.
+- `PUT /api/gmail/owners` with `{"owners": [addresses]}` (204), and `DELETE /api/gmail` (204;
+  its emails stay).
 - `GET /healthz`: `{"status":"ok","version":"<commit>","database":"ok"}`, 503 when the database is
   unreachable.
 
@@ -566,8 +670,14 @@ Server:
   is named after it, and its password derived from its password (keep the name under 40 characters).
 - `PORT`: listen port, default `8080`.
 - `HOST_BINARIES`: where the host binaries are; default `/usr/local/share/intelligence/host`.
-- `ASSEMBLYAI_API_KEY`: optional; turns on dictation in the chat box, new agent and workspace forms,
-  and workflow run dialog. Unset, there is none.
+- `ASSEMBLYAI_API_KEY`: optional; turns on dictation everywhere a task or agent work starts (the
+  pages `/dictation.js` lists). Unset, there is none.
+- `GOOGLE_OAUTH_CLIENT_JSON` and `CONNECTIONS_KEY`: optional, together; turn on email triggers. The
+  first is a Google OAuth client's JSON (raw or base64), Desktop ("installed") or web (with
+  `<PUBLIC_URL>/gmail/callback` as a redirect URI), with the Gmail API enabled. The second is 32
+  random bytes in base64 (`openssl rand -base64 32`); it seals each mailbox's token, so changing
+  it means connecting again.
+- `PUBLIC_URL`: optional; the server's origin, for Google's redirect. Default each request's.
 
 The version is stamped at build (`-X main.buildCommit`, from Coolify's `SOURCE_COMMIT` build
 argument); else `SOURCE_COMMIT` at run time, else Go's VCS stamp, else `dev`.
