@@ -46,7 +46,7 @@ func TestTextBoxesOutsideAFormNameTheirSendButton(t *testing.T) {
 	sendReport(t, h, wfReport())
 	wf := createWorkflow(t, h, workflow.Starting)
 	list := get(t, h, "/workflows", nil).Body.String()
-	if !strings.Contains(list, `<div class="composer" data-submit="#submit-task"`) {
+	if !strings.Contains(list, `<section class="composer" data-submit="#submit-task"`) {
 		t.Error("the new task box should send with #submit-task")
 	}
 	ed := get(t, h, "/workflows/"+wf, nil).Body.String()

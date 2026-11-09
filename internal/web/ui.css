@@ -193,13 +193,19 @@ legend { font-size: 13px; font-weight: 600; padding: 0 .35rem; }
 .dictation kbd { font: inherit; font-size: .7rem; opacity: .75; margin-left: .3rem; }
 textarea.listening, textarea.listening:focus { border-color: var(--red); box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 25%, transparent); }
 
-.attachments { margin: .6rem 0; padding: .6rem; border: 1px dashed var(--line); border-radius: var(--radius); }
-.attachments.dropping { outline: 2px solid var(--accent); }
-.attachment-previews { display: flex; flex-wrap: wrap; gap: .6rem; }
-.attachment-previews > div { display: flex; flex-direction: column; max-width: 180px; gap: .3rem; margin-top: .6rem; }
-.attachment-previews img { width: 160px; height: 110px; object-fit: contain; }
-.attachment-previews button { overflow-wrap: anywhere; white-space: normal; }
-.composer > .attachments { flex-basis: 100%; }
-.composer > textarea { order: 1; }
-.composer > .side { order: 2; }
-.composer > .attachments { order: 3; }
+.attachments { margin: .6rem 0; min-width: 0; }
+.attachment-actions { display: inline-flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+.attachment-help { font-size: 12px; color: var(--muted); max-width: 22rem; }
+.attachment-help summary { cursor: pointer; }
+.attachment-help[open] span { display: block; padding: .4rem 0; }
+.attachment-previews { display: flex; flex-wrap: wrap; gap: .5rem; }
+.attachment-chip { display: inline-flex; align-items: center; min-width: 0; width: 15rem; max-width: 100%; gap: .5rem; padding: .35rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-subtle); }
+.attachment-previews img { width: 2.75rem; height: 2.75rem; object-fit: cover; border-radius: 3px; flex: none; }
+.attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; flex: 1; }
+.attachment-remove { flex: none; width: 2rem; height: 2rem; padding: 0; font-size: 20px; }
+.attachments .warn:empty, .attachment-previews:empty { display: none; }
+.attachments .warn { margin: .5rem 0 0; font-size: 13px; }
+.composer > .attachments { margin: 0; padding: 0 1rem .6rem; }
+.composer > .attachments:has(.attachment-previews:empty):has(.warn:empty) { padding: 0; }
+.composer .mic { margin-left: 0; }
+.dropping { outline: 2px dashed var(--accent); outline-offset: -4px; background: var(--accent-bg); }

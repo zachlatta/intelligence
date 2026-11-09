@@ -1,16 +1,23 @@
 // Shared image picker for workflow tasks and agent-session prompts.
 // Upload only on submit; previews stay local until then. Keep IDs after failed submits.
-function imageAttachments(text, zone = text.closest('form') || text.parentElement) {
-  const panel = document.createElement('div');
+function imageAttachments(text, zone = text.closest('form') || text.parentElement, options = {}) {
+  const panel = options.panel || document.createElement('div');
   panel.className = 'attachments';
   const pick = document.createElement('button');
-  pick.type = 'button'; pick.className = 'btn'; pick.textContent = 'Attach images';
+  pick.type = 'button'; pick.className = 'btn'; pick.textContent = '＋ Attach';
+  pick.title = 'Attach images (PNG, JPEG or GIF). Up to 8 images, 4 MiB each, 8 MiB total.';
+  pick.setAttribute('aria-label', 'Attach images');
   const input = document.createElement('input');
   input.type = 'file'; input.multiple = true; input.accept = 'image/png,image/jpeg,image/gif'; input.hidden = true;
-  const hint = document.createElement('span'); hint.className = 'hint'; hint.textContent = ' Drop or paste screenshots · up to 8 images, 4 MiB each, 8 MiB total';
+  const hint = document.createElement('details'); hint.className = 'attachment-help';
+  const summary = document.createElement('summary'); summary.textContent = 'Image limits';
+  const limits = document.createElement('span'); limits.textContent = 'PNG, JPEG or GIF · up to 8 images, 4 MiB each, 8 MiB total. Drop or paste into the prompt.';
+  hint.append(summary, limits);
   const previews = document.createElement('div'); previews.className = 'attachment-previews';
   const error = document.createElement('p'); error.className = 'warn'; error.setAttribute('role', 'alert');
-  panel.append(pick, input, hint, previews, error); text.after(panel);
+  const actions = document.createElement('span'); actions.className = 'attachment-actions'; actions.append(pick, input, hint);
+  panel.append(previews, error);
+  if (options.action) options.action.append(actions); else { panel.prepend(actions); text.after(panel); }
   let files = [], busy = false, disabled = false;
   const warn = msg => { error.textContent = msg; };
   function add(incoming) {
@@ -22,23 +29,26 @@ function imageAttachments(text, zone = text.closest('form') || text.parentElemen
         warn('Attach up to 8 images, 4 MiB each and 8 MiB total.'); continue;
       }
       const url = URL.createObjectURL(file), item = { file, url };
-      const preview = document.createElement('div'), img = document.createElement('img'), remove = document.createElement('button');
+      const preview = document.createElement('div'), img = document.createElement('img'), remove = document.createElement('button'), name = document.createElement('span');
+      preview.className = 'attachment-chip';
       img.src = url; img.alt = file.name;
-      remove.type = 'button'; remove.className = 'btn'; remove.textContent = 'Remove ' + file.name;
-      remove.onclick = () => { if (busy || disabled) return; files = files.filter(f => f !== item); URL.revokeObjectURL(url); preview.remove(); };
-      preview.append(img, remove); previews.append(preview); files.push(item);
+      name.className = 'attachment-name'; name.textContent = file.name; name.title = file.name;
+      remove.type = 'button'; remove.className = 'btn ghost attachment-remove'; remove.textContent = '×';
+      remove.setAttribute('aria-label', 'Remove ' + file.name); remove.title = 'Remove ' + file.name;
+      remove.onclick = () => { if (busy || disabled) return; files = files.filter(f => f !== item); URL.revokeObjectURL(url); preview.remove(); pick.focus(); };
+      preview.append(img, name, remove); previews.append(preview); files.push(item);
     }
   }
   pick.onclick = () => input.click();
   input.onchange = () => { add(input.files); input.value = ''; };
-  zone.addEventListener('dragover', e => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); panel.classList.add('dropping'); } });
-  zone.addEventListener('dragleave', () => panel.classList.remove('dropping'));
-  zone.addEventListener('drop', e => { if (e.dataTransfer.files.length) { e.preventDefault(); panel.classList.remove('dropping'); add(e.dataTransfer.files); } });
+  zone.addEventListener('dragover', e => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); zone.classList.add('dropping'); } });
+  zone.addEventListener('dragleave', e => { if (!zone.contains(e.relatedTarget)) zone.classList.remove('dropping'); });
+  zone.addEventListener('drop', e => { zone.classList.remove('dropping'); if (e.dataTransfer.files.length) { e.preventDefault(); add(e.dataTransfer.files); } });
   text.addEventListener('paste', e => { if (e.clipboardData.files.length) { e.preventDefault(); add(e.clipboardData.files); } });
   window.addEventListener('pagehide', () => files.forEach(f => URL.revokeObjectURL(f.url)));
   return {
     hasImages: () => files.length > 0,
-    setDisabled(value) { disabled = value; pick.disabled = value; },
+    setDisabled(value) { disabled = value; pick.disabled = value; previews.querySelectorAll('button').forEach(b => b.disabled = value); },
     clear() {
       files.forEach(f => URL.revokeObjectURL(f.url)); files = [];
       previews.replaceChildren(); input.value = ''; warn('');

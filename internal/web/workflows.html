@@ -33,15 +33,29 @@
     border: 1px solid var(--line-strong); background: var(--bg-subtle); color: var(--fg-2); white-space: nowrap; }
   .chip.k-gate { background: var(--orange-bg); border-color: var(--orange-line); color: var(--orange); }
   .chip.k-signoff { background: var(--accent-bg); border-color: var(--accent-line); color: var(--accent); }
-  .composer { display: flex; gap: .75rem; align-items: flex-start; flex-wrap: wrap; }
-  .composer textarea { min-height: 4rem; flex: 1 1 24rem; }
-  .composer .side { display: flex; flex-direction: column; gap: .4rem; min-width: 12rem; }
-  .composer .pick { display: grid; grid-template-columns: 4.5rem 1fr; align-items: center; gap: .5rem; }
+  .composer { border: 1px solid var(--line-strong); border-radius: 10px; background: var(--panel); margin-bottom: 1.5rem; box-shadow: var(--shadow); }
+  .composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+  .composer > label { margin: 1rem 1rem 0; }
+  .composer textarea { display: block; min-height: 10rem; border: 0; box-shadow: none; padding: .7rem 1rem; background: transparent; resize: vertical; }
+  .composer textarea:focus { box-shadow: none; }
+  .composer .composer-toolbar { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; padding: .7rem 1rem; border-top: 1px solid var(--line); background: var(--bg-subtle); border-radius: 0 0 10px 10px; }
+  .composer .pick { display: flex; min-width: 0; align-items: center; gap: .5rem; margin-left: auto; }
+  .composer .pick select { width: auto; max-width: 22rem; min-width: 0; }
   .composer .pick label { margin: 0; font-size: 12.5px; color: var(--muted); font-weight: 500; }
-  .composer .task-actions { display: flex; gap: .4rem; }
-  .composer .task-actions #submit-task { flex: 1; }
   .composer .task-actions[hidden] { display: none; }
-  #task-dictation .dictation .dstatus { flex-basis: 100%; }
+  #task-dictation .dictation { padding: .7rem 1rem; border-top: 1px solid var(--line); }
+  .composer .dictation[hidden] { display: none; }
+  .composer .composer-help { display: flex; flex-wrap: wrap; gap: .3rem 1rem; margin: 0; padding: 0 1rem .65rem; font-size: 12px; color: var(--muted); }
+  .composer .banner { margin: .5rem 1rem; }
+  .composer #task-status:empty { display: none; }
+  @media (max-width: 40rem) {
+    .composer .pick { flex: 1 1 100%; order: -1; }
+    .composer .pick select { flex: 1; max-width: none; }
+    .composer #submit-task { margin-left: auto; }
+    .composer .attachment-help summary { font-size: 0; }
+    .composer .attachment-help summary::after { content: "ⓘ"; font-size: 16px; }
+    .wf-grid { grid-template-columns: minmax(0, 1fr); }
+  }
   .builder { display: grid; grid-template-columns: minmax(0, 1fr) 24rem; gap: 1.5rem; align-items: start; }
   @media (max-width: 62rem) { .builder { grid-template-columns: 1fr; } }
   .pipe { max-width: 36rem; }
@@ -141,16 +155,20 @@
 </div>
 {{else}}
 {{if .Tasks}}
-<section class="card"><div class="card-body">
-  <div class="composer" data-submit="#submit-task" id="task-dictation"{{if .Dictation}} data-dictation="{{.Dictation}}"{{end}}>
-    <textarea id="task" placeholder="New task: describe what you want done. Its project is found for you."></textarea>
-    <div class="side">
+  <section class="composer" data-submit="#submit-task" id="task-dictation" aria-label="Submit a task"{{if .Dictation}} data-dictation="{{.Dictation}}"{{end}}>
+    <label for="task">New task</label>
+    <textarea id="task" aria-describedby="task-hint" placeholder="Describe what you want done…"></textarea>
+    <div id="task-attachments"></div>
+    <p class="composer-help" id="task-hint"><span>We’ll find the project for you.</span><span>Drop or paste images · Cmd/Ctrl + Enter to submit</span></p>
+    <p class="banner" id="task-error" role="alert" hidden></p>
+    <span id="task-status" role="status" class="composer-help"></span>
+    <div class="composer-toolbar task-actions">
+      <span id="task-attach-action"></span>{{if .Dictation}}{{template "dictationbutton"}}{{end}}
       <div class="pick"><label for="task-workflow">Workflow</label>
         <select id="task-workflow">{{range .Tasks}}<option value="{{.ID}}"{{if .IsDefault}} selected{{end}}>{{.Name}}{{with .Definition.Host}} · {{.}}{{end}}</option>{{end}}</select></div>
-      <div class="task-actions"><button class="btn primary" id="submit-task" title="⌘/Ctrl Enter">Submit task</button>{{if .Dictation}}{{template "dictationbutton"}}{{end}}</div>
+      <button class="btn primary" id="submit-task" disabled title="⌘/Ctrl Enter">Submit task</button>
     </div>
-  </div>
-</div></section>
+  </section>
 {{end}}
 {{range .Runs}}{{if eq .Status "waiting"}}<p class="banner note"><b>{{.Workflow}}</b> is asking you: “{{.Title}}” · <a href="/workflow-runs/{{.ID}}">Read the note →</a></p>{{end}}{{end}}
 <h2 class="section-title">Workflows</h2>
@@ -214,15 +232,35 @@ async function addWorkflow(name, description) {
 document.getElementById("add-starting")?.addEventListener("click", () =>
   addWorkflow("Task from Intelligence", "Find the project, do the work, three gates, ask Zach only for broader changes, then land."));
 document.getElementById("new-workflow")?.addEventListener("click", () => addWorkflow("New workflow", ""));
-const taskImages = document.getElementById("task") ? imageAttachments(document.getElementById("task"), document.querySelector(".composer")) : null;
-document.getElementById("submit-task")?.addEventListener("click", async (ev) => {
-  const input = document.getElementById("task").value.trim();
-  if (!input) return document.getElementById("task").focus();
-  ev.target.disabled = true;
+// Task composer submission: hold the draft steady through uploads and the API call.
+const taskText = document.getElementById("task"), taskSubmit = document.getElementById("submit-task");
+const taskBox = document.getElementById("task-dictation"), taskWorkflow = document.getElementById("task-workflow");
+const taskError = document.getElementById("task-error"), taskStatus = document.getElementById("task-status");
+const taskImages = taskText ? imageAttachments(taskText, taskBox, {
+  panel: document.getElementById("task-attachments"), action: document.getElementById("task-attach-action")
+}) : null;
+let taskSending = false;
+const taskWarning = (message) => { taskError.textContent = message; taskError.hidden = !message; };
+const taskReady = () => { taskSubmit.disabled = taskSending || !taskText.value.trim(); };
+taskText?.addEventListener("input", taskReady);
+if (taskText) taskReady();
+taskSubmit?.addEventListener("click", async () => {
+  const input = taskText.value.trim();
+  if (taskSending || !input || taskText.readOnly) return;
+  taskSending = true; taskReady(); taskWarning("");
+  taskText.readOnly = true; taskWorkflow.disabled = true; taskImages.setDisabled(true);
+  taskBox.setAttribute("aria-busy", "true");
+  taskSubmit.textContent = "Submitting…"; taskStatus.textContent = "Submitting your task…";
+  const mic = document.getElementById("dictate"); if (mic) mic.disabled = true;
   try {
-    const r = await api("POST", "/api/workflow-runs", { workflowId: document.getElementById("task-workflow").value, input: await taskImages.prompt(input) });
+    const r = await api("POST", "/api/workflow-runs", { workflowId: taskWorkflow.value, input: await taskImages.prompt(input) });
     location.href = "/workflow-runs/" + r.id;
-  } catch (e) { err(e.message); ev.target.disabled = false; }
+  } catch (e) {
+    taskWarning(e.message); taskStatus.textContent = "";
+    taskSending = false; taskText.readOnly = false; taskWorkflow.disabled = false; taskImages.setDisabled(false);
+    if (mic) mic.disabled = false;
+    taskBox.setAttribute("aria-busy", "false"); taskSubmit.textContent = "Submit task"; taskReady();
+  }
 });
 // keep the runs current while nobody is typing a task
 setInterval(async () => {
@@ -240,11 +278,11 @@ setInterval(async () => {
 <script>
 (() => {
   const box = document.getElementById("task-dictation"), submit = document.getElementById("submit-task");
-  const error = document.getElementById("error");
+  const error = document.getElementById("task-error");
   dictation({ text: document.getElementById("task"), tokenPath: box.dataset.dictation,
     mic: document.getElementById("dictate"), row: box.querySelector(".task-actions"),
     label: () => submit.textContent, send: () => submit.click(), onstart: () => { error.hidden = true; error.textContent = ""; },
-    warn: (msg) => err(msg) });
+    active: () => !taskSending, warn: taskWarning });
 })();
 </script>{{end}}
 {{template "wffoot" .}}{{end}}

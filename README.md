@@ -731,6 +731,10 @@ origin (another site's request is refused with 403), and those with a body must 
 - `GET /workflows`: a new task (for workflows triggered by a task: pick the workflow, which names
   its host, with the default first and selected), the account's workflows and their runs. Without
   workflows, a button adds the starting one (`workflow.Starting`) on the account's first host.
+  The task composer has a full-width prompt and an action bar for images, dictation (when enabled),
+  workflow selection and submission. Cmd/Ctrl+Enter submits; Enter keeps its newline. Images can be
+  picked, dropped or pasted, and appear as removable thumbnail chips; image limits open on demand.
+  Submission locks the draft while uploading and starting the run; a failure keeps it for retry.
   The task box takes dictation: ⌘D or Enter again in an empty box submits the task.
 - Task workflow cards offer Make default (one per account) and Clear default; without a default,
   the task picker keeps creation order. The choice is readable as `workflows.is_default`.
