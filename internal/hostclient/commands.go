@@ -16,7 +16,9 @@ import (
 // in Postgres and sends it down the host's stream; the host runs it and streams back CommandUpdates.
 // A command can arrive more than once (a stream that dropped before its result was acknowledged),
 // so each kind is safe to repeat: creations and messages carry the command's ID to the daemon as
-// their idempotency key, and the rest are idempotent by nature.
+// their idempotency key, and the rest are idempotent by nature. Two are not: the daemon takes no
+// idempotency key for creating or running a schedule, so only the Runner's memory of finished
+// commands keeps a repeat of those from running twice.
 type Command struct {
 	ID        string          `json:"id"`
 	Kind      string          `json:"kind"`
@@ -115,6 +117,8 @@ func (c Command) waitsForTurn() bool {
 type CommandResult struct {
 	WorkspaceID string `json:"workspaceId,omitempty"`
 	AgentID     string `json:"agentId,omitempty"`
+	ScheduleID  string `json:"scheduleId,omitempty"`
+	RunID       string `json:"runId,omitempty"` // run_schedule: the run it started
 }
 
 // ParseCommand decodes args for kind strictly (no unknown fields) and checks what it needs. The
@@ -191,6 +195,8 @@ func ParseCommand(kind string, args json.RawMessage) (any, error) {
 			return nil, fmt.Errorf("%s takes only agentId", kind)
 		}
 		return a, nil
+	case CreateScheduleKind, UpdateScheduleKind, PauseScheduleKind, ResumeScheduleKind, DeleteScheduleKind, RunScheduleKind:
+		return parseSchedule(kind, decode) // schedules.go
 	}
 	return nil, fmt.Errorf("unknown command kind %q", kind)
 }
@@ -206,6 +212,9 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 	w.mu.Unlock()
 	if c == nil {
 		return CommandResult{}, errors.New("not connected to the Paseo daemon")
+	}
+	if IsScheduleKind(cmd.Kind) {
+		return executeSchedule(ctx, c, cmd, parsed)
 	}
 	switch a := parsed.(type) {
 	case CreateWorkspaceArgs:

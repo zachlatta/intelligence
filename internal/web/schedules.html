@@ -1,0 +1,377 @@
+{{define "schedhead"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.}} · Intelligence</title>
+{{template "css"}}
+<style>
+  .card.form { padding: .25rem 1.25rem 1.25rem; }
+  .host-head { display: flex; align-items: center; gap: .6rem; margin: 1.6rem 0 .6rem; }
+  .host-head h2 { font-size: 15px; margin: 0; }
+  .host-head .grow { flex: 1; }
+  .sched-name { font-weight: 500; }
+  .sched-prompt { color: var(--muted); max-width: 32rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .actions { white-space: nowrap; text-align: right; }
+  .facts { display: grid; grid-template-columns: max-content 1fr; gap: .35rem 1.2rem; padding: 1rem 1.25rem; margin: 0; font-size: 13.5px; }
+  .facts dt { color: var(--muted); }
+  .facts dd { margin: 0; }
+  .prompt-text { white-space: pre-wrap; padding: .9rem 1.25rem; margin: 0; border-top: 1px solid var(--line); font-size: 13.5px; }
+  .run-out { white-space: pre-wrap; margin: .4rem 0 0; font-size: 12.5px; max-height: 24rem; overflow: auto; }
+  .run-err { color: var(--red); white-space: pre-wrap; }
+  #progress.meta::before { content: ""; display: inline-block; width: .5rem; height: .5rem; border-radius: 50%; margin-right: .45rem;
+    background: var(--accent); animation: pulse 1.2s infinite; }
+  #progress.warn { padding: .55rem .8rem; border-radius: var(--radius); border: 1px solid var(--red-line); background: var(--red-bg);
+    white-space: pre-wrap; font-size: 13px; }
+  @keyframes pulse { 50% { opacity: .3; } }
+</style>
+</head>
+<body>
+{{template "top" "/schedules"}}
+{{end}}
+
+{{define "status"}}{{if eq . "active"}}<span class="badge green">active</span>{{else if eq . "paused"}}<span class="badge orange">paused</span>{{else}}<span class="badge">{{.}}</span>{{end}}{{end}}
+
+{{define "runstatus"}}{{if eq . "succeeded"}}<span class="badge green">succeeded</span>{{else if eq . "failed"}}<span class="badge red">failed</span>{{else if eq . "running"}}<span class="badge blue">running</span>{{else}}<span class="badge">{{.}}</span>{{end}}{{end}}
+
+{{define "actions"}}{{/* a schedule's buttons; . is a fleet.ScheduleView */}}
+{{if eq .Status "active"}}<button class="btn sm" data-kind="pause_schedule" data-host="{{.Host}}" data-id="{{.ID}}">Pause</button>{{end}}
+{{if eq .Status "paused"}}<button class="btn sm" data-kind="resume_schedule" data-host="{{.Host}}" data-id="{{.ID}}">Resume</button>{{end}}
+{{if ne .Status "completed"}}<button class="btn sm" data-kind="run_schedule" data-host="{{.Host}}" data-id="{{.ID}}"{{if .Running}} disabled title="a run is running"{{end}}>Run now</button>{{end}}
+<button class="btn sm ghost" data-kind="delete_schedule" data-host="{{.Host}}" data-id="{{.ID}}" data-confirm="Delete the schedule {{or .Name .ID}}? Its runs' agents stay.">Delete</button>
+{{end}}
+
+{{define "schedjs"}}
+<script>
+// Each change goes through the commands API; the page follows the command through the read-only SQL
+// API. The host sends its schedules before the command's result, so a reload then shows the change.
+const commandSQL = document.body.dataset.commandSql;
+const progress = document.getElementById("progress");
+
+function say(text, warn) {
+  if (!progress) { if (warn) alert(text); return; }
+  progress.textContent = text;
+  progress.className = warn ? "warn" : "meta";
+}
+
+async function sql(query) {
+  const res = await fetch("/api/sql", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query }) });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error);
+  return body.rows;
+}
+
+// command sends one command to host and resolves with the schedule it made or changed once the host ran it.
+async function command(host, kind, args) {
+  const res = await fetch("/api/hosts/" + encodeURIComponent(host) + "/commands", { method: "POST",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind, args }) });
+  if (res.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return new Promise(() => {}); }
+  if (!res.ok) throw new Error(await res.text());
+  const id = (await res.json()).id;
+  if (!/^[0-9a-f-]{36}$/.test(id)) throw new Error("the server returned a bad command id");
+  for (;;) {
+    const [row] = await sql(commandSQL.replaceAll("$ID", id));
+    const [status, error, schedule] = row || [];
+    if (status === "succeeded") return schedule;
+    if (status === "failed" || status === "expired") throw new Error(error || "the command " + status);
+    say(status === "queued" ? "Waiting for " + host + " to connect…" : host + " is on it…");
+    await new Promise((r) => setTimeout(r, 700));
+  }
+}
+
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-kind]");
+  if (!b) return;
+  if (b.dataset.confirm && !confirm(b.dataset.confirm)) return;
+  const buttons = document.querySelectorAll("button[data-kind]");
+  buttons.forEach((x) => (x.disabled = true));
+  say("Sending…");
+  try {
+    await command(b.dataset.host, b.dataset.kind, { scheduleId: b.dataset.id });
+    if (b.dataset.kind === "delete_schedule" && document.body.dataset.page === "schedule") location.href = "/schedules";
+    else location.reload();
+  } catch (err) {
+    say(err.message, true);
+    buttons.forEach((x) => (x.disabled = false));
+  }
+});
+
+// the cadence fields: every or cron (and its zone, the browser's by default)
+function cadenceFields(form) {
+  const kind = () => form.querySelector("[name=cadence]:checked").value;
+  const show = () => {
+    form.querySelector("#every-fields").hidden = kind() !== "every";
+    form.querySelector("#cron-fields").hidden = kind() !== "cron";
+  };
+  form.querySelectorAll("[name=cadence]").forEach((r) => r.addEventListener("change", show));
+  if (!form.timezone.value) form.timezone.value = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+  show();
+  return kind;
+}
+
+// expiry is a datetime-local input's value as an RFC 3339 time, "" for none.
+function expiry(input) {
+  return input.value ? new Date(input.value).toISOString().replace(/\.\d+Z$/, "Z") : "";
+}
+
+// a datetime-local input given a UTC time shows it in the browser's zone
+document.querySelectorAll("input[type=datetime-local][data-utc]").forEach((i) => {
+  if (!i.dataset.utc) return;
+  const d = new Date(i.dataset.utc), p = (n) => String(n).padStart(2, "0");
+  i.value = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+});
+</script>
+{{end}}
+
+{{define "cadencefields"}}{{/* . is the schedule being edited, or false */}}
+  <label>Runs</label>
+  <div class="fields">
+    <label class="check"><input type="radio" name="cadence" value="cron"{{if not (and . .EveryMs)}} checked{{end}}> on a cron schedule</label>
+    <label class="check"><input type="radio" name="cadence" value="every"{{if and . .EveryMs}} checked{{end}}> every so often</label>
+  </div>
+  <div class="fields" id="cron-fields">
+    <div><label for="cron">Cron <span class="meta">(minute hour day month weekday)</span></label>
+      <input id="cron" name="cron" class="mono" placeholder="0 7 * * *" value="{{if .}}{{.Cron}}{{end}}"></div>
+    <div><label for="timezone">Time zone</label><input id="timezone" name="timezone" placeholder="America/New_York" value="{{if .}}{{.Timezone}}{{end}}"></div>
+  </div>
+  <div class="fields" id="every-fields">
+    <div><label for="every">Every <span class="meta">(at least 1m: 30m, 2h, 1h30m)</span></label>
+      <input id="every" name="every" class="mono" placeholder="1h" value="{{if and . .EveryMs}}{{everyText .EveryMs}}{{end}}"></div>
+  </div>
+{{end}}
+
+{{define "runfields"}}{{/* each run's agent and limits; . is the schedule being edited, or false */}}
+  <div class="fields">
+    <div><label for="isolation">Each run works in</label>
+      <select id="isolation" name="isolation">
+        <option value="worktree"{{if and . (eq .Isolation "worktree")}} selected{{end}}>a new git worktree</option>
+        <option value="local"{{if and . (ne .Isolation "worktree")}} selected{{end}}>the directory itself</option>
+      </select></div>
+    <div><label for="maxRuns">At most <span class="meta">(runs; empty for no limit)</span></label>
+      <input id="maxRuns" name="maxRuns" type="number" min="1" step="1" value="{{if and . .MaxRuns}}{{.MaxRuns}}{{end}}"></div>
+    <div><label for="expiresAt">Until <span class="meta">(optional)</span></label>
+      <input id="expiresAt" name="expiresAt" type="datetime-local" data-utc="{{if .}}{{localInput .ExpiresAt}}{{end}}"></div>
+  </div>
+  <label class="check"><input type="checkbox" name="archiveOnFinish"{{if or (not .) .ArchiveOnFinish}} checked{{end}}> archive each run's agent when it finishes</label>
+{{end}}
+
+{{define "schedules"}}{{template "schedhead" "Schedules"}}
+<main class="container page mid">
+<div class="page-head"><div><h1>Schedules</h1>
+<p class="sub">Prompts each host's Paseo runs on a cadence, each time in a new agent.</p></div></div>
+<p id="progress"></p>
+{{if not .Count}}<p class="empty-state">No schedules yet.{{if .Hosts}} Make one on a host below.{{end}}</p>{{end}}
+{{range .Hosts}}
+<div class="host-head" id="{{.Host.Report.Name}}">
+  <span class="dot {{if .Host.Online}}online{{else}}offline{{end}}" title="{{if .Host.Online}}online{{else}}offline{{end}}"></span>
+  <h2>{{.Host.Report.Name}}</h2><span class="meta">{{len .Schedules}} schedule{{if ne (len .Schedules) 1}}s{{end}}</span>
+  <span class="grow"></span>
+  <a class="btn sm" href="/hosts/{{.Host.Report.Name}}/schedules/new">New schedule</a>
+</div>
+{{if .Problem}}<p class="banner">{{.Host.Report.Name}} could not list its schedules: {{.Problem}}</p>{{end}}
+{{if .Schedules}}
+<div class="table-wrap"><table class="table">
+  <tr><th>Schedule</th><th>When</th><th>Next</th><th>Last run</th><th></th></tr>
+  {{range .Schedules}}
+  <tr>
+    <td><a class="sched-name" href="/hosts/{{.Host}}/schedules/{{.ID}}">{{or .Name .Title .ID}}</a> {{template "status" .Status}}
+      <div class="sched-prompt" title="{{.Prompt}}">{{.Prompt}}</div>
+      <div class="meta">{{if eq .Target "new-agent"}}{{.Provider}}{{if .Model}} · {{.Model}}{{end}} · <span class="mono">{{.Cwd}}</span>{{if eq .Isolation "worktree"}} · worktree{{end}}{{else}}in agent <span class="mono">{{.AgentID}}</span>{{end}}</div></td>
+    <td>{{cadence .Schedule}}{{if .Timezone}}<div class="meta">{{.Timezone}}</div>{{end}}</td>
+    <td>{{if eq .Status "active"}}{{until $.Now .NextRunAt}}<div class="meta">{{inZone .NextRunAt .Timezone}}</div>{{else}}<span class="meta">—</span>{{end}}</td>
+    <td>{{with .LastRun}}{{template "runstatus" .Status}} <span class="meta">{{ago $.Now .StartedAt}}</span>{{else}}<span class="meta">none</span>{{end}}
+      <div class="meta">{{.RunCount}} run{{if ne .RunCount 1}}s{{end}}{{if .FailedRuns}}, {{.FailedRuns}} failed{{end}}</div></td>
+    <td class="actions">{{template "actions" .}}</td>
+  </tr>
+  {{end}}
+</table></div>
+{{end}}
+{{else}}<p class="empty-state">No dev host has joined this account yet.</p>
+{{end}}
+<footer title="{{.Version}}">version {{short .Version}}</footer>
+</main>
+<script>document.body.dataset.commandSql = {{.CommandSQL}};</script>
+{{template "schedjs"}}
+</body>
+</html>
+{{end}}
+
+{{define "schedule"}}{{template "schedhead" (or .S.Name .S.ID)}}
+<main class="container page mid">
+<div class="crumbs"><a href="/schedules">Schedules</a><span class="sep">/</span><a href="/schedules#{{.S.Host}}">{{.S.Host}}</a></div>
+<div class="page-head"><div><h1>{{or .S.Name .S.Title .S.ID}} {{template "status" .S.Status}}</h1>
+<p class="sub">{{cadence .S.Schedule}}{{if .S.Timezone}} ({{.S.Timezone}}){{end}}{{if eq .S.Status "active"}} · next {{until .Now .S.NextRunAt}}, {{inZone .S.NextRunAt .S.Timezone}}{{end}}</p></div>
+<div class="actions">{{template "actions" .S}}</div></div>
+<p id="progress"></p>
+<section class="card">
+  <dl class="facts">
+    <dt>Host</dt><dd>{{.S.Host}}{{if not .Host.Online}} <span class="badge red">offline</span>{{end}}</dd>
+    {{if eq .S.Target "new-agent"}}
+    <dt>Agent</dt><dd>{{.S.Provider}}{{if .S.Model}} · {{.S.Model}}{{end}}{{if .S.Thinking}} · {{.S.Thinking}} thinking{{end}}{{if .S.Mode}} · <span class="mono">{{.S.Mode}}</span>{{end}}{{if .S.Title}} · titled “{{.S.Title}}”{{end}}</dd>
+    <dt>Runs in</dt><dd><span class="mono">{{.S.Cwd}}</span>, {{if eq .S.Isolation "worktree"}}each run in a new git worktree{{else}}in the directory itself{{end}}{{if .S.ArchiveOnFinish}}; each run's agent is archived when it finishes{{end}}</dd>
+    {{else}}
+    <dt>Agent</dt><dd>sends each run to agent <a class="mono" href="/hosts/{{.S.Host}}/agents/{{.S.AgentID}}">{{.S.AgentID}}</a></dd>
+    {{end}}
+    <dt>Cadence</dt><dd>{{if .S.Cron}}<span class="mono">{{.S.Cron}}</span>{{else}}every {{everyText .S.EveryMs}}{{end}}</dd>
+    {{if .S.MaxRuns}}<dt>Limit</dt><dd>{{.S.MaxRuns}} runs</dd>{{end}}
+    {{if not .S.ExpiresAt.IsZero}}<dt>Until</dt><dd>{{inZone .S.ExpiresAt .S.Timezone}}</dd>{{end}}
+    {{if not .S.PausedAt.IsZero}}<dt>Paused</dt><dd>{{ago .Now .S.PausedAt}}</dd>{{end}}
+    <dt>Made</dt><dd>{{ago .Now .S.CreatedAt}}{{if not .S.UpdatedAt.IsZero}}, changed {{ago .Now .S.UpdatedAt}}{{end}}</dd>
+    <dt>ID</dt><dd class="mono">{{.S.ID}}</dd>
+  </dl>
+  <p class="prompt-text">{{.S.Prompt}}</p>
+</section>
+
+<h2 class="section-title">{{.S.RunCount}} run{{if ne .S.RunCount 1}}s{{end}}</h2>
+{{if .Runs}}
+<div class="table-wrap"><table class="table">
+  <tr><th>Run</th><th>Started</th><th class="n">Took</th><th>Agent</th></tr>
+  {{range .Runs}}
+  <tr>
+    <td>{{template "runstatus" .Status}}
+      {{if .Error}}<div class="run-err">{{.Error}}</div>{{end}}
+      {{if .Output}}<details><summary class="meta">output</summary><pre class="run-out">{{.Output}}</pre></details>{{end}}</td>
+    <td>{{inZone .StartedAt $.S.Timezone}}<div class="meta">{{ago $.Now .StartedAt}}</div></td>
+    <td class="n">{{dur $.Now .ScheduleRun}}</td>
+    <td>{{if .AgentListed}}<a href="/hosts/{{$.S.Host}}/agents/{{.AgentID}}">transcript</a>{{else if .AgentID}}<span class="meta mono" title="archived: its transcript is not kept">{{.AgentID}}</span>{{end}}</td>
+  </tr>
+  {{end}}
+</table></div>
+{{else}}<p class="empty-state">No runs yet.</p>{{end}}
+
+{{if eq .S.Target "new-agent"}}
+<h2 class="section-title">Edit</h2>
+<form id="edit" class="card form" data-host="{{.S.Host}}" data-id="{{.S.ID}}" data-kind="update_schedule"
+  data-name="{{.S.Name}}" data-prompt="{{.S.Prompt}}" data-cron="{{.S.Cron}}" data-timezone="{{.S.Timezone}}"
+  data-every="{{if .S.EveryMs}}{{everyText .S.EveryMs}}{{end}}" data-provider="{{.S.Provider}}" data-model="{{.S.Model}}"
+  data-thinking="{{.S.Thinking}}" data-mode="{{.S.Mode}}" data-cwd="{{.S.Cwd}}" data-isolation="{{or .S.Isolation "local"}}"
+  data-archive="{{.S.ArchiveOnFinish}}" data-max-runs="{{if .S.MaxRuns}}{{.S.MaxRuns}}{{end}}" data-expires="{{localInput .S.ExpiresAt}}">
+  <label for="name">Name</label><input id="name" name="name" maxlength="200" value="{{.S.Name}}">
+  <label for="prompt">Prompt</label><textarea id="prompt" name="prompt" required>{{.S.Prompt}}</textarea>
+  {{template "cadencefields" .S}}
+  <label for="cwd">Directory</label><input id="cwd" name="cwd" class="mono" value="{{.S.Cwd}}" required>
+  <div class="fields">
+    <div><label for="provider">Provider</label>
+      <select id="provider" name="provider">{{range .Providers}}<option value="{{.}}"{{if eq . $.S.Provider}} selected{{end}}>{{.}}</option>{{end}}</select></div>
+    <div><label for="model">Model</label><input id="model" name="model" value="{{.S.Model}}" placeholder="unchanged"></div>
+    <div><label for="thinking">Thinking</label>
+      <select id="thinking" name="thinking"><option value="">unchanged</option>{{range .Thinking}}<option value="{{.}}"{{if eq . $.S.Thinking}} selected{{end}}>{{.}}</option>{{end}}</select></div>
+    <div><label for="mode">Mode</label><input id="mode" name="mode" value="{{.S.Mode}}" placeholder="unchanged"></div>
+  </div>
+  {{template "runfields" .S}}
+  <div class="form-actions"><button class="btn primary" type="submit">Save</button></div>
+</form>
+{{end}}
+<footer title="{{.Version}}">version {{short .Version}}</footer>
+</main>
+<script>document.body.dataset.commandSql = {{.CommandSQL}}; document.body.dataset.page = "schedule";</script>
+{{template "schedjs"}}
+<script>
+const edit = document.getElementById("edit");
+if (edit) {
+  const kind = cadenceFields(edit);
+  edit.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const o = edit.dataset, f = edit, args = { scheduleId: o.id }, agent = {};
+    if (f.name.value.trim() !== o.name) args.name = f.name.value.trim();
+    if (f.prompt.value !== o.prompt) args.prompt = f.prompt.value;
+    if (kind() === "every" && f.every.value.trim() !== o.every) args.every = f.every.value.trim();
+    if (kind() === "cron" && (f.cron.value.trim() !== o.cron || f.timezone.value.trim() !== o.timezone)) {
+      args.cron = f.cron.value.trim();
+      if (f.timezone.value.trim()) args.timezone = f.timezone.value.trim();
+    }
+    for (const [k, d] of [["provider", "provider"], ["model", "model"], ["thinking", "thinking"], ["mode", "mode"], ["cwd", "cwd"], ["isolation", "isolation"]]) {
+      const v = f[k].value.trim();
+      if (v && v !== o[d]) agent[k] = v;
+    }
+    if (f.archiveOnFinish.checked !== (o.archive === "true")) agent.archiveOnFinish = f.archiveOnFinish.checked;
+    if (Object.keys(agent).length) args.agent = agent;
+    if (f.maxRuns.value !== o.maxRuns) args.maxRuns = f.maxRuns.value ? Number(f.maxRuns.value) : 0;
+    const exp = expiry(f.expiresAt);
+    if (exp !== o.expires) args.expiresAt = exp;
+    if (Object.keys(args).length === 1) { say("Nothing changed."); return; }
+    const button = f.querySelector("button[type=submit]");
+    button.disabled = true;
+    say("Saving…");
+    try {
+      await command(o.host, "update_schedule", args);
+      location.reload();
+    } catch (err) {
+      say(err.message, true);
+      button.disabled = false;
+    }
+  });
+}
+</script>
+</body>
+</html>
+{{end}}
+
+{{define "newschedule"}}{{template "schedhead" "New schedule"}}
+<main class="container page narrow">
+<div class="crumbs"><a href="/schedules">Schedules</a><span class="sep">/</span><a href="/schedules#{{.Host}}">{{.Host}}</a></div>
+<div class="page-head"><div><h1>New schedule on {{.Host}}</h1>
+<p class="sub">A prompt Paseo runs on a cadence, each time in a new agent.</p></div></div>
+<form id="schedule" class="card form" data-host="{{.Host}}" data-kind="create_schedule"
+  data-default-provider="{{.Agent.Provider}}" data-default-model="{{.Agent.Model}}" data-default-mode="{{.Agent.Mode}}">
+  <label for="name">Name <span class="meta">(optional)</span></label><input id="name" name="name" maxlength="200">
+  {{template "cadencefields" false}}
+  <label for="dir">Directory</label>
+  <select id="dir" name="dir">
+    {{range .Directories}}<option value="{{.}}">{{.}}</option>{{end}}
+    <option value="">another directory…</option>
+  </select>
+  <input id="cwd" name="cwd" class="mono" style="margin-top:.5rem" placeholder="a directory on {{.Host}}"{{if .Directories}} hidden{{end}}>
+  <fieldset><legend>Each run's agent</legend>
+  {{template "agentfields" .}}
+  {{template "runfields" false}}
+  </fieldset>
+  <label class="check"><input type="checkbox" name="runNow"> run it once now, too</label>
+  <div class="form-actions"><button class="btn primary" type="submit">Make schedule</button><a class="btn" href="/schedules">Cancel</a></div>
+  <p id="progress"></p>
+</form>
+<footer title="{{.Version}}">version {{short .Version}}</footer>
+</main>
+<script>document.body.dataset.commandSql = {{.CommandSQL}};</script>
+{{template "schedjs"}}
+<script>
+const form = document.getElementById("schedule");
+const kind = cadenceFields(form);
+const dir = form.dir, cwd = form.cwd;
+dir.addEventListener("change", () => { cwd.hidden = dir.value !== ""; });
+form.provider.addEventListener("change", () => { // model and mode names belong to a provider
+  const def = form.provider.value === form.dataset.defaultProvider;
+  form.model.value = def ? form.dataset.defaultModel : "";
+  form.mode.value = def ? form.dataset.defaultMode : "";
+});
+form.prompt.labels[0].textContent = "What should each run do?";
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const button = form.querySelector("button[type=submit]");
+  try {
+    const where = dir.value || cwd.value.trim();
+    if (!where) throw new Error("Choose a directory or type one.");
+    const agent = { provider: form.provider.value, cwd: where, isolation: form.isolation.value, archiveOnFinish: form.archiveOnFinish.checked };
+    for (const k of ["model", "thinking", "mode", "title"]) if (form[k].value.trim()) agent[k] = form[k].value.trim();
+    const args = { prompt: form.prompt.value, agent, runNow: form.runNow.checked };
+    if (form.name.value.trim()) args.name = form.name.value.trim();
+    if (kind() === "every") args.every = form.every.value.trim();
+    else {
+      args.cron = form.cron.value.trim();
+      if (form.timezone.value.trim()) args.timezone = form.timezone.value.trim();
+    }
+    if (form.maxRuns.value) args.maxRuns = Number(form.maxRuns.value);
+    if (form.expiresAt.value) args.expiresAt = expiry(form.expiresAt);
+    button.disabled = true;
+    say("Sending…");
+    const id = await command(form.dataset.host, "create_schedule", args);
+    location.href = "/hosts/" + encodeURIComponent(form.dataset.host) + "/schedules/" + encodeURIComponent(id);
+  } catch (err) {
+    say(err.message, true);
+    button.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
+{{end}}

@@ -36,6 +36,10 @@ type Daemon struct {
 	timelines  map[string]timeline
 	created    map[string]map[string]any // what each creation idempotency key made
 	nextID     int
+
+	schedules   []map[string]any  // schedules.go
+	noSchedules bool              // every schedule request fails, as on a daemon without them
+	runOnce     map[string]waiter // run-once requests waiting for their run to end, by run id
 }
 
 type timeline struct {
@@ -200,7 +204,7 @@ func (f *Daemon) answer(c *websocket.Conn, msg map[string]any) {
 		f.write(c, session("fetch_workspaces_response", map[string]any{"requestId": id, "entries": entries, "pageInfo": page,
 			"emptyProjects": []any{}}))
 	default:
-		if f.change(c, id, msg) {
+		if f.change(c, id, msg) || f.schedule(c, id, msg) {
 			return
 		}
 		f.write(c, session("rpc_error", map[string]any{"requestId": id, "error": "unknown request"}))

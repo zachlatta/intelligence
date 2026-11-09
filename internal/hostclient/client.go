@@ -2,6 +2,7 @@ package hostclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -31,6 +32,10 @@ type Client struct {
 	LiveEvery   time.Duration // copy running agents' transcripts; default 2s
 	Settle      time.Duration // gather a burst of daemon updates into one report; default 1s
 	Logf        func(format string, args ...any)
+
+	schedules       *ScheduleSync
+	scheduleMu      sync.Mutex
+	lastScheduleErr string // syncSchedules logs an error once
 }
 
 // Run runs the host until ctx ends.
@@ -57,6 +62,7 @@ func (b *Client) Run(ctx context.Context) error {
 		}
 	}
 	reported := &latest{wake: make(chan struct{}, 1)}
+	b.schedules = &ScheduleSync{List: b.Watcher.Schedules, Inspect: b.Watcher.InspectSchedule, Send: b.Link.Schedules}
 	runs := []func(context.Context){
 		b.Watcher.Run,
 		b.Link.Run,
@@ -99,6 +105,7 @@ func (b *Client) report(ctx context.Context, reported *latest) {
 		case <-b.Link.Connected():
 			b.Logf("stream to %s: connected", b.Link.Server)
 			due, fresh = true, true
+			b.schedules.Reset() // the server may have missed changes
 		case <-b.Watcher.Changed():
 			select { // a burst of updates (an agent's turn starting, its workspace moving) goes in one report
 			case <-ctx.Done():
@@ -108,6 +115,7 @@ func (b *Client) report(ctx context.Context, reported *latest) {
 			due = true
 		case <-status.C:
 			b.Watcher.RefreshStatus(ctx) // a change comes back through Changed
+			b.syncSchedules(ctx)
 		}
 		snap := b.Watcher.Snapshot()
 		if snap.Error != lastDaemon {
@@ -136,8 +144,26 @@ func (b *Client) report(ctx context.Context, reported *latest) {
 			lastErr = ""
 		}
 		reported.put(snap, fresh)
+		if fresh {
+			b.syncSchedules(ctx)
+		}
 		due, fresh = false, false
 	}
+}
+
+// syncSchedules sends the daemon's schedules if they changed. The daemon pushes nothing when a
+// schedule changes, so this runs with every status read, on each new stream, and after each
+// schedule command.
+func (b *Client) syncSchedules(ctx context.Context) {
+	sctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	err := b.schedules.Sync(sctx)
+	b.scheduleMu.Lock()
+	defer b.scheduleMu.Unlock()
+	if msg := fmt.Sprint(err); err != nil && msg != b.lastScheduleErr && !errors.Is(err, ErrNotConnected) && ctx.Err() == nil {
+		b.Logf("schedules: %v", err)
+	}
+	b.lastScheduleErr = fmt.Sprint(err)
 }
 
 // syncTranscripts copies loaded agents' transcripts after each stored report (once the server
@@ -181,7 +207,14 @@ func (b *Client) syncTranscripts(ctx context.Context, reported *latest) {
 
 // runCommands runs the server's commands against the daemon.
 func (b *Client) runCommands(ctx context.Context) {
-	runner := &Runner{Exec: b.Watcher.Execute, Report: b.Link.Update}
+	exec := func(ctx context.Context, cmd Command) (CommandResult, error) {
+		res, err := b.Watcher.Execute(ctx, cmd)
+		if IsScheduleKind(cmd.Kind) {
+			b.syncSchedules(ctx) // so the server has the change before the command's result
+		}
+		return res, err
+	}
+	runner := &Runner{Exec: exec, Report: b.Link.Update}
 	defer runner.Wait()
 	for {
 		select {

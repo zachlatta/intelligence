@@ -1,8 +1,9 @@
 # Intelligence
 
 A web app, inspired by agent-factory, that will orchestrate coding agents through Paseo on a fleet
-of hosts. For now it shows each host's Paseo daemon and how much of each subscription plan
-(every Claude login, Codex, Muse, Antigravity) is used over time, and all of its state is readable
+of hosts. For now it shows each host's Paseo daemon, its schedules (which it can also make, change,
+pause, run and delete), and how much of each subscription plan (every Claude login, Codex, Muse,
+Antigravity) is used over time, and all of its state is readable
 with read-only SQL. People sign in to accounts with a password, and each account sees only its own
 hosts and everything they report.
 
@@ -68,6 +69,9 @@ The hierarchy is hosts > workspaces > agents:
   which Postgres cannot store, become U+FFFD.
 - `commands`: what the server asked a host to do (below): its kind, args, status, result or error,
   and when it was created, sent, started, finished and when it expires.
+- `schedules` and `schedule_runs`: each host's Paseo schedules and their runs (below), with the view
+  `schedule_status` (each schedule's run counts and newest run). `hosts.schedules_at` and
+  `schedules_error` say when the host last listed them, and why it could not.
 - `host_minutes`, `agent_minutes`, `oom_kills` and `host_probes`: each host's resources over time
   (below), with the views `host_current`, `host_days` and `agent_days`.
 - `usage_accounts`, `usage_readings`, `usage_active` and `usage_sources`: subscription plans' usage
@@ -91,7 +95,7 @@ open, dialing again 5 seconds after it drops. Each frame is a JSON `hostclient.F
   version is in the dial's `X-Intelligence-Version` header.
 - host to server: `report` (on each new stream, and within a second of a change; the host re-reads
   the daemon's status every 15 seconds and reports it if it changed), `transcript` batches, `usage`
-  (every 5 minutes), `host` (every minute) and `command_update`s. Each carries an `id`, and the server answers each with an
+  (every 5 minutes), `host` (every minute), `schedules` (when they changed, below) and `command_update`s. Each carries an `id`, and the server answers each with an
   `ack` once it is stored (or with why not), transcript batches on their own so a large one holds up
   nothing else.
 
@@ -152,14 +156,45 @@ against its daemon and reports `running`, then `succeeded` with a result (`{"wor
   (by creation time) has gone, then starts a turn. It waits until the command expires, so give it
   a longer `ttl`; one whose agent is archived meanwhile fails. On an agent that is not running,
   all three start a turn.
+- `create_schedule`: `prompt`, a cadence (`every`, a duration of at least `1m` such as `30m` or
+  `1h30m`; or `cron`, five fields, with an optional `timezone`), and `agent`: `provider`, `cwd`, and
+  optionally `model`, `thinking`, `mode`, `title`, `isolation` (`worktree`, a new git worktree each
+  run, or `local`, the directory itself) and `archiveOnFinish` (default true). Optionally `name`,
+  `maxRuns`, `expiresAt` (RFC 3339) and `runNow` (run it once now too; else an `every` schedule
+  first runs one interval from now). The result names the schedule (`scheduleId`).
+- `update_schedule`: `scheduleId` and whatever changes, as for `create_schedule`; a cadence replaces
+  the old one whole, and the agent's fields change one by one (not its title). `name: ""`,
+  `maxRuns: 0` and `expiresAt: ""` clear them.
+- `pause_schedule`, `resume_schedule`, `delete_schedule` and `run_schedule`: `scheduleId`.
+  `run_schedule` succeeds once the run has started, with its `runId`; the run goes on after.
 
 Delivery is at least once: a command sent down a stream that dropped before its result arrived is
-sent again when the host reconnects. Each kind is safe to repeat. Creations and messages carry the
-command id to Paseo as their idempotency key, renames and archives are idempotent, and a host
-remembers its last 1000 results, so a repeat gets the first result again without running twice. A
+sent again when the host reconnects. Creations and messages carry the command id to Paseo as their
+idempotency key; renames, archives and schedule changes are idempotent (deleting a schedule that is
+gone succeeds); and a host remembers its last 1000 results, so a repeat gets the first result again
+without running twice. Paseo takes no idempotency key for creating or running a schedule, so those
+two rely on that memory alone: a repeat that reaches a host which restarted in between (an update)
+makes a second schedule or run. A
 command not finished by its expiry (10 minutes by default) is `expired`: never delivered, or
 delivered with no result (it may have run). A host does not start an expired command, and a result
 that arrives after expiry replaces it.
+
+### Schedules
+
+A Paseo schedule runs a prompt on a cadence, each time in a new agent (or, for schedules made from
+inside an agent, in that agent). The daemon pushes nothing when a schedule changes, so the host
+lists them with every status read (every 15 seconds), on each new stream and right after each
+schedule command, and sends a `schedules` frame when they changed: the schedules whole, and the
+newest 50 runs of each schedule that changed (a run's output and error cut at 64 KB). A host sends a
+schedule command's change before its result, so a page that reloads when the command succeeds
+shows it.
+
+The server replaces the host's schedules with each frame and adds to the runs it keeps, so the run
+history outlives what the host sends; a schedule's runs go with it. A daemon that cannot list
+schedules (one older than 0.15) is recorded in `hosts.schedules_error` and the last schedules are
+kept. A schedule's agent settings can hold MCP servers (with credentials), a system prompt and
+provider options: those are never read. A run's agent is usually archived when it finishes, and
+with it its transcript, so a run keeps the agent's id and its last message (`output`).
 
 ### Plan usage
 
@@ -264,8 +299,10 @@ its daemon keeps its transcripts.
 `daemon.get_status`, `fetch_workspaces` and `fetch_agents` requests (paged, the first page
 subscribing), and pushed `workspace_update` and `agent_update` messages. Commands use
 `workspace.create`, `agent.create`, `workspace.title.set`, `archive_workspace`, `update_agent`,
-`send_agent_message`, `cancel_agent` and `archive_agent`; a refusal comes back as the daemon's
-error. The hello opts in to
+`send_agent_message`, `cancel_agent` and `archive_agent`, and for schedules `schedule/list`,
+`inspect`, `create`, `update`, `pause`, `resume`, `delete` and `run-once` (which the daemon answers
+only when the run ends, so the host watches `inspect` for the run instead); a refusal comes back as
+the daemon's error. The hello opts in to
 explicit subscriptions; without that the daemon streams every running agent's timeline. It decodes
 only the fields stored here: agent records can carry credentials in other fields. The protocol is
 not published as stable; `internal/paseo/paseotest` is a fake daemon that validates requests the
@@ -318,6 +355,17 @@ the account and enrollment routes, the host binaries and the streams (with a hos
   agents are folded under a count. Problems (Paseo not connected, a client not on the server's version)
   show under the host. The tree refreshes in place every 15 seconds and keeps what was opened or closed.
   Above it, Plans: every login with each window's % left, its reset, pace and the hosts using it.
+- `GET /schedules`: every schedule on each of the account's hosts: what it runs, when (in words for
+  common cron expressions), its next run in its own time zone, its newest run and run counts, with
+  Pause or Resume, Run now and Delete, and a link to make one on each host.
+- `GET /hosts/{host}/schedules/{id}`: one schedule: its agent, directory, isolation, cadence,
+  limits and prompt, every run kept (status, start, duration, error, output, and the transcript
+  while its agent is on the host), and the form that edits it (sending only what changed).
+- `GET /hosts/{host}/schedules/new`: the form that makes a schedule: a name, the prompt, cron (with
+  the browser's time zone) or every, the directory (the host's repositories and its schedules'
+  directories), the agent (Opus 5.5, medium thinking, `bypassPermissions` by default), a new git
+  worktree each run or the directory, archive on finish, a run limit, an end, and run once now.
+  Each of these pages sends its commands to the commands API and follows them through `/api/sql`.
 - `GET /usage?days=7` (1 to 365): every login with a chart of each window's used % over the days,
   and its weekly peaks.
 - `GET /api/usage`: the logins and their windows, as JSON.

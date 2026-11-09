@@ -154,6 +154,8 @@ func receive(ctx context.Context, cfg Config, reg *fleet.Registry, host string, 
 		err = reg.RecordHost(ctx, host, *f.Host, cfg.Now())
 	case f.Type == hostclient.UsageFrame && f.Usage != nil:
 		err = reg.RecordUsage(ctx, host, *f.Usage, cfg.Now())
+	case f.Type == hostclient.SchedulesFrame && f.Schedules != nil:
+		err = reg.RecordSchedules(ctx, host, *f.Schedules, cfg.Now())
 	default:
 		err = fmt.Errorf("unexpected %q frame", f.Type)
 	}

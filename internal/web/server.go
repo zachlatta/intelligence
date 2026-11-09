@@ -139,6 +139,9 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /hosts/{host}/agents/{agent}/entries/{seq}", a.page(func(v viewer) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) { transcriptEntry(v.reg, w, r) }
 	}))
+	mux.HandleFunc("GET /schedules", a.page(func(v viewer) http.HandlerFunc { return schedulesPage(cfg, v.reg) }))
+	mux.HandleFunc("GET /hosts/{host}/schedules/new", a.page(func(v viewer) http.HandlerFunc { return newSchedulePage(cfg, v.reg) }))
+	mux.HandleFunc("GET /hosts/{host}/schedules/{id}", a.page(func(v viewer) http.HandlerFunc { return schedulePage(cfg, v.reg) }))
 	mux.HandleFunc("GET /usage", a.page(func(v viewer) http.HandlerFunc { return usagePage(cfg, v.reg) }))
 	mux.HandleFunc("GET /resources", a.page(func(v viewer) http.HandlerFunc { return hostResourcesPage(cfg, v.reg) }))
 	mux.HandleFunc("GET /hosts", func(w http.ResponseWriter, r *http.Request) { // its name before the home page's hosts took it

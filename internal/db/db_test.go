@@ -114,6 +114,8 @@ func twoAccounts(t *testing.T, d dbtest.DB) (roles *db.AccountRoles, ann, bob *p
 			`INSERT INTO workspaces (host, id, name, kind, status, directory) SELECT $1, 'w', 'W', 'directory', 'done', '/w' WHERE $2::bigint > 0`,
 			`INSERT INTO usage_accounts (provider, account, first_seen, last_seen) SELECT 'claude', $1 || '@example.com', now(), now() WHERE $2::bigint > 0`,
 			`INSERT INTO usage_sources (host, provider, account, ok, observed_at, received_at) SELECT $1, 'claude', $1 || '@example.com', true, now(), now() WHERE $2::bigint > 0`,
+			`INSERT INTO schedules (host, id, prompt, received_at) SELECT $1, 's', 'go', now() WHERE $2::bigint > 0`,
+			`INSERT INTO schedule_runs (host, schedule_id, id, status, received_at) SELECT $1, 's', 'r', 'succeeded', now() WHERE $2::bigint > 0`,
 		} {
 			if _, err := d.Owner.Exec(ctx, q, host, id); err != nil {
 				t.Fatalf("%s: %v", q, err)
@@ -153,6 +155,9 @@ func TestAnAccountReadsOnlyItsOwnRows(t *testing.T) {
 		"SELECT host FROM workspace_status":           "ann-host",
 		"SELECT account FROM usage_accounts":          "ann-host@example.com",
 		"SELECT host FROM usage_sources":              "ann-host",
+		"SELECT host FROM schedules":                  "ann-host",
+		"SELECT host FROM schedule_runs":              "ann-host",
+		"SELECT host FROM schedule_status":            "ann-host",
 		"SELECT current_account_id()::text":           "1",
 		"SELECT count(*)::text FROM host_enrollments": "0",
 	} {
