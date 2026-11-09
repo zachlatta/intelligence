@@ -3,7 +3,10 @@ package hostclient
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/zachlatta/intelligence/internal/paseo"
 )
@@ -46,10 +49,11 @@ func TestPermissionRecovery(t *testing.T) {
 
 func TestPermissionRecoveryRetriesAndAuditsBeforeDeny(t *testing.T) {
 	a := paseo.Agent{ID: "a", Provider: "claude", CurrentModeID: "bypassPermissions", PendingPermissions: []paseo.Permission{{ID: "p"}}}
+	now := time.Unix(1, 0)
 	offline, refuse := true, true
 	denies := 0
 	var statuses []string
-	s := PermissionSync{Send: func(_ context.Context, r PermissionResolution) error {
+	s := PermissionSync{Now: func() time.Time { return now }, Send: func(_ context.Context, r PermissionResolution) error {
 		if offline {
 			return errors.New("offline")
 		}
@@ -68,10 +72,12 @@ func TestPermissionRecoveryRetriesAndAuditsBeforeDeny(t *testing.T) {
 		t.Fatal("denied without durable audit")
 	}
 	offline = false
+	now = now.Add(time.Second)
 	if s.Sync(context.Background(), []paseo.Agent{a}) == nil {
 		t.Fatal("lost denial error")
 	}
 	refuse = false
+	now = now.Add(time.Second)
 	if err := s.Sync(context.Background(), []paseo.Agent{a}); err != nil {
 		t.Fatal(err)
 	}
@@ -82,9 +88,10 @@ func TestPermissionRecoveryRetriesAndAuditsBeforeDeny(t *testing.T) {
 
 func TestPermissionAuditRetriesAfterPromptDisappears(t *testing.T) {
 	a := paseo.Agent{ID: "a", Provider: "claude", CurrentModeID: "bypassPermissions", PendingPermissions: []paseo.Permission{{ID: "p"}}}
+	now := time.Unix(1, 0)
 	denies, finals := 0, 0
 	failFinal := true
-	s := PermissionSync{Send: func(_ context.Context, r PermissionResolution) error {
+	s := PermissionSync{Now: func() time.Time { return now }, Send: func(_ context.Context, r PermissionResolution) error {
 		if r.Status == "denied" {
 			finals++
 			if failFinal {
@@ -95,10 +102,96 @@ func TestPermissionAuditRetriesAfterPromptDisappears(t *testing.T) {
 	}, Deny: func(context.Context, string, string) error { denies++; return nil }}
 	_ = s.Sync(context.Background(), []paseo.Agent{a})
 	failFinal = false
+	now = now.Add(time.Second)
 	if err := s.Sync(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
 	if denies != 1 || finals != 2 {
 		t.Fatal(denies, finals)
+	}
+}
+
+func TestPermissionRetryBackoffIsPerPromptAndCapped(t *testing.T) {
+	now := time.Unix(1, 0)
+	a := paseo.Agent{ID: "a", Provider: "claude", CurrentModeID: "bypassPermissions", PendingPermissions: []paseo.Permission{{ID: "p"}}}
+	calls, writes := 0, 0
+	s := PermissionSync{Now: func() time.Time { return now }, Send: func(context.Context, PermissionResolution) error { writes++; return nil }, Deny: func(context.Context, string, string) error { calls++; return errors.New("reject") }}
+	_ = s.Sync(context.Background(), []paseo.Agent{a})
+	delay := time.Second
+	for i := 0; i < 11; i++ {
+		before, w := calls, writes
+		now = now.Add(delay - time.Nanosecond)
+		_ = s.Sync(context.Background(), []paseo.Agent{a})
+		if calls != before || writes != w {
+			t.Fatal("retry before due", delay, calls, writes)
+		}
+		now = now.Add(time.Nanosecond)
+		_ = s.Sync(context.Background(), []paseo.Agent{a})
+		if calls != before+1 || writes != w+1 {
+			t.Fatal("missing retry or rewrote intent", delay, calls, writes)
+		}
+		delay = min(delay*2, 5*time.Minute)
+	}
+	// Another prompt does not inherit p's backoff.
+	a.PendingPermissions = append(a.PendingPermissions, paseo.Permission{ID: "p2"})
+	before := calls
+	_ = s.Sync(context.Background(), []paseo.Agent{a})
+	if calls != before+1 {
+		t.Fatal("backoff leaked across prompts")
+	}
+}
+
+func TestPermissionStuckAndCleared(t *testing.T) {
+	for _, reject := range []bool{false, true} {
+		t.Run(fmt.Sprint(reject), func(t *testing.T) {
+			now := time.Unix(1, 0)
+			var last PermissionResolution
+			calls := 0
+			a := paseo.Agent{ID: "a", Provider: "claude", CurrentModeID: "bypassPermissions", PendingPermissions: []paseo.Permission{{ID: "p"}}}
+			s := PermissionSync{Now: func() time.Time { return now }, Send: func(_ context.Context, r PermissionResolution) error { last = r; return nil }, Deny: func(context.Context, string, string) error {
+				calls++
+				if reject {
+					return errors.New("reject")
+				}
+				return nil
+			}}
+			_ = s.Sync(context.Background(), []paseo.Agent{a})
+			now = now.Add(20 * time.Minute)
+			_ = s.Sync(context.Background(), []paseo.Agent{a})
+			if last.Status != "stuck" || last.StuckAt.IsZero() || last.FirstSeenAt.IsZero() {
+				t.Fatal(last)
+			}
+			if !reject && calls != 1 {
+				t.Fatal("repeated confirmed denial")
+			}
+			now = now.Add(time.Second)
+			_ = s.Sync(context.Background(), nil)
+			if last.Status != "cleared" || last.ClearedAt.IsZero() {
+				t.Fatal(last)
+			}
+		})
+	}
+}
+
+func TestPermissionRewriteIncludesLiteralAbsoluteRemovalRule(t *testing.T) {
+	for _, part := range []string{"literal absolute paths", "no glob, variable, substitution or ~", "no cd earlier"} {
+		if !strings.Contains(permissionRewrite, part) {
+			t.Fatal("missing", part)
+		}
+	}
+}
+
+func TestPermissionRetryStopsWhenModeChanges(t *testing.T) {
+	now := time.Unix(1, 0)
+	calls := 0
+	var last PermissionResolution
+	a := paseo.Agent{ID: "a", Provider: "claude", CurrentModeID: "bypassPermissions", PendingPermissions: []paseo.Permission{{ID: "p"}}}
+	s := PermissionSync{Now: func() time.Time { return now }, Send: func(_ context.Context, r PermissionResolution) error { last = r; return nil }, Deny: func(context.Context, string, string) error { calls++; return errors.New("reject") }}
+	_ = s.Sync(context.Background(), []paseo.Agent{a})
+	a.CurrentModeID = "default"
+	now = now.Add(time.Hour)
+	_ = s.Sync(context.Background(), []paseo.Agent{a})
+	if calls != 1 || last.Status != "error" {
+		t.Fatal("acted on a prompt outside never-ask mode", calls, last)
 	}
 }
