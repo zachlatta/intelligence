@@ -16,6 +16,8 @@ RUN set -eu; ldflags="-s -w -X main.buildCommit=${SOURCE_COMMIT}"; \
 # Every test passes, the read-only SQL contract with them, against a throwaway Postgres 18,
 # before an image exists: a failure fails the build, so Coolify never deploys it.
 FROM postgres:18-alpine AS test
+# git: the workflow naming tests check every branch name with git check-ref-format
+RUN apk add --no-cache git
 COPY --from=build /usr/local/go /usr/local/go
 COPY --from=build /go/pkg/mod /go/pkg/mod
 ENV PATH=/usr/local/go/bin:$PATH GOPATH=/go GOTOOLCHAIN=local GOFLAGS=-mod=mod CGO_ENABLED=0
