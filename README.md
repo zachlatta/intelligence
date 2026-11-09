@@ -425,11 +425,13 @@ the account and enrollment routes, the host binaries and the streams (with a hos
   Pause or Resume, Run now and Delete, and a link to make one on each host.
 - `GET /hosts/{host}/schedules/{id}`: one schedule: its agent, directory, isolation, cadence,
   limits and prompt, every run kept (status, start, duration, error, output, and the transcript
-  while its agent is on the host), and the form that edits it (sending only what changed).
+  while its agent is on the host), and the form that edits it (sending only what changed). Its
+  prompt takes dictation, which only puts words in: the edit is saved with Save.
 - `GET /hosts/{host}/schedules/new`: the form that makes a schedule: a name, the prompt, cron (with
   the browser's time zone) or every, the directory (the host's repositories and its schedules'
   directories), the agent (Opus 5.5, medium thinking, `bypassPermissions` by default), a new git
   worktree each run or the directory, archive on finish, a run limit, an end, and run once now.
+  The prompt takes dictation as the new agent form does.
   Each of these pages sends its commands to the commands API and follows them through `/api/sql`.
 - `GET /usage?days=7` (1 to 365): every login with a chart of each window's used % over the days,
   and its weekly peaks.
@@ -517,12 +519,14 @@ origin (another site's request is refused with 403), and those with a body must 
   "truncated"}`, or 400 with `{"error"}`. At most 10000 rows; 5 seconds per query.
 - `GET /api/host/binary/{os}/{arch}`: the host binary at the server's version.
 - `GET /dictation.js`: the dictation engine shared by the chat box, the new agent and workspace forms,
-  and the workflow run dialog.
+  the new and edit schedule forms, the new task box, the workflow run dialog and the reply to a
+  waiting run.
 - `GET /ui.css`: the one stylesheet every page shares, with the top bar (`layout.html`) that links the
   pages.
 - `GET /workflows`: a new task (for workflows triggered by a task: pick the workflow, which names
   its host, with the default first and selected), the account's workflows and their runs. Without
   workflows, a button adds the starting one (`workflow.Starting`) on the account's first host.
+  The task box takes dictation: ⌘D or Enter again in an empty box submits the task.
 - Task workflow cards offer Make default (one per account) and Clear default; without a default,
   the task picker keeps creation order. The choice is readable as `workflows.is_default`.
 - `PUT /api/workflows/{id}/default` with `{"default": true}` (or `false` to clear):
@@ -533,7 +537,8 @@ origin (another site's request is refused with 403), and those with a body must 
   (its workspaces' `project_root`s), or typed. The “Run this workflow” dialog takes the run's task;
   with `ASSEMBLYAI_API_KEY` set, its mic button or ⌘D/Ctrl+D uses the shared dictation controls.
 - `GET /workflow-runs/{id}`: a run: its project, the orchestrator and its sub-agents, each step's
-  state and what happened in it, and, while it waits, the orchestrator's note with a reply box.
+  state and what happened in it, and, while it waits, the orchestrator's note with a reply box,
+  which takes dictation.
 - `POST /api/workflows` with `{"name", "description", "definition"}`: 201 `{"id", "version": 1}`;
   400 for a definition that cannot run. `PUT /api/workflows/{id}`, the same body: the next version.
 - `POST /api/workflow-runs` with `{"workflowId", "input"}`: starts a run on the workflow's host
@@ -560,8 +565,8 @@ Server:
   is named after it, and its password derived from its password (keep the name under 40 characters).
 - `PORT`: listen port, default `8080`.
 - `HOST_BINARIES`: where the host binaries are; default `/usr/local/share/intelligence/host`.
-- `ASSEMBLYAI_API_KEY`: optional; turns on dictation in the chat box, new agent and workspace forms,
-  and workflow run dialog. Unset, there is none.
+- `ASSEMBLYAI_API_KEY`: optional; turns on dictation everywhere a task or agent work starts (the
+  pages `/dictation.js` lists). Unset, there is none.
 
 The version is stamped at build (`-X main.buildCommit`, from Coolify's `SOURCE_COMMIT` build
 argument); else `SOURCE_COMMIT` at run time, else Go's VCS stamp, else `dev`.

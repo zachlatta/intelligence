@@ -105,22 +105,6 @@ func TestChatBoxOffersDictationOnlyWithAKey(t *testing.T) {
 	}
 }
 
-func TestSpawnPagesOfferDictationOnlyWithAKey(t *testing.T) {
-	aai := fakeAssemblyAI(t, "k", "t")
-	for _, p := range []string{newAgentPath, "/hosts/host-1/workspaces/new"} {
-		page := get(t, dictationServer(t, "k", aai.URL), p, nil).Body.String()
-		for _, want := range []string{`data-dictation="/api/dictation/token"`, `id="dictate"`, `src="/dictation.js"`} {
-			if !strings.Contains(page, want) {
-				t.Errorf("%s with a key misses %s", p, want)
-			}
-		}
-		page = get(t, dictationServer(t, "", aai.URL), p, nil).Body.String()
-		if strings.Contains(page, `id="dictate"`) || strings.Contains(page, `/dictation.js`) {
-			t.Errorf("%s without a key offers dictation", p)
-		}
-	}
-}
-
 // TestDictationCanOnlyInsert: with insertOnly, an empty box does not choose sending: dictation
 // always appends at the cursor, and stopping it never calls send.
 func TestDictationCanOnlyInsert(t *testing.T) {
@@ -155,33 +139,6 @@ func TestDictationScriptIsServed(t *testing.T) {
 	}
 }
 
-func TestWorkflowRunOffersDictationOnlyWithAKey(t *testing.T) {
-	for _, key := range []string{"k", ""} {
-		t.Run("key="+key, func(t *testing.T) {
-			h := dictationServer(t, key, "")
-			id := createWorkflow(t, h, workflow.Starting)
-			rec := get(t, h, "/workflows/"+id, nil)
-			if rec.Code != http.StatusOK {
-				t.Fatalf("workflow page: %d %s", rec.Code, rec.Body)
-			}
-			page := rec.Body.String()
-			if key == "" {
-				if strings.Contains(page, `id="dictate"`) || strings.Contains(page, `/dictation.js`) {
-					t.Error("without a key, the workflow run box offers dictation")
-				}
-				return
-			}
-			for _, want := range []string{`data-dictation="/api/dictation/token"`, `id="dictate"`, `src="/dictation.js"`, `text: document.getElementById("s-input")`, `send: () => form.requestSubmit(start)`, `active: () => dlg.open`,
-				`onstart: clearWarning`, `dlg.addEventListener("toggle", clearWarning)`,
-				`error.textContent = ""; error.hidden = true;`, `#start .dictation { margin-top: 1.4rem; }`} {
-				if !strings.Contains(page, want) {
-					t.Errorf("workflow run box misses %s", want)
-				}
-			}
-		})
-	}
-}
-
 // TestEveryTaskEntryPointOffersDictation: every form that creates a task or starts agent work (a
 // workflow task, a workflow run, a reply to a waiting run, a new agent, a new workspace, a new or
 // edited schedule) offers the shared dictation button, loads the engine and wires it to that form's own text box; none does without a key.
@@ -193,7 +150,10 @@ func TestEveryTaskEntryPointOffersDictation(t *testing.T) {
 	}{
 		{"workflow task", "/workflows", []string{`<textarea id="task"`, `text: document.getElementById("task")`,
 			`send: () => submit.click()`, `#task-dictation .dictation`, `.composer .task-actions[hidden] { display: none; }`}, nil},
-		{"workflow run", "/workflows/{id}", []string{`<textarea id="s-input"`, `text: document.getElementById("s-input")`}, nil},
+		{"workflow run", "/workflows/{id}", []string{`<textarea id="s-input"`, `text: document.getElementById("s-input")`,
+			`send: () => form.requestSubmit(start)`, `active: () => dlg.open`, `onstart: clearWarning`,
+			`dlg.addEventListener("toggle", clearWarning)`, `error.textContent = ""; error.hidden = true;`,
+			`#start .dictation { margin-top: 1.4rem; }`}, nil},
 		{"new agent", newAgentPath, []string{`id="spawn"`, `text: form.prompt`}, nil},
 		{"new workspace", "/hosts/host-1/workspaces/new", []string{`id="spawn"`, `text: form.prompt`}, nil},
 		{"new schedule", "/hosts/host-1/schedules/new", []string{`id="schedule"`, `text: form.prompt`,
