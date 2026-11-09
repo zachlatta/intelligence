@@ -310,11 +310,6 @@
     if (open && narrow.matches) names.filter(n => n !== name && isOpen(n)).forEach(n => set(n, false, false));
     if (open) (name === 'diff' ? loadDiff : loadAgents)();
   }
-  const defaults = { side: true, diff: matchMedia('(min-width: 90rem)').matches };
-  for (const name of names) {
-    const kept = localStorage.getItem('panel-' + name);
-    set(name, !narrow.matches && (kept === null ? defaults[name] : kept === '1'), false);
-  }
   document.querySelectorAll('[data-panel]').forEach(b => b.addEventListener('click', () => set(b.dataset.panel, !isOpen(b.dataset.panel), true)));
   document.addEventListener('keydown', e => {
     if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest('input, textarea, select, [contenteditable]')) return;
@@ -349,7 +344,6 @@
 
   // The diff: read when its time changes; each file's lines are drawn when it is first opened.
   const pane = document.getElementById('diff');
-  if (!pane) return;
   const dbody = document.getElementById('diffbody'), totals = document.getElementById('difftotals');
   const when = document.getElementById('diffwhen'), stat = document.getElementById('diffstat'), fold = document.getElementById('difffold');
   const opened = new Map(); // path -> open, as the reader left it
@@ -357,7 +351,7 @@
   const ago = t => { const s = Math.max(0, Math.round((Date.now() - t) / 1000));
     return s < 60 ? s + 's ago' : s < 3600 ? Math.floor(s / 60) + 'm ago' : s < 86400 ? Math.floor(s / 3600) + 'h ago' : Math.floor(s / 86400) + 'd ago'; };
   const showWhen = () => { when.textContent = at ? ' · read ' + ago(at) : ''; when.title = at ? new Date(at).toLocaleString() : ''; };
-  setInterval(showWhen, 10000);
+  if (pane) setInterval(showWhen, 10000);
   const counts = (a, d) => { const s = el('span'); s.append(el('span', 'add', '+' + a), ' ', el('span', 'del', '−' + d)); return s; };
 
   function lines(f) {
@@ -421,7 +415,7 @@
   }
 
   async function loadDiff(force) {
-    if (diffBusy || !isOpen('diff') || document.hidden) return;
+    if (!pane || diffBusy || !isOpen('diff') || document.hidden) return;
     diffBusy = true;
     try {
       const [s] = await sql(pane.dataset.stampSql);
@@ -436,12 +430,19 @@
   setInterval(() => loadDiff(), 5000);
   document.addEventListener('visibilitychange', () => { loadDiff(); loadAgents(); });
 
-  fold.addEventListener('click', () => {
+  fold?.addEventListener('click', () => {
     const close = fold.textContent.startsWith('Collapse');
     fold.dataset.folded = close ? '1' : '';
     fold.textContent = close ? 'Expand all' : 'Collapse all';
     dbody.querySelectorAll('details.dfile').forEach(d => { d.open = !close; opened.set(d.dataset.path, !close); });
   });
+
+  // Each panel as it was left; at first the agents open on a wide screen, and the diff on a wider one.
+  const defaults = { side: true, diff: matchMedia('(min-width: 90rem)').matches };
+  for (const name of names) {
+    const kept = localStorage.getItem('panel-' + name);
+    set(name, !narrow.matches && (kept === null ? defaults[name] : kept === '1'), false);
+  }
 })();
 </script>
 
