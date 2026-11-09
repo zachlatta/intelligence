@@ -574,6 +574,11 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		if status == Failed {
 			errText = m.Why
 		}
+		if finished != nil {
+			if err := fleet.CaptureWorkflowAgents(ctx, tx, r.Host, r.ID, e.Now()); err != nil {
+				return err
+			}
+		}
 		_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, step = $3, note = $4, error = $5, updated_at = $6,
 			finished_at = $7 WHERE id = $1`, r.ID, status, step, note, errText, e.Now(), finished)
 		if err != nil {
@@ -762,6 +767,9 @@ func (e *Engine) Cancel(ctx context.Context, account int64, runID string) error 
 				}
 				break
 			}
+		}
+		if err := fleet.CaptureWorkflowAgents(ctx, tx, r.Host, r.ID, e.Now()); err != nil {
+			return err
 		}
 		if err := e.event(ctx, tx, r, "cancel", nil, nil, ""); err != nil {
 			return err

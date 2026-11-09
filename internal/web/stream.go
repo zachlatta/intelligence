@@ -263,6 +263,9 @@ func enqueueCommand(a *app, v viewer) http.HandlerFunc {
 		case errors.As(err, &bad):
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
+		case errors.Is(err, fleet.ErrArchivedAgent):
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
 		case errors.Is(err, fleet.ErrUnknownHost):
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return

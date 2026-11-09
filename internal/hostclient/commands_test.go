@@ -487,3 +487,31 @@ func TestWorkflowArchiveExpiresWithoutInterruptingOrchestrator(t *testing.T) {
 		t.Fatal("interrupted the orchestrator")
 	}
 }
+
+func TestWorkflowArchiveSurvivesDaemonRestart(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "agents", func(s PaseoStatus) bool { return len(s.Agents) == 2 })
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := w.Execute(ctx, Command{ID: "restart-cleanup", Kind: ArchiveWorkspaceKind, Args: json.RawMessage(`{"workspaceId":"w1","waitForAgent":"a1"}`)})
+		done <- err
+	}()
+	time.Sleep(100 * time.Millisecond)
+	d.DropAll()
+	eventually(t, w, "reconnected", func(s PaseoStatus) bool { return s.Connected && d.Connections() > 1 })
+	select {
+	case err := <-done:
+		t.Fatalf("archive stopped after restart: %v", err)
+	case <-time.After(1100 * time.Millisecond):
+	}
+	d.SetAgents(paseotest.Agent("a1", "w1", "idle"), paseotest.Agent("a2", "w1", "idle"))
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Requests("archive_workspace_request")) != 1 {
+		t.Fatal("workspace not archived")
+	}
+}

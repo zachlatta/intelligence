@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -257,6 +258,9 @@ func TestAWorkflowRunFindsItsProjectThenTheOrchestratorMovesItThroughTheSteps(t 
 	succeed(t, b, cleanup, `{"workspaceId":"w-run","archivedAgents":3}`)
 	if r := readRun(t, h, run); r["status"] != "succeeded" {
 		t.Fatalf("cleanup changed run: %v", r)
+	}
+	if page := get(t, h, "/workflow-runs/"+run, nil); strings.Contains(page.Body.String(), `<p class="banner">Workspace archive: succeeded`) {
+		t.Error("successful archive looks like an error")
 	}
 	if page := get(t, h, "/workflow-runs/"+run, nil); !strings.Contains(page.Body.String(), "Workspace archive: succeeded") {
 		t.Fatal("run page hides archive success")
@@ -807,6 +811,23 @@ func TestFinishedWorkflowRetainsAgentsTranscriptsAndDiffAfterArchiveReport(t *te
 	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Preserved workflow result") {
 		t.Fatalf("transcript lost: %d", page.Code)
 	}
+	if strings.Contains(page.Body.String(), `id="archive"`) || strings.Contains(page.Body.String(), `id="chat"`) || !strings.Contains(page.Body.String(), "archived with its workflow run") {
+		t.Error("history transcript is not read-only")
+	}
+	for _, kind := range []string{"archive_agent", "cancel_agent", "rename_agent", "send_message"} {
+		args := map[string]string{"agentId": agentA1}
+		if kind == "rename_agent" {
+			args["title"] = "new name"
+		}
+		if kind == "send_message" {
+			args["text"] = "restart"
+		}
+		body, _ := json.Marshal(map[string]any{"kind": kind, "args": args})
+		rec := call(t, h, http.MethodPost, "/api/hosts/host-1/commands", string(body), sameOriginFetch)
+		if rec.Code != http.StatusConflict {
+			t.Errorf("historical %s accepted: %d %s", kind, rec.Code, rec.Body)
+		}
+	}
 	if strings.Contains(get(t, h, "/", nil).Body.String(), `/hosts/host-1/agents/`+agentA1+`"`) {
 		t.Fatal("archived agent appears in live fleet")
 	}
@@ -841,4 +862,61 @@ func TestFinishedWorkflowRetainsAgentsTranscriptsAndDiffAfterArchiveReport(t *te
 		}
 	}
 
+}
+
+func TestEndedWorkflowStopsCapturingHistory(t *testing.T) {
+	for _, ending := range []string{"fail", "done"} {
+		t.Run(ending, func(t *testing.T) {
+			h, d := dbServer(t)
+			rep := wfReport()
+			sendReport(t, h, rep)
+			b := openStream(t, h, "host-1")
+			def := workflow.Starting
+			def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+			run := startRun(t, h, createWorkflow(t, h, def), "bounded history")
+			succeed(t, b, b.command(), `{"workspaceId":"w-app","agentId":"`+agentA1+`"}`)
+			if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+				t.Fatal(ack.Error)
+			}
+			if code, msg := move(t, h, keyOf(t, h, "host-1"), run, map[string]string{"move": ending, "why": "inspect"}); code != http.StatusOK {
+				t.Fatalf("finish %d %s", code, msg)
+			}
+			if ending == "done" {
+				succeed(t, b, b.command(), `{"workspaceId":"w-app"}`)
+			}
+			var before string
+			if err := d.Owner.QueryRow(t.Context(), "SELECT max(captured_at)::text FROM workflow_run_agents WHERE run_id=$1", run).Scan(&before); err != nil {
+				t.Fatal(err)
+			}
+			rep.Paseo.Agents = append(append([]hostclient.Agent{}, rep.Paseo.Agents...), hostclient.Agent{ID: "later-agent", WorkspaceID: "w-app", ParentID: agentA1, Title: "Later work"})
+			if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+				t.Fatal(ack.Error)
+			}
+			var after string
+			var pinned int
+			if err := d.Owner.QueryRow(t.Context(), "SELECT max(captured_at)::text,count(*) FILTER (WHERE agent_id='later-agent') FROM workflow_run_agents WHERE run_id=$1", run).Scan(&after, &pinned); err != nil {
+				t.Fatal(err)
+			}
+			if page := get(t, h, "/workflow-runs/"+run, nil); strings.Contains(page.Body.String(), "/agents/later-agent") {
+				t.Error("ended run lists later work")
+			}
+			if before != after || pinned != 0 {
+				t.Fatalf("ended run kept capturing: before %s after %s new agents %d", before, after, pinned)
+			}
+		})
+	}
+}
+
+func TestArchiveStatusUsesNeutralStyleUnlessFailed(t *testing.T) {
+	for _, status := range []string{"queued", "sent", "running", "succeeded", "failed", "expired"} {
+		rec := httptest.NewRecorder()
+		renderWorkflows(rec, "run", map[string]any{"Run": runRow{Status: "succeeded"}, "Now": t0, "ArchiveStatus": status, "Agents": []agentRow{}})
+		class := "banner note"
+		if status == "failed" || status == "expired" {
+			class = "banner"
+		}
+		if !strings.Contains(rec.Body.String(), `<p class="`+class+`">Workspace archive: `+status) {
+			t.Errorf("wrong archive style for %s", status)
+		}
+	}
 }

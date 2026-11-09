@@ -615,7 +615,7 @@ render();
 {{if .Emails}}<section class="card"><div class="card-head"><h2>Email thread</h2><span class="meta grow">what each email in it did</span><a class="btn sm ghost" href="/workflows/email">All email</a></div>
   <div class="card-body"><ul class="events">{{range .Emails}}<li><span class="t">{{.ReceivedAt.Format "Jan 2 15:04"}}</span><b>{{.Who}}</b> · {{or .Subject "(no subject)"}} · <span class="badge {{.Badge}}">{{.Label}}</span>{{with .Reason}} <span class="meta">{{.}}</span>{{end}}</li>{{end}}</ul></div></section>{{end}}
 {{if eq .Run.Status "failed"}}<p class="banner">{{or .Run.Error "The orchestrator marked the run failed."}}</p>{{end}}
-{{if .ArchiveStatus}}<p class="banner">Workspace archive: {{.ArchiveStatus}}{{if .ArchiveError}} — {{.ArchiveError}}{{end}}</p>{{end}}
+{{if .ArchiveStatus}}<p class="banner{{if and (ne .ArchiveStatus "failed") (ne .ArchiveStatus "expired")}} note{{end}}">Workspace archive: {{.ArchiveStatus}}{{if .ArchiveError}} — {{.ArchiveError}}{{end}}</p>{{end}}
 </div>
 <p class="banner" id="error" hidden></p>
 <div id="ask">{{if eq .Run.Status "waiting"}}

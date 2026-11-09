@@ -16,6 +16,7 @@ import (
 )
 
 var (
+	ErrArchivedAgent = errors.New("agent was archived with its workflow run and is read-only")
 	// ErrUnknownHost refuses a command for a host that has never connected.
 	ErrUnknownHost = errors.New("no such host")
 	// ErrUnknownCommand: no command with that id for that host.
@@ -76,6 +77,20 @@ func (r *Registry) Enqueue(ctx context.Context, host, kind string, args json.Raw
 	var c Command
 	err := pgx.BeginFunc(ctx, r.p, func(tx pgx.Tx) error {
 		var err error
+		parsed, err := hostclient.ParseCommand(kind, args)
+		if err != nil {
+			return &BadCommandError{err}
+		}
+		if a, ok := parsed.(hostclient.AgentArgs); ok {
+			var archived bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workflow_run_agents WHERE host=$1 AND agent_id=$2)
+                AND NOT EXISTS (SELECT 1 FROM agents WHERE host=$1 AND id=$2)`, host, a.AgentID).Scan(&archived); err != nil {
+				return err
+			}
+			if archived {
+				return ErrArchivedAgent
+			}
+		}
 		c, err = EnqueueTx(ctx, tx, host, kind, args, ttl, at)
 		return err
 	})

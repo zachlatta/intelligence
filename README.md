@@ -360,7 +360,8 @@ cancel); waiting for Zach's reply counts toward the step. `workflow_run_step_vis
 
 After the last step (`next` or `skip`), or explicit `done`, the server queues
 `archive_workspace` for the run's workspace. The host waits for the orchestrator's turn to end,
-so its final CLI reply returns before its workspace and agents are archived. The final reply tells
+so its final CLI reply returns before its workspace and agents are archived. It retries daemon
+restarts and temporary read failures until the cleanup command expires. The final reply tells
 it to archive any sub-agents it started outside this workspace, then end its turn. A failed
 orchestrator start also archives any workspace it made. Explicit `fail` and cancellation leave
 the workspace for inspection; cancellation stops the orchestrator.
@@ -379,7 +380,14 @@ The run page still lists these agents after archiving, and their transcript link
 Their synced transcripts and last workspace diffs remain in `transcripts`, `transcript_entries`
 and `workspace_diffs`; late transcript batches are accepted too. History preserves what the host
 reported, not unsynced messages. Archived agents appear closed in history and stay off the live
-fleet page. The history follows its run and host when either is deleted.
+fleet page. History-only transcript pages are read-only: they show neither Archive nor chat
+controls, and the commands API refuses agent writes with 409. Live closed agents remain writable.
+
+Report-time capture uses only unfinished runs with a listed workspace or live project finder,
+with an index on unfinished runs. It takes a final snapshot when a run ends, then freezes membership
+and stops recapturing it. Agents started later in a failed or canceled run's retained workspace
+belong to later work, not that ended run's history. The history follows its run and host when
+either is deleted.
 
 Variables in instructions: `{{input}}`, `{{repo}}`, `{{branch}}` and `{{run}}`.
 

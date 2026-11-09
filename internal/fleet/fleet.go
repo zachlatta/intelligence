@@ -33,6 +33,7 @@ type AgentView struct {
 	hostclient.Agent
 	TranscriptSynced  bool `json:"transcriptSynced"`
 	TranscriptEntries int  `json:"transcriptEntries"`
+	Archived          bool `json:"archived"`
 }
 
 // Registry is the hosts, workspaces and agents tables.
@@ -63,7 +64,7 @@ func (r *Registry) Record(ctx context.Context, rep hostclient.Report, at time.Ti
 		if err != nil {
 			return err
 		}
-		if err := captureWorkflowAgents(ctx, tx, rep.Name, at); err != nil {
+		if err := CaptureWorkflowAgents(ctx, tx, rep.Name, "", at); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, "DELETE FROM workspaces WHERE host = $1", rep.Name); err != nil { // and their agents
@@ -104,7 +105,7 @@ func (r *Registry) Record(ctx context.Context, rep hostclient.Report, at time.Ti
 			"updated_at", "last_user_message_at"}, pgx.CopyFromRows(arows)); err != nil {
 			return err
 		}
-		if err := captureWorkflowAgents(ctx, tx, rep.Name, at); err != nil {
+		if err := CaptureWorkflowAgents(ctx, tx, rep.Name, "", at); err != nil {
 			return err
 		}
 		if !ps.Connected {
@@ -175,7 +176,7 @@ func (r *Registry) list(ctx context.Context, history bool) ([]Host, error) {
 	agents := map[key][]AgentView{}
 	rows, err = r.p.Query(ctx, `SELECT a.host, a.workspace_id, a.id, a.parent_id, a.title, a.provider, a.model, a.thinking,
 		a.status, a.cwd, a.requires_attention, a.attention_reason, a.created_at, a.updated_at, a.last_user_message_at,
-		t.agent_id IS NOT NULL,
+		t.agent_id IS NOT NULL, NOT EXISTS (SELECT 1 FROM agents live WHERE live.host = a.host AND live.id = a.id),
 		(SELECT count(*) FROM transcript_entries e WHERE e.host = a.host AND e.agent_id = a.id)::int
 		FROM `+agentTable+` a LEFT JOIN transcripts t ON t.host = a.host AND t.agent_id = a.id
 		ORDER BY a.host, a.status <> 'running', a.created_at DESC NULLS LAST, a.id`)
@@ -187,7 +188,7 @@ func (r *Registry) list(ctx context.Context, history bool) ([]Host, error) {
 	var created, updated, lastMsg *time.Time
 	if _, err := pgx.ForEachRow(rows, []any{&host, &a.WorkspaceID, &a.ID, &a.ParentID, &a.Title, &a.Provider, &a.Model,
 		&a.Thinking, &a.Status, &a.Cwd, &a.RequiresAttention, &a.AttentionReason, &created, &updated, &lastMsg,
-		&a.TranscriptSynced, &a.TranscriptEntries}, func() error {
+		&a.TranscriptSynced, &a.Archived, &a.TranscriptEntries}, func() error {
 		a.CreatedAt, a.UpdatedAt, a.LastUserMessageAt = deref(created), deref(updated), deref(lastMsg)
 		k := key{host, a.WorkspaceID}
 		agents[k] = append(agents[k], a)

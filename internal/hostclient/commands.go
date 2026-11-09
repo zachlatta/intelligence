@@ -220,6 +220,9 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 	if err != nil {
 		return CommandResult{}, err
 	}
+	if a, ok := parsed.(WorkspaceArgs); ok && cmd.Kind == ArchiveWorkspaceKind && a.WaitForAgent != "" {
+		return w.archiveAfterTurn(ctx, a)
+	}
 	w.mu.Lock()
 	c := w.client
 	w.mu.Unlock()
@@ -260,11 +263,6 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 		return createAgent(ctx, c, a, cmd.ID, cmd.ID)
 	case WorkspaceArgs:
 		if cmd.Kind == ArchiveWorkspaceKind {
-			if a.WaitForAgent != "" {
-				if err := waitForAgent(ctx, c, a.WaitForAgent); err != nil {
-					return CommandResult{WorkspaceID: a.WorkspaceID}, err
-				}
-			}
 			return w.archiveWorkspace(ctx, c, a.WorkspaceID)
 		}
 		return CommandResult{WorkspaceID: a.WorkspaceID}, c.SetWorkspaceTitle(ctx, a.WorkspaceID, a.Title)
@@ -290,29 +288,42 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 	return CommandResult{}, fmt.Errorf("unknown command kind %q", cmd.Kind)
 }
 
-// waitForAgent reads fresh daemon state rather than trusting a possibly stale idle snapshot.
-// The orchestrator is running while its workflow CLI awaits the final response. Waiting for
-// its turn to end lets that response return before archiving stops its agents and removes its cwd.
-// A missing agent has already ended; other agents in the workspace need not be idle.
-func waitForAgent(ctx context.Context, c *paseo.Client, id string) error {
+// archiveAfterTurn uses the current connection on each attempt: a daemon restart or
+// self-update while the orchestrator finishes must not abandon durable cleanup.
+func (w *Watcher) archiveAfterTurn(ctx context.Context, a WorkspaceArgs) (CommandResult, error) {
 	for {
-		agents, err := c.Agents(ctx)
-		if err != nil {
-			return fmt.Errorf("waiting for orchestrator: %w", err)
-		}
-		running := false
-		for _, ag := range agents {
-			if ag.ID == id {
-				running = busy(ag.Status)
-				break
+		w.mu.Lock()
+		c := w.client
+		w.mu.Unlock()
+		if c != nil {
+			agents, err := c.Agents(ctx)
+			if err == nil {
+				running := false
+				for _, ag := range agents {
+					if ag.ID == a.WaitForAgent {
+						running = busy(ag.Status)
+						break
+					}
+				}
+				w.mu.Lock()
+				current := w.client
+				w.mu.Unlock()
+				if !running && current != nil && current == c {
+					result, err := w.archiveWorkspace(ctx, current, a.WorkspaceID)
+					if err == nil {
+						return result, nil
+					}
+					select {
+					case <-current.Done(): // retry after a transport failure; archives are idempotent
+					default:
+						return result, err
+					}
+				}
 			}
-		}
-		if !running {
-			return nil
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("waiting for orchestrator's turn to end: %w", ctx.Err())
+			return CommandResult{WorkspaceID: a.WorkspaceID}, fmt.Errorf("waiting for orchestrator's turn to end: %w", ctx.Err())
 		case <-time.After(time.Second):
 		}
 	}
