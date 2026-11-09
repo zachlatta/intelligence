@@ -466,14 +466,8 @@ agents on the enrolled host, including workflow sub-agents started directly with
 No Intelligence label or workflow ownership is required: **every never-ask-mode agent on the
 host is covered**.
 
-A bypass mode is not a promise that the provider will never prompt. Claude Code can still
-request permission on shell safety checks. One stalled workflow was writing a prompt file
-with a compound shell command and a heredoc; the pending Bash prompt supplied no reason.
-The exact provider check was not retained, so attributing it to a particular parser rule
-would be speculation. Intelligence previously discarded both the pending requests and the
-current mode, leaving no recovery path.
-
-Following Agent Factory's policy, Intelligence **denies**, never approves, these prompts.
+A bypass mode can still request permission on shell safety checks. Intelligence denies these
+prompts and never approves them.
 The denial asks the agent to rewrite the authorized step: Write/Edit for multiline files,
 simple shell commands, and `git -C`. Generated workflow instructions carry the same guidance,
 including for saved definitions. This does not expand the agent's task or waive approvals.

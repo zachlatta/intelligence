@@ -1,8 +1,9 @@
 package paseo_test
 
 import (
-	"github.com/zachlatta/intelligence/internal/paseo/paseotest"
 	"testing"
+
+	"github.com/zachlatta/intelligence/internal/paseo/paseotest"
 )
 
 func TestDenyPermissionUsesPromptID(t *testing.T) {

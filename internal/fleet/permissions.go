@@ -3,8 +3,9 @@ package fleet
 import (
 	"context"
 	"errors"
-	"github.com/jackc/pgx/v5"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/zachlatta/intelligence/internal/hostclient"
 )

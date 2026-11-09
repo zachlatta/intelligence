@@ -3,11 +3,12 @@ package web
 import (
 	"context"
 	"errors"
-	"github.com/zachlatta/intelligence/internal/hostclient"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
 func TestStreamPermissionAuditIsReadableThroughSQL(t *testing.T) {

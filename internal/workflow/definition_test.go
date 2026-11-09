@@ -185,6 +185,9 @@ func TestLandingOwnsApprovedExternalChanges(t *testing.T) {
 
 func TestWorkflowPromptsAvoidPermissionTraps(t *testing.T) {
 	for _, p := range []string{OrchestratorPrompt("task", Starting, Vars{Run: "r"}), StepMessage(Starting, 0, Vars{})} {
+		if n := strings.Count(p, UnattendedShellRule); n != 1 {
+			t.Errorf("unattended guidance occurs %d times, want once", n)
+		}
 		for _, want := range []string{"Write/Edit", "heredoc", "--mode bypassPermissions", "--mode full-access"} {
 			if !strings.Contains(p, want) {
 				t.Errorf("prompt misses %q", want)

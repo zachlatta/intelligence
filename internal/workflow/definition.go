@@ -224,8 +224,7 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 	if v.Repo != "" {
 		fmt.Fprintf(&b, ", in a worktree of %s on branch %s", v.Repo, v.Branch)
 	}
-	b.WriteString(".\n\n" + UnattendedShellRule)
-	fmt.Fprintf(&b, "\n\nWhat started it:\n\n%s\n\nIts steps:\n\n", strings.TrimSpace(v.Input))
+	fmt.Fprintf(&b, ".\n\nWhat started it:\n\n%s\n\nIts steps:\n\n", strings.TrimSpace(v.Input))
 	for i, s := range d.Steps {
 		fmt.Fprintf(&b, "%d. %s (%s, id %s)\n", i+1, s.Title, s.Kind, s.ID)
 	}

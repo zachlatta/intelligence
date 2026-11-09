@@ -1,9 +1,10 @@
 package fleet
 
 import (
-	"github.com/zachlatta/intelligence/internal/hostclient"
 	"testing"
 	"time"
+
+	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
 func TestPermissionAuditSurvivesReportsAndRetries(t *testing.T) {
