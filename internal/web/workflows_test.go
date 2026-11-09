@@ -283,6 +283,34 @@ func TestAFixedProjectStartsTheOrchestratorAtOnce(t *testing.T) {
 	}
 }
 
+// TestARunFromBeforeCleanTitlesIsNamedFromItsTask: a run started before titles were the cleaned
+// task (its title the input's first line) and still finding its project is named from its task.
+func TestARunFromBeforeCleanTitlesIsNamedFromItsTask(t *testing.T) {
+	h, d := dbServer(t)
+	sendReport(t, h, wfReport())
+	key := keyOf(t, h, "host-1")
+	b := openStream(t, h, "host-1")
+	run := startRun(t, h, createWorkflow(t, h, workflow.Starting), "Hi!\nCould you please fix the login page?")
+	succeed(t, b, b.command(), `{"agentId":"finder-1"}`)
+	if _, err := d.Owner.Exec(t.Context(), "UPDATE workflow_runs SET title = 'Hi!' WHERE id = $1", run); err != nil {
+		t.Fatal(err)
+	}
+	if code, msg := move(t, h, key, run, map[string]string{"move": "project", "directory": "/w/app"}); code != http.StatusOK {
+		t.Fatalf("project: %d %s", code, msg)
+	}
+	ws := commandsByKind(t, b, 2)[hostclient.CreateWorkspaceKind]
+	var wa hostclient.CreateWorkspaceArgs
+	json.Unmarshal(ws.Args, &wa)
+	hex := strings.ReplaceAll(run, "-", "")[:12]
+	if wa.Title != "Task from Intelligence: Fix the login page · "+hex || wa.Branch != "wf-task-from-intelligence-fix-the-login-page-"+hex ||
+		wa.Agent == nil || wa.Agent.Title != "Orchestrator · Task from Intelligence: Fix the login page" {
+		t.Fatalf("workspace = %+v %+v", wa, wa.Agent)
+	}
+	if r := readRun(t, h, run); r["title"] != "Fix the login page" {
+		t.Errorf("the run's title should become its task: %v", r)
+	}
+}
+
 func TestNoProjectRunsTheOrchestratorInTheHomeDirectory(t *testing.T) {
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())

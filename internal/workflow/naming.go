@@ -72,7 +72,11 @@ func runNames(id, workflow, task string) (wsTitle, branch string) {
 		wsTitle = workflow + ": " + wsTitle
 	}
 	branch = "wf"
-	for _, s := range []string{slug(strings.Fields(workflow), workflowMax), slug(strings.Fields(task), taskMax), hex[:12]} {
+	taskSlug := slug(strings.Fields(task), taskMax)
+	if taskLine(task) == "" {
+		taskSlug = "" // a title that is only a heading ("Task:") says nothing of the task
+	}
+	for _, s := range []string{slug(strings.Fields(workflow), workflowMax), taskSlug, hex[:12]} {
 		if s != "" {
 			branch += "-" + s
 		}

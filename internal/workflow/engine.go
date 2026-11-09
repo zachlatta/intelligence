@@ -324,6 +324,8 @@ func repositories(ctx context.Context, tx pgx.Tx, host string) ([]string, error)
 // orchestrator in it: a worktree of repo on the run's branch, or the home directory.
 func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo string) error {
 	r.Repo = repo
+	// the title again from the input: a run started before titles were the task has its first line
+	r.Title = taskName(r.Input)
 	wsTitle, branch := runNames(r.ID, r.Name, r.Title)
 	if repo != "" {
 		r.Branch = branch
@@ -348,8 +350,8 @@ func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo s
 	if err := e.event(ctx, tx, r, "project", nil, nil, text); err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, repo = $3, branch = $4, workspace_title = $5, pending_command = $6, updated_at = $7
-		WHERE id = $1`, r.ID, StartingOrchestrator, repo, r.Branch, wsTitle, c.ID, e.Now())
+	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, repo = $3, branch = $4, workspace_title = $5, pending_command = $6, updated_at = $7,
+		title = $8 WHERE id = $1`, r.ID, StartingOrchestrator, repo, r.Branch, wsTitle, c.ID, e.Now(), r.Title)
 	return err
 }
 

@@ -245,6 +245,7 @@ func TestRunNamesSayWhichWorkflowAndWhatTask(t *testing.T) {
 		{"no ASCII at all", "任务", "修复登录页面", "任务: 修复登录页面 · b7ea78381c2d", "wf-b7ea78381c2d"},
 		{"no words: the first line stands in", "Factory Task", "🙏",
 			"Factory Task: 🙏 · b7ea78381c2d", "wf-factory-task-b7ea78381c2d"},
+		{"only a heading and an emoji", "Factory Task", "Task:\n🙏", "Factory Task: Task: · b7ea78381c2d", "wf-factory-task-b7ea78381c2d"},
 		{"no workflow name", "", "Fix the login page", "Fix the login page · b7ea78381c2d", "wf-fix-the-login-page-b7ea78381c2d"},
 	} {
 		title, br := runNames(id, c.workflow, taskName(c.input))
