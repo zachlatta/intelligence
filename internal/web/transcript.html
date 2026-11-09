@@ -558,8 +558,10 @@ const isWorking = st => st === 'running' || st === 'initializing';
   }
   refresh();
 
+  // One send at a time: while one is in flight (its buttons disabled) a key or a click sends nothing,
+  // nor does a behaviour whose button is disabled.
   async function send(behavior) {
-    if (sending) return;
+    if (sending || form.querySelector('[data-behavior=' + behavior + ']')?.disabled) return;
     const msg = text.value;
     if (!msg.trim() && !images.hasImages()) { text.focus(); return; }
     sending = true;
@@ -568,7 +570,7 @@ const isWorking = st => st === 'running' || st === 'initializing';
     buttons.forEach(b => b.disabled = true);
     say('Sending…');
     try {
-      const message = await images.prompt(msg);
+      const message = images.hasImages() ? await images.prompt(msg) : msg;
       const body = { kind: 'send_message', args: { agentId: agent, text: message, behavior } };
       if (behavior === 'queue') body.ttl = queueTtl;
       const res = await fetch(commands, { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -596,6 +598,7 @@ const isWorking = st => st === 'running' || st === 'initializing';
   text.addEventListener('keydown', e => {
     if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
     e.preventDefault();
+    if (e.repeat) return; // a held key sends once
     send(e.altKey ? 'queue' : (e.metaKey || e.ctrlKey) ? 'interrupt' : 'steer');
   });
 })();

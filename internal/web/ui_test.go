@@ -19,6 +19,22 @@ func TestTheStylesheetIsServed(t *testing.T) {
 	}
 }
 
+// The shared assets are revalidated on each load, and a browser's copy that is current is not sent again.
+func TestTheSharedAssetsAreRevalidated(t *testing.T) {
+	h, _ := dbServer(t)
+	for _, path := range []string{"/ui.css", "/dictation.js", "/submitkeys.js"} {
+		rec := get(t, h, path, nil)
+		tag := rec.Header().Get("ETag")
+		if rec.Code != http.StatusOK || tag == "" || rec.Header().Get("Cache-Control") != "no-cache" {
+			t.Errorf("%s: %d, etag %q, cache-control %q", path, rec.Code, tag, rec.Header().Get("Cache-Control"))
+			continue
+		}
+		if again := get(t, h, path, map[string]string{"If-None-Match": tag}); again.Code != http.StatusNotModified {
+			t.Errorf("%s with its own etag: %d, want 304", path, again.Code)
+		}
+	}
+}
+
 // Every page shares one stylesheet and one top bar, with its own tab marked.
 func TestEveryPageSharesTheStylesheetAndTopBar(t *testing.T) {
 	h, _ := cmdServer(t)

@@ -496,6 +496,13 @@ The denial asks the agent to rewrite the authorized step: Write/Edit for multili
 simple shell commands, and `git -C`. Generated workflow instructions carry the same guidance,
 including for saved definitions. This does not expand the agent's task or waive approvals.
 
+When investigating a stalled workflow, check the host's `client_version` against the deployed
+server before assuming this recovery is active. Check both the orchestrator and its workers
+for pending permissions, then follow their audit rows and transcripts: a cleared prompt proves
+the request disappeared, while a completed tool or workflow move proves work resumed. An idle
+orchestrator can be waiting on a live background command whose completion starts its next turn;
+idle status alone is not evidence of abandonment and does not trigger an automatic reminder.
+
 Each attempt first stores a `permission_resolutions` row through the authenticated host stream.
 The row is account-scoped and readable through `/api/sql`; it survives agent removal.
 `pending` means the audit landed before contacting the daemon; `denied` means the daemon
@@ -676,6 +683,9 @@ origin (another site's request is refused with 403), and those with a body must 
   `attachments` and answers 201 with `{"id", "reference"}` (see Attachments, above).
 - `GET /attachments.js`: the image picker shared by the chat box, the new agent and workspace forms,
   the workflows task box and the workflow run dialog.
+- `GET /submitkeys.js`: loaded by every page with its stylesheet. Cmd/Ctrl+Enter in any text box
+  sends it: the default button of its form, or, for a box outside a form, the button named by the
+  nearest `data-submit` ancestor. A disabled button sends nothing; plain Enter is unchanged.
 - `GET /ui.css`: the one stylesheet every page shares, with the top bar (`layout.html`) that links the
   pages.
 - `GET /workflows`: a new task (for workflows triggered by a task: pick the workflow, which names
