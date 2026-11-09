@@ -1,0 +1,223 @@
+// Package workflow runs workflows: a trigger's input, a project found for it, and an orchestrator
+// agent in that project's worktree that is handed the workflow's steps one at a time.
+//
+// The orchestrator never does the work itself: it starts sub-agents for it and decides when each
+// step is done, moving the run with `intelligence workflow` (next, back, skip, ask, done, fail),
+// which reaches the server through the host's key. The server only records the run and hands
+// the orchestrator the next step's instructions.
+package workflow
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"path"
+	"regexp"
+	"strings"
+)
+
+// Definition is one version of a workflow: what starts it, how its project is found, its
+// orchestrator, and its steps, in order.
+type Definition struct {
+	Trigger      string       `json:"trigger"` // task (submitted on the Workflows page) or manual
+	Project      Project      `json:"project"`
+	Orchestrator Orchestrator `json:"orchestrator"`
+	Steps        []Step       `json:"steps"`
+}
+
+// Project is how a run's project is found, before the orchestrator starts in its worktree: an
+// agent picks one of the host's repositories (match), or it is always Directory (fixed).
+type Project struct {
+	Mode         string `json:"mode"`
+	Directory    string `json:"directory,omitempty"` // fixed: the repository's main checkout on the host
+	Provider     string `json:"provider,omitempty"`  // match: the finder agent
+	Model        string `json:"model,omitempty"`
+	Thinking     string `json:"thinking,omitempty"`
+	Instructions string `json:"instructions,omitempty"`
+}
+
+// Orchestrator is the agent that runs the steps, and its standing instructions.
+type Orchestrator struct {
+	Provider     string `json:"provider"`
+	Model        string `json:"model,omitempty"`
+	Thinking     string `json:"thinking,omitempty"`
+	Instructions string `json:"instructions"`
+}
+
+// Step is instructions to the orchestrator. Its kind changes only how it reads: a step does work,
+// a gate decides whether to move on or send work back, and a sign-off may ask Zach.
+type Step struct {
+	ID           string `json:"id"`
+	Kind         string `json:"kind"`
+	Title        string `json:"title"`
+	Instructions string `json:"instructions"`
+}
+
+// Triggers, project modes and step kinds.
+const (
+	TriggerTask   = "task"
+	TriggerManual = "manual"
+	ProjectMatch  = "match"
+	ProjectFixed  = "fixed"
+	KindStep      = "step"
+	KindGate      = "gate"
+	KindSignoff   = "signoff"
+)
+
+var stepID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+
+// Parse decodes a definition strictly and validates it.
+func Parse(b []byte) (Definition, error) {
+	var d Definition
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&d); err != nil {
+		return d, fmt.Errorf("bad workflow: %w", err)
+	}
+	return d, d.Validate()
+}
+
+// Validate says what in d cannot run.
+func (d Definition) Validate() error {
+	blank := func(s string) bool { return strings.TrimSpace(s) == "" }
+	switch {
+	case d.Trigger != TriggerTask && d.Trigger != TriggerManual:
+		return fmt.Errorf("trigger %q: want %s or %s", d.Trigger, TriggerTask, TriggerManual)
+	case d.Project.Mode == ProjectFixed && (d.Project.Directory == "" || !path.IsAbs(d.Project.Directory)):
+		return errors.New("a fixed project needs the absolute directory of its repository on the host")
+	case d.Project.Mode == ProjectMatch && blank(d.Project.Provider):
+		return errors.New("the project finder needs a provider")
+	case d.Project.Mode == ProjectMatch && blank(d.Project.Instructions):
+		return errors.New("the project finder needs instructions")
+	case d.Project.Mode != ProjectMatch && d.Project.Mode != ProjectFixed:
+		return fmt.Errorf("project mode %q: want %s or %s", d.Project.Mode, ProjectMatch, ProjectFixed)
+	case blank(d.Orchestrator.Provider):
+		return errors.New("the orchestrator needs a provider")
+	case blank(d.Orchestrator.Instructions):
+		return errors.New("the orchestrator needs instructions")
+	case len(d.Steps) == 0:
+		return errors.New("a workflow needs at least one step")
+	}
+	seen := map[string]bool{}
+	for i, s := range d.Steps {
+		n := i + 1
+		switch {
+		case !stepID.MatchString(s.ID):
+			return fmt.Errorf("step %d: id %q: lowercase letters, digits and -, up to 32", n, s.ID)
+		case seen[s.ID]:
+			return fmt.Errorf("step %d: id %q is used twice", n, s.ID)
+		case s.Kind != KindStep && s.Kind != KindGate && s.Kind != KindSignoff:
+			return fmt.Errorf("step %d: kind %q: want step, gate or signoff", n, s.Kind)
+		case blank(s.Title):
+			return fmt.Errorf("step %d needs a title", n)
+		case blank(s.Instructions):
+			return fmt.Errorf("step %d (%s) needs instructions", n, s.Title)
+		}
+		seen[s.ID] = true
+	}
+	return nil
+}
+
+// Index is the position of the step with id, or -1.
+func (d Definition) Index(id string) int {
+	for i, s := range d.Steps {
+		if s.ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// Vars fill a step's instructions: {{run}}, {{input}}, {{repo}} and {{branch}}.
+type Vars struct {
+	Run, Input, Repo, Branch string
+}
+
+func (v Vars) fill(s string) string {
+	return strings.NewReplacer("{{run}}", v.Run, "{{input}}", v.Input, "{{repo}}", v.Repo, "{{branch}}", v.Branch).Replace(s)
+}
+
+// ProjectPrompt is what the project finder is told: its instructions, the input, the host's
+// repositories, and how to answer.
+func ProjectPrompt(run string, d Definition, input string, repos []string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\nThe task:\n\n%s\n\n", strings.TrimSpace(d.Project.Instructions), strings.TrimSpace(input))
+	if len(repos) == 0 {
+		b.WriteString("This host has no repositories in Paseo yet.\n\n")
+	} else {
+		fmt.Fprintf(&b, "The repositories on this host (their main checkouts):\n\n- %s\n\n", strings.Join(repos, "\n- "))
+	}
+	fmt.Fprintf(&b, "Change nothing. When you have decided, run one of these, then stop:\n\n"+
+		"  intelligence workflow project --run %[1]s <directory>\n"+
+		"  intelligence workflow project --run %[1]s none\n\n"+
+		"none means the task belongs in no repository: the orchestrator then works in the home directory.", run)
+	return b.String()
+}
+
+// OrchestratorPrompt is the orchestrator's first message: its standing instructions, the run, the
+// steps, the commands that move it, and the first step.
+func OrchestratorPrompt(name string, d Definition, v Vars) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\nThis is run %s of the workflow “%s”. You are its orchestrator", strings.TrimSpace(d.Orchestrator.Instructions), v.Run, name)
+	if v.Repo != "" {
+		fmt.Fprintf(&b, ", in a worktree of %s on branch %s", v.Repo, v.Branch)
+	}
+	fmt.Fprintf(&b, ".\n\nWhat started it:\n\n%s\n\nIts steps:\n\n", strings.TrimSpace(v.Input))
+	for i, s := range d.Steps {
+		fmt.Fprintf(&b, "%d. %s (%s, id %s)\n", i+1, s.Title, s.Kind, s.ID)
+	}
+	fmt.Fprintf(&b, "\nYou get one step at a time. Move the run with these commands:\n\n"+
+		"  intelligence workflow next --run %[1]s --summary \"<one line>\"    this step is done; prints the next one\n"+
+		"  intelligence workflow back --run %[1]s <step id> --why \"<what is missing>\"    send the work back to an earlier step\n"+
+		"  intelligence workflow skip --run %[1]s --why \"<why>\"    skip a step its instructions let you skip\n"+
+		"  intelligence workflow ask --run %[1]s --note note.md    ask Zach (Markdown); then end your turn: his reply comes as your next message\n"+
+		"  intelligence workflow fail --run %[1]s --why \"<why>\"    the run cannot be done\n\n"+
+		"next after the last step finishes the run.\n\n", v.Run)
+	b.WriteString(StepMessage(d, 0, v))
+	return b.String()
+}
+
+// StepMessage is step i's title and filled instructions, as the orchestrator gets them.
+func StepMessage(d Definition, i int, v Vars) string {
+	s := d.Steps[i]
+	return fmt.Sprintf("Step %d of %d: %s\n\n%s", i+1, len(d.Steps), s.Title, strings.TrimSpace(v.fill(s.Instructions)))
+}
+
+// OrchestratorInstructions are the starting workflow's standing instructions to its orchestrator.
+const OrchestratorInstructions = `You run a workflow. You never do the work yourself: for each step, start sub-agents to do it, read what they report, and decide when the step is done.
+
+Start a sub-agent in this workspace with the paseo CLI, for example:
+
+  paseo run --no-wait --title "<what it does>" --provider claude/claude-opus-5-5 "<its task, with all the context it needs>"
+
+Then paseo wait <id> until it is done, and paseo logs <id> to read what it did. paseo send <id> "<message>" gives a sub-agent more work and keeps its context: use it when work comes back to a sub-agent that did it. A checker must be a fresh sub-agent that did none of the work. Archive sub-agents you are done with (paseo archive <id>).
+
+Use frontier models, and spread the work across the plans: claude/claude-opus-5-5 and codex.`
+
+// Starting is the workflow an account starts with: a task from the Workflows page, its project
+// found, the work, three gates, Zach's sign-off for broader changes, and landing.
+var Starting = Definition{
+	Trigger: TriggerTask,
+	Project: Project{Mode: ProjectMatch, Provider: "claude", Model: "claude-opus-5-5", Thinking: "medium",
+		Instructions: "Pick the repository this task belongs in. Read each candidate's README and recent commits."},
+	Orchestrator: Orchestrator{Provider: "claude", Model: "claude-opus-5-5", Thinking: "high", Instructions: OrchestratorInstructions},
+	Steps: []Step{
+		{ID: "build", Kind: KindStep, Title: "Do the work", Instructions: "Have sub-agents do this:\n\n{{input}}\n\n" +
+			"Follow the repository's AGENTS.md, and work test-first if the repository does. Move on when it is committed and the tests pass."},
+		{ID: "meets", Kind: KindGate, Title: "Meets the request", Instructions: "Have a fresh sub-agent that did none of the work check that the change does what Zach asked, " +
+			"including what he left unsaid. It tests it itself: the tests, the dev server, a browser for UI.\n\n" +
+			"If something is missing or broken, send it back to Do the work with what is missing. Otherwise move on."},
+		{ID: "fit", Kind: KindGate, Title: "Fits the codebase", Instructions: "Have a fresh sub-agent read the diff against the repository's conventions. " +
+			"Is it test-first where the repository is? Is anything now redundant? Did a small refactor show a larger one we should do? " +
+			"Does the codebase evolve with the change, or is it bolted on?\n\nSmall fixes: have them made here. Anything bigger: send it back to Do the work."},
+		{ID: "main", Kind: KindGate, Title: "Up to date with main", Instructions: "Rebase on origin/main and run the tests. " +
+			"If something conflicts or fails, have it fixed, then check again. Move on when it is current and green."},
+		{ID: "signoff", Kind: KindSignoff, Title: "Zach's sign-off", Instructions: "If the change is only what Zach asked for, with no broader architecture change " +
+			"(new tables, dependencies, contracts or boundaries), skip this step.\n\nOtherwise write him a note in Markdown: the original task, " +
+			"the architecture change before and after, before and after screenshots, and anything he needs to decide, with your recommendation. " +
+			"Ask, then do what his reply says."},
+		{ID: "land", Kind: KindStep, Title: "Land and deploy", Instructions: "Rebase on origin/main, land on main the way the repository's AGENTS.md says, " +
+			"and wait until the deploy reports the new version. Then move on, which finishes the run."},
+	},
+}

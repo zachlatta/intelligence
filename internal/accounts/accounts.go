@@ -348,6 +348,19 @@ func (s *Store) HostKey(ctx context.Context, host, key string) (bool, error) {
 	return err == nil && tag.RowsAffected() == 1, err
 }
 
+// HostOfKey is the host key is good for, or "" when it is no host's key. It records the key as used.
+func (s *Store) HostOfKey(ctx context.Context, key string) (string, error) {
+	if key == "" {
+		return "", nil
+	}
+	var host string
+	err := s.p.QueryRow(ctx, "UPDATE host_keys SET last_used_at = $2 WHERE key_hash = $1 RETURNING host", sha(key), s.Now()).Scan(&host)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return host, err
+}
+
 // Owns says whether host is account id's.
 func (s *Store) Owns(ctx context.Context, id int64, host string) (bool, error) {
 	var owns bool

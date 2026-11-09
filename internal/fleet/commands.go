@@ -73,6 +73,18 @@ func scanCommand(row pgx.Row) (Command, error) {
 
 // Enqueue queues a command for host, created at at, that expires ttl later.
 func (r *Registry) Enqueue(ctx context.Context, host, kind string, args json.RawMessage, ttl time.Duration, at time.Time) (Command, error) {
+	var c Command
+	err := pgx.BeginFunc(ctx, r.p, func(tx pgx.Tx) error {
+		var err error
+		c, err = EnqueueTx(ctx, tx, host, kind, args, ttl, at)
+		return err
+	})
+	return c, err
+}
+
+// EnqueueTx is Enqueue in tx, so a command is queued with whatever else tx changes, or not at
+// all. The host hears of it when tx commits.
+func EnqueueTx(ctx context.Context, tx pgx.Tx, host, kind string, args json.RawMessage, ttl time.Duration, at time.Time) (Command, error) {
 	if _, err := hostclient.ParseCommand(kind, args); err != nil {
 		return Command{}, &BadCommandError{err}
 	}
@@ -80,23 +92,18 @@ func (r *Registry) Enqueue(ctx context.Context, host, kind string, args json.Raw
 		args = json.RawMessage("{}")
 	}
 	var known bool
-	if err := r.p.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM hosts WHERE name = $1)", host).Scan(&known); err != nil {
+	if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM hosts WHERE name = $1)", host).Scan(&known); err != nil {
 		return Command{}, err
 	}
 	if !known {
 		return Command{}, ErrUnknownHost
 	}
-	var c Command
-	err := pgx.BeginFunc(ctx, r.p, func(tx pgx.Tx) error {
-		var err error
-		c, err = scanCommand(tx.QueryRow(ctx, `INSERT INTO commands (host, kind, args, created_at, expires_at)
-			VALUES ($1, $2, $3, $4, $5) RETURNING `+commandColumns, host, kind, []byte(args), at, at.Add(ttl)))
-		if err != nil {
-			return err
-		}
-		_, err = tx.Exec(ctx, notifySQL, CommandsTopic(host))
-		return err
-	})
+	c, err := scanCommand(tx.QueryRow(ctx, `INSERT INTO commands (host, kind, args, created_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5) RETURNING `+commandColumns, host, kind, []byte(args), at, at.Add(ttl)))
+	if err != nil {
+		return Command{}, err
+	}
+	_, err = tx.Exec(ctx, notifySQL, CommandsTopic(host))
 	return c, err
 }
 

@@ -417,3 +417,23 @@ func TestArchivingAWorkspaceSkipsAnAgentAlreadyGone(t *testing.T) {
 		t.Errorf("result = %+v, want a2 archived and then the workspace", res)
 	}
 }
+
+// TestExecuteTakesTildeAsTheHomeDirectory: the server does not know a host's home directory, so a
+// workflow's project finder starts in "~", which the host expands.
+func TestExecuteTakesTildeAsTheHomeDirectory(t *testing.T) {
+	t.Setenv("HOME", "/home/someone")
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	if _, err := execute(t, w, CreateAgentKind, `{"cwd":"~","provider":"claude","prompt":"go"}`); err != nil {
+		t.Fatal(err)
+	}
+	if cwd := d.Requests("agent.create.request")[0]["config"].(map[string]any)["cwd"]; cwd != "/home/someone" {
+		t.Errorf("cwd = %v, want the home directory", cwd)
+	}
+	for in, want := range map[string]string{"~": "/home/someone", "~/dev/app": "/home/someone/dev/app", "/w/app": "/w/app", "~other": "~other"} {
+		if got := expandHome(in, "/home/someone"); got != want {
+			t.Errorf("expandHome(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

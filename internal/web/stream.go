@@ -87,7 +87,7 @@ func stream(a *app) http.HandlerFunc {
 		defer close(transcripts)
 		go func() {
 			for f := range transcripts {
-				if err := hostclient.WriteFrame(ctx, conn, receive(ctx, cfg, reg, host, f)); err != nil {
+				if err := hostclient.WriteFrame(ctx, conn, receive(ctx, a, host, f)); err != nil {
 					cancel()
 				}
 			}
@@ -105,7 +105,7 @@ func stream(a *app) http.HandlerFunc {
 				}
 				continue
 			}
-			if err := hostclient.WriteFrame(ctx, conn, receive(ctx, cfg, reg, host, f)); err != nil {
+			if err := hostclient.WriteFrame(ctx, conn, receive(ctx, a, host, f)); err != nil {
 				return
 			}
 		}
@@ -122,7 +122,8 @@ func newStreamID() string {
 }
 
 // receive stores one of the host's frames and says how it went.
-func receive(ctx context.Context, cfg Config, reg *fleet.Registry, host string, f hostclient.Frame) hostclient.Frame {
+func receive(ctx context.Context, a *app, host string, f hostclient.Frame) hostclient.Frame {
+	cfg, reg := a.cfg, a.reg
 	ack := hostclient.Frame{Type: hostclient.AckFrame, ID: f.ID}
 	var err error
 	switch {
@@ -149,6 +150,8 @@ func receive(ctx context.Context, cfg Config, reg *fleet.Registry, host string, 
 		err = reg.UpdateCommand(ctx, host, *f.Update, cfg.Now())
 		if errors.Is(err, fleet.ErrUnknownCommand) {
 			err = nil // nothing to record, and nothing the host can do about it
+		} else if err == nil {
+			err = a.wf.CommandUpdated(ctx, f.Update.ID) // a workflow run waiting on it moves on
 		}
 	case f.Type == hostclient.HostFrame && f.Host != nil:
 		err = reg.RecordHost(ctx, host, *f.Host, cfg.Now())

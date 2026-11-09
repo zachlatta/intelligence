@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -219,8 +221,10 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 	if IsScheduleKind(cmd.Kind) {
 		return executeSchedule(ctx, c, cmd, parsed)
 	}
+	home, _ := os.UserHomeDir()
 	switch a := parsed.(type) {
 	case CreateWorkspaceArgs:
+		a.Cwd = expandHome(a.Cwd, home)
 		ws, err := c.CreateWorkspace(ctx, paseo.CreateWorkspace{Cwd: a.Cwd, Worktree: a.Worktree, Branch: a.Branch, Base: a.Base,
 			Title: a.Title, IdempotencyKey: cmd.ID})
 		if err != nil || a.Agent == nil {
@@ -236,6 +240,7 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 		}
 		return res, err
 	case CreateAgentArgs:
+		a.Cwd = expandHome(a.Cwd, home)
 		if a.Cwd == "" {
 			w.mu.Lock()
 			a.Cwd = w.workspaces[a.WorkspaceID].Directory
@@ -296,6 +301,20 @@ func (w *Watcher) archiveWorkspace(ctx context.Context, c *paseo.Client, id stri
 		r.ArchivedAgents++
 	}
 	return r, c.ArchiveWorkspace(ctx, id)
+}
+
+// expandHome reads a leading "~" in path as the home directory: the server does not know it.
+func expandHome(path, home string) string {
+	if home == "" {
+		return path
+	}
+	if path == "~" {
+		return home
+	}
+	if rest, ok := strings.CutPrefix(path, "~/"); ok {
+		return filepath.Join(home, rest)
+	}
+	return path
 }
 
 // createAgent starts a in a.Cwd, labelled with the command that asked for it.

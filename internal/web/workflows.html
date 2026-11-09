@@ -1,0 +1,519 @@
+{{define "wfhead"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.}} · Intelligence</title>
+{{template "css"}}
+<style>
+  .status { display: inline-flex; align-items: center; justify-content: center; gap: .3rem; height: 1.3rem; min-width: 4.6rem; padding: 0 .45rem;
+    border-radius: 4px; border: 1px solid var(--line-strong); background: var(--bg-subtle); color: var(--fg-2); font-size: 12px; font-weight: 500;
+    flex: none; white-space: nowrap; }
+  .status::before { content: ""; width: .4rem; height: .4rem; border-radius: 50%; background: var(--faint); }
+  .st-running { background: var(--accent-bg); border-color: var(--accent-line); color: var(--accent); }
+  .st-running::before { background: var(--accent); animation: pulse 1.6s infinite; }
+  .st-needs, .st-sent-back, .st-asking { background: var(--orange-bg); border-color: var(--orange-line); color: var(--orange); }
+  .st-needs::before, .st-sent-back::before, .st-asking::before { background: var(--orange); }
+  .st-needs::before, .st-asking::before { animation: pulse 1.6s infinite; }
+  .st-done { background: var(--green-bg); border-color: var(--green-line); color: var(--green); }
+  .st-done::before { background: var(--green); }
+  .st-error, .st-failed { background: var(--red-bg); border-color: var(--red-line); color: var(--red); }
+  .st-error::before, .st-failed::before { background: var(--red); }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .banner[hidden] { display: none; }
+  .wf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr)); gap: 1rem; }
+  .wf-card { display: flex; flex-direction: column; margin: 0; }
+  .wf-card .card-body { flex: 1; }
+  .wf-card h2 a { color: var(--fg); } .wf-card h2 a:hover { color: var(--accent); }
+  .card-foot { display: flex; gap: .5rem; align-items: center; padding: .6rem 1rem; border-top: 1px solid var(--line); background: var(--bg-subtle); }
+  .strip { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; margin: .6rem 0 0; }
+  .strip .arrow { color: var(--faint); font-size: 12px; }
+  .chip { display: inline-flex; align-items: center; height: 1.45rem; padding: 0 .5rem; border-radius: 4px; font-size: 12px;
+    border: 1px solid var(--line-strong); background: var(--bg-subtle); color: var(--fg-2); white-space: nowrap; }
+  .chip.k-gate { background: var(--orange-bg); border-color: var(--orange-line); color: var(--orange); }
+  .chip.k-signoff { background: var(--accent-bg); border-color: var(--accent-line); color: var(--accent); }
+  .composer { display: flex; gap: .75rem; align-items: flex-start; flex-wrap: wrap; }
+  .composer textarea { min-height: 4rem; flex: 1 1 24rem; }
+  .composer .side { display: flex; flex-direction: column; gap: .4rem; min-width: 12rem; }
+  .builder { display: grid; grid-template-columns: minmax(0, 1fr) 24rem; gap: 1.5rem; align-items: start; }
+  @media (max-width: 62rem) { .builder { grid-template-columns: 1fr; } }
+  .pipe { max-width: 36rem; }
+  .node { position: relative; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius); host-shadow: var(--shadow); }
+  .node.click { cursor: pointer; } .node.click:hover { border-color: var(--faint); }
+  .node.sel { border-color: var(--accent); host-shadow: 0 0 0 3px var(--ring); }
+  .node.fixed { background: var(--bg-subtle); border-style: dashed; }
+  .node .nh { display: flex; align-items: center; gap: .6rem; padding: .65rem .8rem; }
+  .node .kind { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--faint); font-weight: 600; }
+  .node .ttl { font-weight: 600; overflow-wrap: anywhere; }
+  .node .nb { padding: 0 .8rem .65rem; font-size: 12.5px; color: var(--muted); }
+  .node .instr { color: var(--fg-2); white-space: pre-wrap; overflow: hidden; display: -webkit-host; -webkit-line-clamp: 3; -webkit-host-orient: vertical; }
+  .node.sel .instr { -webkit-line-clamp: unset; }
+  .node.k-gate { border-left: 3px solid var(--orange-line); } .node.k-signoff { border-left: 3px solid var(--accent-line); }
+  .node.r-pending { opacity: .6; } .node.r-running { border-color: var(--accent-line); } .node.r-asking { border-color: var(--orange); }
+  .node .grow-r { margin-left: auto; display: flex; gap: .4rem; align-items: center; }
+  .node .grip { color: var(--faint); cursor: grab; user-select: none; }
+  .node.dragging { opacity: .4; }
+  .node.drop-before { host-shadow: 0 -3px 0 var(--accent); } .node.drop-after { host-shadow: 0 3px 0 var(--accent); }
+  .link { height: 1.6rem; margin-left: 1.5rem; border-left: 1.5px solid var(--line-strong); position: relative; }
+  .link.done { border-left-color: var(--green); }
+  .link .add { position: absolute; left: 0; top: 50%; transform: translate(-50%, -50%); width: 1.3rem; height: 1.3rem; border-radius: 50%;
+    border: 1px solid var(--line-strong); background: var(--panel); color: var(--muted); cursor: pointer; padding: 0; line-height: 1; opacity: 0; }
+  .pipe:hover .link .add, .link .add:focus { opacity: 1; }
+  .var { color: var(--accent); background: var(--accent-bg); border-radius: 3px; padding: 0 2px; }
+  .inspector { position: sticky; top: 1rem; }
+  .inspector .card-body { max-height: calc(100vh - 8rem); overflow: auto; }
+  .inspector label:first-child { margin-top: 0; }
+  .inspector textarea { min-height: 12rem; }
+  .vars { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .35rem; }
+  .vars button { font: inherit; font-family: var(--mono); font-size: 11px; border: 1px solid var(--accent-line); background: var(--accent-bg);
+    color: var(--accent); border-radius: 4px; padding: .05rem .35rem; cursor: pointer; }
+  .hint { font-size: 12px; color: var(--muted); margin: .3rem 0 0; }
+  .json { width: 100%; min-height: 30rem; font-family: var(--mono); font-size: 12px; }
+  .tree .ag { display: flex; gap: .4rem; align-items: center; margin-top: .25rem; flex-wrap: wrap; }
+  .tree .ag .status { min-width: 3.8rem; }
+  .request { white-space: pre-wrap; font-size: 13px; color: var(--fg-2); background: var(--bg-subtle); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: .6rem .8rem; margin: 0 0 1.25rem; }
+  .note { border: 1px solid var(--orange-line); }
+  .note > .card-head { background: var(--orange-bg); } .note > .card-head h2 { color: var(--orange); }
+  .md { font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+  .md img { max-width: 100%; }
+  .md pre { background: var(--bg-muted); padding: .6rem; border-radius: var(--radius); overflow: auto; }
+  .reply-host { display: flex; gap: .5rem; align-items: flex-start; margin-top: .75rem; }
+  .reply-host textarea { min-height: 5rem; flex: 1; }
+  .reply-host .side { display: flex; flex-direction: column; gap: .4rem; }
+  .mic.on { background: var(--red-bg); border-color: var(--red-line); color: var(--red); }
+  .events { list-style: none; margin: .4rem 0 0; padding: 0; font-size: 12.5px; }
+  .events li { padding: .15rem 0; color: var(--fg-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .events .t { color: var(--faint); font-family: var(--mono); font-size: 11px; margin-right: .4rem; }
+  .run-meta { display: flex; flex-wrap: wrap; gap: .3rem 1.2rem; font-size: 13px; color: var(--muted); margin-top: .35rem; align-items: center; }
+  .run-meta b { color: var(--fg-2); font-weight: 500; }
+  dialog { border: 1px solid var(--line-strong); border-radius: 8px; padding: 0; background: var(--panel); color: var(--fg); width: min(36rem, 92vw); }
+  dialog::backdrop { background: rgba(20,20,20,.35); }
+  dialog form { padding: 1rem; }
+  .menu { position: absolute; z-index: 20; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius);
+    host-shadow: 0 6px 24px rgba(0,0,0,.12); padding: .3rem; width: 17rem; }
+  .menu button { display: block; width: 100%; text-align: left; padding: .45rem .5rem; border: 0; background: none; border-radius: 4px;
+    font: inherit; color: var(--fg); cursor: pointer; }
+  .menu button:hover { background: var(--bg-muted); }
+  .menu .d { display: block; font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+{{template "top" "/workflows"}}
+{{end}}
+
+{{define "wffoot"}}<footer title="{{.Version}}">version {{short .Version}}</footer>
+</main>
+</body>
+</html>
+{{end}}
+
+{{define "chips"}}<span class="chip">{{if eq .Trigger "task"}}Task{{else}}By hand{{end}}</span><span class="arrow">→</span><span class="chip">Find the project</span><span class="arrow">→</span><span class="chip">Orchestrator</span>{{range .Steps}}<span class="arrow">→</span><span class="chip k-{{.Kind}}">{{.Title}}</span>{{end}}{{end}}
+
+{{define "list"}}{{template "wfhead" "Workflows"}}
+<main class="container page">
+<div class="page-head">
+  <div><h1>Workflows</h1><p class="sub">Each run finds its project, starts an orchestrator in the worktree, and hands it the steps one at a time.</p></div>
+  <div class="actions">{{if .Workflows}}<button class="btn sm" id="new-workflow">New workflow</button>{{end}}</div>
+</div>
+<p class="banner" id="error" hidden></p>
+{{if not .Workflows}}
+<div class="empty-state">
+  <p>No workflows yet. Start with the starting workflow: find the project, do the work, three gates, your sign-off for broader changes, then land.</p>
+  <button class="btn primary" id="add-starting">Add the starting workflow</button>
+</div>
+{{else}}
+{{if .Tasks}}
+<section class="card"><div class="card-body">
+  <div class="composer">
+    <textarea id="task" placeholder="New task: describe what you want done. Its project is found for you."></textarea>
+    <div class="side">
+      {{if gt (len .Tasks) 1}}<select id="task-workflow">{{range .Tasks}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select>
+      {{else}}<input type="hidden" id="task-workflow" value="{{(index .Tasks 0).ID}}">{{end}}
+      <select id="task-host" title="The host it runs on">{{range .Hosts}}<option>{{.}}</option>{{else}}<option value="">no hosts</option>{{end}}</select>
+      <button class="btn primary" id="submit-task">Submit task</button>
+    </div>
+  </div>
+</div></section>
+{{end}}
+{{range .Runs}}{{if eq .Status "waiting"}}<p class="banner note"><b>{{.Workflow}}</b> is asking you: “{{.Title}}” · <a href="/workflow-runs/{{.ID}}">Read the note →</a></p>{{end}}{{end}}
+<h2 class="section-title">Workflows</h2>
+<div class="wf-grid">
+{{range .Workflows}}
+<section class="card wf-card">
+  <div class="card-head"><h2><a href="/workflows/{{.ID}}">{{.Name}}</a></h2><span class="badge">v{{.Version}}</span></div>
+  <div class="card-body">{{with .Description}}<div class="meta">{{.}}</div>{{end}}<div class="strip">{{template "chips" .Definition}}</div></div>
+  <div class="card-foot"><span class="grow"></span><a class="btn sm" href="/workflows/{{.ID}}">Edit</a></div>
+</section>
+{{end}}
+</div>
+{{end}}
+<h2 class="section-title">Runs</h2>
+<div id="runs">
+{{if .Runs}}<div class="table-wrap"><table class="table">
+  <tr><th>Status</th><th>What</th><th>Workflow</th><th>Now</th><th>Host</th><th>Project</th><th class="n">Started</th></tr>
+  {{range .Runs}}<tr>
+    <td><span class="status {{.StatusClass}}">{{.StatusLabel}}</span></td>
+    <td><a href="/workflow-runs/{{.ID}}">{{.Title}}</a></td>
+    <td>{{.Workflow}} <span class="meta">v{{.Version}}</span></td>
+    <td class="meta">{{.Where}}</td>
+    <td class="mono" style="white-space:nowrap">{{.Host}}</td>
+    <td class="mono">{{.Repo}}</td>
+    <td class="n meta">{{ago $.Now .CreatedAt}}</td></tr>{{end}}
+</table></div>{{else}}<p class="empty-state">No runs yet.</p>{{end}}
+</div>
+<script>
+const starting = {{json .Starting}};
+const err = (m) => { const e = document.getElementById("error"); e.hidden = false; e.textContent = m; };
+async function api(method, path, body) {
+  const res = await fetch(path, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error(await res.text());
+  return res.status === 204 ? null : res.json();
+}
+async function addWorkflow(name, description) {
+  try { const w = await api("POST", "/api/workflows", { name, description, definition: starting }); location.href = "/workflows/" + w.id; }
+  catch (e) { err(e.message); }
+}
+document.getElementById("add-starting")?.addEventListener("click", () =>
+  addWorkflow("Task from Intelligence", "Find the project, do the work, three gates, ask Zach only for broader changes, then land."));
+document.getElementById("new-workflow")?.addEventListener("click", () => addWorkflow("New workflow", ""));
+document.getElementById("submit-task")?.addEventListener("click", async (ev) => {
+  const input = document.getElementById("task").value.trim();
+  if (!input) return document.getElementById("task").focus();
+  ev.target.disabled = true;
+  try {
+    const r = await api("POST", "/api/workflow-runs", { workflowId: document.getElementById("task-workflow").value,
+      host: document.getElementById("task-host").value, input });
+    location.href = "/workflow-runs/" + r.id;
+  } catch (e) { err(e.message); ev.target.disabled = false; }
+});
+// keep the runs current while nobody is typing a task
+setInterval(async () => {
+  const t = document.getElementById("task");
+  if (t && (t.value || document.activeElement === t)) return;
+  try {
+    const res = await fetch(location.href, { cache: "no-store" });
+    if (!res.ok) return;
+    const next = new DOMParser().parseFromString(await res.text(), "text/html").getElementById("runs");
+    if (next) document.getElementById("runs").replaceWith(next);
+  } catch {}
+}, 10000);
+</script>
+{{template "wffoot" .}}{{end}}
+
+{{define "editor"}}{{template "wfhead" .Workflow.Name}}
+<main class="container page">
+<div class="crumbs"><a href="/workflows">Workflows</a><span class="sep">/</span><span id="crumb">{{.Workflow.Name}}</span></div>
+<div class="page-head">
+  <div style="flex:1;min-width:16rem">
+    <input id="wf-name" aria-label="Name" style="font-size:1.4rem;font-weight:600;border-color:transparent;host-shadow:none;padding:.1rem .3rem;margin-left:-.3rem">
+    <input id="wf-desc" aria-label="Description" placeholder="What is this workflow for?" style="border-color:transparent;host-shadow:none;padding:.1rem .3rem;margin-left:-.3rem;color:var(--muted)">
+  </div>
+  <div class="actions">
+    <span class="meta" id="saved"></span>
+    <div class="segmented"><a href="#" id="v-vis" class="on">Visual</a><a href="#" id="v-json">JSON</a></div>
+    <button class="btn sm" id="discard" disabled>Discard</button>
+    <button class="btn sm" id="save" disabled>Save</button>
+    <button class="btn sm primary" id="run">Run…</button>
+  </div>
+</div>
+<p class="banner" id="error" hidden></p>
+<div id="editor"></div>
+<div id="menu" class="menu" hidden></div>
+<dialog id="start">
+  <div class="card-head"><h2>Run this workflow</h2></div>
+  <form method="dialog">
+    <label for="s-input">What should it do?</label>
+    <textarea id="s-input" required></textarea>
+    <label for="s-host">Host</label>
+    <select id="s-host">{{range .Hosts}}<option>{{.}}</option>{{else}}<option value="">no hosts</option>{{end}}</select>
+    <p class="hint">Runs the saved version.</p>
+    <div class="form-actions"><button class="btn primary" value="ok">Start</button><button class="btn" value="cancel" formnovalidate>Cancel</button></div>
+  </form>
+</dialog>
+<script>
+"use strict";
+const saved = {{json .Workflow}};
+let wf = structuredClone(saved), sel = "__trigger", json = false, dirty = false;
+const $ = (s, el = document) => el.querySelector(s), $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const vars = (s) => esc(s).replace(/\{\{(input|repo|branch|run)\}\}/g, (m) => `<span class="var">${m}</span>`);
+// V is a variable as instructions write it ({ { input } } without the spaces; spelled out here, as this file is a Go template)
+const V = (n) => "{" + "{" + n + "}" + "}";
+const KIND = { step: "Step", gate: "Gate", signoff: "Sign-off" };
+const KIND_DESC = { step: "Instructions to the orchestrator. It moves on when it decides the step is done.",
+  gate: "Instructions for deciding whether to move on or send the work back.", signoff: "The orchestrator may write Zach a note and wait for his reply." };
+const THINKING = ["", "low", "medium", "high", "xhigh", "max"];
+const err = (m) => { const e = $("#error"); e.hidden = !m; e.textContent = m || ""; };
+const opts = (list, cur) => list.map(([v, l]) => `<option value="${esc(v)}"${v === cur ? " selected" : ""}>${esc(l)}</option>`).join("");
+const def = () => wf.definition;
+
+function markDirty(re) {
+  dirty = true; $("#save").disabled = false; $("#discard").disabled = false; $("#saved").textContent = "Unsaved changes";
+  $("#saved").style.color = "var(--orange)";
+  if (re) render();
+}
+function head() {
+  $("#wf-name").value = wf.name; $("#wf-desc").value = wf.description;
+  $("#saved").textContent = dirty ? "Unsaved changes" : `v${wf.version} · saved`;
+  $("#saved").style.color = dirty ? "var(--orange)" : "";
+  $("#save").disabled = !dirty; $("#discard").disabled = !dirty;
+  $("#v-vis").classList.toggle("on", !json); $("#v-json").classList.toggle("on", json);
+}
+
+function fixedCards() {
+  const d = def(), p = d.project, o = d.orchestrator;
+  const card = (id, kind, ttl, body) => `<div class="node fixed click${sel === id ? " sel" : ""}" data-id="${id}"><div class="nh"><div><div class="kind">${kind}</div><div class="ttl">${ttl}</div></div></div><div class="nb">${body}</div></div>`;
+  return card("__trigger", "Trigger", d.trigger === "task" ? "Task in Intelligence" : "By hand",
+      d.trigger === "task" ? "A task submitted on the Workflows page. It becomes " + V("input") + "." : "Someone presses Run and types what it should do.") +
+    `<div class="link"></div>` +
+    card("__project", "Before the orchestrator", "Find the project", p.mode === "fixed" ? `Always <span class="mono">${esc(p.directory)}</span>.` :
+      `An agent (${esc(p.provider)}${p.model ? " · " + esc(p.model) : ""}) picks one of the host's repositories, or none. Then the worktree is made.`) +
+    `<div class="link"></div>` +
+    card("__orch", "In the worktree", "Orchestrator", `${esc(o.provider)}${o.model ? " · " + esc(o.model) : ""}${o.thinking ? " · " + esc(o.thinking) : ""}. ` +
+      "Does no work itself: it gets the steps one at a time, starts sub-agents, and decides when to move on.") +
+    `<div class="link"><button class="add" data-insert="0" title="Add a step here">+</button></div>`;
+}
+function stepCards() {
+  return def().steps.map((s, i) => `<div class="node click k-${s.kind}${sel === s.id ? " sel" : ""}" data-id="${esc(s.id)}" draggable="true">
+      <div class="nh"><span class="grip" title="Drag to reorder">⋮⋮</span><div style="min-width:0"><div class="kind">${KIND[s.kind] || s.kind} ${i + 1}</div><div class="ttl">${esc(s.title)}</div></div>
+      <span class="grow-r"><button class="btn ghost sm" data-del="${esc(s.id)}" title="Remove">✕</button></span></div>
+      <div class="nb"><div class="instr">${vars(s.instructions)}</div></div></div>
+    ${i < def().steps.length - 1 ? `<div class="link"><button class="add" data-insert="${i + 1}" title="Add a step here">+</button></div>` : ""}`).join("") +
+    `<p class="hint" style="margin:.8rem 0 0 .2rem">After the last step, <code>next</code> finishes the run.</p>
+    <div style="margin-top:.6rem;display:flex;gap:.4rem">${Object.keys(KIND).map((k) => `<button class="btn sm ghost" data-append="${k}">+ ${KIND[k]}</button>`).join("")}</div>`;
+}
+
+function inspector() {
+  const d = def();
+  const chips = `<div class="vars">${["input", "repo", "branch", "run"].map(V).map((v) => `<button type="button" data-var="${v}">${v}</button>`).join("")}</div>`;
+  const agentFields = (o, pre) => `<div class="fields">
+      <div><label>Provider</label><input data-${pre}="provider" value="${esc(o.provider)}" list="providers"></div>
+      <div><label>Model</label><input data-${pre}="model" value="${esc(o.model)}" placeholder="provider default"></div>
+      <div><label>Thinking</label><select data-${pre}="thinking">${opts(THINKING.map((t) => [t, t || "default"]), o.thinking || "")}</select></div></div>
+      <datalist id="providers"><option>claude</option><option>codex</option><option>muse</option><option>antigravity</option></datalist>`;
+  const host = (ttl, sub, body) => `<div class="card-head"><h2>${ttl}</h2>${sub ? `<span class="meta grow">${sub}</span>` : ""}</div><div class="card-body">${body}</div>`;
+  if (sel === "__trigger") return host("Trigger", "", `<label>Starts when</label><select data-d="trigger">${opts([["task", "A task is submitted on the Workflows page"], ["manual", "Someone presses Run"]], d.trigger)}</select>
+    <p class="hint">What was submitted is ${V("input")} in the instructions.</p>`);
+  if (sel === "__project") {
+    const p = d.project;
+    return host("Find the project", "Runs before the orchestrator, which lives in the worktree", `<label>The project is</label>
+      <select data-p="mode">${opts([["match", "Picked by an agent (or none)"], ["fixed", "Always one repository"]], p.mode)}</select>
+      ${p.mode === "fixed" ? `<label>Its main checkout on the host</label><input data-p="directory" value="${esc(p.directory)}" placeholder="/path/to/the/repository">`
+        : `${agentFields(p, "p")}<label>What the agent is told</label><textarea data-p="instructions" class="prompt">${esc(p.instructions)}</textarea>
+           <p class="hint">It also gets the task, the host's repositories, and how to answer.</p>`}
+      <p class="hint">Then Intelligence makes a git worktree of the repository (or uses the home directory, for none) and starts the orchestrator in it.</p>`);
+  }
+  if (sel === "__orch") {
+    const o = d.orchestrator;
+    return host("Orchestrator", "", `<p class="muted" style="margin-top:0">One per run, in the worktree. It gets one step at a time and decides when each is done. It never does the work itself.</p>
+      ${agentFields(o, "o")}<label>Its standing instructions</label><textarea data-o="instructions" class="prompt" style="min-height:16rem">${esc(o.instructions)}</textarea>
+      <p class="hint">It also gets the run, the list of steps, the <code>intelligence workflow</code> commands (next, back, skip, ask, fail) and the first step.</p>`);
+  }
+  const s = d.steps.find((x) => x.id === sel);
+  if (!s) return host("Steps", "", `<p class="muted">Select a step to edit it, or add one with +.</p>`);
+  const i = d.steps.indexOf(s);
+  return host(`${KIND[s.kind]} ${i + 1}`, KIND_DESC[s.kind], `<label>Title</label><input data-s="title" value="${esc(s.title)}">
+    <p class="hint mono">id: ${esc(s.id)} · <code>intelligence workflow back ${esc(s.id)}</code> returns here</p>
+    <label>Kind</label><select data-s="kind">${opts(Object.entries(KIND), s.kind)}</select>
+    <label>Instructions to the orchestrator</label><textarea data-s="instructions" class="prompt">${esc(s.instructions)}</textarea>${chips}
+    <p class="hint">${s.kind === "gate" ? "Say what to check and which step to send work back to." : s.kind === "signoff" ? "Say when to skip it, and what the note should hold. Zach replies on the run's page; his reply goes to the orchestrator." : "Say when the step is done."}</p>`);
+}
+
+function render() {
+  head();
+  if (json) {
+    $("#editor").innerHTML = `<div class="card"><div class="card-head"><h2>As JSON</h2><span class="meta grow">What <code>PUT /api/workflows/{id}</code> takes as <code>definition</code>.</span><button class="btn sm" id="json-apply">Apply</button></div>
+      <div class="card-body"><textarea class="json" id="json" spellcheck="false">${esc(JSON.stringify(def(), null, 2))}</textarea></div></div>`;
+    $("#json-apply").onclick = () => { try { wf.definition = JSON.parse($("#json").value); json = false; err(""); markDirty(true); } catch (e) { err("JSON: " + e.message); } };
+    return;
+  }
+  $("#editor").innerHTML = `<div class="builder"><div class="pipe" id="pipe">${fixedCards()}${stepCards()}</div><aside class="inspector card" id="inspector">${inspector()}</aside></div>`;
+  bind();
+}
+
+function newStep(kind) {
+  let n = 1, id;
+  do { id = kind + "-" + n++; } while (def().steps.some((s) => s.id === id));
+  return { id, kind, title: { step: "New step", gate: "New gate", signoff: "Zach's sign-off" }[kind],
+    instructions: { step: "Have sub-agents …\n\nMove on when …", gate: "Have a fresh sub-agent check …\n\nIf it falls short, send it back to … with what is missing. Otherwise move on.",
+      signoff: "If …, skip this step.\n\nOtherwise write Zach a note in Markdown with …, ask him, and do what his reply says." }[kind] };
+}
+function insert(at, kind) { const s = newStep(kind); def().steps.splice(at, 0, s); sel = s.id; markDirty(true); }
+
+function bind() {
+  $$("#pipe .node").forEach((el) => {
+    el.onclick = (e) => { if (e.target.closest("[data-del]")) return; sel = el.dataset.id; render(); };
+    if (el.classList.contains("fixed")) return;
+    el.ondragstart = (e) => { e.dataTransfer.setData("text/plain", el.dataset.id); el.classList.add("dragging"); };
+    el.ondragend = () => el.classList.remove("dragging");
+    el.ondragover = (e) => { e.preventDefault(); const r = el.getBoundingClientRect();
+      $$("#pipe .node").forEach((x) => x.classList.remove("drop-before", "drop-after")); el.classList.add(e.clientY < r.top + r.height / 2 ? "drop-before" : "drop-after"); };
+    el.ondragleave = () => el.classList.remove("drop-before", "drop-after");
+    el.ondrop = (e) => {
+      e.preventDefault();
+      const steps = def().steps, from = steps.findIndex((s) => s.id === e.dataTransfer.getData("text/plain"));
+      if (from < 0 || steps[from].id === el.dataset.id) return render();
+      const before = el.classList.contains("drop-before"), [s] = steps.splice(from, 1), to = steps.findIndex((x) => x.id === el.dataset.id);
+      steps.splice(before ? to : to + 1, 0, s); markDirty(true);
+    };
+  });
+  $$("[data-del]").forEach((b) => b.onclick = () => { def().steps = def().steps.filter((s) => s.id !== b.dataset.del); if (sel === b.dataset.del) sel = "__orch"; markDirty(true); });
+  $$("[data-append]").forEach((b) => b.onclick = () => insert(def().steps.length, b.dataset.append));
+  $$("[data-insert]").forEach((b) => b.onclick = (e) => {
+    e.stopPropagation();
+    const m = $("#menu"), r = b.getBoundingClientRect();
+    m.innerHTML = Object.keys(KIND).map((k) => `<button data-k="${k}"><b>${KIND[k]}</b><span class="d">${KIND_DESC[k]}</span></button>`).join("");
+    m.style.left = r.right + 8 + scrollX + "px"; m.style.top = r.top - 10 + scrollY + "px"; m.hidden = false;
+    $$("button", m).forEach((x) => x.onclick = () => { m.hidden = true; insert(+b.dataset.insert, x.dataset.k); });
+  });
+  const on = (attr, target) => $$(`#inspector [data-${attr}]`).forEach((el) => {
+    const structural = el.tagName === "SELECT";
+    el.addEventListener(structural ? "change" : "input", () => {
+      target()[el.dataset[attr]] = el.value;
+      if (structural) return markDirty(true);
+      markDirty(false);
+      const s = def().steps.find((x) => x.id === sel), card = s && $(`#pipe .node[data-id="${CSS.escape(s.id)}"]`);
+      if (card) { $(".ttl", card).textContent = s.title; $(".instr", card).innerHTML = vars(s.instructions); }
+    });
+  });
+  on("d", def); on("p", () => def().project); on("o", () => def().orchestrator); on("s", () => def().steps.find((x) => x.id === sel));
+  $$("#inspector [data-var]").forEach((b) => b.onclick = () => {
+    const t = $("#inspector textarea.prompt"); const a = t.selectionStart, z = t.selectionEnd;
+    t.value = t.value.slice(0, a) + b.dataset.var + t.value.slice(z); t.focus(); t.selectionStart = t.selectionEnd = a + b.dataset.var.length;
+    t.dispatchEvent(new Event("input"));
+  });
+}
+
+document.addEventListener("click", (e) => { if (!e.target.closest("#menu") && !e.target.closest("[data-insert]")) $("#menu").hidden = true; });
+$("#wf-name").oninput = (e) => { wf.name = e.target.value; markDirty(false); };
+$("#wf-desc").oninput = (e) => { wf.description = e.target.value; markDirty(false); };
+$("#v-vis").onclick = (e) => { e.preventDefault(); json = false; render(); };
+$("#v-json").onclick = (e) => { e.preventDefault(); json = true; render(); };
+$("#discard").onclick = () => { wf = structuredClone(saved); dirty = false; err(""); render(); };
+async function save() {
+  const res = await fetch("/api/workflows/" + wf.id, { method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: wf.name, description: wf.description, definition: def() }) });
+  if (!res.ok) { err(await res.text()); return false; }
+  const out = await res.json();
+  wf.version = out.version; Object.assign(saved, structuredClone(wf)); dirty = false; err("");
+  $("#crumb").textContent = wf.name; document.title = wf.name + " · Intelligence"; render();
+  return true;
+}
+$("#save").onclick = save;
+$("#run").onclick = async () => {
+  if (dirty && !(confirm("Save this version first, then run it?") && await save())) return;
+  const dlg = $("#start"); dlg.returnValue = ""; dlg.showModal();
+};
+$("#start").addEventListener("close", async () => {
+  const dlg = $("#start"), input = $("#s-input").value.trim();
+  if (dlg.returnValue !== "ok" || !input) return;
+  const res = await fetch("/api/workflow-runs", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workflowId: wf.id, host: $("#s-host").value, input }) });
+  if (!res.ok) return err(await res.text());
+  location.href = "/workflow-runs/" + (await res.json()).id;
+});
+window.addEventListener("beforeunload", (e) => { if (dirty) e.preventDefault(); });
+render();
+</script>
+{{template "wffoot" .}}{{end}}
+
+{{define "run"}}{{template "wfhead" .Run.Title}}
+<main class="container page">
+<div class="crumbs"><a href="/workflows">Workflows</a><span class="sep">/</span><a href="/workflows/{{.Run.WorkflowID}}">{{.Run.Workflow}}</a><span class="sep">/</span>run</div>
+<div id="live">
+<div class="page-head">
+  <div><h1>{{.Run.Title}}</h1>
+    <div class="run-meta"><span class="status {{.Run.StatusClass}}">{{.Run.StatusLabel}}</span>
+      <span><b>{{.Run.Workflow}}</b> v{{.Run.Version}}</span><span>on <b class="mono">{{.Run.Host}}</b></span>
+      {{if .Run.Repo}}<span><b class="mono">{{.Run.Repo}}</b> @ <span class="mono">{{.Run.Branch}}</span></span>{{end}}
+      <span>{{plural (len .Agents) "agent"}}</span><span>started {{ago .Now .Run.CreatedAt}}</span></div></div>
+  <div class="actions">{{if .Run.Live}}<button class="btn sm" id="cancel">Cancel run</button>{{end}}</div>
+</div>
+<div class="request">{{.Run.Input}}</div>
+{{if eq .Run.Status "failed"}}<p class="banner">{{or .Run.Error "The orchestrator marked the run failed."}}</p>{{end}}
+</div>
+<p class="banner" id="error" hidden></p>
+<div id="ask">{{if eq .Run.Status "waiting"}}
+<section class="card note"><div class="card-head"><h2>The orchestrator is asking you</h2><span class="meta grow">at {{(index .Run.Steps .Run.Step).Title}}</span></div>
+  <div class="card-body"><div class="md" id="note">{{markdown .Run.Note}}</div>
+    <div class="reply-host"><textarea id="reply" placeholder="Reply in your own words. The orchestrator reads it and decides what to do."></textarea>
+      <div class="side"><button class="btn primary sm" id="send">Send</button><button class="btn sm mic" id="mic" hidden>Dictate</button></div></div>
+  </div></section>{{end}}</div>
+<div id="steps" class="builder">
+  <div class="pipe">
+    <div class="node fixed"><div class="nh"><div><div class="kind">Before the orchestrator</div><div class="ttl">Find the project</div></div>
+      <span class="grow-r">{{if eq .Run.Status "finding_project"}}<span class="status st-running">running</span>{{else}}<span class="status st-done">done</span>{{end}}</span></div>
+      <div class="nb">{{if eq .Run.Status "finding_project"}}An agent is choosing the repository.{{else if .Run.Repo}}<span class="mono">{{.Run.Repo}}</span>, worktree <span class="mono">{{.Run.Branch}}</span>{{else}}No repository: the home directory.{{end}}
+        <ul class="events">{{range .Before}}<li><span class="t">{{.At.Format "15:04"}}</span>{{.Line}}</li>{{end}}</ul></div></div>
+    <div class="link{{if .Run.Orchestrator}} done{{end}}"></div>
+    <div class="node fixed"><div class="nh"><div><div class="kind">In the worktree</div><div class="ttl">Orchestrator and its sub-agents</div></div></div>
+      <div class="nb">{{if .Agents}}<div class="tree">{{range .Agents}}<div class="ag" style="padding-left:{{.Depth}}.2rem"><span class="status{{if eq .Status "running"}} st-running{{end}}">{{.Status}}</span>
+        <a href="/hosts/{{$.Run.Host}}/agents/{{.ID}}">{{or .Title .ID}}</a><span class="meta">{{.Provider}}{{with .Model}} · {{.}}{{end}}</span></div>{{end}}</div>
+        {{else if .Run.Orchestrator}}Its agents show here once the host reports them.{{else}}Starts once the project is found.{{end}}</div></div>
+    <div class="link{{if .Run.Orchestrator}} done{{end}}"></div>
+    {{range $i, $s := .Steps}}
+    <div class="node k-{{.Kind}} r-{{.State}}"><div class="nh"><div style="min-width:0"><div class="kind">{{kind .Kind}} {{.N}}</div><div class="ttl">{{.Title}}</div></div>
+      <span class="grow-r">{{if gt .Times 1}}<span class="meta">{{.Times}} times</span>{{end}}<span class="status st-{{.State}}">{{.Label}}</span></span></div>
+      <div class="nb"><details><summary class="meta">Instructions</summary><div class="instr" style="-webkit-line-clamp:unset">{{.Instructions}}</div></details>
+        {{if .Events}}<ul class="events">{{range .Events}}<li><span class="t">{{.At.Format "15:04"}}</span>{{.Line}}</li>{{end}}</ul>{{end}}</div></div>
+    {{if lt (add $i 1) (len $.Steps)}}<div class="link{{if eq .State "done" "skipped"}} done{{end}}"></div>{{end}}
+    {{end}}
+  </div>
+  <aside class="card"><div class="card-head"><h2>What happened</h2></div><div class="card-body">
+    <ul class="events">{{range .Events}}<li><span class="t">{{.At.Format "Jan 2 15:04"}}</span>{{with .Step}}<b>{{add . 1}}.</b> {{end}}{{.Line}}</li>{{end}}</ul></div></aside>
+</div>
+<script>
+"use strict";
+const run = {{json .Run.ID}};
+const $ = (s) => document.querySelector(s);
+const err = (m) => { const e = $("#error"); e.hidden = !m; e.textContent = m || ""; };
+async function post(path, body) {
+  const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error(await res.text());
+}
+function bind() {
+  if ($("#cancel")) $("#cancel").onclick = async () => {
+    if (!confirm("Cancel this run? Its orchestrator is stopped; the worktree stays.")) return;
+    try { await post(`/api/workflow-runs/${run}/cancel`, {}); refresh(true); } catch (e) { err(e.message); }
+  };
+  if ($("#send")) $("#send").onclick = async (ev) => {
+    const text = $("#reply").value.trim();
+    if (!text) return $("#reply").focus();
+    ev.target.disabled = true;
+    try { await post(`/api/workflow-runs/${run}/reply`, { text }); $("#reply").value = ""; refresh(true); }
+    catch (e) { err(e.message); ev.target.disabled = false; }
+  };
+  // dictation, where the browser has speech recognition
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition, mic = $("#mic");
+  if (SR && mic) {
+    mic.hidden = false;
+    let rec = null;
+    mic.onclick = () => {
+      if (rec) return rec.stop();
+      rec = new SR(); rec.continuous = true; rec.interimResults = true;
+      const base = $("#reply").value;
+      rec.onresult = (e) => { $("#reply").value = (base ? base + " " : "") + [...e.results].map((r) => r[0].transcript).join(""); };
+      rec.onend = rec.onerror = () => { rec = null; mic.classList.remove("on"); mic.textContent = "Dictate"; };
+      rec.start(); mic.classList.add("on"); mic.textContent = "Stop";
+    };
+  }
+}
+// keep the page current; leave a reply being written alone
+async function refresh(all) {
+  try {
+    const res = await fetch(location.href, { cache: "no-store" });
+    if (!res.ok) return;
+    const next = new DOMParser().parseFromString(await res.text(), "text/html");
+    const reply = $("#reply"), writing = reply && (reply.value || document.activeElement === reply);
+    for (const id of ["live", "steps"].concat(writing && !all ? [] : ["ask"])) {
+      const n = next.getElementById(id), cur = document.getElementById(id);
+      if (n && cur && n.innerHTML !== cur.innerHTML) cur.replaceWith(n);
+    }
+    bind();
+  } catch {}
+}
+bind();
+setInterval(refresh, 4000);
+</script>
+{{template "wffoot" .}}{{end}}

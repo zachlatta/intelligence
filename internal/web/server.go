@@ -18,6 +18,7 @@ import (
 	"github.com/zachlatta/intelligence/internal/db"
 	"github.com/zachlatta/intelligence/internal/fleet"
 	"github.com/zachlatta/intelligence/internal/hostclient"
+	"github.com/zachlatta/intelligence/internal/workflow"
 )
 
 // Config is what the server needs. All app state is in DB; each account reads it through its own
@@ -42,6 +43,7 @@ type app struct {
 	store   *accounts.Store
 	reg     *fleet.Registry // as the owner: for the host streams and for writes
 	changes *fleet.Changes
+	wf      *workflow.Engine // as the owner: workflows and their runs
 }
 
 //go:embed index.html
@@ -81,7 +83,7 @@ func New(cfg Config) http.Handler {
 	roles := db.NewAccountRoles(cfg.DB, cfg.Readonly)
 	context.AfterFunc(cfg.Context, roles.Close)
 	store := accounts.New(cfg.DB, roles)
-	a := &app{cfg: cfg, store: store, reg: reg, changes: changes}
+	a := &app{cfg: cfg, store: store, reg: reg, changes: changes, wf: workflow.NewEngine(cfg.DB, cfg.Now)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
@@ -153,6 +155,16 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /schedules", a.page(func(v viewer) http.HandlerFunc { return schedulesPage(cfg, v.reg) }))
 	mux.HandleFunc("GET /hosts/{host}/schedules/new", a.page(func(v viewer) http.HandlerFunc { return newSchedulePage(cfg, v.reg) }))
 	mux.HandleFunc("GET /hosts/{host}/schedules/{id}", a.page(func(v viewer) http.HandlerFunc { return schedulePage(cfg, v.reg) }))
+	// workflows: written through the API, read through the account's role; a host's agents move runs with its key
+	mux.HandleFunc("POST /api/workflows", a.write(a.createWorkflow))
+	mux.HandleFunc("PUT /api/workflows/{id}", a.write(a.updateWorkflow))
+	mux.HandleFunc("POST /api/workflow-runs", a.write(a.startRun))
+	mux.HandleFunc("POST /api/workflow-runs/{id}/reply", a.write(a.replyToRun))
+	mux.HandleFunc("POST /api/workflow-runs/{id}/cancel", a.write(a.cancelRun))
+	mux.HandleFunc("POST /api/workflow-runs/{id}/moves", a.moveRun)
+	mux.HandleFunc("GET /workflows", a.page(func(v viewer) http.HandlerFunc { return workflowsPage(cfg, v) }))
+	mux.HandleFunc("GET /workflows/{id}", a.page(func(v viewer) http.HandlerFunc { return workflowPage(cfg, v) }))
+	mux.HandleFunc("GET /workflow-runs/{id}", a.page(func(v viewer) http.HandlerFunc { return runPage(cfg, v) }))
 	mux.HandleFunc("GET /usage", a.page(func(v viewer) http.HandlerFunc { return usagePage(cfg, v.reg) }))
 	mux.HandleFunc("GET /resources", a.page(func(v viewer) http.HandlerFunc { return hostResourcesPage(cfg, v.reg) }))
 	mux.HandleFunc("GET /hosts", func(w http.ResponseWriter, r *http.Request) { // its name before the home page's hosts took it

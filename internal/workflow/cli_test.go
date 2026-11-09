@@ -1,0 +1,126 @@
+package workflow
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// fakeServer answers moves with what it was sent, and records each request.
+func fakeServer(t *testing.T, code int) (*httptest.Server, *[]*http.Request, *[]Move) {
+	t.Helper()
+	var reqs []*http.Request
+	var moves []Move
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var m Move
+		json.NewDecoder(r.Body).Decode(&m)
+		reqs, moves = append(reqs, r), append(moves, m)
+		w.WriteHeader(code)
+		json.NewEncoder(w).Encode(map[string]string{"message": "moved: " + m.Move})
+	}))
+	t.Cleanup(s.Close)
+	return s, &reqs, &moves
+}
+
+// boxHome is a home directory set up as `deploy/install-host` leaves it: the env file and the key.
+func boxHome(t *testing.T, server string) string {
+	t.Helper()
+	home := t.TempDir()
+	dir := filepath.Join(home, ".config", "intelligence")
+	os.MkdirAll(dir, 0o700)
+	os.WriteFile(filepath.Join(dir, "host.env"), []byte("# the server\nHOST_SERVER="+server+"\n"), 0o600)
+	os.WriteFile(filepath.Join(dir, "host.key"), []byte("host-key\n"), 0o600)
+	return home
+}
+
+func runCLI(t *testing.T, home, stdin string, args ...string) (int, string, string) {
+	t.Helper()
+	var out, errb bytes.Buffer
+	env := map[string]string{"HOME": home}
+	code := CLI(t.Context(), args, func(k string) string { return env[k] }, strings.NewReader(stdin), &out, &errb, http.DefaultClient)
+	return code, out.String(), errb.String()
+}
+
+func TestTheCLISendsEachMoveWithTheBoxsKey(t *testing.T) {
+	s, reqs, moves := fakeServer(t, http.StatusOK)
+	home := boxHome(t, s.URL)
+	note := filepath.Join(t.TempDir(), "note.md")
+	os.WriteFile(note, []byte("## A question"), 0o600)
+	for _, c := range []struct {
+		args []string
+		want Move
+	}{
+		{[]string{"project", "--run", "r1", "/srv/dev/app"}, Move{Move: "project", Directory: "/srv/dev/app"}},
+		{[]string{"project", "--run", "r1", "none"}, Move{Move: "project", Directory: "none"}},
+		{[]string{"next", "--run", "r1", "--summary", "built it"}, Move{Move: "next", Summary: "built it"}},
+		{[]string{"back", "--run", "r1", "build", "--why", "no test"}, Move{Move: "back", Step: "build", Why: "no test"}},
+		{[]string{"back", "--why", "no test", "--run", "r1", "build"}, Move{Move: "back", Step: "build", Why: "no test"}},
+		{[]string{"skip", "--run", "r1", "--why", "only what he asked"}, Move{Move: "skip", Why: "only what he asked"}},
+		{[]string{"ask", "--run", "r1", "--note", note}, Move{Move: "ask", Note: "## A question"}},
+		{[]string{"done", "--run", "r1"}, Move{Move: "done"}},
+		{[]string{"fail", "--run", "r1", "--why", "no such repo"}, Move{Move: "fail", Why: "no such repo"}},
+	} {
+		code, out, errOut := runCLI(t, home, "", c.args...)
+		if code != 0 || out != "moved: "+c.want.Move+"\n" {
+			t.Errorf("%v: %d %q %q", c.args, code, out, errOut)
+			continue
+		}
+		r, m := (*reqs)[len(*reqs)-1], (*moves)[len(*moves)-1]
+		if r.URL.Path != "/api/workflow-runs/r1/moves" || r.Header.Get("Authorization") != "Bearer host-key" || m != c.want {
+			t.Errorf("%v: sent %s %s %+v, want %+v", c.args, r.URL.Path, r.Header.Get("Authorization"), m, c.want)
+		}
+	}
+	if code, _, _ := runCLI(t, home, "## From stdin", "ask", "--run", "r1", "--note", "-"); code != 0 || (*moves)[len(*moves)-1].Note != "## From stdin" {
+		t.Errorf("--note - should read stdin: %+v", (*moves)[len(*moves)-1])
+	}
+}
+
+func TestTheCLIRefusesWhatItCannotSend(t *testing.T) {
+	s, reqs, _ := fakeServer(t, http.StatusOK)
+	home := boxHome(t, s.URL)
+	for _, args := range [][]string{
+		{},
+		{"next"},                              // no run
+		{"jump", "--run", "r1"},               // no such move
+		{"back", "--run", "r1", "--why", "x"}, // no step
+		{"project", "--run", "r1"},            // no directory
+		{"ask", "--run", "r1"},                // no note
+	} {
+		if code, _, errOut := runCLI(t, home, "", args...); code == 0 || errOut == "" {
+			t.Errorf("%v: %d, want a usage error", args, code)
+		}
+	}
+	if len(*reqs) != 0 {
+		t.Errorf("sent %d requests", len(*reqs))
+	}
+	if code, _, errOut := runCLI(t, t.TempDir(), "", "next", "--run", "r1"); code == 0 || !strings.Contains(errOut, "HOST_SERVER") {
+		t.Errorf("no configuration: %d %q", code, errOut)
+	}
+}
+
+func TestTheCLIShowsTheServersRefusal(t *testing.T) {
+	s, _, _ := fakeServer(t, http.StatusConflict)
+	code, out, errOut := runCLI(t, boxHome(t, s.URL), "", "next", "--run", "r1")
+	if code == 0 || out != "" || !strings.Contains(errOut, "moved: next") {
+		t.Errorf("%d %q %q", code, out, errOut)
+	}
+}
+
+// TestTheCLIReadsAHostInstalledAsADevBox: a host installed before hosts were called dev boxes has
+// devbox.env and devbox.key.
+func TestTheCLIReadsAHostInstalledAsADevBox(t *testing.T) {
+	s, reqs, _ := fakeServer(t, http.StatusOK)
+	home := t.TempDir()
+	dir := filepath.Join(home, ".config", "intelligence")
+	os.MkdirAll(dir, 0o700)
+	os.WriteFile(filepath.Join(dir, "devbox.env"), []byte("DEVBOX_SERVER="+s.URL+"\n"), 0o600)
+	os.WriteFile(filepath.Join(dir, "devbox.key"), []byte("old-key"), 0o600)
+	if code, _, errOut := runCLI(t, home, "", "next", "--run", "r1"); code != 0 || (*reqs)[0].Header.Get("Authorization") != "Bearer old-key" {
+		t.Errorf("%d %q", code, errOut)
+	}
+}

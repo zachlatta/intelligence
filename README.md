@@ -9,7 +9,7 @@ hosts and everything they report.
 
 ## How it fits together
 
-One binary, four commands:
+One binary, five commands:
 
 - `intelligence` (or `intelligence server`): the web app. It runs in Coolify with a Postgres
   database, reachable only on the tailnet.
@@ -22,6 +22,8 @@ One binary, four commands:
 - `intelligence probe`: runs as root on each Linux host (a systemd system service): the eBPF
   probe (`internal/probe`) that charges every process's CPU to its Paseo agent and records OOM kills.
   The host client reads it over a Unix socket.
+- `intelligence workflow`: what a workflow run's agents run on their host to move the run
+  (Workflows, below). It reaches the server with the host's key.
 - `intelligence version`: prints the commit the binary was built from.
 
 ### State and the read-only SQL contract
@@ -82,6 +84,8 @@ The hierarchy is hosts > workspaces > agents:
 - `accounts` (username, argon2id password hash, its role), `sessions` (signed-in browsers; a hash
   of each cookie's token), `host_keys` (each host's account and a hash of its key) and
   `host_enrollments` (hosts waiting for their code to be entered). An account reads only its own.
+- `workflows`, `workflow_versions` (every saved definition), `workflow_runs` and
+  `workflow_run_events` (what happened in each run, in order): Workflows, below.
 - `schema_migrations`.
 
 Each report replaces its host's workspaces and agents. A host that cannot reach its daemon has none,
@@ -283,6 +287,41 @@ it), replaces `/usr/local/lib/intelligence/intelligence` and re-executes. Its tr
 client's: the client already runs the server's binary as the host user. The unit limits it to
 the capabilities it needs (BPF, perfmon, ptrace read of other processes' environment, memlock).
 
+### Workflows
+
+A workflow is a trigger, a way to find the project, an orchestrator, and steps
+(`internal/workflow`). Each save is a new version (`workflow_versions.definition`); a run keeps the
+version it started with. A run:
+
+1. **Finds its project.** Before anything runs in a worktree, an agent (the definition's project
+   finder, started in the host's home directory, `~`) is told the task and the host's repositories
+   (its workspaces' `project_root`s) and answers with `intelligence workflow project --run <id>
+   <directory>|none`. A definition can name its repository instead (`"mode": "fixed"`).
+2. **Starts the orchestrator in the worktree.** The server archives the finder and queues
+   `create_workspace`: a git worktree of the repository on branch `wf-<run>-<title>` (or the home
+   directory, for none) with the orchestrator in it. Its first message is its standing
+   instructions, the input, the list of steps, the commands below, and the first step.
+3. **The orchestrator moves through the steps.** It never does the work itself: it starts
+   sub-agents for it (`paseo run` in its workspace, so they are its sub-agents), and decides when a
+   step is done. A step is only instructions to it; its kind (`step`, `gate` or `signoff`) changes
+   how it reads, not what the server does. The orchestrator moves the run with:
+   - `intelligence workflow next --run <id> --summary "..."`: the step is done; prints the next
+     step's instructions (after the last step, the run is finished).
+   - `back --run <id> <step id> --why "..."`: back to an earlier step, with what is missing.
+   - `skip --run <id> --why "..."`, `done --run <id>` and `fail --run <id> --why "..."`.
+   - `ask --run <id> --note note.md`: the run waits, showing Zach the note (Markdown) on its page.
+     His reply (typed or dictated there) goes to the orchestrator as a message, which decides what
+     it means and moves on.
+
+The server only records each move (`workflow_run_events`), checks it can happen (a run waiting for
+a reply cannot move, a canceled one says so), and answers with what the agent reads next. A move
+is a `POST /api/workflow-runs/{id}/moves` with the run's host's key; the CLI reads the server and
+key as the host client does (`HOST_SERVER` from `~/.config/intelligence/host.env`, the key from
+`host.key`, or their `devbox` names). The run follows the commands it queued (the finder, the
+workspace) through their results: a failed one fails the run.
+
+Variables in instructions: `{{input}}`, `{{repo}}`, `{{branch}}` and `{{run}}`.
+
 ### Transcripts
 
 After each report, and every 2 seconds while an agent is running, the host syncs the transcripts of
@@ -457,6 +496,23 @@ origin (another site's request is refused with 403), and those with a body must 
 - `GET /dictation.js`: the dictation engine the chat box and the new agent and workspace forms share.
 - `GET /ui.css`: the one stylesheet every page shares, with the top bar (`layout.html`) that links the
   pages.
+- `GET /workflows`: a new task (for workflows triggered by a task), the account's workflows and
+  their runs. Without workflows, a button adds the starting one (`workflow.Starting`).
+- `GET /workflows/{id}`: the editor: the trigger, how the project is found, the orchestrator, and
+  the steps (add, reorder, edit, remove), or the definition as JSON. Saving makes a new version.
+- `GET /workflow-runs/{id}`: a run: its project, the orchestrator and its sub-agents, each step's
+  state and what happened in it, and, while it waits, the orchestrator's note with a reply box.
+- `POST /api/workflows` with `{"name", "description", "definition"}`: 201 `{"id", "version": 1}`;
+  400 for a definition that cannot run. `PUT /api/workflows/{id}`, the same body: the next version.
+- `POST /api/workflow-runs` with `{"workflowId", "host", "input"}`: starts a run on one of the
+  account's hosts (201, with its `Location`).
+- `POST /api/workflow-runs/{id}/reply` with `{"text"}`: answers the note the run waits on (204;
+  409 when it waits on none). `POST /api/workflow-runs/{id}/cancel` with `{}`: ends the run and
+  stops its orchestrator (204).
+- `POST /api/workflow-runs/{id}/moves` with `{"move", "directory", "step", "summary", "why",
+  "note"}` and `Authorization: Bearer <the run's host's key>`: `intelligence workflow`. Answers
+  `{"message"}`, what the agent reads next; 400 or 409 (with the reason as the message) for a move
+  that cannot be made, 404 for a run not on that host.
 - `GET /healthz`: `{"status":"ok","version":"<commit>","database":"ok"}`, 503 when the database is
   unreachable.
 
