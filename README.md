@@ -395,6 +395,10 @@ the account and enrollment routes, the host binaries and the streams (with a hos
   (or Steer) steers its running turn, Queue (Alt+Enter) waits for the turn to end, and Interrupt
   (Cmd/Ctrl+Enter) stops it; Shift+Enter is a new line. Messages not yet delivered are listed
   above it, read through `/api/sql`; one that fails says why and comes back into the chat box.
+  With `ASSEMBLYAI_API_KEY` set, ⌘D (or Ctrl+D, or the mic button) dictates: the browser streams the
+  microphone to AssemblyAI's streaming speech-to-text (Universal-3.6 Pro) and the words appear in the box
+  as they are said. With text already in the box they go in at the cursor and stay there. In an empty
+  box, ⌘D or Enter again stops and sends them, Edit stops and leaves them to change, Esc drops them.
   Under its title, the agent's resources from `agent_minutes` and `oom_kills`: its CPU time (average
   and peak cores), memory now and at its peak, most processes, commands started and OOM kills, opening to charts of its CPU and memory over its life; re-read every minute while live.
 - `GET /hosts/{host}/agents/{id}/resources`: those resources alone, as HTML, for the live page.
@@ -428,6 +432,10 @@ the account and enrollment routes, the host binaries and the streams (with a hos
 Writes from a browser (everything but the host's own enrollment calls) must come from this
 origin (another site's request is refused with 403), and those with a body must send JSON (else
 415), which another site cannot send without the server's leave; the cookie is SameSite=Strict too.
+- `POST /api/dictation/token` with `{}`: a token for one AssemblyAI streaming session (60 seconds to
+  open it, 30 minutes long), minted with the server's key, which the browser never sees: 200
+  `{"token", "url", "expiresIn"}`; 503 with no `ASSEMBLYAI_API_KEY`, 502 with AssemblyAI's reason
+  when it refuses. Nothing is stored.
 - `POST /api/sql` with `{"query": "...", "limit": 1000}`, or `GET /api/sql?q=...&limit=`: one
   read-only query, as the account's own role, so it reads only the account's rows. Returns `{"columns": [{"name", "type"}], "rows": [[...]], "rowCount",
   "truncated"}`, or 400 with `{"error"}`. At most 10000 rows; 5 seconds per query.
@@ -449,6 +457,7 @@ Server:
   is named after it, and its password derived from its password (keep the name under 40 characters).
 - `PORT`: listen port, default `8080`.
 - `HOST_BINARIES`: where the host binaries are; default `/usr/local/share/intelligence/host`.
+- `ASSEMBLYAI_API_KEY`: optional; turns on dictation in the chat box. Unset, there is none.
 
 The version is stamped at build (`-X main.buildCommit`, from Coolify's `SOURCE_COMMIT` build
 argument); else `SOURCE_COMMIT` at run time, else Go's VCS stamp, else `dev`.

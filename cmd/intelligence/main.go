@@ -98,11 +98,13 @@ type serverSettings struct {
 	ReadonlyRole     string // the user in ReadonlyURL; the server creates or updates it
 	ReadonlyPassword string
 	BinDir           string // HOST_BINARIES: host binaries to serve; default /usr/local/share/intelligence/host
+	AssemblyAIKey    string // ASSEMBLYAI_API_KEY: for the chat box's dictation; unset turns it off
 }
 
 func serverConfig(getenv func(string) string) (serverSettings, error) {
 	getenv = withDevboxNames(getenv)
-	c := serverSettings{DatabaseURL: getenv("DATABASE_URL"), ReadonlyURL: getenv("READONLY_DATABASE_URL"), BinDir: getenv("HOST_BINARIES")}
+	c := serverSettings{DatabaseURL: getenv("DATABASE_URL"), ReadonlyURL: getenv("READONLY_DATABASE_URL"), BinDir: getenv("HOST_BINARIES"),
+		AssemblyAIKey: getenv("ASSEMBLYAI_API_KEY")}
 	if c.BinDir == "" {
 		c.BinDir = "/usr/local/share/intelligence/host"
 	}
@@ -157,8 +159,9 @@ func serve(ctx context.Context) error {
 		}
 	}
 	srv := &http.Server{
-		Addr:              addr(os.Getenv),
-		Handler:           web.New(web.Config{Context: ctx, Version: v, DB: owner, Readonly: ro, BinDir: c.BinDir}),
+		Addr: addr(os.Getenv),
+		Handler: web.New(web.Config{Context: ctx, Version: v, DB: owner, Readonly: ro, BinDir: c.BinDir,
+			AssemblyAIKey: c.AssemblyAIKey}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go pruneHosts(ctx, fleet.New(owner))

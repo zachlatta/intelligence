@@ -194,3 +194,11 @@ func TestServerConfigReadsDevboxBinariesFromBeforeTheRename(t *testing.T) {
 		t.Errorf("BinDir = %q, %v; want /old", c.BinDir, err)
 	}
 }
+
+func TestServerConfigReadsTheAssemblyAIKey(t *testing.T) {
+	c, err := serverConfig(env(map[string]string{"DATABASE_URL": "postgres://app:p@db/app",
+		"READONLY_DATABASE_URL": "postgres://ro:p@db/app", "ASSEMBLYAI_API_KEY": "k"}))
+	if err != nil || c.AssemblyAIKey != "k" {
+		t.Errorf("AssemblyAIKey = %q, %v; want k", c.AssemblyAIKey, err)
+	}
+}

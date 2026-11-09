@@ -30,7 +30,10 @@ type Config struct {
 	Readonly   *pgxpool.Pool // the same database as the read-only role (db.EnsureReadonlyRole)
 	SQLTimeout time.Duration // per SQL API query; default 5s
 	BinDir     string        // host binaries, intelligence-<os>-<arch>, served for self-update; "" = none
-	Now        func() time.Time
+	// AssemblyAIKey mints the chat box's dictation tokens; "" turns dictation off.
+	AssemblyAIKey      string
+	AssemblyAITokenURL string // default AssemblyAI's own
+	Now                func() time.Time
 }
 
 // app is the server's shared parts.
@@ -65,6 +68,9 @@ func New(cfg Config) http.Handler {
 	}
 	if cfg.Context == nil {
 		cfg.Context = context.Background()
+	}
+	if cfg.AssemblyAITokenURL == "" {
+		cfg.AssemblyAITokenURL = assemblyAITokenURL
 	}
 	reg := fleet.New(cfg.DB)
 	changes := fleet.NewChanges(cfg.DB)
@@ -121,6 +127,7 @@ func New(cfg Config) http.Handler {
 	}))
 	mux.HandleFunc("POST /api/hosts/{host}/commands", a.write(func(v viewer) http.HandlerFunc { return enqueueCommand(a, v) }))
 	mux.HandleFunc("GET /api/hosts/{host}/commands/{id}", a.read(func(v viewer) http.HandlerFunc { return showCommand(a, v) }))
+	mux.HandleFunc("POST "+dictationTokenPath, a.write(func(viewer) http.HandlerFunc { return dictationToken(cfg) }))
 	mux.HandleFunc("GET /api/sql", a.read(func(v viewer) http.HandlerFunc { return sqlHandler(cfg, v.pool) }))
 	mux.HandleFunc("POST /api/sql", a.read(func(v viewer) http.HandlerFunc { return sqlHandler(cfg, v.pool) }))
 	mux.HandleFunc("GET /api/hosts/resources", a.read(func(v viewer) http.HandlerFunc { return hostResourcesAPI(v.reg) }))

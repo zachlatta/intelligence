@@ -120,7 +120,7 @@ func transcriptPage(cfg Config, reg *fleet.Registry, w http.ResponseWriter, r *h
 		"Now": cfg.Now(), "Base": base, "Stats": stats, "Live": err == nil && live(agent), "Blocks": blocks,
 		"BlocksData": blocksData{Base: base, Blocks: blocks, Now: cfg.Now()}, "Resources": res,
 		"Chat": map[string]string{"Commands": "/api/hosts/" + host + "/commands", "PendingSQL": pendingMessagesSQL(host, agentID),
-			"QueueTTL": queuedMessageTTL},
+			"QueueTTL": queuedMessageTTL, "Dictation": dictationPath(cfg)},
 	})
 }
 
