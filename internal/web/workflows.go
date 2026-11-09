@@ -143,6 +143,17 @@ func (a *app) setDefaultWorkflow(v viewer) http.HandlerFunc {
 	}
 }
 
+// deleteWorkflow: DELETE /api/workflows/{id}: 204; 409 while a run of it is still going. Its runs stay.
+func (a *app) deleteWorkflow(v viewer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := a.wf.DeleteWorkflow(r.Context(), v.acct.ID, r.PathValue("id")); err != nil {
+			workflowError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 // startRun: POST /api/workflow-runs {"workflowId", "input"}: on the host the workflow names.
 func (a *app) startRun(v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -246,7 +257,7 @@ type workflowRow struct {
 func readWorkflows(ctx context.Context, p *pgxpool.Pool, id string) ([]workflowRow, error) {
 	rows, err := p.Query(ctx, `SELECT w.id::text, w.name, w.description, w.version, w.is_default, v.definition FROM workflows w
 		JOIN workflow_versions v ON v.workflow_id = w.id AND v.version = w.version
-		WHERE $1 = '' OR w.id::text = $1 ORDER BY w.is_default DESC, w.created_at, w.id`, id)
+		WHERE w.deleted_at IS NULL AND ($1 = '' OR w.id::text = $1) ORDER BY w.is_default DESC, w.created_at, w.id`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -266,20 +277,22 @@ type runRow struct {
 	ID, Title, Input, Status, Host, Repo, Branch, Workflow, WorkflowID string
 	WorkspaceID, Orchestrator, ProjectAgent, Note, Error               string
 	Step, Version                                                      int
+	WorkflowDeleted                                                    bool
 	Steps                                                              []workflow.Step
 	CreatedAt, UpdatedAt                                               time.Time
 	FinishedAt                                                         *time.Time
 }
 
 const runRowSelect = `SELECT r.id::text, r.title, r.input, r.status, r.host, r.repo, r.branch, w.name, r.workflow_id::text, r.workspace_id,
-	r.orchestrator_id, r.project_agent_id, r.note, r.error, r.step, r.version, v.definition -> 'steps', r.created_at, r.updated_at, r.finished_at
+	r.orchestrator_id, r.project_agent_id, r.note, r.error, r.step, r.version, v.definition -> 'steps', r.created_at, r.updated_at, r.finished_at,
+	w.deleted_at IS NOT NULL
 	FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id JOIN workflow_versions v ON v.workflow_id = r.workflow_id AND v.version = r.version `
 
 func scanRunRow(row pgx.CollectableRow) (runRow, error) {
 	var r runRow
 	var steps []byte
 	err := row.Scan(&r.ID, &r.Title, &r.Input, &r.Status, &r.Host, &r.Repo, &r.Branch, &r.Workflow, &r.WorkflowID, &r.WorkspaceID,
-		&r.Orchestrator, &r.ProjectAgent, &r.Note, &r.Error, &r.Step, &r.Version, &steps, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt)
+		&r.Orchestrator, &r.ProjectAgent, &r.Note, &r.Error, &r.Step, &r.Version, &steps, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt, &r.WorkflowDeleted)
 	if err == nil {
 		err = json.Unmarshal(steps, &r.Steps)
 	}

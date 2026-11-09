@@ -119,7 +119,7 @@ func (e *Engine) SetDefault(ctx context.Context, account int64, id string, chose
 		var trigger string
 		err := tx.QueryRow(ctx, `SELECT v.definition ->> 'trigger' FROM workflows w
 			JOIN workflow_versions v ON v.workflow_id = w.id AND v.version = w.version
-			WHERE w.id = $1 AND w.account_id = $2 FOR UPDATE OF w`, id, account).Scan(&trigger)
+			WHERE w.id = $1 AND w.account_id = $2 AND w.deleted_at IS NULL FOR UPDATE OF w`, id, account).Scan(&trigger)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -157,7 +157,7 @@ func (e *Engine) UpdateWorkflow(ctx context.Context, account int64, id, name, de
 	var version int
 	err = pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
 		var mine bool
-		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM workflows WHERE id = $1 AND account_id = $2)", id, account).Scan(&mine); err != nil {
+		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM workflows WHERE id = $1 AND account_id = $2 AND deleted_at IS NULL)", id, account).Scan(&mine); err != nil {
 			return err
 		}
 		if !mine {
@@ -168,7 +168,7 @@ func (e *Engine) UpdateWorkflow(ctx context.Context, account int64, id, name, de
 		}
 		err := tx.QueryRow(ctx, `UPDATE workflows SET name = $3, description = $4, version = version + 1, updated_at = $5,
 			is_default = is_default AND $6
-			WHERE id = $1 AND account_id = $2 RETURNING version`, id, account, name, strings.TrimSpace(description), at, d.Trigger == TriggerTask).Scan(&version)
+			WHERE id = $1 AND account_id = $2 AND deleted_at IS NULL RETURNING version`, id, account, name, strings.TrimSpace(description), at, d.Trigger == TriggerTask).Scan(&version)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -180,6 +180,37 @@ func (e *Engine) UpdateWorkflow(ctx context.Context, account int64, id, name, de
 		return err
 	})
 	return version, err
+}
+
+// DeleteWorkflow deletes account's workflow id. Its row and versions stay, marked deleted_at, so
+// its runs and what happened in them stay readable; it is no longer listed, edited, the default or
+// run. A workflow with a run still going is refused: cancel or finish the run first.
+func (e *Engine) DeleteWorkflow(ctx context.Context, account int64, id string) error {
+	if !uuidRe.MatchString(id) {
+		return ErrNotFound
+	}
+	return pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		// the lock waits out a run being started, which holds the workflow FOR SHARE
+		var found bool
+		err := tx.QueryRow(ctx, "SELECT true FROM workflows WHERE id = $1 AND account_id = $2 AND deleted_at IS NULL FOR UPDATE",
+			id, account).Scan(&found)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		var live int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM workflow_runs WHERE workflow_id = $1 AND status NOT IN ($2, $3, $4)`,
+			id, Succeeded, Failed, Canceled).Scan(&live); err != nil {
+			return err
+		}
+		if live > 0 {
+			return conflict("this workflow has runs still going (%d): cancel them or let them finish first", live)
+		}
+		_, err = tx.Exec(ctx, "UPDATE workflows SET deleted_at = $3, is_default = false WHERE id = $1 AND account_id = $2", id, account, e.Now())
+		return err
+	})
 }
 
 // ownsHost refuses a host that is not account's.
@@ -282,7 +313,7 @@ func (e *Engine) StartRun(ctx context.Context, account int64, workflowID, input 
 		var version int
 		var def []byte
 		err := tx.QueryRow(ctx, `SELECT w.version, v.definition FROM workflows w JOIN workflow_versions v ON v.workflow_id = w.id AND v.version = w.version
-			WHERE w.id = $1 AND w.account_id = $2`, workflowID, account).Scan(&version, &def)
+			WHERE w.id = $1 AND w.account_id = $2 AND w.deleted_at IS NULL FOR SHARE OF w`, workflowID, account).Scan(&version, &def)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}

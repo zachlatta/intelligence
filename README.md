@@ -525,6 +525,12 @@ origin (another site's request is refused with 403), and those with a body must 
   workflows, a button adds the starting one (`workflow.Starting`) on the account's first host.
 - Task workflow cards offer Make default (one per account) and Clear default; without a default,
   the task picker keeps creation order. The choice is readable as `workflows.is_default`.
+- `DELETE /api/workflows/{id}`: deletes the workflow (204), from its card on `/workflows` or its
+  editor, after a confirmation. 409 while any of its runs is still going (cancel them or let them
+  finish); 404 for another account's or an already deleted one. The row and its versions stay,
+  marked `workflows.deleted_at`, so its runs and their events stay readable (marked “deleted”); it
+  leaves the list, the editor and the task picker, stops being the default, and cannot be edited,
+  chosen or run again.
 - `PUT /api/workflows/{id}/default` with `{"default": true}` (or `false` to clear):
   chooses the account's default task workflow (204); 404 for another account's workflow.
 - `GET /workflows/{id}`: the editor: the host and trigger, how the project is found, the orchestrator, and
