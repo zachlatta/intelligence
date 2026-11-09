@@ -30,6 +30,7 @@ type Client struct {
 
 	StatusEvery time.Duration // re-read the daemon's status (a change is reported); default 15s
 	LiveEvery   time.Duration // copy running agents' transcripts; default 2s
+	DiffEvery   time.Duration // re-read the diffs of workspaces an agent works in; default 5s
 	Settle      time.Duration // gather a burst of daemon updates into one report; default 1s
 	Logf        func(format string, args ...any)
 
@@ -45,6 +46,9 @@ func (b *Client) Run(ctx context.Context) error {
 	}
 	if b.LiveEvery == 0 {
 		b.LiveEvery = 2 * time.Second
+	}
+	if b.DiffEvery == 0 {
+		b.DiffEvery = 5 * time.Second
 	}
 	if b.Settle == 0 {
 		b.Settle = time.Second
@@ -62,12 +66,14 @@ func (b *Client) Run(ctx context.Context) error {
 		}
 	}
 	reported := &latest{wake: make(chan struct{}, 1)}
+	diffed := &latest{wake: make(chan struct{}, 1)}
 	b.schedules = &ScheduleSync{List: b.Watcher.Schedules, Inspect: b.Watcher.InspectSchedule, Send: b.Link.Schedules}
 	runs := []func(context.Context){
 		b.Watcher.Run,
 		b.Link.Run,
 		b.runCommands,
 		func(ctx context.Context) { b.syncTranscripts(ctx, reported) },
+		func(ctx context.Context) { b.syncDiffs(ctx, diffed) },
 		func(ctx context.Context) { b.update(ctx, versions) },
 	}
 	if b.Usage != nil {
@@ -85,7 +91,7 @@ func (b *Client) Run(ctx context.Context) error {
 	for _, run := range runs {
 		wg.Go(func() { run(ctx) })
 	}
-	b.report(ctx, reported)
+	b.report(ctx, reported, diffed)
 	wg.Wait()
 	return nil
 }
@@ -93,7 +99,7 @@ func (b *Client) Run(ctx context.Context) error {
 // report sends a report when the host connects (a new stream: the server may have missed
 // changes) and when the daemon's state changes, and hands each stored one to transcript syncing.
 // A report that fails is sent again on the next status read or connection.
-func (b *Client) report(ctx context.Context, reported *latest) {
+func (b *Client) report(ctx context.Context, reported ...*latest) {
 	status := time.NewTicker(b.StatusEvery)
 	defer status.Stop()
 	due, fresh := false, false // a report is due; the next one is the first on a new stream
@@ -143,7 +149,9 @@ func (b *Client) report(ctx context.Context, reported *latest) {
 			b.Logf("reporting again")
 			lastErr = ""
 		}
-		reported.put(snap, fresh)
+		for _, l := range reported {
+			l.put(snap, fresh)
+		}
 		if fresh {
 			b.syncSchedules(ctx)
 		}
@@ -198,6 +206,42 @@ func (b *Client) syncTranscripts(ctx context.Context, reported *latest) {
 		cancel()
 		if msg := fmt.Sprint(err); err != nil && msg != lastErr && ctx.Err() == nil {
 			b.Logf("transcript sync: %v", err)
+			lastErr = msg
+		} else if err == nil {
+			lastErr = ""
+		}
+	}
+}
+
+// syncDiffs sends the git workspaces' diffs that changed after each stored report and, while an
+// agent works, every DiffEvery.
+func (b *Client) syncDiffs(ctx context.Context, reported *latest) {
+	ds := &DiffSync{Read: b.Watcher.CheckoutDiff, Send: b.Link.Diff}
+	tick := time.NewTicker(b.DiffEvery)
+	defer tick.Stop()
+	lastErr := ""
+	for {
+		var snap PaseoStatus
+		select {
+		case <-ctx.Done():
+			return
+		case <-reported.wake:
+			var fresh bool
+			snap, fresh = reported.take()
+			if fresh {
+				ds.Reset() // the server may have lost them while the stream was down
+			}
+		case <-tick.C:
+			if snap = b.Watcher.Snapshot(); !anyRunning(snap.Agents) {
+				continue
+			}
+		}
+		syncCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		err := ds.Sync(syncCtx, snap)
+		cancel()
+		if msg := fmt.Sprint(err); err != nil && msg != lastErr && !errors.Is(err, ErrNotConnected) &&
+			!errors.Is(err, errNoDaemon) && ctx.Err() == nil {
+			b.Logf("diff sync: %v", err)
 			lastErr = msg
 		} else if err == nil {
 			lastErr = ""

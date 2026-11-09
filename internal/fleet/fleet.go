@@ -102,7 +102,11 @@ func (r *Registry) Record(ctx context.Context, rep hostclient.Report, at time.Ti
 			return err
 		}
 		if !ps.Connected {
-			return nil // a host that lost its daemon keeps its transcripts until it can say which agents are gone
+			return nil // a host that lost its daemon keeps its transcripts and diffs until it can say what is gone
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM workspace_diffs d WHERE d.host = $1
+			AND NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.host = d.host AND w.id = d.workspace_id AND w.listed)`, rep.Name); err != nil {
+			return err
 		}
 		_, err = tx.Exec(ctx, `DELETE FROM transcripts t WHERE t.host = $1
 			AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.host = t.host AND a.id = t.agent_id)`, rep.Name)

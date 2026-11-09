@@ -195,11 +195,14 @@ func runsOf(runs []paseo.ScheduleRun) []ScheduleRun {
 	return out
 }
 
-func cut(s string) string {
-	if len(s) <= maxRunText {
+func cut(s string) string { return cutAt(s, maxRunText) }
+
+// cutAt is s cut after n bytes (at a character boundary), marked as cut.
+func cutAt(s string, n int) string {
+	if len(s) <= n {
 		return s
 	}
-	i := maxRunText
+	i := n
 	for i > 0 && !utf8.RuneStart(s[i]) {
 		i--
 	}

@@ -52,7 +52,7 @@ func TestEveryPageSharesTheStylesheetAndTopBar(t *testing.T) {
 				t.Errorf("%s misses %q", p.path, want)
 			}
 		}
-		if strings.Count(page, `aria-current="page"`) != 1 {
+		if strings.Count(nav, `aria-current="page"`) != 1 {
 			t.Errorf("%s should mark exactly one tab", p.path)
 		}
 	}

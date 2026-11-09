@@ -72,6 +72,9 @@ The hierarchy is hosts > workspaces > agents:
   An entry keeps the daemon's item whole (`item`, jsonb); `kind` (user_message, assistant_message,
   reasoning, tool_call, ...), `tool`, `status` and `text` are generated from it. NUL characters,
   which Postgres cannot store, become U+FFFD.
+- `workspace_diffs`: each git workspace's diff (below): its files, each with its hunks of lines, as
+  `files` (jsonb), its totals, and why the daemon could not read it (`error`); the view
+  `workspace_diff_files` reads one changed file a row.
 - `commands`: what the server asked a host to do (below): its kind, args, status, result or error,
   and when it was created, sent, started, finished and when it expires.
 - `schedules` and `schedule_runs`: each host's Paseo schedules and their runs (below), with the view
@@ -102,7 +105,8 @@ open, dialing again 5 seconds after it drops. Each frame is a JSON `hostclient.F
   version is in the dial's `X-Intelligence-Version` header.
 - host to server: `report` (on each new stream, and within a second of a change; the host re-reads
   the daemon's status every 15 seconds and reports it if it changed), `transcript` batches, `usage`
-  (every 5 minutes), `host` (every minute), `schedules` (when they changed, below) and `command_update`s. Each carries an `id`, and the server answers each with an
+  (every 5 minutes), `host` (every minute), `schedules` (when they changed, below), `diff` (a workspace's diff, when it
+  changed, below) and `command_update`s. Each carries an `id`, and the server answers each with an
   `ack` once it is stored (or with why not), transcript batches on their own so a large one holds up
   nothing else.
 
@@ -205,6 +209,19 @@ schedules (one older than 0.15) is recorded in `hosts.schedules_error` and the l
 kept. A schedule's agent settings can hold MCP servers (with credentials), a system prompt and
 provider options: those are never read. A run's agent is usually archived when it finishes, and
 with it its transcript, so a run keeps the agent's id and its last message (`output`).
+
+### Diffs
+
+Each git workspace's diff goes up the stream when it changed, one `diff` frame per workspace: what
+the workspace's work changed against its base branch (from the merge base), with uncommitted and
+untracked files, as the daemon parses it for its own diff view (`checkout.diff.get`, mode `all`).
+Reading a diff runs git, so the host reads a workspace's again only when its diff stat, branch or
+directory moved, while an agent in it is working (every 5 seconds), once after the agent stops (for
+its last edits), and on each new stream; it sends it only when it differs from what it last sent. A
+line is cut after 4 KB, and past 2 MB of a workspace's files the biggest lose their hunks (status
+`too_large`, counts kept). A diff the daemon cannot read is sent with its reason. The server keeps
+each workspace's newest, and drops it when a host connected to its daemon no longer lists the
+workspace.
 
 ### Plan usage
 
@@ -344,7 +361,7 @@ its daemon keeps its transcripts.
 `daemon.get_status`, `fetch_workspaces` and `fetch_agents` requests (paged, the first page
 subscribing), and pushed `workspace_update` and `agent_update` messages. Commands use
 `workspace.create`, `agent.create`, `workspace.title.set`, `archive_workspace`, `update_agent`,
-`send_agent_message`, `cancel_agent` and `archive_agent`, and for schedules `schedule/list`,
+`send_agent_message`, `cancel_agent` and `archive_agent`, diffs with `checkout.diff.get`, and for schedules `schedule/list`,
 `inspect`, `create`, `update`, `pause`, `resume`, `delete` and `run-once` (which the daemon answers
 only when the run ends, so the host watches `inspect` for the run instead); a refusal comes back as
 the daemon's error. The hello opts in to
@@ -441,7 +458,7 @@ the account and enrollment routes, the host binaries and the streams (with a hos
   (raw HTML shown as text, unsafe links dropped, images named rather than loaded), thinking folded to
   a line, and runs of tool calls as a compact list that opens per call (commands with exit codes,
   diffs, reads, writes, searches). Long output is cut, with a link to the whole entry. Search,
-  thinking and tool toggles, the other agents in the workspace, and Archive (asking again while the
+  thinking and tool toggles, and Archive (asking again while the
   agent is running), which goes back to `/` once the agent is archived. While the agent is loaded the
   page re-fetches from its last block every 4 seconds and replaces it, so a growing message updates
   in place. A chat box at the bottom sends the agent a message through the commands API: Enter
@@ -452,6 +469,12 @@ the account and enrollment routes, the host binaries and the streams (with a hos
   microphone to AssemblyAI's streaming speech-to-text (Universal-3.6 Pro) and the words appear in the box
   as they are said. With text already in the box they go in at the cursor and stay there. In an empty
   box, ⌘D or Enter again stops and sends them, Edit stops and leaves them to change, Esc drops them.
+  On the left, a sidebar of every agent in the workspace (this one marked, sub-agents indented, with
+  their status), re-read every 15 seconds, and a link to start another there. On the right, for a git
+  workspace, its diff: each changed file with its counts, opening to its lines with old and new
+  line numbers, read from `workspace_diffs` whenever the host sends a new one (checked every 5
+  seconds). Each panel folds away (its button in the toolbar, or `[` and `]`) and stays as it was
+  left; on a narrow screen they lie over the page and start closed. Both read through `/api/sql`.
   Under its title, the agent's resources from `agent_minutes` and `oom_kills`: its CPU time (average
   and peak cores), memory now and at its peak, most processes, commands started and OOM kills, opening to charts of its CPU and memory over its life; re-read every minute while live.
 - `GET /hosts/{host}/agents/{id}/resources`: those resources alone, as HTML, for the live page.

@@ -159,6 +159,12 @@ func receive(ctx context.Context, a *app, host string, f hostclient.Frame) hostc
 		err = reg.RecordUsage(ctx, host, *f.Usage, cfg.Now())
 	case f.Type == hostclient.SchedulesFrame && f.Schedules != nil:
 		err = reg.RecordSchedules(ctx, host, *f.Schedules, cfg.Now())
+	case f.Type == hostclient.DiffFrame && f.Diff != nil:
+		if f.Diff.WorkspaceID == "" {
+			err = errors.New("bad diff: workspaceId is required")
+			break
+		}
+		err = reg.RecordDiff(ctx, host, *f.Diff, cfg.Now())
 	default:
 		err = fmt.Errorf("unexpected %q frame", f.Type)
 	}

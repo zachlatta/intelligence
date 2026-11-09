@@ -43,6 +43,8 @@ type Daemon struct {
 
 	catalog    []map[string]any // catalog.go
 	catalogSet bool
+
+	diffs map[string]diff // diff.go, by checkout directory
 }
 
 type timeline struct {
@@ -210,7 +212,7 @@ func (f *Daemon) answer(c *websocket.Conn, msg map[string]any) {
 		f.write(c, session("fetch_workspaces_response", map[string]any{"requestId": id, "entries": entries, "pageInfo": page,
 			"emptyProjects": []any{}}))
 	default:
-		if f.change(c, id, msg) || f.schedule(c, id, msg) {
+		if f.change(c, id, msg) || f.schedule(c, id, msg) || f.diff(c, id, msg) {
 			return
 		}
 		f.write(c, session("rpc_error", map[string]any{"requestId": id, "error": "unknown request"}))

@@ -124,3 +124,40 @@ func TestHostSendsItsPlansUsage(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestHostSendsItsWorkspacesDiffs(t *testing.T) {
+	s, d := newStreamServer(t), daemon(t)
+	d.SetDiff("/w/w1", paseotest.DiffFile("main.go", 2, 1))
+	hostRig(t, s, d)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		byID := map[string]*WorkspaceDiff{}
+		for _, f := range s.frames(DiffFrame) {
+			byID[f.Diff.WorkspaceID] = f.Diff
+		}
+		w1, w2 := byID["w1"], byID["w2"]
+		if w1 != nil && w2 != nil {
+			if len(w1.Files) != 1 || w1.Files[0].Path != "main.go" || w1.Additions != 2 || w1.Directory != "/w/w1" ||
+				w2.Error != "Not a git repository: /w/w2" {
+				t.Fatalf("w1 = %+v, w2 = %+v", w1, w2)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("diffs sent: %v", byID)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// a1 works in w1: its diff is read again and a change goes up
+	d.SetDiff("/w/w1", paseotest.DiffFile("main.go", 3, 1))
+	for {
+		got := s.frames(DiffFrame)
+		if last := got[len(got)-1].Diff; last.WorkspaceID == "w1" && last.Additions == 3 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a running agent's change never went up")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

@@ -57,9 +57,69 @@
   .img { display: inline-flex; gap: .35rem; align-items: baseline; padding: .1rem .5rem; border: 1px dashed var(--line);
     border-radius: .4rem; font-size: .85rem; color: var(--muted); }
 
-  .siblings { display: flex; flex-wrap: wrap; gap: .35rem; margin: .9rem 0 0; font-size: .8rem; }
-  .siblings a { text-decoration: none; color: var(--fg); padding: .1rem .55rem; border: 1px solid var(--line-strong); border-radius: 4px;
-    background: var(--bg-subtle); max-width: 18rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Side panels: the workspace's agents on the left, its diff on the right. Each folds away; on a wide
+     screen it takes its own column, on a narrow one it lies over the page. */
+  :root { --side-w: 15rem; --diff-w: clamp(26rem, 40vw, 52rem); }
+  .panel { position: fixed; top: 0; bottom: 0; z-index: 20; display: none; flex-direction: column; min-height: 0;
+    background: var(--panel); }
+  .side { left: 0; width: var(--side-w); border-right: 1px solid var(--line); }
+  .diffpane { right: 0; width: var(--diff-w); border-left: 1px solid var(--line); }
+  body.side-open .side, body.diff-open .diffpane { display: flex; }
+  @media (min-width: 64rem) { body.side-open { padding-left: var(--side-w); } }
+  @media (min-width: 80rem) {
+    body.diff-open { padding-right: var(--diff-w); }
+    body.diff-open #latest { right: calc(var(--diff-w) + 1rem); }
+  }
+  @media (max-width: 79.99rem) { .diffpane { width: min(92vw, 44rem); box-shadow: -8px 0 24px #0002; } }
+  @media (max-width: 63.99rem) { .side { width: min(85vw, 18rem); box-shadow: 8px 0 24px #0002; } }
+  .phead { flex: none; display: flex; align-items: center; gap: .35rem; padding: .55rem .5rem .55rem .75rem; border-bottom: 1px solid var(--line); }
+  .ptitle { flex: 1; min-width: 0; font-size: .85rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ptitle .muted { font-weight: 400; }
+  .psub { flex: none; padding: .35rem .75rem; font-size: .72rem; color: var(--muted); border-bottom: 1px solid var(--line); }
+  .pbtn { height: 1.6rem; padding: 0 .5rem; border-radius: 4px; border: 1px solid var(--line-strong); background: var(--panel);
+    color: var(--fg-2); font: inherit; font-size: 11.5px; cursor: pointer; }
+  .pbtn:hover { background: var(--bg-subtle); }
+  .pclose { flex: none; width: 1.6rem; height: 1.6rem; border: 0; border-radius: 4px; background: none; color: var(--muted);
+    font-size: 1.05rem; line-height: 1; cursor: pointer; }
+  .pclose:hover { background: var(--bg-muted); color: var(--fg); }
+  .pscroll { flex: 1; min-height: 0; overflow: auto; }
+  .ptoggle { display: inline-flex; align-items: center; gap: .35rem; }
+  .toolbar .ptoggle[aria-expanded=true] { background: var(--accent-bg); border-color: var(--accent-line); color: var(--accent); }
+  .ptoggle .add { color: var(--add); } .ptoggle .del { color: var(--del); }
+  .ptoggle .stat { font-variant-numeric: tabular-nums; font-size: 11.5px; }
+
+  .agentlist { padding: .3rem 0; }
+  .agentlist a { display: flex; align-items: center; gap: .45rem; padding: .32rem .75rem; color: var(--fg); font-size: .8rem;
+    text-decoration: none; border-left: 2px solid transparent; }
+  .agentlist a:hover { background: var(--bg-subtle); }
+  .agentlist a[aria-current=page] { background: var(--accent-bg); border-left-color: var(--accent); font-weight: 600; }
+  .agentlist a.sub { padding-left: 1.6rem; }
+  .agentlist .atitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agentlist .astatus { flex: none; font-size: .68rem; font-weight: 400; color: var(--muted); }
+  .agentlist .attn .astatus { color: var(--orange); }
+  .agentlist .dot, .agentlist .spinner { flex: none; }
+  .side .newagent { margin: .4rem .75rem .8rem; align-self: flex-start; }
+
+  .dfile { border-bottom: 1px solid var(--line); }
+  .dfile > summary { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: .45rem; padding: .32rem .75rem;
+    background: var(--panel); font-size: .78rem; min-width: 0; }
+  .dfile > summary:hover { background: var(--bg-subtle); }
+  .dfile[open] > summary { border-bottom: 1px solid var(--line); }
+  .dkind { flex: none; width: 1rem; text-align: center; font-family: var(--mono); font-size: .7rem; font-weight: 700; }
+  .dkind.A { color: var(--add); } .dkind.D { color: var(--del); } .dkind.M { color: var(--orange); } .dkind.R { color: var(--accent); }
+  .dpath { flex: 1; min-width: 0; font-family: var(--mono); font-size: .75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dpath .ddir { color: var(--muted); }
+  .dcount { flex: none; font-family: var(--mono); font-size: .72rem; }
+  .dcount .add, .dtotal .add { color: var(--add); } .dcount .del, .dtotal .del { color: var(--del); }
+  .dscroll { overflow-x: auto; }
+  .dtable { border-collapse: collapse; min-width: 100%; font-family: var(--mono); font-size: 12px; line-height: 1.45; }
+  .dtable td { padding: 0 .6rem 0 .3rem; white-space: pre; vertical-align: top; }
+  .dtable td.ln { width: 1%; padding: 0 .35rem; text-align: right; color: var(--faint); user-select: none; }
+  .dtable tr.add td { background: var(--add-bg); } .dtable tr.add td.code { color: var(--add); }
+  .dtable tr.remove td { background: var(--del-bg); } .dtable tr.remove td.code { color: var(--del); }
+  .dtable tr.header td { background: var(--bg-subtle); color: var(--hunk); }
+  .dnote { margin: 0; padding: .55rem .75rem; font-size: .8rem; color: var(--muted); }
+  .dnote.bad { color: var(--bad); }
 
   main { padding-top: .5rem; }
   .blk { margin: .5rem 0; }
@@ -176,22 +236,19 @@
   </div>
   {{template "resources" .Resources}}
 </div></header>
-{{if .Synced}}
 <div class="bar"><div class="wrap toolbar">
+  <button type="button" class="ptoggle" data-panel="side" aria-controls="side" aria-expanded="false" title="Agents in this workspace ( [ )">☰<span class="wide"> Agents</span></button>
+  {{if .Synced}}
   <input type="search" id="search" placeholder="Search" autocomplete="off" aria-label="Search this transcript">
   <span id="hits"></span>
   <button type="button" data-toggle="reasoning" aria-pressed="true">Thinking</button>
   <button type="button" data-toggle="tools" aria-pressed="true">Tools</button>
   <button type="button" id="expand">Expand<span class="wide"> all</span></button>
+  {{else}}<span class="grow"></span>{{end}}
+  {{if .Panels.HasDiff}}<button type="button" class="ptoggle" data-panel="diff" aria-controls="diff" aria-expanded="false" title="This workspace's changes ( ] )"><span class="wide">Changes</span><span class="stat" id="diffstat"><span class="add">+{{.Workspace.Additions}}</span> <span class="del">−{{.Workspace.Deletions}}</span></span></button>{{end}}
 </div></div>
-{{end}}
 
 <div class="wrap">
-  {{if .Siblings}}
-  <nav class="siblings" aria-label="Other agents in this workspace">
-    {{range .Siblings}}<a href="/hosts/{{$.Host}}/agents/{{.ID}}" title="{{.Status}}"><span class="dot {{.Status}}"></span> {{or .Title "(untitled)"}}</a>{{end}}
-  </nav>
-  {{end}}
   <main id="transcript" data-base="{{.Base}}" data-epoch="{{.Transcript.Epoch}}" data-live="{{if .Live}}1{{end}}">
   {{if .Synced}}
     {{if .Blocks}}{{template "blocks" .BlocksData}}{{else}}<p class="empty">Nothing in this transcript yet.</p>{{end}}
@@ -204,6 +261,189 @@
   </main>
 </div>
 <button id="latest" type="button">↓ Latest</button>
+
+<aside id="side" class="panel side" aria-label="Agents in this workspace" data-agents-sql="{{.Panels.AgentsSQL}}" data-host="{{.Host}}" data-current="{{.Agent.ID}}">
+  <div class="phead">
+    <div class="ptitle" title="{{.Workspace.Directory}}">{{if .Workspace.Listed}}{{or .Workspace.Name .Workspace.ID}}{{else}}{{.Workspace.ID}}{{end}}{{if .Workspace.Branch}} <span class="muted">· {{.Workspace.Branch}}</span>{{end}}</div>
+    <button type="button" class="pclose" data-panel="side" aria-controls="side" aria-label="Hide the agents" title="Hide ( [ )">×</button>
+  </div>
+  <div class="pscroll">
+    <nav class="agentlist" id="agentlist">
+      {{range .Workspace.Agents}}<a href="/hosts/{{$.Host}}/agents/{{.ID}}"{{if eq .ID $.Agent.ID}} aria-current="page"{{end}} class="{{if .ParentID}}sub {{end}}{{if .RequiresAttention}}attn{{end}}" title="{{or .Title "(untitled)"}}">{{if working .Status}}<span class="spinner" style="color: var(--accent)"></span>{{else}}<span class="dot {{.Status}}"></span>{{end}}<span class="atitle">{{or .Title "(untitled)"}}</span><span class="astatus">{{if .RequiresAttention}}needs you{{else}}{{.Status}}{{end}}</span></a>
+      {{end}}
+    </nav>
+    {{if .Workspace.Listed}}<a class="btn ghost sm newagent" href="/hosts/{{.Host}}/workspaces/{{.Workspace.ID}}/agents/new">+ New agent here</a>{{end}}
+  </div>
+</aside>
+{{if .Panels.HasDiff}}
+<aside id="diff" class="panel diffpane" aria-label="This workspace's changes" data-diff-sql="{{.Panels.DiffSQL}}" data-stamp-sql="{{.Panels.DiffStampSQL}}">
+  <div class="phead">
+    <div class="ptitle">Changes <span class="muted dtotal" id="difftotals"></span></div>
+    <button type="button" class="pbtn" id="difffold">Collapse all</button>
+    <button type="button" class="pclose" data-panel="diff" aria-controls="diff" aria-label="Hide the changes" title="Hide ( ] )">×</button>
+  </div>
+  <div class="psub">Against the base branch, with uncommitted and untracked files<span id="diffwhen"></span></div>
+  <div class="pscroll" id="diffbody"><p class="dnote">Loading…</p></div>
+</aside>
+{{end}}
+<script>
+// The side panels: the workspace's agents (left) and its diff (right). Each opens and closes with
+// its buttons or [ and ], and is remembered; on a narrow screen they lie over the page, one at a
+// time, and start closed. Both read through the read-only SQL API.
+(() => {
+  const body = document.body, names = ['side', 'diff'];
+  const narrow = matchMedia('(max-width: 63.99rem)');
+  const isOpen = name => body.classList.contains(name + '-open');
+  const sql = async query => {
+    const res = await fetch('/api/sql', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }) });
+    const out = await res.json();
+    if (!res.ok) throw new Error(out.error || res.statusText);
+    return out.rows;
+  };
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+
+  function set(name, open, remember) {
+    if (!document.getElementById(name)) return;
+    body.classList.toggle(name + '-open', open);
+    document.querySelectorAll('[data-panel="' + name + '"]').forEach(b => b.setAttribute('aria-expanded', open));
+    if (remember && !narrow.matches) localStorage.setItem('panel-' + name, open ? '1' : '0');
+    if (open && narrow.matches) names.filter(n => n !== name && isOpen(n)).forEach(n => set(n, false, false));
+    if (open) (name === 'diff' ? loadDiff : loadAgents)();
+  }
+  const defaults = { side: true, diff: matchMedia('(min-width: 90rem)').matches };
+  for (const name of names) {
+    const kept = localStorage.getItem('panel-' + name);
+    set(name, !narrow.matches && (kept === null ? defaults[name] : kept === '1'), false);
+  }
+  document.querySelectorAll('[data-panel]').forEach(b => b.addEventListener('click', () => set(b.dataset.panel, !isOpen(b.dataset.panel), true)));
+  document.addEventListener('keydown', e => {
+    if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest('input, textarea, select, [contenteditable]')) return;
+    if (e.key === '[') set('side', !isOpen('side'), true);
+    else if (e.key === ']') set('diff', !isOpen('diff'), true);
+    else if (e.key === 'Escape' && narrow.matches) names.forEach(n => set(n, false, false));
+  });
+
+  // The workspace's agents, re-read while the panel is open.
+  const side = document.getElementById('side'), list = document.getElementById('agentlist');
+  let agentsBusy = false;
+  async function loadAgents() {
+    if (agentsBusy || !isOpen('side') || document.hidden) return;
+    agentsBusy = true;
+    try {
+      const rows = await sql(side.dataset.agentsSql);
+      const ids = new Set(rows.map(r => r[0]));
+      list.replaceChildren(...rows.map(([id, title, status, attn, parent]) => {
+        const a = el('a', (parent && ids.has(parent) ? 'sub ' : '') + (attn ? 'attn' : ''));
+        a.href = '/hosts/' + side.dataset.host + '/agents/' + id;
+        a.title = title || '(untitled)';
+        if (id === side.dataset.current) a.setAttribute('aria-current', 'page');
+        const working = status === 'running' || status === 'initializing';
+        const mark = el('span', working ? 'spinner' : 'dot ' + status);
+        if (working) mark.style.color = 'var(--accent)';
+        a.append(mark, el('span', 'atitle', title || '(untitled)'), el('span', 'astatus', attn ? 'needs you' : status));
+        return a;
+      }));
+    } catch { /* keep the list as it was */ } finally { agentsBusy = false; }
+  }
+  setInterval(loadAgents, 15000);
+
+  // The diff: read when its time changes; each file's lines are drawn when it is first opened.
+  const pane = document.getElementById('diff');
+  if (!pane) return;
+  const dbody = document.getElementById('diffbody'), totals = document.getElementById('difftotals');
+  const when = document.getElementById('diffwhen'), stat = document.getElementById('diffstat'), fold = document.getElementById('difffold');
+  const opened = new Map(); // path -> open, as the reader left it
+  let stamp, diffBusy = false, at;
+  const ago = t => { const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+    return s < 60 ? s + 's ago' : s < 3600 ? Math.floor(s / 60) + 'm ago' : s < 86400 ? Math.floor(s / 3600) + 'h ago' : Math.floor(s / 86400) + 'd ago'; };
+  const showWhen = () => { when.textContent = at ? ' · read ' + ago(at) : ''; when.title = at ? new Date(at).toLocaleString() : ''; };
+  setInterval(showWhen, 10000);
+  const counts = (a, d) => { const s = el('span'); s.append(el('span', 'add', '+' + a), ' ', el('span', 'del', '−' + d)); return s; };
+
+  function lines(f) {
+    const wrap = el('div', 'dscroll'), table = el('table', 'dtable'), tb = el('tbody');
+    for (const h of f.hunks || []) {
+      let o = h.oldStart, n = h.newStart;
+      for (const l of h.lines || []) {
+        const tr = el('tr', l.type), sign = { add: '+', remove: '-', context: ' ' }[l.type];
+        const lo = l.type === 'add' || l.type === 'header' ? '' : o++, ln = l.type === 'remove' || l.type === 'header' ? '' : n++;
+        tr.append(el('td', 'ln', lo), el('td', 'ln', ln), el('td', 'code', sign === undefined ? l.content : sign + l.content));
+        tb.append(tr);
+      }
+    }
+    table.append(tb); wrap.append(table);
+    return wrap;
+  }
+
+  function file(f, open) {
+    const d = el('details', 'dfile'), s = el('summary');
+    const kind = f.isNew ? 'A' : f.isDeleted ? 'D' : f.oldPath && f.oldPath !== f.path ? 'R' : 'M';
+    const k = el('span', 'dkind ' + kind, kind);
+    k.title = { A: 'added', D: 'deleted', R: 'renamed', M: 'modified' }[kind];
+    const p = el('span', 'dpath'), cut = f.path.lastIndexOf('/') + 1;
+    p.title = (kind === 'R' ? f.oldPath + ' → ' : '') + f.path;
+    if (kind === 'R') p.append(el('span', 'ddir', f.oldPath + ' → '));
+    p.append(el('span', 'ddir', f.path.slice(0, cut)), f.path.slice(cut));
+    const c = el('span', 'dcount'); c.append(counts(f.additions, f.deletions));
+    s.append(k, p, c);
+    d.append(s);
+    d.dataset.path = f.path;
+    const draw = () => {
+      if (d.dataset.drawn) return;
+      d.dataset.drawn = '1';
+      d.append(f.status === 'binary' ? el('p', 'dnote', 'Binary file.') :
+        f.status === 'too_large' ? el('p', 'dnote', 'Too large to show here.') : lines(f));
+    };
+    d.addEventListener('toggle', () => { opened.set(f.path, d.open); if (d.open) draw(); });
+    if (open) { d.open = true; draw(); }
+    return d;
+  }
+
+  function render(row) {
+    const keep = dbody.scrollTop;
+    if (!row) {
+      at = null; totals.textContent = '';
+      dbody.replaceChildren(el('p', 'dnote', 'No diff yet: the host sends it with its next read.'));
+      showWhen(); return;
+    }
+    const [error, tooLarge, , additions, deletions, files, collected] = row;
+    at = Date.parse(collected);
+    showWhen();
+    totals.replaceChildren(files.length + (files.length === 1 ? ' file · ' : ' files · '), counts(additions, deletions));
+    if (stat) stat.replaceChildren(counts(additions, deletions));
+    if (error) { dbody.replaceChildren(el('p', 'dnote bad', 'Paseo could not read this diff: ' + error)); return; }
+    if (tooLarge) { dbody.replaceChildren(el('p', 'dnote', 'This diff is too large for Paseo to show.')); return; }
+    if (!files.length) { dbody.replaceChildren(el('p', 'dnote', 'No changes against the base branch.')); return; }
+    const size = files.reduce((n, f) => n + (f.hunks || []).reduce((m, h) => m + (h.lines || []).length, 0), 0);
+    const openAll = size <= 3000 && fold.dataset.folded !== '1';
+    dbody.replaceChildren(...files.map(f => file(f, opened.has(f.path) ? opened.get(f.path) : openAll)));
+    dbody.scrollTop = keep;
+  }
+
+  async function loadDiff(force) {
+    if (diffBusy || !isOpen('diff') || document.hidden) return;
+    diffBusy = true;
+    try {
+      const [s] = await sql(pane.dataset.stampSql);
+      if (!force && stamp !== undefined && (s ? s[0] : null) === stamp) return;
+      const [row] = s ? await sql(pane.dataset.diffSql) : [];
+      stamp = row ? row[6] : null;
+      render(row);
+    } catch (err) {
+      dbody.replaceChildren(el('p', 'dnote bad', 'Could not read the diff: ' + err.message));
+    } finally { diffBusy = false; }
+  }
+  setInterval(() => loadDiff(), 5000);
+  document.addEventListener('visibilitychange', () => { loadDiff(); loadAgents(); });
+
+  fold.addEventListener('click', () => {
+    const close = fold.textContent.startsWith('Collapse');
+    fold.dataset.folded = close ? '1' : '';
+    fold.textContent = close ? 'Expand all' : 'Collapse all';
+    dbody.querySelectorAll('details.dfile').forEach(d => { d.open = !close; opened.set(d.dataset.path, !close); });
+  });
+})();
+</script>
 
 <form id="chat" class="chat" data-commands="{{.Chat.Commands}}" data-agent="{{.Agent.ID}}" data-host="{{.Host}}"
   data-pending-sql="{{.Chat.PendingSQL}}" data-queue-ttl="{{.Chat.QueueTTL}}" data-status="{{.Agent.Status}}"{{if .Chat.Dictation}} data-dictation="{{.Chat.Dictation}}"{{end}}><div class="wrap">

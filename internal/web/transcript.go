@@ -119,9 +119,31 @@ func transcriptPage(cfg Config, reg *fleet.Registry, w http.ResponseWriter, r *h
 		"Host": host, "Agent": agent, "Workspace": ws, "Siblings": siblings, "Transcript": tr, "Synced": err == nil,
 		"Now": cfg.Now(), "Base": base, "Stats": stats, "Live": err == nil && live(agent), "Blocks": blocks,
 		"BlocksData": blocksData{Base: base, Blocks: blocks, Now: cfg.Now()}, "Resources": res,
+		"Panels": panelsFor(host, ws),
 		"Chat": map[string]string{"Commands": "/api/hosts/" + host + "/commands", "PendingSQL": pendingMessagesSQL(host, agentID),
 			"QueueTTL": queuedMessageTTL, "Dictation": dictationPath(cfg)},
 	})
+}
+
+// panels is what the agent page's side panels read: the workspace's agents (left) and, for a git
+// workspace, its diff (right). The page re-reads both through the SQL API.
+type panels struct {
+	AgentsSQL    string
+	HasDiff      bool
+	DiffSQL      string // the whole diff
+	DiffStampSQL string // only when it was read, to see whether to fetch it again
+}
+
+func panelsFor(host string, ws *fleet.WorkspaceAgents) panels {
+	h, id := sqlString(host), sqlString(ws.ID)
+	return panels{
+		AgentsSQL: `SELECT id, title, status, requires_attention, parent_id, provider, created_at FROM agents WHERE host = ` + h +
+			` AND workspace_id = ` + id + ` ORDER BY (status IN ('running', 'initializing')) DESC, created_at DESC, id`,
+		HasDiff: ws.Branch != "",
+		DiffSQL: `SELECT error, too_large, file_count, additions, deletions, files, collected_at FROM workspace_diffs WHERE host = ` +
+			h + ` AND workspace_id = ` + id,
+		DiffStampSQL: `SELECT collected_at FROM workspace_diffs WHERE host = ` + h + ` AND workspace_id = ` + id,
+	}
 }
 
 // transcriptBlocks sends the blocks from seq `from` on, for a live page to replace its tail with.

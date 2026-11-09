@@ -34,6 +34,7 @@ type Frame struct {
 	Usage      *usage.Report     `json:"usage,omitempty"`      // usage: host -> server
 	Host       *resources.Report `json:"host,omitempty"`       // host: host -> server
 	Schedules  *ScheduleReport   `json:"schedules,omitempty"`  // schedules: host -> server
+	Diff       *WorkspaceDiff    `json:"diff,omitempty"`       // diff: host -> server
 	Command    *Command          `json:"command,omitempty"`    // command: server -> host
 	Error      string            `json:"error,omitempty"`      // ack: refused, and why
 	Code       string            `json:"code,omitempty"`       // ack: AckResend or AckNotYet
@@ -48,6 +49,7 @@ const (
 	UsageFrame         = "usage"
 	HostFrame          = "host"
 	SchedulesFrame     = "schedules"
+	DiffFrame          = "diff"
 	CommandFrame       = "command"
 	AckFrame           = "ack"
 )
@@ -293,6 +295,11 @@ func (l *Link) Resources(ctx context.Context, r resources.Report) error {
 // Schedules sends the daemon's schedules.
 func (l *Link) Schedules(ctx context.Context, r ScheduleReport) error {
 	return l.call(ctx, Frame{Type: SchedulesFrame, Schedules: &r})
+}
+
+// Diff sends one workspace's diff.
+func (l *Link) Diff(ctx context.Context, d WorkspaceDiff) error {
+	return l.call(ctx, Frame{Type: DiffFrame, Diff: &d})
 }
 
 // TranscriptCursors are the server's transcript cursors from the current stream's hello.
