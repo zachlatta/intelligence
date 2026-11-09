@@ -309,9 +309,9 @@ if (edit) {
 {{if and (eq .S.Target "new-agent") .Dictation}}<script src="/dictation.js"></script>
 <script>
 (() => {
-  const save = edit.querySelector(".form-actions .primary");
+  // only puts words in the prompt: the schedule is saved with Save, never by dictation
   dictation({ text: edit.prompt, tokenPath: edit.dataset.dictation, mic: document.getElementById("dictate"),
-    row: edit.querySelector(".form-actions"), label: () => save.textContent, send: () => edit.requestSubmit(),
+    row: edit.querySelector(".form-actions"), label: () => "Done", insertOnly: true,
     warn: (msg) => say(msg, true) });
 })();
 </script>

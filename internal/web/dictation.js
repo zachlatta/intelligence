@@ -14,7 +14,9 @@
 //   warn(msg) shows a problem
 //   onstart() optional: clears a previous warning when a new dictation session starts
 //   active()  optional: whether keyboard shortcuts should act on this box (e.g. an open dialog)
-window.dictation = ({ text, tokenPath, mic, row, label, send, warn, active = () => true, onstart = () => {} }) => {
+//   insertOnly optional: always put the words in at the cursor and never send, even into an empty
+//             box (a form that saves only on its own button, like a schedule's edit form)
+window.dictation = ({ text, tokenPath, mic, row, label, send = () => {}, warn, active = () => true, onstart = () => {}, insertOnly = false }) => {
   const bar = document.createElement('div');
   bar.className = 'dictation';
   bar.hidden = true;
@@ -58,7 +60,7 @@ window.dictation = ({ text, tokenPath, mic, row, label, send, warn, active = () 
 
   async function start() {
     onstart();
-    const mode = text.value.trim() ? 'append' : 'send';
+    const mode = insertOnly || text.value.trim() ? 'append' : 'send';
     const s = session = { mode, original: text.value, before: text.value.slice(0, text.selectionStart),
       after: text.value.slice(text.selectionEnd), turns: new Map(), queue: [], ws: null, stopping: false };
     let closed; s.closed = new Promise(r => closed = r);
