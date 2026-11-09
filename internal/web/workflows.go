@@ -459,11 +459,11 @@ func runAgents(ctx context.Context, p *pgxpool.Pool, r runRow) ([]agentRow, erro
 	rows, err := p.Query(ctx, `WITH RECURSIVE tree AS (
 		SELECT a.id, a.title, a.provider, a.model, a.status, a.parent_id, 0 AS depth,
 			ARRAY[lpad(array_position($2::text[], a.id)::text, 3, '0')] AS path
-		FROM agents a WHERE a.host = $1 AND a.id = ANY($2)
+		FROM recorded_agents a WHERE a.host = $1 AND a.id = ANY($2)
 		UNION ALL
 		SELECT a.id, a.title, a.provider, a.model, a.status, a.parent_id, t.depth + 1,
 			t.path || (coalesce(to_char(a.created_at AT TIME ZONE 'UTC', 'YYYYMMDDHH24MISSUS'), '') || a.id)
-		FROM agents a JOIN tree t ON a.parent_id = t.id WHERE a.host = $1 AND t.depth < 6)
+		FROM recorded_agents a JOIN tree t ON a.parent_id = t.id WHERE a.host = $1 AND t.depth < 6)
 		SELECT id, title, provider, model, status, parent_id, depth FROM tree ORDER BY path`, r.Host, roots)
 	if err != nil {
 		return nil, err

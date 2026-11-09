@@ -579,7 +579,7 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		if err != nil {
 			return err
 		}
-		if finished != nil {
+		if status == Succeeded {
 			return e.archiveRun(ctx, tx, r)
 		}
 		return nil
@@ -594,7 +594,7 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 			if err := e.event(ctx, tx, r, "done", ptr(r.Step), nil, text); err != nil {
 				return "", err
 			}
-			return "That was the last step: the run is finished. End your turn now; the workspace and its agents will be archived automatically.", set(Succeeded, r.Step, "")
+			return "That was the last step: the run is finished. Archive any sub-agents you started outside this workspace, then end your turn. The workspace and its agents will be archived automatically.", set(Succeeded, r.Step, "")
 		}
 		if err := e.event(ctx, tx, r, m.Move, ptr(r.Step), ptr(r.Step+1), text); err != nil {
 			return "", err
@@ -627,7 +627,7 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		if err := e.event(ctx, tx, r, "fail", ptr(r.Step), nil, m.Why); err != nil {
 			return "", err
 		}
-		return "The run is marked failed. End your turn now; the workspace and its agents will be archived automatically.", set(Failed, r.Step, "")
+		return "The run is marked failed. The workspace stays for inspection. Archive any sub-agents you started outside this workspace, then stop.", set(Failed, r.Step, "")
 	}
 	return "", bad("unknown move %q: want next, back, skip, ask, done or fail.", m.Move)
 }

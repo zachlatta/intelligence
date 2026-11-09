@@ -653,7 +653,7 @@ func TestARunShowsHowLongEachStepTook(t *testing.T) {
 }
 
 func TestFinishedWorkflowQueuesArchiveAndKeepsArchiveFailureSeparate(t *testing.T) {
-	for _, ending := range []string{"next", "skip", "done", "fail"} {
+	for _, ending := range []string{"next", "skip", "done"} {
 		t.Run(ending, func(t *testing.T) {
 			h, _ := dbServer(t)
 			sendReport(t, h, wfReport())
@@ -731,4 +731,114 @@ func TestFailedOrchestratorStartArchivesItsPartialWorkspace(t *testing.T) {
 	if r := readRun(t, h, run); r["status"] != "failed" || !strings.Contains(r["error"].(string), "agent failed to start") {
 		t.Fatalf("run = %v", r)
 	}
+}
+
+func TestFailedWorkflowLeavesWorkspaceAndExplainsExternalCleanup(t *testing.T) {
+	h, _ := dbServer(t)
+	sendReport(t, h, wfReport())
+	b := openStream(t, h, "host-1")
+	def := workflow.Starting
+	def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+	run := startRun(t, h, createWorkflow(t, h, def), "fail me")
+	succeed(t, b, b.command(), `{"workspaceId":"w-run","agentId":"orch-1"}`)
+	code, msg := move(t, h, keyOf(t, h, "host-1"), run, map[string]string{"move": "fail", "why": "needs inspection"})
+	if code != http.StatusOK || !strings.Contains(msg, "outside this workspace") || strings.Contains(msg, "archived automatically") {
+		t.Fatalf("fail reply: %d %s", code, msg)
+	}
+	code, rows := sqlPost(t, h, q(`SELECT count(*) FROM commands WHERE kind = 'archive_workspace'`))
+	if code != http.StatusOK || rows.Rows[0][0] != float64(0) {
+		t.Fatal("failed run queued cleanup")
+	}
+}
+
+func TestFinishedWorkflowRetainsAgentsTranscriptsAndDiffAfterArchiveReport(t *testing.T) {
+	h, _ := dbServer(t)
+	rep := wfReport()
+	sendReport(t, h, rep)
+	b := openStream(t, h, "host-1")
+	def := workflow.Starting
+	def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+	run := startRun(t, h, createWorkflow(t, h, def), "keep history")
+	succeed(t, b, b.command(), `{"workspaceId":"w-app","agentId":"`+agentA1+`"}`)
+	rep.Paseo.Agents = append([]hostclient.Agent(nil), rep.Paseo.Agents...)
+	rep.Paseo.Agents[1].ParentID = agentA1
+	rep.Paseo.Agents[2].ParentID = agentA1
+	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	tr := batch(true, "history", tentry(1, `{"type":"assistant_message","text":"Preserved workflow result"}`))
+	if ack := b.call(hostclient.Frame{Type: hostclient.TranscriptFrame, Transcript: &tr}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	child := tr
+	child.AgentID = rep.Paseo.Agents[1].ID
+	child.Entries = []hostclient.TranscriptEntry{tentry(1, `{"type":"assistant_message","text":"Preserved external child result"}`)}
+	if ack := b.call(hostclient.Frame{Type: hostclient.TranscriptFrame, Transcript: &child}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	rep.Paseo.Agents = append(rep.Paseo.Agents[:1:1], rep.Paseo.Agents[2:]...)
+	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	diff := sampleDiff()
+	if ack := b.call(hostclient.Frame{Type: hostclient.DiffFrame, Diff: &diff}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	code, msg := move(t, h, keyOf(t, h, "host-1"), run, map[string]string{"move": "done"})
+	if code != http.StatusOK || !strings.Contains(msg, "outside this workspace") {
+		t.Fatalf("done: %d %s", code, msg)
+	}
+	succeed(t, b, b.command(), `{"workspaceId":"w-app"}`)
+	rep.Paseo.Workspaces = nil
+	rep.Paseo.Agents = nil
+	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	} // later reports must retain the history too
+	page := get(t, h, "/workflow-runs/"+run, nil)
+	for _, a := range wfReport().Paseo.Agents {
+		if !strings.Contains(page.Body.String(), `/hosts/host-1/agents/`+a.ID) {
+			t.Errorf("run lost agent %s", a.ID)
+		}
+	}
+	page = get(t, h, "/hosts/host-1/agents/"+agentA1, nil)
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Preserved workflow result") {
+		t.Fatalf("transcript lost: %d", page.Code)
+	}
+	if strings.Contains(get(t, h, "/", nil).Body.String(), `/hosts/host-1/agents/`+agentA1+`"`) {
+		t.Fatal("archived agent appears in live fleet")
+	}
+	childPage := get(t, h, "/hosts/host-1/agents/"+wfReport().Paseo.Agents[1].ID, nil)
+	if childPage.Code != http.StatusOK || !strings.Contains(childPage.Body.String(), "Preserved external child result") {
+		t.Fatal("lost child archived before workflow finished")
+	}
+	late := tr
+	late.Replace = false
+	late.Entries = []hostclient.TranscriptEntry{tentry(2, `{"type":"assistant_message","text":"Late final batch"}`)}
+	if ack := b.call(hostclient.Frame{Type: hostclient.TranscriptFrame, Transcript: &late}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	code, diffs := sqlPost(t, h, q(`SELECT path FROM workspace_diff_files WHERE workspace_id = 'w-app'`))
+	if code != http.StatusOK || len(diffs.Rows) != 1 || diffs.Rows[0][0] != "login.go" {
+		t.Fatalf("lost run diff: %+v", diffs)
+	}
+	code, rows := sqlPost(t, h, q(`SELECT count(*) FROM transcript_entries WHERE text = 'Preserved workflow result'`))
+	if code != http.StatusOK || rows.Rows[0][0] != float64(1) {
+		t.Fatalf("SQL lost transcript: %+v", rows)
+	}
+	ts := h.(*testServer)
+	bob, err := ts.store.Create(t.Context(), "bob", testPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asBob := sessionFor(t, ts.store, bob)
+	for _, table := range []string{"workflow_run_agents", "recorded_agents", "recorded_workspaces", "recorded_workspace_status", "transcript_entries", "workspace_diffs"} {
+		rec := call(t, h, http.MethodGet, "/api/sql?q=SELECT+count(*)+FROM+"+table, "", nil, asBob)
+		if !strings.Contains(rec.Body.String(), `"rows":[[0]]`) {
+			t.Errorf("history leaked through %s: %s", table, rec.Body)
+		}
+	}
+
 }

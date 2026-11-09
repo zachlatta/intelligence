@@ -358,17 +358,28 @@ A run is on a step from the move that hands it the step (the orchestrator starti
 `next`, `skip` or `back`) to the move that leaves it (`next`, `skip`, `back`, `done`, `fail`, or a
 cancel); waiting for Zach's reply counts toward the step. `workflow_run_step_visits` reads each visit.
 
-After the last step (`next` or `skip`), explicit `done`, or `fail`, the server queues
+After the last step (`next` or `skip`), or explicit `done`, the server queues
 `archive_workspace` for the run's workspace. The host waits for the orchestrator's turn to end,
 so its final CLI reply returns before its workspace and agents are archived. The final reply tells
-it to end its turn. A failed orchestrator start also archives any workspace it made. Cancellation
-still stops the orchestrator and leaves the workspace for inspection.
+it to archive any sub-agents it started outside this workspace, then end its turn. A failed
+orchestrator start also archives any workspace it made. Explicit `fail` and cancellation leave
+the workspace for inspection; cancellation stops the orchestrator.
 
 Cleanup is durable across server and host restarts, with a 24-hour expiry. `workflow_runs.archive_command`
 links to `commands` for its progress, error and result; the run page shows that status too. An archive
 failure or expiry leaves the run's outcome intact. A stuck orchestrator is never forcibly archived
 by this cleanup after the deadline; the failure can be inspected and archiving retried with the
 existing workspace command.
+
+A run keeps the last reported metadata for its orchestrator, project finder and sub-agents,
+including descendants in other workspaces and agents archived before the last step. Host reports
+save these snapshots in `workflow_run_agents`. `recorded_agents`, `recorded_workspaces` and
+`recorded_workspace_status` combine live rows with history. Each account can read only its own runs.
+The run page still lists these agents after archiving, and their transcript links still work.
+Their synced transcripts and last workspace diffs remain in `transcripts`, `transcript_entries`
+and `workspace_diffs`; late transcript batches are accepted too. History preserves what the host
+reported, not unsynced messages. Archived agents appear closed in history and stay off the live
+fleet page. The history follows its run and host when either is deleted.
 
 Variables in instructions: `{{input}}`, `{{repo}}`, `{{branch}}` and `{{run}}`.
 
@@ -409,8 +420,8 @@ timeline) replaces the copy.
 **A closed agent's transcript is never read:** the daemon answers a timeline read by loading the
 agent, which starts a closed agent again. An agent's transcript is copied while it is loaded and
 kept after Paseo closes it; one closed before syncing reached it has none until it is opened again.
-A transcript goes when its agent is gone from a connected host's report (archived); a host that loses
-its daemon keeps its transcripts.
+A transcript goes when its agent is gone from a connected host's report (archived), unless a
+workflow run retains that agent; a host that loses its daemon keeps its transcripts.
 
 ### Talking to Paseo
 

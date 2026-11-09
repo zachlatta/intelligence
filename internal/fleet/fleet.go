@@ -63,6 +63,9 @@ func (r *Registry) Record(ctx context.Context, rep hostclient.Report, at time.Ti
 		if err != nil {
 			return err
 		}
+		if err := captureWorkflowAgents(ctx, tx, rep.Name, at); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, "DELETE FROM workspaces WHERE host = $1", rep.Name); err != nil { // and their agents
 			return err
 		}
@@ -101,15 +104,19 @@ func (r *Registry) Record(ctx context.Context, rep hostclient.Report, at time.Ti
 			"updated_at", "last_user_message_at"}, pgx.CopyFromRows(arows)); err != nil {
 			return err
 		}
+		if err := captureWorkflowAgents(ctx, tx, rep.Name, at); err != nil {
+			return err
+		}
 		if !ps.Connected {
 			return nil // a host that lost its daemon keeps its transcripts and diffs until it can say what is gone
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM workspace_diffs d WHERE d.host = $1
-			AND NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.host = d.host AND w.id = d.workspace_id AND w.listed)`, rep.Name); err != nil {
+			AND NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.host = d.host AND w.id = d.workspace_id AND w.listed)
+            AND NOT EXISTS (SELECT 1 FROM workflow_run_agents h WHERE h.host = d.host AND h.workspace->>'id' = d.workspace_id)`, rep.Name); err != nil {
 			return err
 		}
 		_, err = tx.Exec(ctx, `DELETE FROM transcripts t WHERE t.host = $1
-			AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.host = t.host AND a.id = t.agent_id)`, rep.Name)
+			AND NOT EXISTS (SELECT 1 FROM recorded_agents a WHERE a.host = t.host AND a.id = t.agent_id)`, rep.Name)
 		return err
 	})
 }
@@ -117,6 +124,20 @@ func (r *Registry) Record(ctx context.Context, rep hostclient.Report, at time.Ti
 // List returns every host by name. Its workspaces come with running agents first, then with any
 // agents, then the most recently active; agents are running first, then newest.
 func (r *Registry) List(ctx context.Context) ([]Host, error) {
+	return r.list(ctx, false)
+}
+
+// ListWithHistory includes a run's archived agents for transcript navigation. The live fleet
+// continues to use List, so archived agents do not appear active or offer workspaces to reuse.
+func (r *Registry) ListWithHistory(ctx context.Context) ([]Host, error) {
+	return r.list(ctx, true)
+}
+
+func (r *Registry) list(ctx context.Context, history bool) ([]Host, error) {
+	agentTable, workspaceTable := "agents", "workspace_status"
+	if history {
+		agentTable, workspaceTable = "recorded_agents", "recorded_workspace_status"
+	}
 	rows, err := r.p.Query(ctx, `SELECT name, client_version, collected_at, last_seen, online, connected, paseo_error,
 		status_error, paseo_version, hostname, listen, pid, started_at, providers, providers_at
 		FROM host_status ORDER BY name`)
@@ -156,7 +177,7 @@ func (r *Registry) List(ctx context.Context) ([]Host, error) {
 		a.status, a.cwd, a.requires_attention, a.attention_reason, a.created_at, a.updated_at, a.last_user_message_at,
 		t.agent_id IS NOT NULL,
 		(SELECT count(*) FROM transcript_entries e WHERE e.host = a.host AND e.agent_id = a.id)::int
-		FROM agents a LEFT JOIN transcripts t ON t.host = a.host AND t.agent_id = a.id
+		FROM `+agentTable+` a LEFT JOIN transcripts t ON t.host = a.host AND t.agent_id = a.id
 		ORDER BY a.host, a.status <> 'running', a.created_at DESC NULLS LAST, a.id`)
 	if err != nil {
 		return nil, err
@@ -177,7 +198,7 @@ func (r *Registry) List(ctx context.Context) ([]Host, error) {
 
 	rows, err = r.p.Query(ctx, `SELECT host, id, listed, name, kind, status, directory, project, branch, dirty, additions,
 		deletions, created_at, activity_at, last_user_message_at, project_root, tags
-		FROM workspace_status
+		FROM `+workspaceTable+`
 		ORDER BY host, running_agents > 0 DESC, agents > 0 DESC,
 		         greatest(activity_at, last_user_message_at, created_at) DESC NULLS LAST, name, id`)
 	if err != nil {
