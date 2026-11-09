@@ -380,10 +380,19 @@ The run page still lists these agents after archiving, and their transcript link
 Their synced transcripts and last workspace diffs remain in `transcripts`, `transcript_entries`
 and `workspace_diffs`; late transcript batches are accepted too. History preserves what the host
 reported, not unsynced messages. Archived agents appear closed in history and stay off the live
-fleet page. History-only transcript pages are read-only: they show neither Archive nor chat
-controls, and the commands API refuses agent writes with 409. Live closed agents remain writable.
+fleet page. Confirmed archived transcript pages are read-only: they show neither Archive nor chat controls,
+and the commands API refuses agent writes with 409. `workflow_run_agents.archived` records absence
+from a connected daemon's complete agent list. `archived_workflow_agents` also recognizes a
+successful archive command for that agent's workspace. An outage alone does not mark an agent
+archived or disable its controls; a prior confirmation survives an outage. Live closed agents
+remain writable.
 
-Report-time capture uses only unfinished runs with a listed workspace or live project finder,
+The upgrade backfills runs without history from their still-live orchestrator, finder, workspace
+agents and descendants. Known creation times exclude agents started after the run ended. A
+finished run without snapshots also falls back to its live agent tree, so legacy links remain
+available. This cannot recover metadata or transcripts already removed before the upgrade.
+
+Report-time capture runs once, before replacing live rows, and uses only unfinished runs with a listed workspace or live project finder,
 with an index on unfinished runs. It takes a final snapshot when a run ends, then freezes membership
 and stops recapturing it. Agents started later in a failed or canceled run's retained workspace
 belong to later work, not that ended run's history. The history follows its run and host when

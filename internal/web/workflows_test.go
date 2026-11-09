@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zachlatta/intelligence/internal/db"
 	"github.com/zachlatta/intelligence/internal/dbtest"
 	"github.com/zachlatta/intelligence/internal/hostclient"
 	"github.com/zachlatta/intelligence/internal/workflow"
@@ -855,7 +856,7 @@ func TestFinishedWorkflowRetainsAgentsTranscriptsAndDiffAfterArchiveReport(t *te
 		t.Fatal(err)
 	}
 	asBob := sessionFor(t, ts.store, bob)
-	for _, table := range []string{"workflow_run_agents", "recorded_agents", "recorded_workspaces", "recorded_workspace_status", "transcript_entries", "workspace_diffs"} {
+	for _, table := range []string{"workflow_run_agents", "recorded_agents", "recorded_workspaces", "recorded_workspace_status", "archived_workflow_agents", "transcript_entries", "workspace_diffs"} {
 		rec := call(t, h, http.MethodGet, "/api/sql?q=SELECT+count(*)+FROM+"+table, "", nil, asBob)
 		if !strings.Contains(rec.Body.String(), `"rows":[[0]]`) {
 			t.Errorf("history leaked through %s: %s", table, rec.Body)
@@ -918,5 +919,136 @@ func TestArchiveStatusUsesNeutralStyleUnlessFailed(t *testing.T) {
 		if !strings.Contains(rec.Body.String(), `<p class="`+class+`">Workspace archive: `+status) {
 			t.Errorf("wrong archive style for %s", status)
 		}
+	}
+}
+
+func TestLegacyFinishedRunKeepsLiveAgentLinksAndBackfillsHistory(t *testing.T) {
+	for _, status := range []string{"succeeded", "failed", "canceled"} {
+		t.Run(status, func(t *testing.T) {
+			h, d := dbServer(t)
+			rep := wfReport()
+			rep.Paseo.Agents = append([]hostclient.Agent{}, rep.Paseo.Agents...)
+			rep.Paseo.Agents[1].ParentID = agentA1
+			rep.Paseo.Agents[2].ParentID = agentA1
+			sendReport(t, h, rep)
+			b := openStream(t, h, "host-1")
+			def := workflow.Starting
+			def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+			run := startRun(t, h, createWorkflow(t, h, def), "legacy history")
+			succeed(t, b, b.command(), `{"workspaceId":"w-app","agentId":"`+agentA1+`"}`)
+			if _, err := d.Owner.Exec(t.Context(), "UPDATE workflow_runs SET status=$2,finished_at=now() WHERE id=$1", run, status); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := d.Owner.Exec(t.Context(), "DELETE FROM workflow_run_agents WHERE run_id=$1", run); err != nil {
+				t.Fatal(err)
+			}
+			rep.Paseo.Agents = append(rep.Paseo.Agents, hostclient.Agent{ID: "later-legacy-agent", WorkspaceID: "w-app", ParentID: agentA1, CreatedAt: time.Now().Add(time.Hour)})
+			if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+				t.Fatal(ack.Error)
+			}
+			page := get(t, h, "/workflow-runs/"+run, nil)
+			for _, a := range wfReport().Paseo.Agents {
+				if !strings.Contains(page.Body.String(), "/agents/"+a.ID) {
+					t.Errorf("legacy %s lost agent %s", status, a.ID)
+				}
+			}
+			if strings.Contains(page.Body.String(), "/agents/later-legacy-agent") {
+				t.Error("legacy fallback includes later work")
+			}
+			if _, err := d.Owner.Exec(t.Context(), "DELETE FROM schema_migrations WHERE version='0021_workflow_history_upgrade'"); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Migrate(t.Context(), d.Owner); err != nil {
+				t.Fatal(err)
+			}
+			code, rows := sqlPost(t, h, q(`SELECT count(*) FROM workflow_run_agents WHERE run_id='`+run+`'`))
+			if code != http.StatusOK || rows.Rows[0][0] != float64(3) {
+				t.Fatalf("legacy backfill missing or includes later work: %+v", rows)
+			}
+			rep.Paseo.Workspaces = nil
+			rep.Paseo.Agents = nil
+			if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+				t.Fatal(ack.Error)
+			}
+			page = get(t, h, "/workflow-runs/"+run, nil)
+			for _, a := range wfReport().Paseo.Agents {
+				if !strings.Contains(page.Body.String(), "/agents/"+a.ID) {
+					t.Errorf("backfilled run lost %s", a.ID)
+				}
+			}
+		})
+	}
+}
+
+func TestDaemonGapDoesNotMakeWorkflowAgentsReadOnly(t *testing.T) {
+	h, _ := dbServer(t)
+	rep := wfReport()
+	sendReport(t, h, rep)
+	b := openStream(t, h, "host-1")
+	def := workflow.Starting
+	def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+	run := startRun(t, h, createWorkflow(t, h, def), "gap")
+	succeed(t, b, b.command(), `{"workspaceId":"w-app","agentId":"`+agentA1+`"}`)
+	// First live report, then a daemon outage: metadata must survive without implying archival.
+	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	rep.Paseo.Connected = false
+	rep.Paseo.Agents = nil
+	rep.Paseo.Workspaces = nil
+	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	rec := call(t, h, http.MethodPost, "/api/hosts/host-1/commands", `{"kind":"send_message","args":{"agentId":"`+agentA1+`","text":"continue"}}`, sameOriginFetch)
+	if rec.Code != http.StatusAccepted {
+		t.Errorf("daemon gap treated as archival: %d %s", rec.Code, rec.Body)
+	}
+	page := get(t, h, "/hosts/host-1/agents/"+agentA1, nil)
+	if !strings.Contains(page.Body.String(), `id="chat"`) {
+		t.Error("daemon gap hid live agent controls")
+	}
+	if r := readRun(t, h, run); r["status"] != "running" {
+		t.Fatalf("outage changed run: %v", r)
+	}
+	rep.Paseo.Connected = true // now the daemon confirms the agent is gone
+	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	rep.Paseo.Connected = false // a later outage must not erase that confirmation
+	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	rec = call(t, h, http.MethodPost, "/api/hosts/host-1/commands", `{"kind":"send_message","args":{"agentId":"`+agentA1+`","text":"restart"}}`, sameOriginFetch)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("confirmed archive became writable during outage: %d", rec.Code)
+	}
+}
+
+func TestSuccessfulArchiveStaysReadOnlyBeforeNextConnectedReport(t *testing.T) {
+	h, _ := dbServer(t)
+	rep := wfReport()
+	sendReport(t, h, rep)
+	b := openStream(t, h, "host-1")
+	def := workflow.Starting
+	def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+	run := startRun(t, h, createWorkflow(t, h, def), "archived before outage")
+	succeed(t, b, b.command(), `{"workspaceId":"w-app","agentId":"`+agentA1+`"}`)
+	if code, msg := move(t, h, keyOf(t, h, "host-1"), run, map[string]string{"move": "done"}); code != http.StatusOK {
+		t.Fatalf("done: %d %s", code, msg)
+	}
+	succeed(t, b, b.command(), `{"workspaceId":"w-app"}`)
+	rep.Paseo.Connected = false
+	rep.Paseo.Agents = nil
+	rep.Paseo.Workspaces = nil
+	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	rec := call(t, h, http.MethodPost, "/api/hosts/host-1/commands", `{"kind":"send_message","args":{"agentId":"`+agentA1+`","text":"restart"}}`, sameOriginFetch)
+	if rec.Code != http.StatusConflict {
+		t.Errorf("successful archive became writable: %d", rec.Code)
+	}
+	page := get(t, h, "/hosts/host-1/agents/"+agentA1, nil)
+	if strings.Contains(page.Body.String(), `id="chat"`) {
+		t.Error("successful archive shows chat during outage")
 	}
 }

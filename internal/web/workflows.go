@@ -457,7 +457,10 @@ func runAgents(ctx context.Context, p *pgxpool.Pool, r runRow) ([]agentRow, erro
 	}
 	// path orders the tree: each agent under its parent, siblings by when they started
 	rows, err := p.Query(ctx, `WITH RECURSIVE members AS (
-        SELECT a.* FROM recorded_agents a WHERE a.host=$1 AND ($3::boolean OR EXISTS
+        SELECT a.* FROM recorded_agents a WHERE a.host=$1 AND ($3::boolean OR
+            (NOT EXISTS (SELECT 1 FROM workflow_run_agents h WHERE h.run_id=$4)
+                AND EXISTS (SELECT 1 FROM agents live WHERE live.host=a.host AND live.id=a.id)
+                AND (a.created_at IS NULL OR a.created_at <= $5::timestamptz OR a.id=ANY($2))) OR EXISTS
             (SELECT 1 FROM workflow_run_agents h WHERE h.run_id=$4 AND h.host=a.host AND h.agent_id=a.id))
     ), tree AS (
 		SELECT a.id, a.title, a.provider, a.model, a.status, a.parent_id, 0 AS depth,
@@ -467,7 +470,7 @@ func runAgents(ctx context.Context, p *pgxpool.Pool, r runRow) ([]agentRow, erro
 		SELECT a.id, a.title, a.provider, a.model, a.status, a.parent_id, t.depth + 1,
 			t.path || (coalesce(to_char(a.created_at AT TIME ZONE 'UTC', 'YYYYMMDDHH24MISSUS'), '') || a.id)
 		FROM members a JOIN tree t ON a.parent_id = t.id WHERE a.host = $1 AND t.depth < 6)
-		SELECT id, title, provider, model, status, parent_id, depth FROM tree ORDER BY path`, r.Host, roots, r.Live(), r.ID)
+		SELECT id, title, provider, model, status, parent_id, depth FROM tree ORDER BY path`, r.Host, roots, r.Live(), r.ID, r.FinishedAt)
 	if err != nil {
 		return nil, err
 	}

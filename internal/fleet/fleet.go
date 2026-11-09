@@ -105,11 +105,19 @@ func (r *Registry) Record(ctx context.Context, rep hostclient.Report, at time.Ti
 			"updated_at", "last_user_message_at"}, pgx.CopyFromRows(arows)); err != nil {
 			return err
 		}
-		if err := CaptureWorkflowAgents(ctx, tx, rep.Name, "", at); err != nil {
-			return err
-		}
 		if !ps.Connected {
 			return nil // a host that lost its daemon keeps its transcripts and diffs until it can say what is gone
+		}
+		// A connected daemon's complete agent list confirms archival. An outage leaves
+		// these flags untouched; seeing an agent again clears its prior archived state.
+		if _, err := tx.Exec(ctx, `UPDATE workflow_run_agents h SET archived=true
+            WHERE h.host=$1 AND NOT h.archived
+                AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.host=h.host AND a.id=h.agent_id)`, rep.Name); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE workflow_run_agents h SET archived=false FROM agents a
+            WHERE a.host=$1 AND h.host=a.host AND h.agent_id=a.id AND h.archived`, rep.Name); err != nil {
+			return err
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM workspace_diffs d WHERE d.host = $1
 			AND NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.host = d.host AND w.id = d.workspace_id AND w.listed)
@@ -176,7 +184,8 @@ func (r *Registry) list(ctx context.Context, history bool) ([]Host, error) {
 	agents := map[key][]AgentView{}
 	rows, err = r.p.Query(ctx, `SELECT a.host, a.workspace_id, a.id, a.parent_id, a.title, a.provider, a.model, a.thinking,
 		a.status, a.cwd, a.requires_attention, a.attention_reason, a.created_at, a.updated_at, a.last_user_message_at,
-		t.agent_id IS NOT NULL, NOT EXISTS (SELECT 1 FROM agents live WHERE live.host = a.host AND live.id = a.id),
+		t.agent_id IS NOT NULL, (NOT EXISTS (SELECT 1 FROM agents live WHERE live.host = a.host AND live.id = a.id)
+            AND EXISTS (SELECT 1 FROM archived_workflow_agents h WHERE h.host=a.host AND h.agent_id=a.id)),
 		(SELECT count(*) FROM transcript_entries e WHERE e.host = a.host AND e.agent_id = a.id)::int
 		FROM `+agentTable+` a LEFT JOIN transcripts t ON t.host = a.host AND t.agent_id = a.id
 		ORDER BY a.host, a.status <> 'running', a.created_at DESC NULLS LAST, a.id`)

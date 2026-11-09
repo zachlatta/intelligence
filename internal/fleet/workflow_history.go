@@ -8,7 +8,7 @@ import (
 )
 
 // CaptureWorkflowAgents remembers only active runs with a listed workspace (or live finder).
-// Reports call it around replacing live rows; terminal moves take one final snapshot before
+// Reports call it before replacing live rows; terminal moves take one final snapshot before
 // setting finished_at. runID limits a terminal move to its own run; reports pass "".
 // Shared run locks serialize capture with terminal moves, so membership freezes at completion.
 func CaptureWorkflowAgents(ctx context.Context, tx pgx.Tx, host, runID string, at time.Time) error {

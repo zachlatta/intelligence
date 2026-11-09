@@ -83,7 +83,7 @@ func (r *Registry) Enqueue(ctx context.Context, host, kind string, args json.Raw
 		}
 		if a, ok := parsed.(hostclient.AgentArgs); ok {
 			var archived bool
-			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workflow_run_agents WHERE host=$1 AND agent_id=$2)
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM archived_workflow_agents WHERE host=$1 AND agent_id=$2)
                 AND NOT EXISTS (SELECT 1 FROM agents WHERE host=$1 AND id=$2)`, host, a.AgentID).Scan(&archived); err != nil {
 				return err
 			}
