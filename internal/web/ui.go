@@ -50,11 +50,20 @@ func dictationScript(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, "dictation.js", time.Time{}, bytes.NewReader(dictationJS))
 }
 
+// attachmentsJS is the image picker every form that takes a prompt loads.
+//
 //go:embed attachments.js
 var attachmentsJS []byte
 
+var attachmentsETag = func() string {
+	sum := sha256.Sum256(attachmentsJS)
+	return `"` + hex.EncodeToString(sum[:8]) + `"`
+}()
+
+// attachmentsScript serves attachments.js, revalidated on each load like ui.css.
 func attachmentsScript(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("ETag", attachmentsETag)
 	http.ServeContent(w, r, "attachments.js", time.Time{}, bytes.NewReader(attachmentsJS))
 }

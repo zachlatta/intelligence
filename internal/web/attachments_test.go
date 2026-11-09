@@ -129,6 +129,14 @@ func TestAttachmentControlsOnTaskAndSpawnForms(t *testing.T) {
 	}
 }
 
+func TestAttachmentsScriptIsServed(t *testing.T) {
+	rec := get(t, dictationServer(t, "", ""), "/attachments.js", nil)
+	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/javascript") ||
+		!strings.Contains(rec.Body.String(), "function imageAttachments") || rec.Header().Get("ETag") == "" {
+		t.Errorf("/attachments.js: %d %q, etag %q", rec.Code, rec.Header().Get("Content-Type"), rec.Header().Get("ETag"))
+	}
+}
+
 func TestTooManyImageAttachmentsRefusesRun(t *testing.T) {
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
