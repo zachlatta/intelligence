@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/zachlatta/intelligence/internal/hostclient"
@@ -173,11 +174,36 @@ func ProjectPrompt(run string, d Definition, input string, repos []string) strin
 	return b.String()
 }
 
-// OrchestratorPrompt is the orchestrator's first message: its standing instructions, the run, the
-// steps, the commands that move it, and the first step.
+// unattendedModes are the paseo modes in which each provider's agents run without asking: every
+// agent of a run works unattended, so a permission prompt would stall it.
+var unattendedModes = map[string]string{"claude": "bypassPermissions", "codex": "full-access"}
+
+// agentMode is the mode an agent of provider starts in: its unattended mode, or, for a provider
+// without one, its default ("").
+func agentMode(provider string) string { return unattendedModes[provider] }
+
+// subAgentModes tells the orchestrator which mode to start each provider's sub-agents in. It is
+// in the prompt, not only the instructions, so definitions saved before it get it too: `paseo
+// run` starts an agent in its provider's default mode, which asks, unless given --mode.
+func subAgentModes() string {
+	providers := make([]string, 0, len(unattendedModes))
+	for p := range unattendedModes {
+		providers = append(providers, p)
+	}
+	sort.Strings(providers)
+	modes := make([]string, len(providers))
+	for i, p := range providers {
+		modes[i] = fmt.Sprintf("--mode %s for %s", unattendedModes[p], p)
+	}
+	return "Every sub-agent works unattended, so start each in the mode that never asks for permission: " +
+		strings.Join(modes, ", ") + " (paseo run --mode <mode>). Without it, a permission prompt stalls the run."
+}
+
+// OrchestratorPrompt is the orchestrator's first message: its standing instructions, the mode its
+// sub-agents start in, the run, the steps, the commands that move it, and the first step.
 func OrchestratorPrompt(name string, d Definition, v Vars) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n\nThis is run %s of the workflow “%s”. You are its orchestrator", strings.TrimSpace(d.Orchestrator.Instructions), v.Run, name)
+	fmt.Fprintf(&b, "%s\n\n%s\n\nThis is run %s of the workflow “%s”. You are its orchestrator", strings.TrimSpace(d.Orchestrator.Instructions), subAgentModes(), v.Run, name)
 	if v.Repo != "" {
 		fmt.Fprintf(&b, ", in a worktree of %s on branch %s", v.Repo, v.Branch)
 	}
@@ -207,7 +233,7 @@ const OrchestratorInstructions = `You run a workflow. You never do the work your
 
 Start a sub-agent in this workspace with the paseo CLI, for example:
 
-  paseo run --no-wait --title "<what it does>" --provider claude/claude-opus-5-5 "<its task, with all the context it needs>"
+  paseo run --no-wait --title "<what it does>" --provider claude/claude-opus-5-5 --mode bypassPermissions "<its task, with all the context it needs>"
 
 Then paseo wait <id> until it is done, and paseo logs <id> to read what it did. paseo send <id> "<message>" gives a sub-agent more work and keeps its context: use it when work comes back to a sub-agent that did it. A checker must be a fresh sub-agent that did none of the work. Archive sub-agents you are done with (paseo archive <id>).
 

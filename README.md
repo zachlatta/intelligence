@@ -324,7 +324,11 @@ version it started with. A run:
    instructions, the input, the list of steps, the commands below, and the first step.
 3. **The orchestrator moves through the steps.** It never does the work itself: it starts
    sub-agents for it (`paseo run` in its workspace, so they are its sub-agents), and decides when a
-   step is done. A step is only instructions to it; its kind (`step`, `gate` or `signoff`) changes
+   step is done. Every agent of a run works unattended, so each starts in its provider's mode that
+   never asks for permission: `bypassPermissions` for Claude, `full-access` for Codex (others keep
+   their default). The server starts the finder and the orchestrator in it; `paseo run` would start
+   a sub-agent in the provider's default mode, which asks, so the orchestrator's first message tells
+   it to pass `--mode` (this is in the prompt, not the saved instructions, so every version gets it). A step is only instructions to it; its kind (`step`, `gate` or `signoff`) changes
    how it reads, not what the server does. The orchestrator moves the run with:
    - `intelligence workflow next --run <id> --summary "..."`: the step is done; prints the next
      step's instructions (after the last step, the run is finished).

@@ -321,15 +321,6 @@ func branch(id, title string) string {
 	return b
 }
 
-// agentMode is the mode an agent of provider starts in: Claude runs without asking (its turns
-// are unattended); other providers keep their default.
-func agentMode(provider string) string {
-	if provider == "claude" {
-		return "bypassPermissions"
-	}
-	return ""
-}
-
 // StartRun starts account's workflow with input, on the host its definition names, and returns
 // the run's id. A matched project starts its finder agent; a fixed one, the orchestrator.
 func (e *Engine) StartRun(ctx context.Context, account int64, workflowID, input string) (string, error) {

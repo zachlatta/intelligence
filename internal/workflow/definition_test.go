@@ -109,3 +109,27 @@ func onHost(d Definition) Definition {
 	d.Host = "host-1"
 	return d
 }
+
+func TestWorkflowAgentsStartInTheModeThatNeverAsks(t *testing.T) {
+	// The ids are paseo's unattended modes (provider ls / its provider manifest).
+	for provider, want := range map[string]string{"claude": "bypassPermissions", "codex": "full-access", "other": ""} {
+		if got := agentMode(provider); got != want {
+			t.Errorf("agentMode(%q) = %q, want %q", provider, got, want)
+		}
+	}
+}
+
+func TestTheOrchestratorStartsSubAgentsInTheModeThatNeverAsks(t *testing.T) {
+	if !strings.Contains(OrchestratorInstructions, "--provider claude/claude-opus-5-5 --mode "+agentMode("claude")) {
+		t.Errorf("the example sub-agent has no mode:\n%s", OrchestratorInstructions)
+	}
+	// A definition saved before the modes were in its instructions still gets them: the prompt says them.
+	d := clone(Starting)
+	d.Orchestrator.Instructions = "You run a workflow. Start sub-agents with paseo run."
+	p := OrchestratorPrompt("Task", d, Vars{Run: "run-1", Input: "x"})
+	for _, want := range []string{"--mode bypassPermissions", "claude", "--mode full-access", "codex"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("orchestrator prompt misses %q:\n%s", want, p)
+		}
+	}
+}
