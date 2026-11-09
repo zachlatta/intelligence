@@ -12,7 +12,7 @@ import (
 // "wf-<workflow>-<task>-<run>". <task> is the task's first real sentence as written, code and its
 // punctuation included: lines and sentences that are only a heading, a greeting ("Hi!", "Hey
 // Claude,") or a pleasantry ("Thanks!", "Hope you're well.") are skipped, and only a polite
-// opening ("could you please") and articles go, so "not", "no", "never" and "without" always stay
+// opening ("could you please") goes, so "not", "no", "never", "without" and "a" always stay
 // and the name never says the opposite of the task. It is cut at whole words to titleWords words
 // and titleMax characters; a longer first word, or a script written without spaces, is cut to
 // titleMax characters ending in "…".
@@ -34,7 +34,7 @@ const (
 
 // runNames are a run's workspace title and worktree branch.
 //
-//	"Factory Task", "Please fix the login page" -> "Factory Task: Fix login page · 1bf01c44a2b3", "wf-factory-task-fix-login-page-1bf01c44a2b3"
+//	"Factory Task", "Please fix the login page" -> "Factory Task: Fix the login page · 1bf01c44a2b3", "wf-factory-task-fix-the-login-page-1bf01c44a2b3"
 func runNames(id, workflow, input string) (wsTitle, branch string) {
 	hex := strings.ReplaceAll(id, "-", "")
 	words := taskWords(input)
@@ -61,7 +61,7 @@ func runNames(id, workflow, input string) (wsTitle, branch string) {
 
 // taskWords are the words naming input's task, as written: its first sentence that is more
 // than a greeting or pleasantry, on its first line that is more than a heading or a greeting,
-// without a polite opening or articles, cut to titleWords words and titleMax characters at whole
+// without a polite opening, cut to titleWords words and titleMax characters at whole
 // words. A first word longer than titleMax (or a script written without spaces) is cut and
 // marked with "…".
 func taskWords(input string) []string {
@@ -86,13 +86,7 @@ func taskWords(input string) []string {
 	if sentence == nil {
 		sentence = fallback // nothing but greetings: the first one stands in
 	}
-	var words []string
-	for _, w := range dropOpening(sentence) {
-		if !article[lowerWord(w)] {
-			words = append(words, w)
-		}
-	}
-	words = trimPunctuation(words)
+	words := trimPunctuation(dropOpening(sentence))
 	if len(words) == 0 {
 		return nil
 	}
@@ -113,7 +107,10 @@ func taskWords(input string) []string {
 		out = append(out, w)
 		n += size
 	}
-	out = trimConnectives(trimPunctuation(out))
+	if len(out) < len(words) {
+		out = trimConnectives(out)
+	}
+	out = trimPunctuation(out)
 	if len(out) > 0 {
 		out[len(out)-1] = strings.TrimRight(out[len(out)-1], `.,;:!?"”’'`)
 	}
@@ -259,15 +256,14 @@ func dropOpening(s []string) []string {
 	return s
 }
 
-var article = map[string]bool{"a": true, "an": true, "the": true}
-
-// connectives join words; a name cut short never ends on one. Negations are not among them.
-var connectives = map[string]bool{"and": true, "or": true, "but": true, "with": true, "to": true, "for": true, "of": true,
+// connectives join words, and articles lead to one: a name cut short never ends on either. Words
+// in code ("`a`") and negations are not among them.
+var connectives = map[string]bool{"a": true, "an": true, "the": true, "and": true, "or": true, "but": true, "with": true, "to": true, "for": true, "of": true,
 	"in": true, "on": true, "at": true, "by": true, "from": true, "into": true, "that": true, "which": true, "who": true,
 	"as": true, "than": true, "then": true, "so": true, "if": true, "when": true, "while": true, "because": true}
 
 func trimConnectives(words []string) []string {
-	for len(words) > 0 && connectives[lowerWord(words[len(words)-1])] {
+	for len(words) > 0 && connectives[strings.ToLower(strings.TrimRight(words[len(words)-1], ",;:"))] {
 		words = words[:len(words)-1]
 	}
 	return words
@@ -284,10 +280,10 @@ var fold = strings.NewReplacer("à", "a", "á", "a", "â", "a", "ã", "a", "ä",
 var nonSlug = regexp.MustCompile(`[^a-z0-9]+`)
 
 // slug is words as lowercase ASCII joined by hyphens, as many whole words as fit in max bytes,
-// not ending on a connective.
+// and, when that cuts it short, not ending on a connective.
 func slug(words []string, max int) string {
 	var parts, kept []string
-	n := 0
+	n, cut := 0, false
 	for _, w := range words {
 		s := strings.Trim(nonSlug.ReplaceAllString(fold.Replace(strings.ToLower(w)), "-"), "-")
 		if s == "" {
@@ -298,10 +294,14 @@ func slug(words []string, max int) string {
 			size++
 		}
 		if n+size > max {
+			cut = true
 			break
 		}
 		parts, kept = append(parts, s), append(kept, w)
 		n += size
 	}
-	return strings.Join(parts[:len(trimConnectives(kept))], "-")
+	if cut {
+		parts = parts[:len(trimConnectives(kept))]
+	}
+	return strings.Join(parts, "-")
 }

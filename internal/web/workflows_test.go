@@ -266,8 +266,8 @@ func TestAFixedProjectStartsTheOrchestratorAtOnce(t *testing.T) {
 	json.Unmarshal(ws.Args, &wa)
 	// the workspace and branch name the workflow and the task, and the branch the run
 	hex := strings.ReplaceAll(run, "-", "")[:12]
-	wantTitle := "Task from Intelligence: Fix login page · " + hex
-	wantBranch := "wf-task-from-intelligence-fix-login-page-" + hex
+	wantTitle := "Task from Intelligence: Fix the login page · " + hex
+	wantBranch := "wf-task-from-intelligence-fix-the-login-page-" + hex
 	if ws.Kind != hostclient.CreateWorkspaceKind || wa.Cwd != "/w/app" || wa.Title != wantTitle || wa.Branch != wantBranch {
 		t.Fatalf("command = %s %+v", ws.Kind, wa)
 	}

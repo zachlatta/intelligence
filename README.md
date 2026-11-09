@@ -321,11 +321,11 @@ version it started with. A run:
    input's first real sentence, as written (code and its punctuation included): lines and sentences
    that are only a heading (`Task:`, `## Goal`), a greeting (“Hi!”, “Hey Claude,”, “Good morning —”)
    or a pleasantry (“Thanks!”, “Hope you're well.”) are skipped, and only a polite opening (“could
-   you please”) and the articles go, so a “not” or “never” always stays. It is cut at whole words to
-   8 words and 60 characters; a longer first word, or a script written without spaces, is cut to 60
+   you please”) goes: articles, a “not” or “never”, and code stay. It is cut at whole words to
+   8 words and 60 characters (a cut never leaves it ending on “the” or “and”); a longer first word, or a script written without spaces, is cut to 60
    characters ending in “…”. In Factory Task, “Hi!” on one line and “Could you please fix the login
-   page?” on the next is the workspace “Factory Task: Fix login page · 1bf01c44a2b3” on branch
-   `wf-factory-task-fix-login-page-1bf01c44a2b3`. The run is its id's first 12 hex digits (48
+   page?” on the next is the workspace “Factory Task: Fix the login page · 1bf01c44a2b3” on branch
+   `wf-factory-task-fix-the-login-page-1bf01c44a2b3`. The run is its id's first 12 hex digits (48
    random bits) in both, which makes two runs sharing a name vanishingly unlikely. The title keeps
    any script; the branch is lowercase ASCII, because Paseo accepts no other worktree branch, so
    accents are folded and a task with no ASCII rendering (in Chinese, say) leaves the branch only
