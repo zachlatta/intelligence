@@ -181,8 +181,10 @@ legend { font-size: 13px; font-weight: 600; padding: 0 .35rem; }
 .form-actions .mic { margin-left: auto; }
 .mic svg { width: 15px; height: 15px; }
 .form-actions[hidden], .dictation[hidden] { display: none; }
-.dictation { display: flex; gap: .4rem; align-items: center; }
-.dictation .dstatus { flex: 1; min-width: 0; font-size: .75rem; color: var(--muted); display: flex; gap: .45rem; align-items: center; }
+/* On a narrow screen the buttons, as one group, wrap under the status rather than squeeze it. */
+.dictation { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+.dictation .dactions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .4rem; margin-left: auto; }
+.dictation .dstatus { flex: 1 1 8rem; min-width: 0; font-size: .75rem; color: var(--muted); display: flex; gap: .45rem; align-items: center; }
 .dictation .rec { flex: none; width: .55rem; height: .55rem; border-radius: 50%; background: var(--red); animation: rec 1.2s ease-in-out infinite; }
 .dictation.finishing .rec { animation: none; opacity: .4; }
 @keyframes rec { 50% { opacity: .3; } }

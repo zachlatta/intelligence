@@ -132,6 +132,21 @@ func TestDictationCanOnlyInsert(t *testing.T) {
 	}
 }
 
+// TestDictationBarWrapsOnNarrowScreens: on a phone the bar keeps its status readable and its
+// buttons on the screen: the buttons are one group that wraps under the status when it must.
+func TestDictationBarWrapsOnNarrowScreens(t *testing.T) {
+	if !strings.Contains(string(dictationJS), `<span class="dactions">`) {
+		t.Error("dictation.js does not group the bar's buttons")
+	}
+	css := string(uiCSS)
+	for _, want := range []string{`.dictation { display: flex; flex-wrap: wrap;`, `.dictation .dstatus { flex: 1 1 8rem;`,
+		`.dictation .dactions { display: flex; flex-wrap: wrap; justify-content: flex-end;`} {
+		if !strings.Contains(css, want) {
+			t.Errorf("ui.css misses %s", want)
+		}
+	}
+}
+
 func TestDictationScriptIsServed(t *testing.T) {
 	rec := get(t, dictationServer(t, "", ""), "/dictation.js", nil)
 	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/javascript") ||
@@ -189,7 +204,9 @@ func TestEveryTaskEntryPointOffersDictation(t *testing.T) {
 			`insertOnly: true`, `#edit .dictation`}, []string{`send: () => edit.requestSubmit()`}},
 		{"reply to a waiting run", "/workflow-runs/{run}", []string{`<textarea id="reply"`, `text: reply`,
 			`send: () => send.click()`, `active: () => reply.isConnected`, `.reply-host .side[hidden] { display: none; }`,
-			`reply.classList.contains("listening")`}, nil},
+			`reply.classList.contains("listening")`,
+			// the bar takes its own row under the reply, so a phone keeps the reply's width while dictating
+			`.reply-host { display: flex; flex-wrap: wrap;`, `.reply-host .dictation { flex: 1 1 100%;`}, nil},
 	}
 	for _, key := range []string{"k", ""} {
 		d := dbtest.New(t)

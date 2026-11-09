@@ -40,7 +40,6 @@
   .composer .task-actions { display: flex; gap: .4rem; }
   .composer .task-actions #submit-task { flex: 1; }
   .composer .task-actions[hidden] { display: none; }
-  #task-dictation .dictation { flex-wrap: wrap; }
   #task-dictation .dictation .dstatus { flex-basis: 100%; }
   .builder { display: grid; grid-template-columns: minmax(0, 1fr) 24rem; gap: 1.5rem; align-items: start; }
   @media (max-width: 62rem) { .builder { grid-template-columns: 1fr; } }
@@ -85,7 +84,8 @@
   .md { font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
   .md img { max-width: 100%; }
   .md pre { background: var(--bg-muted); padding: .6rem; border-radius: var(--radius); overflow: auto; }
-  .reply-host { display: flex; gap: .5rem; align-items: flex-start; margin-top: .75rem; }
+  .reply-host { display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-start; margin-top: .75rem; }
+  .reply-host .dictation { flex: 1 1 100%; }
   .reply-host textarea { min-height: 5rem; flex: 1; }
   .reply-host .side { display: flex; flex-direction: column; gap: .4rem; }
   .reply-host .side[hidden] { display: none; }
