@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/zachlatta/intelligence/internal/hostclient"
+	"github.com/zachlatta/intelligence/internal/paseo"
 )
 
 // Definition is one version of a workflow: the host it runs on, what starts it, how its project
@@ -173,43 +174,20 @@ func ProjectPrompt(run string, d Definition, input string, repos []string) strin
 	return b.String()
 }
 
-// unattendedModes are the providers a workflow's agents run on, in the order the editor offers
-// them, each with the paseo mode its catalog marks unattended (it never asks for permission):
-// every agent of a run works unattended, so a permission prompt would stall it.
-var unattendedModes = []struct{ provider, mode string }{
-	{"claude", "bypassPermissions"},
-	{"codex", "full-access"},
-	{"muse", "allowAll"},
-	{"antigravity", "full-access"},
-}
-
 // Providers are the providers the workflow editor offers: those with a mode that never asks.
-func Providers() []string {
-	ps := make([]string, len(unattendedModes))
-	for i, m := range unattendedModes {
-		ps[i] = m.provider
-	}
-	return ps
-}
+func Providers() []string { return paseo.UnattendedProviders() }
 
-// agentMode is the mode an agent of provider starts in: its unattended mode, or, for a provider
-// without one, its default ("").
-func agentMode(provider string) string {
-	for _, m := range unattendedModes {
-		if m.provider == provider {
-			return m.mode
-		}
-	}
-	return ""
-}
+// agentMode is the provider's unattended mode, or its default for unknown providers.
+func agentMode(provider string) string { return paseo.UnattendedMode(provider) }
 
 // subAgentModes tells the orchestrator which mode to start each provider's sub-agents in. It is
 // in the prompt, not only the instructions, so definitions saved before it get it too: `paseo
 // run` starts an agent in its provider's default mode, which may ask, unless given --mode.
 func subAgentModes() string {
-	modes := make([]string, len(unattendedModes))
-	for i, m := range unattendedModes {
-		modes[i] = fmt.Sprintf("--mode %s for %s", m.mode, m.provider)
+	providers := Providers()
+	modes := make([]string, len(providers))
+	for i, provider := range providers {
+		modes[i] = fmt.Sprintf("--mode %s for %s", agentMode(provider), provider)
 	}
 	return "Every sub-agent works unattended, so start each in the mode that never asks for permission: " +
 		strings.Join(modes, ", ") + " (paseo run --mode <mode>). Without it, a permission prompt stalls the run."
@@ -252,7 +230,7 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 // StepMessage is step i's title and filled instructions, as the orchestrator gets them.
 func StepMessage(d Definition, i int, v Vars) string {
 	s := d.Steps[i]
-	return fmt.Sprintf("Step %d of %d: %s\n\n%s", i+1, len(d.Steps), s.Title, strings.TrimSpace(v.fill(s.Instructions)))
+	return fmt.Sprintf("Step %d of %d: %s\n\n%s", i+1, len(d.Steps), s.Title, strings.TrimSpace(v.fill(s.Instructions))+"\n\n"+UnattendedShellRule)
 }
 
 // OrchestratorInstructions are the starting workflow's standing instructions to its orchestrator.
@@ -294,3 +272,7 @@ var Starting = Definition{
 			"Then move on, which finishes the run."},
 	},
 }
+
+// UnattendedShellRule is included for saved workflows too, not only Starting.
+const UnattendedShellRule = "Agents run unattended. Pass this shell guidance to each sub-agent. " +
+	"Even bypass mode can ask for permission on shell safety checks. Intelligence denies those prompts and asks for a safer approach. Use Write/Edit tools for prompt files and other multiline content instead of shell heredocs; split compound commands and use git -C instead of cd && git. A denial does not authorize broader actions. If blocked, report why."

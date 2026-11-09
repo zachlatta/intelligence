@@ -187,6 +187,13 @@ func (f *Daemon) answer(c *websocket.Conn, msg map[string]any) {
 		return
 	}
 	switch msg["type"] {
+	case "agent_permission_response":
+		response, _ := msg["response"].(map[string]any)
+		if id == "" || msg["agentId"] == "" || response["behavior"] != "deny" || response["message"] == "" {
+			f.write(c, session("rpc_error", map[string]any{"requestId": id, "error": "invalid permission response"}))
+			return
+		}
+		f.write(c, session("agent_permission_resolved", map[string]any{"requestId": id, "agentId": msg["agentId"], "resolution": response}))
 	case "daemon.get_status.request":
 		if f.statusErr != "" {
 			f.write(c, session("rpc_error", map[string]any{"requestId": id, "error": f.statusErr, "code": "boom"}))

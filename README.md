@@ -456,6 +456,47 @@ only the fields stored here: agent records can carry credentials in other fields
 not published as stable; `internal/paseo/paseotest` is a fake daemon that validates requests the
 way Paseo 0.15 does, and the client was checked against a live daemon.
 
+### Unattended permission recovery
+
+The host watches pending permissions from its initial agent read and pushed updates once a
+second, on a worker separate from transcript and status reporting. It acts only on explicit
+never-ask modes: Claude `bypassPermissions`, Codex and Antigravity `full-access`, and Muse
+`allowAll`. Other modes and unknown providers are left alone. This covers all unarchived
+agents on the enrolled host, including workflow sub-agents started directly with `paseo run`.
+No Intelligence label or workflow ownership is required: **every never-ask-mode agent on the
+host is covered**.
+
+A bypass mode can still request permission on shell safety checks. Intelligence denies these
+prompts and never approves them.
+The denial asks the agent to rewrite the authorized step: Write/Edit for multiline files,
+simple shell commands, and `git -C`. Generated workflow instructions carry the same guidance,
+including for saved definitions. This does not expand the agent's task or waive approvals.
+
+Each attempt first stores a `permission_resolutions` row through the authenticated host stream.
+The row is account-scoped and readable through `/api/sql`; it survives agent removal.
+`pending` means the audit landed before contacting the daemon; `denied` means the daemon
+acknowledged; `error` means the attempt failed and will retry. Each prompt has one row, updated
+in place. Denial failures back off independently per prompt, doubling from one second to five
+minutes; failed audit uploads have their own backoff. The initial intent is not rewritten on
+each retry. A confirmed denial is not sent again while the same prompt remains.
+
+After 20 minutes pending following a confirmed denial, or 20 minutes of failing to deny a
+prompt, its status becomes `stuck`. The host and agent pages show “permission recovery stuck”.
+SQL exposes `first_seen_at`, `denied_at`, `stuck_at` and `cleared_at`; when the watcher observes
+the prompt gone it marks the row `cleared` and removes the warning. A daemon disconnect is not
+treated as proof of clearance. On host startup and on either daemon or server reconnect,
+the watchdog loads this host's unresolved audits in pages over its authenticated stream,
+then reconciles them against the first authoritative daemon snapshot. Missing prompts are
+cleared even when they were first observed by a previous host process. Confirmed denials and
+stuck timestamps are retained, and `next_retry_at` / `retry_delay_ns` restore failed denials'
+backoff. A restore failure backs off and prevents recovery from acting on incomplete state.
+Newer local outcomes awaiting upload are preserved during reconnect. Audit-upload backoff is
+in-process; denial backoff and the audit remain in Postgres. No email is sent. Reports and daemon reconnects
+do not remove the audit. Failed uploads retry, even after a prompt disappears. A host process
+crash between denial and its final upload can leave `pending`, which deliberately does not
+claim a confirmed outcome. While the server is unreachable the worker waits to store the audit
+before acting. Raw commands, tool inputs and prompt contents are not copied into this table.
+
 ### Self-update
 
 Every response carries `X-Intelligence-Version`, the server's commit. The image builds the host

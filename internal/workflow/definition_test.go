@@ -182,3 +182,29 @@ func TestLandingOwnsApprovedExternalChanges(t *testing.T) {
 		t.Errorf("landing step does not own approved external changes")
 	}
 }
+
+func TestWorkflowPromptsAvoidPermissionTraps(t *testing.T) {
+	for _, p := range []string{OrchestratorPrompt("task", Starting, Vars{Run: "r"}), StepMessage(Starting, 0, Vars{})} {
+		if n := strings.Count(p, UnattendedShellRule); n != 1 {
+			t.Errorf("unattended guidance occurs %d times, want once", n)
+		}
+		for _, want := range []string{"Write/Edit", "heredoc"} {
+			if !strings.Contains(p, want) {
+				t.Errorf("prompt misses %q", want)
+			}
+		}
+	}
+}
+
+func TestUnattendedModeGuidanceIsNotDuplicated(t *testing.T) {
+	p := OrchestratorPrompt("task", Starting, Vars{Run: "r"})
+	for _, provider := range Providers() {
+		want := "--mode " + agentMode(provider) + " for " + provider
+		if n := strings.Count(p, want); n != 1 {
+			t.Errorf("mode guidance %q appears %d times", want, n)
+		}
+	}
+	if strings.Contains(UnattendedShellRule, "--mode ") {
+		t.Fatal("shell guidance duplicates the shared mode guidance")
+	}
+}

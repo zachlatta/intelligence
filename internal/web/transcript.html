@@ -226,6 +226,7 @@
   <h1>{{or .Agent.Title "(untitled)"}}</h1>
   <div class="meta">
     <span class="pill {{.Agent.Status}}" id="status">{{if working .Agent.Status}}<span class="spinner"></span>{{else}}<span class="dot {{.Agent.Status}}"></span>{{end}}{{.Agent.Status}}</span>
+    {{if .Agent.PermissionStuck}}<span class="pill attn">permission recovery stuck</span>{{end}}
     {{if .Agent.RequiresAttention}}<span class="pill attn">needs attention{{if .Agent.AttentionReason}}: {{.Agent.AttentionReason}}{{end}}</span>{{end}}
     <span>{{.Agent.Provider}}{{if .Agent.Model}} · {{.Agent.Model}}{{end}}{{if .Agent.Thinking}} · {{.Agent.Thinking}}{{end}}</span>
     {{if not .Agent.CreatedAt.IsZero}}<span>started {{ago .Now .Agent.CreatedAt}}</span>{{end}}
