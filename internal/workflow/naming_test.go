@@ -247,7 +247,7 @@ func TestRunNamesSayWhichWorkflowAndWhatTask(t *testing.T) {
 			"Factory Task: 🙏 · b7ea78381c2d", "wf-factory-task-b7ea78381c2d"},
 		{"no workflow name", "", "Fix the login page", "Fix the login page · b7ea78381c2d", "wf-fix-the-login-page-b7ea78381c2d"},
 	} {
-		title, br := runNames(id, c.workflow, c.input)
+		title, br := runNames(id, c.workflow, taskName(c.input))
 		if title != c.title || br != c.branch {
 			t.Errorf("%s: runNames(%q, %q)\n got  %q, %q\n want %q, %q", c.name, c.workflow, c.input, title, br, c.title, c.branch)
 		}
@@ -261,13 +261,22 @@ func TestRunNamesSayWhichWorkflowAndWhatTask(t *testing.T) {
 }
 
 func TestRunNamesAreUniquePerRun(t *testing.T) {
-	ta, ba := runNames("aaaaaaaa-1111-4000-8000-000000000000", "Factory Task", "Fix the login page")
-	_, bb := runNames("aaaaaaaa-2222-4000-8000-000000000000", "Factory Task", "Fix the login page")
+	ta, ba := runNames("aaaaaaaa-1111-4000-8000-000000000000", "Factory Task", taskName("Fix the login page"))
+	_, bb := runNames("aaaaaaaa-2222-4000-8000-000000000000", "Factory Task", taskName("Fix the login page"))
 	if ba == bb || !strings.HasSuffix(ba, "-aaaaaaaa1111") {
 		t.Errorf("branches %q and %q", ba, bb)
 	}
-	tc, _ := runNames("aaaaaaaa-2222-4000-8000-000000000000", "Factory Task", "Fix the login page")
+	tc, _ := runNames("aaaaaaaa-2222-4000-8000-000000000000", "Factory Task", taskName("Fix the login page"))
 	if ta == tc || !strings.HasSuffix(ta, " · aaaaaaaa1111") {
 		t.Errorf("titles %q and %q", ta, tc)
+	}
+}
+
+func TestAgentTitlesNameTheRoleWorkflowAndTask(t *testing.T) {
+	if got := agentTitle("Orchestrator", "Factory Task", "Fix the login page"); got != "Orchestrator · Factory Task: Fix the login page" {
+		t.Errorf("agentTitle = %q", got)
+	}
+	if got := agentTitle("Orchestrator", "", "Fix the login page"); got != "Orchestrator · Fix the login page" {
+		t.Errorf("agentTitle without a workflow name = %q", got)
 	}
 }

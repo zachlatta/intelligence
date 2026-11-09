@@ -233,16 +233,6 @@ func (e *Engine) event(ctx context.Context, tx pgx.Tx, r run, kind string, step,
 
 func ptr(i int) *int { return &i }
 
-// title is a run's name: its input's first line, cut to 80 characters.
-func title(input string) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(input), "\n")
-	line = strings.TrimSpace(line)
-	if r := []rune(line); len(r) > 80 {
-		line = string(r[:79]) + "…"
-	}
-	return line
-}
-
 // agentMode is the mode an agent of provider starts in: Claude runs without asking (its turns
 // are unattended); other providers keep their default.
 func agentMode(provider string) string {
@@ -286,7 +276,7 @@ func (e *Engine) StartRun(ctx context.Context, account int64, workflowID, input 
 			return err
 		}
 		if err := tx.QueryRow(ctx, `INSERT INTO workflow_runs (account_id, workflow_id, version, host, title, input, status, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8) RETURNING id::text`, account, workflowID, version, host, title(input), input,
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8) RETURNING id::text`, account, workflowID, version, host, taskName(input), input,
 			FindingProject, at).Scan(&id); err != nil {
 			return err
 		}
@@ -306,7 +296,7 @@ func (e *Engine) StartRun(ctx context.Context, account int64, workflowID, input 
 		}
 		p := r.Def.Project
 		args, _ := json.Marshal(hostclient.CreateAgentArgs{Cwd: "~", Provider: p.Provider, Model: p.Model, Thinking: p.Thinking,
-			Mode: agentMode(p.Provider), Title: "Find the project: " + r.Title, Prompt: ProjectPrompt(id, r.Def, input, repos),
+			Mode: agentMode(p.Provider), Title: agentTitle("Find the project", r.Name, r.Title), Prompt: ProjectPrompt(id, r.Def, input, repos),
 			Labels: map[string]string{"intelligence.run": id, "intelligence.role": "project"}})
 		c, err := fleet.EnqueueTx(ctx, tx, host, hostclient.CreateAgentKind, args, commandTTL, at)
 		if err != nil {
@@ -334,13 +324,13 @@ func repositories(ctx context.Context, tx pgx.Tx, host string) ([]string, error)
 // orchestrator in it: a worktree of repo on the run's branch, or the home directory.
 func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo string) error {
 	r.Repo = repo
-	wsTitle, branch := runNames(r.ID, r.Name, r.Input)
+	wsTitle, branch := runNames(r.ID, r.Name, r.Title)
 	if repo != "" {
 		r.Branch = branch
 	}
 	o := r.Def.Orchestrator
 	agent := &hostclient.CreateAgentArgs{Provider: o.Provider, Model: o.Model, Thinking: o.Thinking, Mode: agentMode(o.Provider),
-		Title: "Orchestrator: " + r.Title, Prompt: OrchestratorPrompt(r.Name, r.Def, r.vars()),
+		Title: agentTitle("Orchestrator", r.Name, r.Title), Prompt: OrchestratorPrompt(r.Name, r.Def, r.vars()),
 		Labels: map[string]string{"intelligence.run": r.ID, "intelligence.role": "orchestrator"}}
 	ws := hostclient.CreateWorkspaceArgs{Cwd: "~", Title: wsTitle, Agent: agent}
 	if repo != "" {

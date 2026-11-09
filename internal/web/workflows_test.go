@@ -84,7 +84,7 @@ func move(t *testing.T, h http.Handler, key, run string, m map[string]string) (i
 // readRun reads the run through the account's SQL API.
 func readRun(t *testing.T, h http.Handler, run string) map[string]any {
 	t.Helper()
-	code, r := sqlPost(t, h, q(`SELECT status, step, repo, branch, workspace_title, workspace_id, orchestrator_id, project_agent_id, note, error
+	code, r := sqlPost(t, h, q(`SELECT title, status, step, repo, branch, workspace_title, workspace_id, orchestrator_id, project_agent_id, note, error
 		FROM workflow_runs WHERE id = '`+run+`'`))
 	if code != http.StatusOK || len(r.Rows) != 1 {
 		t.Fatalf("run %s: %d %+v", run, code, r)
@@ -136,7 +136,7 @@ func TestAWorkflowRunFindsItsProjectThenTheOrchestratorMovesItThroughTheSteps(t 
 	finder := b.command()
 	var fa hostclient.CreateAgentArgs
 	json.Unmarshal(finder.Args, &fa)
-	if finder.Kind != hostclient.CreateAgentKind || fa.Cwd != "~" || fa.Provider != "claude" || fa.Labels["intelligence.run"] != run ||
+	if finder.Kind != hostclient.CreateAgentKind || fa.Title != "Find the project · Tasks: Show each agent's model in the tree" || fa.Cwd != "~" || fa.Provider != "claude" || fa.Labels["intelligence.run"] != run ||
 		!strings.Contains(fa.Prompt, "- /w/app") || !strings.Contains(fa.Prompt, "intelligence workflow project --run "+run) {
 		t.Fatalf("project finder = %s %+v", finder.Kind, fa)
 	}
@@ -260,7 +260,8 @@ func TestAFixedProjectStartsTheOrchestratorAtOnce(t *testing.T) {
 	b := openStream(t, h, "host-1")
 	d := workflow.Starting
 	d.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
-	run := startRun(t, h, createWorkflow(t, h, d), "Fix the login page")
+	// the run, its workspace, branch and agents are all named after the same cleaned task
+	run := startRun(t, h, createWorkflow(t, h, d), "Hi!\nCould you please fix the login page?")
 	ws := b.command()
 	var wa hostclient.CreateWorkspaceArgs
 	json.Unmarshal(ws.Args, &wa)
@@ -268,14 +269,17 @@ func TestAFixedProjectStartsTheOrchestratorAtOnce(t *testing.T) {
 	hex := strings.ReplaceAll(run, "-", "")[:12]
 	wantTitle := "Task from Intelligence: Fix the login page · " + hex
 	wantBranch := "wf-task-from-intelligence-fix-the-login-page-" + hex
-	if ws.Kind != hostclient.CreateWorkspaceKind || wa.Cwd != "/w/app" || wa.Title != wantTitle || wa.Branch != wantBranch {
-		t.Fatalf("command = %s %+v", ws.Kind, wa)
+	if ws.Kind != hostclient.CreateWorkspaceKind || wa.Cwd != "/w/app" || wa.Title != wantTitle || wa.Branch != wantBranch ||
+		wa.Agent == nil || wa.Agent.Title != "Orchestrator · Task from Intelligence: Fix the login page" {
+		t.Fatalf("command = %s %+v %+v", ws.Kind, wa, wa.Agent)
 	}
-	if r := readRun(t, h, run); r["status"] != "starting" || r["repo"] != "/w/app" || r["branch"] != wantBranch || r["workspace_title"] != wantTitle {
+	if r := readRun(t, h, run); r["title"] != "Fix the login page" || r["status"] != "starting" || r["repo"] != "/w/app" ||
+		r["branch"] != wantBranch || r["workspace_title"] != wantTitle {
 		t.Fatalf("run = %v", r)
 	}
-	if page := get(t, h, "/workflow-runs/"+run, nil); !strings.Contains(page.Body.String(), "workspace <b>"+wantTitle+"</b>") {
-		t.Errorf("the run page should name its workspace %q", wantTitle)
+	page := get(t, h, "/workflow-runs/"+run, nil).Body.String()
+	if !strings.Contains(page, "<h1>Fix the login page</h1>") || !strings.Contains(page, "workspace <b>"+wantTitle+"</b>") {
+		t.Errorf("the run page should be headed by the task and name its workspace %q", wantTitle)
 	}
 }
 

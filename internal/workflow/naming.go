@@ -35,31 +35,57 @@ const (
 	taskMax     = 40 // and of the task
 )
 
-// runNames are a run's workspace title and worktree branch.
-//
-//	"Factory Task", "Please fix the login page" -> "Factory Task: Fix the login page · 1bf01c44a2b3", "wf-factory-task-fix-the-login-page-1bf01c44a2b3"
-func runNames(id, workflow, input string) (wsTitle, branch string) {
-	hex := strings.ReplaceAll(id, "-", "")
+// taskName is the name of input's task, the run's title (workflow_runs.title), from which every
+// other name of the run is made: its words (taskWords), with a first word of plain letters
+// capitalised; or, with none, the input's first line.
+func taskName(input string) string {
 	words := taskWords(input)
+	if len(words) == 0 {
+		return firstLine(input)
+	}
 	task := strings.Join(words, " ")
-	if len(words) > 0 && plainWord(words[0]) {
+	if plainWord(words[0]) {
 		r, n := utf8.DecodeRuneInString(task)
 		task = string(unicode.ToUpper(r)) + task[n:]
 	}
-	if task == "" {
-		task = title(input)
+	return task
+}
+
+// firstLine is input's first line, cut to 80 characters.
+func firstLine(input string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(input), "\n")
+	line = strings.TrimSpace(line)
+	if r := []rune(line); len(r) > 80 {
+		line = string(r[:79]) + "…"
 	}
+	return line
+}
+
+// runNames are a run's workspace title and worktree branch, from its id, its workflow's name and
+// its title (taskName).
+//
+//	"Factory Task", "Fix the login page" -> "Factory Task: Fix the login page · 1bf01c44a2b3", "wf-factory-task-fix-the-login-page-1bf01c44a2b3"
+func runNames(id, workflow, task string) (wsTitle, branch string) {
+	hex := strings.ReplaceAll(id, "-", "")
 	wsTitle = task + " · " + hex[:12]
 	if workflow = strings.TrimSpace(workflow); workflow != "" {
 		wsTitle = workflow + ": " + wsTitle
 	}
 	branch = "wf"
-	for _, s := range []string{slug(strings.Fields(workflow), workflowMax), slug(words, taskMax), hex[:12]} {
+	for _, s := range []string{slug(strings.Fields(workflow), workflowMax), slug(strings.Fields(task), taskMax), hex[:12]} {
 		if s != "" {
 			branch += "-" + s
 		}
 	}
 	return wsTitle, branch
+}
+
+// agentTitle is the title of a run's agent: its role, the workflow's name and the run's title.
+func agentTitle(role, workflow, task string) string {
+	if workflow = strings.TrimSpace(workflow); workflow != "" {
+		task = workflow + ": " + task
+	}
+	return role + " · " + task
 }
 
 // taskWords are the words naming input's task, as written: its first sentence that is more
