@@ -306,8 +306,8 @@ the capabilities it needs (BPF, perfmon, ptrace read of other processes' environ
 
 ### Workflows
 
-A workflow is a trigger, a way to find the project, an orchestrator, and steps
-(`internal/workflow`). Each save is a new version (`workflow_versions.definition`); a run keeps the
+A workflow is the host it runs on, a trigger, a way to find the project, an orchestrator, and steps
+(`internal/workflow`). Every run of it happens on its host, which must be one of the account's. Each save is a new version (`workflow_versions.definition`); a run keeps the
 version it started with. A run:
 
 1. **Finds its project.** Before anything runs in a worktree, an agent (the definition's project
@@ -519,18 +519,19 @@ origin (another site's request is refused with 403), and those with a body must 
 - `GET /dictation.js`: the dictation engine the chat box and the new agent and workspace forms share.
 - `GET /ui.css`: the one stylesheet every page shares, with the top bar (`layout.html`) that links the
   pages.
-- `GET /workflows`: a new task (for workflows triggered by a task), the account's workflows and
-  their runs. Without workflows, a button adds the starting one (`workflow.Starting`).
-- `GET /workflows/{id}`: the editor: the trigger, how the project is found, the orchestrator, and
+- `GET /workflows`: a new task (for workflows triggered by a task: pick the workflow, which names
+  its host), the account's workflows and their runs. Without workflows, a button adds the starting
+  one (`workflow.Starting`) on the account's first host.
+- `GET /workflows/{id}`: the editor: the host and trigger, how the project is found, the orchestrator, and
   the steps (add, reorder, edit, remove), or the definition as JSON. Saving makes a new version.
-  A project that is always the same repository is picked from those the account's hosts reported
-  (their workspaces' `project_root`s), or typed.
+  A project that is always the same repository is picked from those the workflow's host reported
+  (its workspaces' `project_root`s), or typed.
 - `GET /workflow-runs/{id}`: a run: its project, the orchestrator and its sub-agents, each step's
   state and what happened in it, and, while it waits, the orchestrator's note with a reply box.
 - `POST /api/workflows` with `{"name", "description", "definition"}`: 201 `{"id", "version": 1}`;
   400 for a definition that cannot run. `PUT /api/workflows/{id}`, the same body: the next version.
-- `POST /api/workflow-runs` with `{"workflowId", "host", "input"}`: starts a run on one of the
-  account's hosts (201, with its `Location`).
+- `POST /api/workflow-runs` with `{"workflowId", "input"}`: starts a run on the workflow's host
+  (201, with its `Location`); 400 for a workflow saved without one.
 - `POST /api/workflow-runs/{id}/reply` with `{"text"}`: answers the note the run waits on (204;
   409 when it waits on none). `POST /api/workflow-runs/{id}/cancel` with `{}`: ends the run and
   stops its orchestrator (204).

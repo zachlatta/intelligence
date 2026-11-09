@@ -122,18 +122,17 @@ func (a *app) updateWorkflow(v viewer) http.HandlerFunc {
 	}
 }
 
-// startRun: POST /api/workflow-runs {"workflowId", "host", "input"}.
+// startRun: POST /api/workflow-runs {"workflowId", "input"}: on the host the workflow names.
 func (a *app) startRun(v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			WorkflowID string `json:"workflowId"`
-			Host       string `json:"host"`
 			Input      string `json:"input"`
 		}
-		if !decodeJSON(w, r, &req) || !a.owned(v, w, r, req.Host) {
+		if !decodeJSON(w, r, &req) {
 			return
 		}
-		id, err := a.wf.StartRun(r.Context(), v.acct.ID, req.WorkflowID, req.Host, req.Input)
+		id, err := a.wf.StartRun(r.Context(), v.acct.ID, req.WorkflowID, req.Input)
 		if err != nil {
 			workflowError(w, err)
 			return
@@ -405,12 +404,16 @@ func runAgents(ctx context.Context, p *pgxpool.Pool, r runRow) ([]agentRow, erro
 	})
 }
 
-func readBoxes(ctx context.Context, p *pgxpool.Pool) ([]string, error) {
+func readHosts(ctx context.Context, p *pgxpool.Pool) ([]string, error) {
 	rows, err := p.Query(ctx, "SELECT name FROM host_status ORDER BY online DESC, name")
 	if err != nil {
 		return nil, err
 	}
-	return pgx.CollectRows(rows, pgx.RowTo[string])
+	out, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if out == nil {
+		out = []string{}
+	}
+	return out, err
 }
 
 // repoOption is a repository a workflow can always use: a main checkout some of the account's
@@ -466,7 +469,7 @@ func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		hosts, err := readBoxes(ctx, v.pool)
+		hosts, err := readHosts(ctx, v.pool)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -499,7 +502,7 @@ func workflowPage(cfg Config, v viewer) http.HandlerFunc {
 			http.NotFound(w, r)
 			return
 		}
-		hosts, err := readBoxes(r.Context(), v.pool)
+		hosts, err := readHosts(r.Context(), v.pool)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

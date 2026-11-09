@@ -15,11 +15,14 @@ import (
 	"path"
 	"regexp"
 	"strings"
+
+	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
-// Definition is one version of a workflow: what starts it, how its project is found, its
-// orchestrator, and its steps, in order.
+// Definition is one version of a workflow: the host it runs on, what starts it, how its project
+// is found, its orchestrator, and its steps, in order.
 type Definition struct {
+	Host         string       `json:"host"`    // the account's host every run happens on
 	Trigger      string       `json:"trigger"` // task (submitted on the Workflows page) or manual
 	Project      Project      `json:"project"`
 	Orchestrator Orchestrator `json:"orchestrator"`
@@ -82,6 +85,10 @@ func Parse(b []byte) (Definition, error) {
 func (d Definition) Validate() error {
 	blank := func(s string) bool { return strings.TrimSpace(s) == "" }
 	switch {
+	case d.Host == "":
+		return errors.New("a workflow needs a host to run on")
+	case !hostclient.ValidName(d.Host):
+		return fmt.Errorf("host %q is not a host's name", d.Host)
 	case d.Trigger != TriggerTask && d.Trigger != TriggerManual:
 		return fmt.Errorf("trigger %q: want %s or %s", d.Trigger, TriggerTask, TriggerManual)
 	case d.Project.Mode == ProjectFixed && (d.Project.Directory == "" || !path.IsAbs(d.Project.Directory)):
@@ -195,7 +202,7 @@ Then paseo wait <id> until it is done, and paseo logs <id> to read what it did. 
 
 Use frontier models, and spread the work across the plans: claude/claude-opus-5-5 and codex.`
 
-// Starting is the workflow an account starts with: a task from the Workflows page, its project
+// Starting is the workflow an account starts with (its Host set to one of the account's): a task from the Workflows page, its project
 // found, the work, three gates, Zach's sign-off for broader changes, and landing.
 var Starting = Definition{
 	Trigger: TriggerTask,

@@ -6,11 +6,11 @@ import (
 	"testing"
 )
 
-func TestTheStartingWorkflowIsValid(t *testing.T) {
-	if err := Starting.Validate(); err != nil {
-		t.Fatal(err)
+func TestTheStartingWorkflowIsValidOnceItHasAHost(t *testing.T) {
+	if err := Starting.Validate(); err == nil || !strings.Contains(err.Error(), "host") {
+		t.Errorf("the starting workflow names no host: err = %v", err)
 	}
-	b, err := json.Marshal(Starting)
+	b, err := json.Marshal(onHost(Starting))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,12 +24,14 @@ func TestTheStartingWorkflowIsValid(t *testing.T) {
 }
 
 func TestParseRefusesWhatCannotRun(t *testing.T) {
-	ok := func() Definition { return clone(Starting) }
+	ok := func() Definition { return onHost(clone(Starting)) }
 	for name, c := range map[string]struct {
 		mod  func(*Definition)
 		want string
 	}{
 		"no steps":           {func(d *Definition) { d.Steps = nil }, "at least one step"},
+		"no host":            {func(d *Definition) { d.Host = "" }, "host"},
+		"bad host":           {func(d *Definition) { d.Host = "Not A Host" }, "host"},
 		"unknown trigger":    {func(d *Definition) { d.Trigger = "email" }, "trigger"},
 		"unknown kind":       {func(d *Definition) { d.Steps[0].Kind = "decide" }, "kind"},
 		"bad step id":        {func(d *Definition) { d.Steps[0].ID = "Do It" }, "id"},
@@ -101,4 +103,9 @@ func clone(d Definition) Definition {
 	var out Definition
 	_ = json.Unmarshal(b, &out)
 	return out
+}
+
+func onHost(d Definition) Definition {
+	d.Host = "host-1"
+	return d
 }

@@ -35,6 +35,8 @@
   .composer { display: flex; gap: .75rem; align-items: flex-start; flex-wrap: wrap; }
   .composer textarea { min-height: 4rem; flex: 1 1 24rem; }
   .composer .side { display: flex; flex-direction: column; gap: .4rem; min-width: 12rem; }
+  .composer .pick { display: grid; grid-template-columns: 4.5rem 1fr; align-items: center; gap: .5rem; }
+  .composer .pick label { margin: 0; font-size: 12.5px; color: var(--muted); font-weight: 500; }
   .builder { display: grid; grid-template-columns: minmax(0, 1fr) 24rem; gap: 1.5rem; align-items: start; }
   @media (max-width: 62rem) { .builder { grid-template-columns: 1fr; } }
   .pipe { max-width: 36rem; }
@@ -128,9 +130,8 @@
   <div class="composer">
     <textarea id="task" placeholder="New task: describe what you want done. Its project is found for you."></textarea>
     <div class="side">
-      {{if gt (len .Tasks) 1}}<select id="task-workflow">{{range .Tasks}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select>
-      {{else}}<input type="hidden" id="task-workflow" value="{{(index .Tasks 0).ID}}">{{end}}
-      <select id="task-host" title="The host it runs on">{{range .Hosts}}<option>{{.}}</option>{{else}}<option value="">no hosts</option>{{end}}</select>
+      <div class="pick"><label for="task-workflow">Workflow</label>
+        <select id="task-workflow">{{range .Tasks}}<option value="{{.ID}}">{{.Name}}{{with .Definition.Host}} · {{.}}{{end}}</option>{{end}}</select></div>
       <button class="btn primary" id="submit-task">Submit task</button>
     </div>
   </div>
@@ -164,6 +165,7 @@
 </div>
 <script>
 const starting = {{json .Starting}};
+const hosts = {{json .Hosts}}; // the account's, online first: a new workflow runs on the first
 const err = (m) => { const e = document.getElementById("error"); e.hidden = false; e.textContent = m; };
 async function api(method, path, body) {
   const res = await fetch(path, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -171,7 +173,8 @@ async function api(method, path, body) {
   return res.status === 204 ? null : res.json();
 }
 async function addWorkflow(name, description) {
-  try { const w = await api("POST", "/api/workflows", { name, description, definition: starting }); location.href = "/workflows/" + w.id; }
+  if (!hosts.length) return err("Add a host first (Account): a workflow runs on one.");
+  try { const w = await api("POST", "/api/workflows", { name, description, definition: { ...starting, host: hosts[0] } }); location.href = "/workflows/" + w.id; }
   catch (e) { err(e.message); }
 }
 document.getElementById("add-starting")?.addEventListener("click", () =>
@@ -182,8 +185,7 @@ document.getElementById("submit-task")?.addEventListener("click", async (ev) => 
   if (!input) return document.getElementById("task").focus();
   ev.target.disabled = true;
   try {
-    const r = await api("POST", "/api/workflow-runs", { workflowId: document.getElementById("task-workflow").value,
-      host: document.getElementById("task-host").value, input });
+    const r = await api("POST", "/api/workflow-runs", { workflowId: document.getElementById("task-workflow").value, input });
     location.href = "/workflow-runs/" + r.id;
   } catch (e) { err(e.message); ev.target.disabled = false; }
 });
@@ -225,8 +227,6 @@ setInterval(async () => {
   <form method="dialog">
     <label for="s-input">What should it do?</label>
     <textarea id="s-input" required></textarea>
-    <label for="s-host">Host</label>
-    <select id="s-host">{{range .Hosts}}<option>{{.}}</option>{{else}}<option value="">no hosts</option>{{end}}</select>
     <p class="hint">Runs the saved version.</p>
     <div class="form-actions"><button class="btn primary" value="ok">Start</button><button class="btn" value="cancel" formnovalidate>Cancel</button></div>
   </form>
@@ -234,10 +234,11 @@ setInterval(async () => {
 <script>
 "use strict";
 const saved = {{json .Workflow}};
-// the repositories the account's hosts reported: a fixed project is picked from these
-const repos = {{json .Repos}};
+// the repositories the account's hosts reported: a fixed project is picked from those on the workflow's host
+const allRepos = {{json .Repos}};
+const hosts = {{json .Hosts}};
 let typingDir = false; // "Another directory…" chosen: the directory is typed
-const repoLabel = (r) => `${r.project || r.directory.split("/").pop()} · ${r.directory} (${r.hosts.join(", ")})`;
+const repoLabel = (r) => `${r.project || r.directory.split("/").pop()} · ${r.directory}`;
 let wf = structuredClone(saved), sel = "__trigger", json = false, dirty = false;
 const $ = (s, el = document) => el.querySelector(s), $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -269,9 +270,10 @@ function fixedCards() {
   const d = def(), p = d.project, o = d.orchestrator;
   const card = (id, kind, ttl, body) => `<div class="node fixed click${sel === id ? " sel" : ""}" data-id="${id}"><div class="nh"><div><div class="kind">${kind}</div><div class="ttl">${ttl}</div></div></div><div class="nb">${body}</div></div>`;
   return card("__trigger", "Trigger", d.trigger === "task" ? "Task in Intelligence" : "By hand",
-      d.trigger === "task" ? "A task submitted on the Workflows page. It becomes " + V("input") + "." : "Someone presses Run and types what it should do.") +
+      (d.trigger === "task" ? "A task submitted on the Workflows page. It becomes " + V("input") + "." : "Someone presses Run and types what it should do.") +
+      ` Runs on <b class="mono">${esc(d.host || "no host yet")}</b>.`) +
     `<div class="link"></div>` +
-    card("__project", "Before the orchestrator", "Find the project", p.mode === "fixed" ? `Always ${esc(repos.find((r) => r.directory === p.directory)?.project || "")} <span class="mono">${esc(p.directory)}</span>.` :
+    card("__project", "Before the orchestrator", "Find the project", p.mode === "fixed" ? `Always ${esc(allRepos.find((r) => r.directory === p.directory)?.project || "")} <span class="mono">${esc(p.directory)}</span>.` :
       `An agent (${esc(p.provider)}${p.model ? " · " + esc(p.model) : ""}) picks one of the host's repositories, or none. Then the worktree is made.`) +
     `<div class="link"></div>` +
     card("__orch", "In the worktree", "Orchestrator", `${esc(o.provider)}${o.model ? " · " + esc(o.model) : ""}${o.thinking ? " · " + esc(o.thinking) : ""}. ` +
@@ -291,16 +293,17 @@ function stepCards() {
 // repoPicker is the repositories as a dropdown, with the one saved (if no host reports it) and
 // "Another directory…", which shows a field to type it.
 function repoPicker(p) {
+  const repos = allRepos.filter((r) => r.hosts.includes(def().host));
   const known = repos.some((r) => r.directory === p.directory);
   const other = typingDir || (p.directory && !known);
   const options = repos.map((r) => [r.directory, repoLabel(r)]);
   if (!repos.length) return `<label>Its main checkout on the host</label><input data-p="directory" value="${esc(p.directory)}" placeholder="/path/to/the/repository">
-    <p class="hint">No host has reported a repository yet: type its directory.</p>`;
+    <p class="hint">${esc(def().host || "This workflow's host")} has not reported a repository yet: type its directory.</p>`;
   return `<label>The repository</label><select id="repo-pick">
       ${!p.directory && !other ? `<option value="" selected disabled>Pick a repository</option>` : ""}
       ${opts(options, other ? "" : p.directory)}<option value="__other"${other ? " selected" : ""}>Another directory…</option></select>
     ${other ? `<label>Its main checkout on the host</label><input data-p="directory" value="${esc(p.directory)}" placeholder="/path/to/the/repository">` : ""}
-    <p class="hint">Each run makes a worktree of it on the host it runs on, so pick one that host has.</p>`;
+    <p class="hint">The repositories ${esc(def().host)} reported. Each run makes a worktree of it there.</p>`;
 }
 
 function inspector() {
@@ -311,12 +314,18 @@ function inspector() {
       <div><label>Model</label><input data-${pre}="model" value="${esc(o.model)}" placeholder="provider default"></div>
       <div><label>Thinking</label><select data-${pre}="thinking">${opts(THINKING.map((t) => [t, t || "default"]), o.thinking || "")}</select></div></div>
       <datalist id="providers"><option>claude</option><option>codex</option><option>muse</option><option>antigravity</option></datalist>`;
-  const host = (ttl, sub, body) => `<div class="card-head"><h2>${ttl}</h2>${sub ? `<span class="meta grow">${sub}</span>` : ""}</div><div class="card-body">${body}</div>`;
-  if (sel === "__trigger") return host("Trigger", "", `<label>Starts when</label><select data-d="trigger">${opts([["task", "A task is submitted on the Workflows page"], ["manual", "Someone presses Run"]], d.trigger)}</select>
-    <p class="hint">What was submitted is ${V("input")} in the instructions.</p>`);
+  const panel = (ttl, sub, body) => `<div class="card-head"><h2>${ttl}</h2>${sub ? `<span class="meta grow">${sub}</span>` : ""}</div><div class="card-body">${body}</div>`;
+  if (sel === "__trigger") {
+    const hostOpts = hosts.map((h) => [h, h]);
+    if (d.host && !hosts.includes(d.host)) hostOpts.push([d.host, d.host + " (not in this account)"]);
+    return panel("Trigger", "", `<label>Starts when</label><select data-d="trigger">${opts([["task", "A task is submitted on the Workflows page"], ["manual", "Someone presses Run"]], d.trigger)}</select>
+    <p class="hint">What was submitted is ${V("input")} in the instructions.</p>
+    <label>Runs on</label><select data-d="host">${d.host ? "" : `<option value="" selected disabled>Pick a host</option>`}${opts(hostOpts, d.host || "")}</select>
+    <p class="hint">Every run of this workflow happens on this host: its project is found among the host's repositories, and its worktree and agents are made there.</p>`);
+  }
   if (sel === "__project") {
     const p = d.project;
-    return host("Find the project", "Runs before the orchestrator, which lives in the worktree", `<label>The project is</label>
+    return panel("Find the project", "Runs before the orchestrator, which lives in the worktree", `<label>The project is</label>
       <select data-p="mode">${opts([["match", "Picked by an agent (or none)"], ["fixed", "Always one repository"]], p.mode)}</select>
       ${p.mode === "fixed" ? repoPicker(p)
         : `${agentFields(p, "p")}<label>What the agent is told</label><textarea data-p="instructions" class="prompt">${esc(p.instructions)}</textarea>
@@ -325,14 +334,14 @@ function inspector() {
   }
   if (sel === "__orch") {
     const o = d.orchestrator;
-    return host("Orchestrator", "", `<p class="muted" style="margin-top:0">One per run, in the worktree. It gets one step at a time and decides when each is done. It never does the work itself.</p>
+    return panel("Orchestrator", "", `<p class="muted" style="margin-top:0">One per run, in the worktree. It gets one step at a time and decides when each is done. It never does the work itself.</p>
       ${agentFields(o, "o")}<label>Its standing instructions</label><textarea data-o="instructions" class="prompt" style="min-height:16rem">${esc(o.instructions)}</textarea>
       <p class="hint">It also gets the run, the list of steps, the <code>intelligence workflow</code> commands (next, back, skip, ask, fail) and the first step.</p>`);
   }
   const s = d.steps.find((x) => x.id === sel);
-  if (!s) return host("Steps", "", `<p class="muted">Select a step to edit it, or add one with +.</p>`);
+  if (!s) return panel("Steps", "", `<p class="muted">Select a step to edit it, or add one with +.</p>`);
   const i = d.steps.indexOf(s);
-  return host(`${KIND[s.kind]} ${i + 1}`, KIND_DESC[s.kind], `<label>Title</label><input data-s="title" value="${esc(s.title)}">
+  return panel(`${KIND[s.kind]} ${i + 1}`, KIND_DESC[s.kind], `<label>Title</label><input data-s="title" value="${esc(s.title)}">
     <p class="hint mono">id: ${esc(s.id)} · <code>intelligence workflow back ${esc(s.id)}</code> returns here</p>
     <label>Kind</label><select data-s="kind">${opts(Object.entries(KIND), s.kind)}</select>
     <label>Instructions to the orchestrator</label><textarea data-s="instructions" class="prompt">${esc(s.instructions)}</textarea>${chips}
@@ -399,7 +408,7 @@ function bind() {
   const pick = $("#repo-pick");
   if (pick) pick.onchange = () => {
     typingDir = pick.value === "__other";
-    def().project.directory = typingDir ? (repos.some((r) => r.directory === def().project.directory) ? "" : def().project.directory) : pick.value;
+    def().project.directory = typingDir ? (allRepos.some((r) => r.directory === def().project.directory) ? "" : def().project.directory) : pick.value;
     markDirty(true);
   };
   on("d", def); on("p", () => def().project); on("o", () => def().orchestrator); on("s", () => def().steps.find((x) => x.id === sel));
@@ -434,7 +443,7 @@ $("#start").addEventListener("close", async () => {
   const dlg = $("#start"), input = $("#s-input").value.trim();
   if (dlg.returnValue !== "ok" || !input) return;
   const res = await fetch("/api/workflow-runs", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ workflowId: wf.id, host: $("#s-host").value, input }) });
+    body: JSON.stringify({ workflowId: wf.id, input }) });
   if (!res.ok) return err(await res.text());
   location.href = "/workflow-runs/" + (await res.json()).id;
 });

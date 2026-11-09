@@ -18,8 +18,12 @@ func wfReport() hostclient.Report {
 	return rep
 }
 
+// wfBody is a workflow request for d, on host-1 unless d names a host.
 func wfBody(t *testing.T, name string, d workflow.Definition) string {
 	t.Helper()
+	if d.Host == "" {
+		d.Host = "host-1"
+	}
 	b, err := json.Marshal(map[string]any{"name": name, "description": "for a test", "definition": d})
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +51,7 @@ func createWorkflow(t *testing.T, h http.Handler, d workflow.Definition) string 
 
 func startRun(t *testing.T, h http.Handler, wf, input string) string {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{"workflowId": wf, "host": "host-1", "input": input})
+	body, _ := json.Marshal(map[string]string{"workflowId": wf, "input": input})
 	rec := call(t, h, http.MethodPost, "/api/workflow-runs", string(body), sameOriginFetch)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("POST /api/workflow-runs = %d %s", rec.Code, rec.Body)
@@ -336,7 +340,7 @@ func TestWorkflowsAreTheAccountsOwn(t *testing.T) {
 			t.Errorf("bob reads someone's %s: %s", tbl, rec.Body)
 		}
 	}
-	body, _ := json.Marshal(map[string]string{"workflowId": wf, "host": "host-1", "input": "x"})
+	body, _ := json.Marshal(map[string]string{"workflowId": wf, "input": "x"})
 	if rec := call(t, h, http.MethodPost, "/api/workflow-runs", string(body), sameOriginFetch, asBob); rec.Code != http.StatusNotFound {
 		t.Errorf("bob ran someone's workflow: %d", rec.Code)
 	}
@@ -349,11 +353,13 @@ func TestWorkflowsAreTheAccountsOwn(t *testing.T) {
 	if rec := call(t, h, http.MethodGet, "/workflow-runs/"+run, "", nil, asBob); rec.Code != http.StatusNotFound {
 		t.Errorf("bob read someone's run page: %d", rec.Code)
 	}
-	// someone's own host is required to start a run
-	body, _ = json.Marshal(map[string]string{"workflowId": wf, "host": "bobs-host", "input": "x"})
+	// a workflow runs only on a host of its own account
 	joinHost(t, ts.store, bob, "bobs-host")
-	if rec := call(t, h, http.MethodPost, "/api/workflow-runs", string(body), sameOriginFetch); rec.Code != http.StatusNotFound {
-		t.Errorf("a run on another account's host: %d", rec.Code)
+	d := workflow.Starting
+	d.Host = "bobs-host"
+	if rec := call(t, h, http.MethodPost, "/api/workflows", wfBody(t, "on bob's host", d), sameOriginFetch); rec.Code != http.StatusBadRequest ||
+		!strings.Contains(rec.Body.String(), "bobs-host") {
+		t.Errorf("a workflow on another account's host: %d %s", rec.Code, rec.Body)
 	}
 }
 
@@ -380,7 +386,9 @@ func TestWorkflowPages(t *testing.T) {
 	wf := createWorkflow(t, h, workflow.Starting)
 	startRun(t, h, wf, "Show each agent's model")
 	list = get(t, h, "/workflows", nil)
-	for _, want := range []string{"Task from Intelligence", "Show each agent&#39;s model", "finding the project", `href="/workflows/` + wf + `"`, "host-1"} {
+	for _, want := range []string{"Task from Intelligence", "Show each agent&#39;s model", "finding the project", `href="/workflows/` + wf + `"`, "host-1",
+		// the new task box says which workflow it runs, and where
+		`<label for="task-workflow">Workflow</label>`, `<option value="` + wf + `">Task from Intelligence · host-1</option>`} {
 		if !strings.Contains(list.Body.String(), want) {
 			t.Errorf("/workflows misses %q", want)
 		}
@@ -389,8 +397,11 @@ func TestWorkflowPages(t *testing.T) {
 	if ed.Code != http.StatusOK || !strings.Contains(ed.Body.String(), "Meets the request") || !strings.Contains(ed.Body.String(), `"version":1`) {
 		t.Errorf("editor = %d", ed.Code)
 	}
+	if !strings.Contains(ed.Body.String(), `"host":"host-1"`) || !strings.Contains(ed.Body.String(), `const hosts = ["host-1"]`) {
+		t.Errorf("the editor should show the workflow's host and offer the account's")
+	}
 	// a fixed project is picked from the repositories the account's hosts reported
-	if !strings.Contains(ed.Body.String(), `const repos = [{"directory":"/w/app","project":"example/app","hosts":["host-1"]}]`) {
+	if !strings.Contains(ed.Body.String(), `const allRepos = [{"directory":"/w/app","project":"example/app","hosts":["host-1"]}]`) {
 		t.Errorf("the editor should offer the hosts' repositories")
 	}
 	if rec := get(t, h, "/workflows/00000000-0000-4000-8000-000000000000", nil); rec.Code != http.StatusNotFound {
@@ -398,5 +409,21 @@ func TestWorkflowPages(t *testing.T) {
 	}
 	if !strings.Contains(get(t, h, "/", nil).Body.String(), `href="/workflows"`) {
 		t.Error("the top bar should link to Workflows")
+	}
+}
+
+// TestAWorkflowSavedWithoutAHostAsksForOne: workflows saved before they named their host do not run
+// until it is set in the editor.
+func TestAWorkflowSavedWithoutAHostAsksForOne(t *testing.T) {
+	h, d := dbServer(t)
+	sendReport(t, h, wfReport())
+	wf := createWorkflow(t, h, workflow.Starting)
+	if _, err := d.Owner.Exec(t.Context(), "UPDATE workflow_versions SET definition = definition - 'host'"); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]string{"workflowId": wf, "input": "x"})
+	if rec := call(t, h, http.MethodPost, "/api/workflow-runs", string(body), sameOriginFetch); rec.Code != http.StatusBadRequest ||
+		!strings.Contains(rec.Body.String(), "host") {
+		t.Errorf("start = %d %s", rec.Code, rec.Body)
 	}
 }

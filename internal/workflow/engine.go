@@ -91,6 +91,9 @@ func (e *Engine) CreateWorkflow(ctx context.Context, account int64, name, descri
 	at := e.Now()
 	var id string
 	err = pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		if err := ownsHost(ctx, tx, account, d.Host); err != nil {
+			return err
+		}
 		if err := tx.QueryRow(ctx, `INSERT INTO workflows (account_id, name, description, version, created_at, updated_at)
 			VALUES ($1, $2, $3, 1, $4, $4) RETURNING id::text`, account, name, strings.TrimSpace(description), at).Scan(&id); err != nil {
 			return err
@@ -119,6 +122,16 @@ func (e *Engine) UpdateWorkflow(ctx context.Context, account int64, id, name, de
 	at := e.Now()
 	var version int
 	err = pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		var mine bool
+		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM workflows WHERE id = $1 AND account_id = $2)", id, account).Scan(&mine); err != nil {
+			return err
+		}
+		if !mine {
+			return ErrNotFound
+		}
+		if err := ownsHost(ctx, tx, account, d.Host); err != nil {
+			return err
+		}
 		err := tx.QueryRow(ctx, `UPDATE workflows SET name = $3, description = $4, version = version + 1, updated_at = $5
 			WHERE id = $1 AND account_id = $2 RETURNING version`, id, account, name, strings.TrimSpace(description), at).Scan(&version)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -132,6 +145,18 @@ func (e *Engine) UpdateWorkflow(ctx context.Context, account int64, id, name, de
 		return err
 	})
 	return version, err
+}
+
+// ownsHost refuses a host that is not account's.
+func ownsHost(ctx context.Context, tx pgx.Tx, account int64, host string) error {
+	var owns bool
+	if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM host_keys WHERE host = $1 AND account_id = $2)", host, account).Scan(&owns); err != nil {
+		return err
+	}
+	if !owns {
+		return bad("host %s is not one of this account's hosts", host)
+	}
+	return nil
 }
 
 // run is a run with its workflow's name and definition.
@@ -207,9 +232,9 @@ func agentMode(provider string) string {
 	return ""
 }
 
-// StartRun starts account's workflow on host (the account's: the caller checks) with input, and
-// returns the run's id. A matched project starts its finder agent; a fixed one, the orchestrator.
-func (e *Engine) StartRun(ctx context.Context, account int64, workflowID, host, input string) (string, error) {
+// StartRun starts account's workflow with input, on the host its definition names, and returns
+// the run's id. A matched project starts its finder agent; a fixed one, the orchestrator.
+func (e *Engine) StartRun(ctx context.Context, account int64, workflowID, input string) (string, error) {
 	if strings.TrimSpace(input) == "" {
 		return "", bad("a run needs input: what should be done")
 	}
@@ -217,14 +242,27 @@ func (e *Engine) StartRun(ctx context.Context, account int64, workflowID, host, 
 		return "", ErrNotFound
 	}
 	at := e.Now()
-	var id string
+	var id, host string
 	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
 		var version int
-		err := tx.QueryRow(ctx, "SELECT version FROM workflows WHERE id = $1 AND account_id = $2", workflowID, account).Scan(&version)
+		var def []byte
+		err := tx.QueryRow(ctx, `SELECT w.version, v.definition FROM workflows w JOIN workflow_versions v ON v.workflow_id = w.id AND v.version = w.version
+			WHERE w.id = $1 AND w.account_id = $2`, workflowID, account).Scan(&version, &def)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
 		if err != nil {
+			return err
+		}
+		var d Definition
+		if err := json.Unmarshal(def, &d); err != nil {
+			return err
+		}
+		host = d.Host
+		if host == "" {
+			return bad("this workflow does not say which host it runs on: pick one in its editor, and save")
+		}
+		if err := ownsHost(ctx, tx, account, host); err != nil {
 			return err
 		}
 		if err := tx.QueryRow(ctx, `INSERT INTO workflow_runs (account_id, workflow_id, version, host, title, input, status, created_at, updated_at)
