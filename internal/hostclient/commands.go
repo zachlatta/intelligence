@@ -88,8 +88,9 @@ type CreateAgentArgs struct {
 
 // WorkspaceArgs name a workspace: archive_workspace, and rename_workspace with Title ("" resets it).
 type WorkspaceArgs struct {
-	WorkspaceID string `json:"workspaceId"`
-	Title       string `json:"title,omitempty"`
+	WorkspaceID  string `json:"workspaceId"`
+	Title        string `json:"title,omitempty"`
+	WaitForAgent string `json:"waitForAgent,omitempty"` // archive: let this agent finish its turn first
 }
 
 // AgentArgs name an agent: archive_agent, cancel_agent, rename_agent with Title, send_message with
@@ -108,8 +109,12 @@ const (
 	Queue     = "queue"     // waits for the running turn, and the messages queued before it, to end
 )
 
-// waitsForTurn: a queued message, which may wait as long as the command lives.
+// waitsForTurn: a queued message or deferred archive may wait as long as the command lives.
 func (c Command) waitsForTurn() bool {
+	if c.Kind == ArchiveWorkspaceKind {
+		var a WorkspaceArgs
+		return json.Unmarshal(c.Args, &a) == nil && a.WaitForAgent != ""
+	}
 	if c.Kind != SendMessageKind {
 		return false
 	}
@@ -175,6 +180,9 @@ func ParseCommand(kind string, args json.RawMessage) (any, error) {
 		}
 		if a.WorkspaceID == "" {
 			return nil, fmt.Errorf("%s needs workspaceId", kind)
+		}
+		if kind == RenameWorkspaceKind && a.WaitForAgent != "" {
+			return nil, errors.New("rename_workspace takes no waitForAgent")
 		}
 		if kind == ArchiveWorkspaceKind && a.Title != "" {
 			return nil, errors.New("archive_workspace takes no title")
@@ -252,6 +260,11 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 		return createAgent(ctx, c, a, cmd.ID, cmd.ID)
 	case WorkspaceArgs:
 		if cmd.Kind == ArchiveWorkspaceKind {
+			if a.WaitForAgent != "" {
+				if err := waitForAgent(ctx, c, a.WaitForAgent); err != nil {
+					return CommandResult{WorkspaceID: a.WorkspaceID}, err
+				}
+			}
 			return w.archiveWorkspace(ctx, c, a.WorkspaceID)
 		}
 		return CommandResult{WorkspaceID: a.WorkspaceID}, c.SetWorkspaceTitle(ctx, a.WorkspaceID, a.Title)
@@ -275,6 +288,34 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 		}
 	}
 	return CommandResult{}, fmt.Errorf("unknown command kind %q", cmd.Kind)
+}
+
+// waitForAgent reads fresh daemon state rather than trusting a possibly stale idle snapshot.
+// The orchestrator is running while its workflow CLI awaits the final response. Waiting for
+// its turn to end lets that response return before archiving stops its agents and removes its cwd.
+// A missing agent has already ended; other agents in the workspace need not be idle.
+func waitForAgent(ctx context.Context, c *paseo.Client, id string) error {
+	for {
+		agents, err := c.Agents(ctx)
+		if err != nil {
+			return fmt.Errorf("waiting for orchestrator: %w", err)
+		}
+		running := false
+		for _, ag := range agents {
+			if ag.ID == id {
+				running = busy(ag.Status)
+				break
+			}
+		}
+		if !running {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for orchestrator's turn to end: %w", ctx.Err())
+		case <-time.After(time.Second):
+		}
+	}
 }
 
 // archiveWorkspace archives each agent in the workspace, then the workspace. Paseo 0.15 archives a

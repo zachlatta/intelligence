@@ -476,7 +476,11 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 			}
 			_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, error = $3, pending_command = NULL, workspace_id = $4,
 				updated_at = $5, finished_at = $5 WHERE id = $1`, r.ID, Failed, msg, res.WorkspaceID, at)
-			return err
+			if err != nil {
+				return err
+			}
+			r.WorkspaceID, r.Orchestrator = res.WorkspaceID, res.AgentID
+			return e.archiveRun(ctx, tx, r)
 		}
 		if r.Status == FindingProject {
 			_, err := tx.Exec(ctx, "UPDATE workflow_runs SET project_agent_id = $2, pending_command = NULL, updated_at = $3 WHERE id = $1",
@@ -572,7 +576,13 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		}
 		_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, step = $3, note = $4, error = $5, updated_at = $6,
 			finished_at = $7 WHERE id = $1`, r.ID, status, step, note, errText, e.Now(), finished)
-		return err
+		if err != nil {
+			return err
+		}
+		if finished != nil {
+			return e.archiveRun(ctx, tx, r)
+		}
+		return nil
 	}
 	switch m.Move {
 	case "next", "skip", "done":
@@ -584,7 +594,7 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 			if err := e.event(ctx, tx, r, "done", ptr(r.Step), nil, text); err != nil {
 				return "", err
 			}
-			return "That was the last step: the run is finished. Archive any sub-agents still open, then stop.", set(Succeeded, r.Step, "")
+			return "That was the last step: the run is finished. End your turn now; the workspace and its agents will be archived automatically.", set(Succeeded, r.Step, "")
 		}
 		if err := e.event(ctx, tx, r, m.Move, ptr(r.Step), ptr(r.Step+1), text); err != nil {
 			return "", err
@@ -617,9 +627,24 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		if err := e.event(ctx, tx, r, "fail", ptr(r.Step), nil, m.Why); err != nil {
 			return "", err
 		}
-		return "The run is marked failed. Archive any sub-agents still open, then stop.", set(Failed, r.Step, "")
+		return "The run is marked failed. End your turn now; the workspace and its agents will be archived automatically.", set(Failed, r.Step, "")
 	}
 	return "", bad("unknown move %q: want next, back, skip, ask, done or fail.", m.Move)
+}
+
+// archiveRun queues durable cleanup in the same transaction as the terminal move. Its
+// command's outcome is independent of the run's outcome and readable through archive_command.
+func (e *Engine) archiveRun(ctx context.Context, tx pgx.Tx, r run) error {
+	if r.WorkspaceID == "" {
+		return nil
+	}
+	args, _ := json.Marshal(hostclient.WorkspaceArgs{WorkspaceID: r.WorkspaceID, WaitForAgent: r.Orchestrator})
+	c, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.ArchiveWorkspaceKind, args, replyTTL, e.Now())
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, "UPDATE workflow_runs SET archive_command = $2 WHERE id = $1", r.ID, c.ID)
+	return err
 }
 
 // archiveFinder queues archiving r's project finder, once its agent is known.

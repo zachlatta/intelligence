@@ -191,6 +191,13 @@ func TestEmailStartsTheWorkflowThatMatchesItAndRepliesGoToItsRun(t *testing.T) {
 	if code, m := move(t, h, key, run, map[string]string{"move": "done", "summary": "sent"}); code != http.StatusOK {
 		t.Fatalf("done = %d %s", code, m)
 	}
+	// the finished run's workspace is archived once its orchestrator's turn ends
+	var aa hostclient.WorkspaceArgs
+	archive := b.command()
+	json.Unmarshal(archive.Args, &aa)
+	if archive.Kind != hostclient.ArchiveWorkspaceKind || aa.WorkspaceID != "w-run" || aa.WaitForAgent != "orch-1" {
+		t.Fatalf("archive = %s %s", archive.Kind, archive.Args)
+	}
 	fake.Add(mailMsg("m4", "t1", "christina@example.com", "Re: Q4 board deck", "One more thing: slide 7 too."))
 	r = decided(t, h, "m4")
 	if r["decision"] != "follow_up" || r["run_id"] == run || r["run_id"] == "" {

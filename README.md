@@ -165,7 +165,8 @@ against its daemon and reports `running`, then `succeeded` with a result (`{"wor
 - `archive_workspace`: `workspaceId`. The host archives each of the workspace's agents first, then the
   workspace (Paseo 0.15 archives a workspace's agents itself; an older daemon left them running in a
   workspace it no longer listed), skipping one already gone. The result counts them
-  (`archivedAgents`). A Paseo-made worktree is removed with it.
+  (`archivedAgents`). A Paseo-made worktree is removed with it. Optional `waitForAgent` waits for
+  that agent to end its turn first, up to the command expiry.
 - `rename_agent`: `agentId`, `title`. `cancel_agent` (stops its current turn) and `archive_agent`:
   `agentId`.
 - `send_message`: `agentId`, `text`, and optionally `behavior`, which says what happens to a turn
@@ -356,6 +357,18 @@ workspace) through their results: a failed one fails the run.
 A run is on a step from the move that hands it the step (the orchestrator starting, for the first;
 `next`, `skip` or `back`) to the move that leaves it (`next`, `skip`, `back`, `done`, `fail`, or a
 cancel); waiting for Zach's reply counts toward the step. `workflow_run_step_visits` reads each visit.
+
+After the last step (`next` or `skip`), explicit `done`, or `fail`, the server queues
+`archive_workspace` for the run's workspace. The host waits for the orchestrator's turn to end,
+so its final CLI reply returns before its workspace and agents are archived. The final reply tells
+it to end its turn. A failed orchestrator start also archives any workspace it made. Cancellation
+still stops the orchestrator and leaves the workspace for inspection.
+
+Cleanup is durable across server and host restarts, with a 24-hour expiry. `workflow_runs.archive_command`
+links to `commands` for its progress, error and result; the run page shows that status too. An archive
+failure or expiry leaves the run's outcome intact. A stuck orchestrator is never forcibly archived
+by this cleanup after the deadline; the failure can be inspected and archiving retried with the
+existing workspace command.
 
 Variables in instructions: `{{input}}`, `{{repo}}`, `{{branch}}` and `{{run}}`.
 

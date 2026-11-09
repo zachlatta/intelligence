@@ -250,6 +250,18 @@ func TestAWorkflowRunFindsItsProjectThenTheOrchestratorMovesItThroughTheSteps(t 
 		t.Errorf("a finished run moved: %d", code)
 	}
 
+	cleanup := b.command()
+	if cleanup.Kind != hostclient.ArchiveWorkspaceKind {
+		t.Fatalf("cleanup = %+v", cleanup)
+	}
+	succeed(t, b, cleanup, `{"workspaceId":"w-run","archivedAgents":3}`)
+	if r := readRun(t, h, run); r["status"] != "succeeded" {
+		t.Fatalf("cleanup changed run: %v", r)
+	}
+	if page := get(t, h, "/workflow-runs/"+run, nil); !strings.Contains(page.Body.String(), "Workspace archive: succeeded") {
+		t.Fatal("run page hides archive success")
+	}
+
 	code, r := sqlPost(t, h, q(`SELECT string_agg(kind, ' ' ORDER BY id) FROM workflow_run_events WHERE run_id = '`+run+`'`))
 	want := "started project workspace next back next next next next ask reply next done"
 	if code != http.StatusOK || len(r.Rows) != 1 || r.Rows[0][0] != want {
@@ -637,5 +649,86 @@ func TestARunShowsHowLongEachStepTook(t *testing.T) {
 		if !strings.Contains(page, want) {
 			t.Errorf("run page misses %q", want)
 		}
+	}
+}
+
+func TestFinishedWorkflowQueuesArchiveAndKeepsArchiveFailureSeparate(t *testing.T) {
+	for _, ending := range []string{"next", "skip", "done", "fail"} {
+		t.Run(ending, func(t *testing.T) {
+			h, _ := dbServer(t)
+			sendReport(t, h, wfReport())
+			key := keyOf(t, h, "host-1")
+			b := openStream(t, h, "host-1")
+			def := workflow.Starting
+			def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+			def.Steps = def.Steps[:1]
+			run := startRun(t, h, createWorkflow(t, h, def), "finish me")
+			succeed(t, b, b.command(), `{"workspaceId":"w-run","agentId":"orch-1"}`)
+			code, rows := sqlPost(t, h, q(`SELECT count(*) FROM commands WHERE kind = 'archive_workspace'`))
+			if code != http.StatusOK || rows.Rows[0][0] != float64(0) {
+				t.Fatal("archived an active run")
+			}
+			if code, msg := move(t, h, key, run, map[string]string{"move": ending, "why": "reason"}); code != http.StatusOK {
+				t.Fatalf("finish: %d %s", code, msg)
+			}
+			code, rows = sqlPost(t, h, q(`SELECT c.kind, c.args->>'workspaceId', c.args->>'waitForAgent' FROM workflow_runs r JOIN commands c ON c.id = r.archive_command WHERE r.id = '`+run+`'`))
+			if code != http.StatusOK || len(rows.Rows) != 1 {
+				t.Fatalf("archive command missing: %d %+v", code, rows)
+			}
+			if rows.Rows[0][0] != "archive_workspace" || rows.Rows[0][1] != "w-run" || rows.Rows[0][2] != "orch-1" {
+				t.Fatalf("archive: %+v", rows)
+			}
+			c := b.command()
+			if ack := b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{ID: c.ID, Status: hostclient.CommandFailed, Error: "archive refused"}}); ack.Error != "" {
+				t.Fatal(ack.Error)
+			}
+			page := get(t, h, "/workflow-runs/"+run, nil)
+			if !strings.Contains(page.Body.String(), "Workspace archive: failed") || !strings.Contains(page.Body.String(), "archive refused") {
+				t.Fatalf("run page hides cleanup failure: %s", page.Body)
+			}
+			want := "succeeded"
+			if ending == "fail" {
+				want = "failed"
+			}
+			if r := readRun(t, h, run); r["status"] != want {
+				t.Fatalf("archive failure changed outcome: %v", r)
+			}
+			code, rows = sqlPost(t, h, q(`SELECT c.status, c.error FROM workflow_runs r JOIN commands c ON c.id = r.archive_command WHERE r.id = '`+run+`'`))
+			if code != http.StatusOK || rows.Rows[0][0] != "failed" || rows.Rows[0][1] != "archive refused" {
+				t.Fatalf("archive failure not readable: %+v", rows)
+			}
+			if code, _ := move(t, h, key, run, map[string]string{"move": ending}); code != http.StatusConflict {
+				t.Fatal("finished run moved again")
+			}
+			code, rows = sqlPost(t, h, q(`SELECT count(*) FROM commands WHERE kind = 'archive_workspace'`))
+			if code != http.StatusOK || rows.Rows[0][0] != float64(1) {
+				t.Fatal("duplicate archive")
+			}
+		})
+	}
+}
+
+func TestFailedOrchestratorStartArchivesItsPartialWorkspace(t *testing.T) {
+	h, _ := dbServer(t)
+	sendReport(t, h, wfReport())
+	b := openStream(t, h, "host-1")
+	def := workflow.Starting
+	def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+	run := startRun(t, h, createWorkflow(t, h, def), "anything")
+	c := b.command()
+	if ack := b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{
+		ID: c.ID, Status: hostclient.CommandFailed, Error: "agent failed to start", Result: json.RawMessage(`{"workspaceId":"partial"}`),
+	}}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	cleanup := b.command()
+	var args map[string]string
+	json.Unmarshal(cleanup.Args, &args)
+	if cleanup.Kind != hostclient.ArchiveWorkspaceKind || args["workspaceId"] != "partial" || args["waitForAgent"] != "" {
+		t.Fatalf("cleanup = %+v", cleanup)
+	}
+	succeed(t, b, cleanup, `{"workspaceId":"partial"}`)
+	if r := readRun(t, h, run); r["status"] != "failed" || !strings.Contains(r["error"].(string), "agent failed to start") {
+		t.Fatalf("run = %v", r)
 	}
 }

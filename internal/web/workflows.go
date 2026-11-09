@@ -662,6 +662,13 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		var archiveStatus, archiveError string
+		err = v.pool.QueryRow(ctx, `SELECT COALESCE(c.status, ''), COALESCE(c.error, '')
+            FROM workflow_runs r LEFT JOIN commands c ON c.id = r.archive_command WHERE r.id = $1`, id).Scan(&archiveStatus, &archiveError)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		agents, err := runAgents(ctx, v.pool, run)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -680,7 +687,7 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 		}
 		slices.Reverse(emails) // oldest first, as a thread reads
 		renderWorkflows(w, "run", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Run": run, "Steps": stepViews(run, events, visits, cfg.Now()),
-			"Agents": agents, "Before": before, "Events": events, "Emails": emails, "Dictation": dictationPath(cfg)})
+			"Agents": agents, "Before": before, "Events": events, "Emails": emails, "ArchiveStatus": archiveStatus, "ArchiveError": archiveError, "Dictation": dictationPath(cfg)})
 	}
 }
 
