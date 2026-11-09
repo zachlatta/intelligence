@@ -316,12 +316,18 @@ version it started with. A run:
    <directory>|none`. A definition can name its repository instead (`"mode": "fixed"`).
 2. **Starts the orchestrator in the worktree.** The server archives the finder and queues
    `create_workspace`: a git worktree of the repository (or the home directory, for none) with the
-   orchestrator in it. Its names say which workflow runs and what for: the task's first line,
-   filler words dropped, gives a few key words, so “For workflows, automatically name the
-   workspaces…” in Factory Task is the workspace “Factory Task: Workflows automatically name
-   workspaces branches” on branch `wf-factory-task-workflows-automatically-name-workspaces-<run>`
-   (`<run>` is the run id's first 8 characters, which keeps branches unique). Both are on the run
-   (`workflow_runs.workspace_title`, `branch`). Its first message is its standing
+   orchestrator in it. Its names say which workflow runs, what for and which run: the workspace is
+   `<workflow>: <task> · <run>` and the branch `wf-<workflow>-<task>-<run>`. The task is the
+   input's first sentence that is more than a greeting, on its first line that is more than a
+   heading (`Task:`, `## Goal`), nearly as written: only a polite opening (“could you please”) and
+   articles go, so a “not” or “never” always stays, and it is cut at whole words. “Could you please
+   fix the login page?” in Factory Task is the workspace “Factory Task: Fix login page · 1bf01c44”
+   on branch `wf-factory-task-fix-login-page-1bf01c44a2b3`. The run is its id's first 8 hex digits
+   in the title and first 12 (48 random bits) in the branch, which makes two runs sharing a branch
+   vanishingly unlikely. The title keeps any script; the branch is lowercase ASCII, because Paseo
+   accepts no other worktree branch, so accents are folded and a task with no ASCII rendering (in
+   Chinese, say) leaves the branch only the workflow and the run. Both are on the run
+   (`workflow_runs.workspace_title`, `branch`) and its page. The orchestrator's first message is its standing
    instructions, the input, the list of steps, the commands below, and the first step.
 3. **The orchestrator moves through the steps.** It never does the work itself: it starts
    sub-agents for it (`paseo run` in its workspace, so they are its sub-agents), and decides when a

@@ -263,22 +263,22 @@ func readWorkflows(ctx context.Context, p *pgxpool.Pool, id string) ([]workflowR
 
 // runRow is a run as the pages show it.
 type runRow struct {
-	ID, Title, Input, Status, Host, Repo, Branch, Workflow, WorkflowID string
-	WorkspaceID, Orchestrator, ProjectAgent, Note, Error               string
-	Step, Version                                                      int
-	Steps                                                              []workflow.Step
-	CreatedAt, UpdatedAt                                               time.Time
-	FinishedAt                                                         *time.Time
+	ID, Title, Input, Status, Host, Repo, Branch, Workflow, WorkflowID   string
+	WorkspaceID, WorkspaceTitle, Orchestrator, ProjectAgent, Note, Error string
+	Step, Version                                                        int
+	Steps                                                                []workflow.Step
+	CreatedAt, UpdatedAt                                                 time.Time
+	FinishedAt                                                           *time.Time
 }
 
-const runRowSelect = `SELECT r.id::text, r.title, r.input, r.status, r.host, r.repo, r.branch, w.name, r.workflow_id::text, r.workspace_id,
+const runRowSelect = `SELECT r.id::text, r.title, r.input, r.status, r.host, r.repo, r.branch, w.name, r.workflow_id::text, r.workspace_id, r.workspace_title,
 	r.orchestrator_id, r.project_agent_id, r.note, r.error, r.step, r.version, v.definition -> 'steps', r.created_at, r.updated_at, r.finished_at
 	FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id JOIN workflow_versions v ON v.workflow_id = r.workflow_id AND v.version = r.version `
 
 func scanRunRow(row pgx.CollectableRow) (runRow, error) {
 	var r runRow
 	var steps []byte
-	err := row.Scan(&r.ID, &r.Title, &r.Input, &r.Status, &r.Host, &r.Repo, &r.Branch, &r.Workflow, &r.WorkflowID, &r.WorkspaceID,
+	err := row.Scan(&r.ID, &r.Title, &r.Input, &r.Status, &r.Host, &r.Repo, &r.Branch, &r.Workflow, &r.WorkflowID, &r.WorkspaceID, &r.WorkspaceTitle,
 		&r.Orchestrator, &r.ProjectAgent, &r.Note, &r.Error, &r.Step, &r.Version, &steps, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt)
 	if err == nil {
 		err = json.Unmarshal(steps, &r.Steps)

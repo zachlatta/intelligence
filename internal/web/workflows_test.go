@@ -265,12 +265,16 @@ func TestAFixedProjectStartsTheOrchestratorAtOnce(t *testing.T) {
 	var wa hostclient.CreateWorkspaceArgs
 	json.Unmarshal(ws.Args, &wa)
 	// the workspace and branch name the workflow and the task, and the branch the run
-	wantTitle, wantBranch := "Task from Intelligence: Fix login page", "wf-task-from-intelligence-fix-login-page-"+run[:8]
+	wantTitle := "Task from Intelligence: Fix login page · " + run[:8]
+	wantBranch := "wf-task-from-intelligence-fix-login-page-" + strings.ReplaceAll(run, "-", "")[:12]
 	if ws.Kind != hostclient.CreateWorkspaceKind || wa.Cwd != "/w/app" || wa.Title != wantTitle || wa.Branch != wantBranch {
 		t.Fatalf("command = %s %+v", ws.Kind, wa)
 	}
 	if r := readRun(t, h, run); r["status"] != "starting" || r["repo"] != "/w/app" || r["branch"] != wantBranch || r["workspace_title"] != wantTitle {
 		t.Fatalf("run = %v", r)
+	}
+	if page := get(t, h, "/workflow-runs/"+run, nil); !strings.Contains(page.Body.String(), "workspace <b>"+wantTitle+"</b>") {
+		t.Errorf("the run page should name its workspace %q", wantTitle)
 	}
 }
 
@@ -288,7 +292,7 @@ func TestNoProjectRunsTheOrchestratorInTheHomeDirectory(t *testing.T) {
 	var wa hostclient.CreateWorkspaceArgs
 	json.Unmarshal(ws.Args, &wa)
 	if ws.Kind != hostclient.CreateWorkspaceKind || wa.Cwd != "~" || wa.Worktree || wa.Branch != "" || wa.Agent == nil ||
-		wa.Title != "Task from Intelligence: Pay hosting October" {
+		wa.Title != "Task from Intelligence: What did we pay for hosting in October · "+run[:8] {
 		t.Fatalf("command = %s %+v", ws.Kind, wa)
 	}
 }

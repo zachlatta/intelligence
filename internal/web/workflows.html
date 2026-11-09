@@ -485,6 +485,7 @@ render();
     <div class="run-meta"><span class="status {{.Run.StatusClass}}">{{.Run.StatusLabel}}</span>
       <span><b>{{.Run.Workflow}}</b> v{{.Run.Version}}</span><span>on <b class="mono">{{.Run.Host}}</b></span>
       {{if .Run.Repo}}<span><b class="mono">{{.Run.Repo}}</b> @ <span class="mono">{{.Run.Branch}}</span></span>{{end}}
+      {{if .Run.WorkspaceTitle}}<span>workspace <b>{{.Run.WorkspaceTitle}}</b></span>{{end}}
       <span>{{plural (len .Agents) "agent"}}</span><span>started {{ago .Now .Run.CreatedAt}}</span></div></div>
   <div class="actions">{{if .Run.Live}}<button class="btn sm" id="cancel">Cancel run</button>{{end}}</div>
 </div>

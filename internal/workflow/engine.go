@@ -243,8 +243,6 @@ func title(input string) string {
 	return line
 }
 
-var nonSlug = regexp.MustCompile(`[^a-z0-9]+`)
-
 // agentMode is the mode an agent of provider starts in: Claude runs without asking (its turns
 // are unattended); other providers keep their default.
 func agentMode(provider string) string {
