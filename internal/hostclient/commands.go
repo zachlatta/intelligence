@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -115,10 +117,11 @@ func (c Command) waitsForTurn() bool {
 
 // CommandResult is what a command made or changed.
 type CommandResult struct {
-	WorkspaceID string `json:"workspaceId,omitempty"`
-	AgentID     string `json:"agentId,omitempty"`
-	ScheduleID  string `json:"scheduleId,omitempty"`
-	RunID       string `json:"runId,omitempty"` // run_schedule: the run it started
+	WorkspaceID    string `json:"workspaceId,omitempty"`
+	AgentID        string `json:"agentId,omitempty"`
+	ScheduleID     string `json:"scheduleId,omitempty"`
+	RunID          string `json:"runId,omitempty"`          // run_schedule: the run it started
+	ArchivedAgents int    `json:"archivedAgents,omitempty"` // archive_workspace: how many agents went with it
 }
 
 // ParseCommand decodes args for kind strictly (no unknown fields) and checks what it needs. The
@@ -244,7 +247,7 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 		return createAgent(ctx, c, a, cmd.ID, cmd.ID)
 	case WorkspaceArgs:
 		if cmd.Kind == ArchiveWorkspaceKind {
-			return CommandResult{WorkspaceID: a.WorkspaceID}, c.ArchiveWorkspace(ctx, a.WorkspaceID)
+			return w.archiveWorkspace(ctx, c, a.WorkspaceID)
 		}
 		return CommandResult{WorkspaceID: a.WorkspaceID}, c.SetWorkspaceTitle(ctx, a.WorkspaceID, a.Title)
 	case AgentArgs:
@@ -267,6 +270,32 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 		}
 	}
 	return CommandResult{}, fmt.Errorf("unknown command kind %q", cmd.Kind)
+}
+
+// archiveWorkspace archives each agent in the workspace, then the workspace. Paseo 0.15 archives a
+// workspace's agents itself, but an older daemon leaves them running in a workspace it no longer
+// lists, so the host does it first. An agent already gone (archived elsewhere) is skipped.
+func (w *Watcher) archiveWorkspace(ctx context.Context, c *paseo.Client, id string) (CommandResult, error) {
+	w.mu.Lock()
+	var agents []string
+	for _, ag := range w.agents {
+		if ag.WorkspaceID == id {
+			agents = append(agents, ag.ID)
+		}
+	}
+	w.mu.Unlock()
+	slices.Sort(agents)
+	r := CommandResult{WorkspaceID: id}
+	for _, ag := range agents {
+		if err := c.ArchiveAgent(ctx, ag); err != nil {
+			if strings.Contains(err.Error(), "not found") {
+				continue
+			}
+			return r, fmt.Errorf("archive agent %s: %w", ag, err)
+		}
+		r.ArchivedAgents++
+	}
+	return r, c.ArchiveWorkspace(ctx, id)
 }
 
 // createAgent starts a in a.Cwd, labelled with the command that asked for it.

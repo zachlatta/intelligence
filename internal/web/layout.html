@@ -13,3 +13,82 @@
   </nav>
 </div></header>
 {{end}}
+{{define "archivejs"}}
+<script>
+// Archive buttons (button[data-archive]: workspace or agent, on data-host, data-id) send
+// archive_workspace or archive_agent through the commands API and follow the command through the
+// read-only SQL API. Archiving a workspace archives its agents too: the host archives each, then the
+// workspace. One that would stop a running agent (data-running) or remove a worktree with
+// uncommitted changes (data-dirty) asks again: the first click arms the button, a second within 5
+// seconds archives. Once archived, the button's row goes, or the page goes to data-then.
+// the agent page's status changes live (an agentstatus event); its button follows it
+document.addEventListener("agentstatus", (e) => {
+  const b = document.querySelector("#archive[data-archive=agent]");
+  if (b) b.dataset.running = e.detail === "running" || e.detail === "initializing" ? "1" : "0";
+});
+
+function archiveWarning(b) {
+  const running = +b.dataset.running || 0, parts = [];
+  if (running) parts.push(b.dataset.archive === "agent" ? "it is running" : running + (running === 1 ? " agent" : " agents") + " running");
+  if (b.dataset.dirty) parts.push("uncommitted changes");
+  return parts.join(", ");
+}
+
+async function archive(b) {
+  const kind = "archive_" + b.dataset.archive;
+  const args = b.dataset.archive === "workspace" ? { workspaceId: b.dataset.id } : { agentId: b.dataset.id };
+  const res = await fetch("/api/hosts/" + encodeURIComponent(b.dataset.host) + "/commands", { method: "POST",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind, args }) });
+  if (res.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return new Promise(() => {}); }
+  if (!res.ok) throw new Error(await res.text());
+  const id = (await res.json()).id;
+  if (!/^[0-9a-f-]{36}$/.test(id)) throw new Error("the server returned a bad command id");
+  for (;;) {
+    const r = await fetch("/api/sql", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: "SELECT status, error FROM commands WHERE id = '" + id + "'" }) });
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.error);
+    const [status, error] = body.rows[0] || [];
+    if (status === "succeeded") return;
+    if (status === "failed" || status === "expired") throw new Error(error || "the command " + status);
+    b.textContent = status === "queued" ? "Waiting for " + b.dataset.host + "…" : "Archiving…";
+    await new Promise((ok) => setTimeout(ok, 700));
+  }
+}
+
+function disarm(b) {
+  clearTimeout(b._disarm);
+  delete b.dataset.armed;
+  b.classList.remove("danger");
+  b.textContent = b.dataset.label || "Archive";
+}
+
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-archive]");
+  if (!b) return;
+  e.preventDefault(); // in a summary, a click would also fold its details
+  if (b.disabled) return;
+  b.dataset.label ||= b.textContent;
+  const warning = archiveWarning(b);
+  if (warning && !b.dataset.armed) {
+    b.dataset.armed = "1";
+    b.classList.add("danger");
+    b.textContent = "Archive? " + warning;
+    b._disarm = setTimeout(() => disarm(b), 5000);
+    return;
+  }
+  clearTimeout(b._disarm);
+  b.disabled = true;
+  b.textContent = "Archiving…";
+  try {
+    await archive(b);
+    if (b.dataset.then) { location.href = b.dataset.then; return; }
+    (b.closest("li, details.ws") || b).remove();
+  } catch (err) {
+    b.disabled = false;
+    disarm(b);
+    alert("Could not archive " + (b.dataset.name || b.dataset.id) + ": " + err.message);
+  }
+});
+</script>
+{{end}}

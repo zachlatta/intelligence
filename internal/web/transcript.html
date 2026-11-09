@@ -179,6 +179,7 @@
     {{if .Synced}}<span>{{plural .Stats.Turns "turn"}} · {{plural .Stats.Tools "tool call"}} · {{plural .Stats.Entries "entry"}}</span>{{end}}
     <span title="{{.Agent.ID}}"><code>{{shortID .Agent.ID}}</code></span>
     {{if .Live}}<span title="New entries appear as the agent works"><span class="dot live"></span> live</span>{{end}}
+    <button class="btn ghost sm" type="button" id="archive" data-archive="agent" data-host="{{.Host}}" data-id="{{.Agent.ID}}" data-name="{{or .Agent.Title .Agent.ID}}" data-running="{{if working .Agent.Status}}1{{else}}0{{end}}" data-then="/" title="Archive this agent">Archive</button>
   </div>
   {{template "resources" .Resources}}
 </div></header>
@@ -637,5 +638,6 @@ const isWorking = st => st === 'running' || st === 'initializing';
   }, 60000);
 })();
 </script>
+{{template "archivejs"}}
 </body>
 </html>

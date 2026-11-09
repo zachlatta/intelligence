@@ -380,3 +380,40 @@ func TestRunnerLetsAQueuedMessageWaitUntilItExpires(t *testing.T) {
 		t.Errorf("a steering message's deadline = %v, want the runner's timeout", deadlines[1])
 	}
 }
+
+func TestArchivingAWorkspaceArchivesItsAgentsFirst(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "agents", func(s PaseoStatus) bool { return len(s.Agents) == 2 })
+	res, err := execute(t, w, ArchiveWorkspaceKind, `{"workspaceId":"w1"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.WorkspaceID != "w1" || res.ArchivedAgents != 2 {
+		t.Errorf("result = %+v, want w1 with its two agents archived", res)
+	}
+	var got []string
+	for _, r := range d.Requests("archive_agent_request") {
+		got = append(got, r["agentId"].(string))
+	}
+	if strings.Join(got, ",") != "a1,a2" || len(d.Requests("archive_workspace_request")) != 1 {
+		t.Errorf("archived agents %v, workspaces %d", got, len(d.Requests("archive_workspace_request")))
+	}
+	eventually(t, w, "the workspace and its agents gone", func(s PaseoStatus) bool {
+		return len(s.Agents) == 0 && len(s.Workspaces) == 1
+	})
+}
+
+func TestArchivingAWorkspaceSkipsAnAgentAlreadyGone(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "agents", func(s PaseoStatus) bool { return len(s.Agents) == 2 })
+	d.SetAgents(paseotest.Agent("a2", "w1", "idle")) // a1 archived elsewhere, before the watcher heard
+	res, err := execute(t, w, ArchiveWorkspaceKind, `{"workspaceId":"w1"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ArchivedAgents != 1 || len(d.Requests("archive_workspace_request")) != 1 {
+		t.Errorf("result = %+v, want a2 archived and then the workspace", res)
+	}
+}

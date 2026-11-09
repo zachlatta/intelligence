@@ -56,6 +56,9 @@ var indexTmpl = template.Must(template.Must(template.New("index").Funcs(template
 	"allAgents":      allAgents,
 	"idleWorkspaces": idleWorkspaces,
 	"openWorkspace":  openWorkspace,
+	"running":        runningAgents,
+	"working":        working,
+	"losesChanges":   losesChanges,
 }).Funcs(usageFuncs).Funcs(hostFuncs).Parse(indexHTML)).Parse(planHTML + layoutHTML))
 
 // New returns the app's HTTP handler.
@@ -291,6 +294,20 @@ func idleWorkspaces(b fleet.Host) []fleet.WorkspaceAgents {
 }
 
 // openWorkspace says whether w starts open on the home page: it has an agent running or needing attention.
+// runningAgents counts the agents working on a turn, which archiving would stop.
+func runningAgents(agents []fleet.AgentView) int {
+	n := 0
+	for _, a := range agents {
+		if working(a.Status) {
+			n++
+		}
+	}
+	return n
+}
+
+// losesChanges: archiving the workspace would remove a worktree holding uncommitted changes.
+func losesChanges(w fleet.WorkspaceAgents) bool { return w.Kind == "worktree" && w.Dirty }
+
 func openWorkspace(w fleet.WorkspaceAgents) bool {
 	for _, a := range w.Agents {
 		if a.Status == "running" || a.RequiresAttention {

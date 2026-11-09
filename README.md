@@ -145,7 +145,10 @@ against its daemon and reports `running`, then `succeeded` with a result (`{"wor
   directory) or `cwd`, and optionally `model`, `thinking`, `mode`, `title`, `prompt` (its first
   message) and `labels`. The agent is labelled `intelligence.command=<command id>`.
 - `rename_workspace`: `workspaceId`, `title` (`""` goes back to the derived name).
-- `archive_workspace`: `workspaceId`. A Paseo-made worktree is removed with it.
+- `archive_workspace`: `workspaceId`. The host archives each of the workspace's agents first, then the
+  workspace (Paseo 0.15 archives a workspace's agents itself; an older daemon left them running in a
+  workspace it no longer listed), skipping one already gone. The result counts them
+  (`archivedAgents`). A Paseo-made worktree is removed with it.
 - `rename_agent`: `agentId`, `title`. `cancel_agent` (stops its current turn) and `archive_agent`:
   `agentId`.
 - `send_message`: `agentId`, `text`, and optionally `behavior`, which says what happens to a turn
@@ -350,7 +353,10 @@ browser that is not signed in to `/login`, and an API route answers 401. Only `/
 the account and enrollment routes, the host binaries and the streams (with a host key) are open.
 
 - `GET /`: a collapsible tree of hosts > workspaces (with their project) > agents (with their status),
-  with links to make a workspace on each host and start an agent in each workspace.
+  with links to make a workspace on each host and start an agent in each workspace, and an Archive
+  button on each workspace (with its agents) and each agent, through the commands API. Archiving
+  that would stop a running agent, or remove a worktree with uncommitted changes, asks again: the
+  button turns red and says why, and a second click within 5 seconds archives.
   Hosts start open, and so do workspaces with an agent running or needing attention; workspaces without
   agents are folded under a count. Problems (Paseo not connected, a client not on the server's version)
   show under the host. The tree refreshes in place every 15 seconds and keeps what was opened or closed.
@@ -389,7 +395,8 @@ the account and enrollment routes, the host binaries and the streams (with a hos
   (raw HTML shown as text, unsafe links dropped, images named rather than loaded), thinking folded to
   a line, and runs of tool calls as a compact list that opens per call (commands with exit codes,
   diffs, reads, writes, searches). Long output is cut, with a link to the whole entry. Search,
-  thinking and tool toggles, and the other agents in the workspace. While the agent is loaded the
+  thinking and tool toggles, the other agents in the workspace, and Archive (asking again while the
+  agent is running), which goes back to `/` once the agent is archived. While the agent is loaded the
   page re-fetches from its last block every 4 seconds and replaces it, so a growing message updates
   in place. A chat box at the bottom sends the agent a message through the commands API: Enter
   (or Steer) steers its running turn, Queue (Alt+Enter) waits for the turn to end, and Interrupt

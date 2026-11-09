@@ -47,6 +47,9 @@
   .quiet li { display: flex; align-items: center; gap: .6rem; padding: .3rem 1rem .3rem 2.6rem; font-size: 13px; }
   .quiet li:hover { background: var(--bg-subtle); }
   a.new { margin-left: auto; }
+  ul.agents li .archive { opacity: 0; }
+  ul.agents li:hover .archive, ul.agents li .archive:focus-visible, ul.agents li .archive.danger, ul.agents li .archive:disabled { opacity: 1; }
+  @media (hover: none) { ul.agents li .archive { opacity: 1; } }
   .plans .plan { padding: .75rem 1rem; }
   .plans .plan + .plan { border-top: 1px solid var(--line); }
   .plans .banner { margin: .6rem 1rem; }
@@ -94,6 +97,7 @@
       {{range .Tags}}<span class="badge tag">{{.}}</span>{{end}}
       <span class="meta grow" style="text-align:right">{{agents .Agents}}</span>
       <a class="new btn ghost sm" href="/hosts/{{$host}}/workspaces/{{.ID}}/agents/new" title="Start an agent here">+ agent</a>
+      <button class="btn ghost sm" type="button" data-archive="workspace" data-host="{{$host}}" data-id="{{.ID}}" data-name="{{or .Name .ID}}" data-agents="{{len .Agents}}" data-running="{{running .Agents}}" data-dirty="{{if losesChanges .}}1{{end}}" title="Archive this workspace{{if .Agents}} and its {{plural (len .Agents) "agent"}}{{end}}{{if eq .Kind "worktree"}}; a Paseo worktree is removed with it{{end}}">Archive</button>
     </summary>
     <ul class="agents">
     {{range .Agents}}
@@ -102,6 +106,7 @@
         <a class="name grow" href="/hosts/{{$host}}/agents/{{.ID}}" title="{{.ID}}">{{or .Title "(untitled)"}}</a>
         {{if .RequiresAttention}}<span class="badge orange" title="{{.AttentionReason}}">needs attention</span>{{end}}
         <span class="meta">{{.Model}}{{with agentMem (index $.Resources $host) .ID}} · {{.}}{{end}}{{if not .CreatedAt.IsZero}} · {{ago $.Now .CreatedAt}}{{end}}</span>
+        <button class="btn ghost sm archive" type="button" data-archive="agent" data-host="{{$host}}" data-id="{{.ID}}" data-name="{{or .Title .ID}}" data-running="{{if working .Status}}1{{else}}0{{end}}" title="Archive this agent">Archive</button>
       </li>
     {{end}}
     </ul>
@@ -111,7 +116,8 @@
   <details class="quiet" id="idle-{{$host}}">
     <summary><span class="chev"></span>{{plural (len $idle) "workspace"}} without agents</summary>
     <ul>{{range $idle}}<li title="{{.Directory}}"><span>{{or .Name .ID}}</span>{{if .Project}} <span class="badge">{{.Project}}</span>{{end}}{{range .Tags}} <span class="badge tag">{{.}}</span>{{end}}
-      <a class="new btn ghost sm" href="/hosts/{{$host}}/workspaces/{{.ID}}/agents/new" title="Start an agent here">+ agent</a></li>{{end}}</ul>
+      <a class="new btn ghost sm" href="/hosts/{{$host}}/workspaces/{{.ID}}/agents/new" title="Start an agent here">+ agent</a>
+      <button class="btn ghost sm" type="button" data-archive="workspace" data-host="{{$host}}" data-id="{{.ID}}" data-name="{{or .Name .ID}}" data-agents="0" data-running="0" data-dirty="{{if losesChanges .}}1{{end}}" title="Archive this workspace{{if eq .Kind "worktree"}}; a Paseo worktree is removed with it{{end}}">Archive</button></li>{{end}}</ul>
   </details>
   {{end}}
   </div>
@@ -129,6 +135,7 @@ document.getElementById("sign-out")?.addEventListener("click", async () => {
 });
 // Refresh the tree in place every 15 seconds, keeping whatever the reader opened or closed.
 setInterval(async () => {
+  if (document.querySelector("button[data-archive][data-armed], button[data-archive]:disabled")) return; // an archive in hand
   try {
     const res = await fetch(location.href, { cache: "no-store" });
     if (!res.ok) return;
@@ -143,5 +150,6 @@ setInterval(async () => {
   } catch {}
 }, 15000);
 </script>
+{{template "archivejs"}}
 </body>
 </html>

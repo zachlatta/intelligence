@@ -115,6 +115,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--line);
 .btn.ghost { border-color: transparent; background: transparent; box-shadow: none; color: var(--muted); }
 .btn.ghost:hover { background: var(--bg-muted); color: var(--fg); }
 .btn:disabled { opacity: .55; cursor: default; }
+.btn.danger, .btn.danger:hover { background: var(--red-bg); border-color: var(--red-line); color: var(--red); }
 .segmented { display: inline-flex; border: 1px solid var(--line-strong); border-radius: var(--radius); overflow: hidden;
   box-shadow: var(--shadow); background: var(--panel); }
 .segmented a { padding: .3rem .75rem; color: var(--fg-2); font-weight: 500; font-size: 13px; }
