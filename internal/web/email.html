@@ -1,0 +1,139 @@
+{{define "page"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Email · Intelligence</title>
+{{template "css"}}
+<style>
+  .banner[hidden] { display: none; }
+  .hint { font-size: 12px; color: var(--muted); margin: .4rem 0 0; }
+  .mailbox { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1rem; }
+  .mailbox .addr { font-weight: 600; font-size: 15px; }
+  .owners { display: flex; gap: .5rem; align-items: center; margin-top: .9rem; }
+  .owners input { flex: 1; }
+  .paste { margin-top: 1rem; display: flex; gap: .5rem; }
+  .paste[hidden] { display: none; }
+  .log td.what { white-space: nowrap; }
+  .log .subj { max-width: 26rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .log .reason { font-size: 12px; color: var(--muted); }
+  .badge.purple { background: #f5f0fd; border-color: #dccdf5; color: #7b4fc4; }
+  @media (prefers-color-scheme: dark) { .badge.purple { background: #251d36; border-color: #43345f; color: #b597ee; } }
+</style>
+</head>
+<body>
+{{template "top" "/workflows"}}
+<main class="container page mid">
+<div class="crumbs"><a href="/workflows">Workflows</a><span class="sep">/</span>Email</div>
+<div class="page-head">
+  <div><h1>Email</h1><p class="sub">Email to the connected mailbox starts the workflows whose trigger matches it. Replies in a run's thread go to that run.</p></div>
+</div>
+<p class="banner" id="error" hidden></p>
+{{if not .On}}<p class="banner note">{{.Off}}</p>
+{{else}}
+<section class="card"><div class="card-body">
+{{if .Mailbox.Connected}}
+  <div class="mailbox">
+    <span class="addr">{{.Mailbox.Address}}</span>
+    {{if .Mailbox.Error}}<span class="badge red" title="{{.Mailbox.Error}}">cannot read it</span>
+    {{else if .Mailbox.CheckedAt}}<span class="badge green">read {{ago $.Now .Mailbox.CheckedAt}}</span>
+    {{else}}<span class="badge">connecting…</span>{{end}}
+    <span class="grow"></span>
+    <button class="btn sm" id="connect">Connect again</button>
+    <button class="btn sm ghost" id="disconnect">Disconnect</button>
+  </div>
+  {{if .Mailbox.Error}}<p class="banner">{{.Mailbox.Error}}</p>{{end}}
+  <div class="owners" data-submit="#save-owners">
+    <label for="owners" style="margin:0;white-space:nowrap">Your addresses</label>
+    <input id="owners" value="{{range $i, $o := .Mailbox.Owners}}{{if $i}}, {{end}}{{$o}}{{end}}" placeholder="you@example.com, you@example.org">
+    <button class="btn sm" id="save-owners">Save</button>
+  </div>
+  <p class="hint">Only your email can answer a run's question. Anyone else's reaches a run marked as information, not instructions.</p>
+{{else}}
+  <p style="margin-top:0">Connect the Gmail account that workflows should watch. Intelligence only reads it.</p>
+  <button class="btn primary" id="connect">Connect Gmail</button>
+{{end}}
+  <div class="paste" id="paste" data-submit="#paste-go" hidden>
+    <input id="paste-url" placeholder="After signing in, Google opens a page on localhost that does not load. Paste its address here.">
+    <button class="btn primary" id="paste-go">Connect</button>
+  </div>
+</div></section>
+{{end}}
+
+<h2 class="section-title">What came in</h2>
+{{if .Emails}}<div class="table-wrap"><table class="table log">
+  <tr><th>When</th><th>From</th><th>Subject</th><th>What happened</th></tr>
+  {{range .Emails}}<tr>
+    <td class="meta" style="white-space:nowrap" title="{{.ReceivedAt.Format "2006-01-02 15:04"}}">{{ago $.Now .ReceivedAt}}</td>
+    <td>{{.Who}}<div class="reason">{{.From}}{{if not .Verified}} · not verified{{end}}</div></td>
+    <td class="subj" title="{{.Subject}}">{{or .Subject "(no subject)"}}</td>
+    <td class="what"><span class="badge {{.Badge}}">{{.Label}}</span>
+      {{if .Run}} <a href="/workflow-runs/{{.Run}}">{{or .RunTitle .Workflow}}</a>{{else if .WorkflowID}} <a href="/workflows/{{.WorkflowID}}">{{.Workflow}}</a>{{end}}
+      {{if .Reason}}<div class="reason">{{.Reason}}</div>{{end}}</td>
+  </tr>{{end}}
+</table></div>{{else}}<p class="empty-state">No email yet.</p>{{end}}
+<footer title="{{.Version}}">version {{short .Version}}</footer>
+</main>
+<script>
+const err = (m) => { const e = document.getElementById("error"); e.hidden = !m; e.textContent = m || ""; };
+async function api(method, path, body) {
+  const res = await fetch(path, { method, headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+  if (res.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return new Promise(() => {}); }
+  if (!res.ok) throw new Error(await res.text());
+  return res.status === 204 ? null : res.json();
+}
+document.getElementById("connect")?.addEventListener("click", async () => {
+  try {
+    const s = await api("POST", "/api/gmail/sign-in", {});
+    if (!s.paste) { location.href = s.url; return; }
+    window.open(s.url, "_blank", "noopener");
+    document.getElementById("paste").hidden = false;
+    document.getElementById("paste-url").focus();
+  } catch (e) { err(e.message); }
+});
+document.getElementById("paste-go")?.addEventListener("click", async () => {
+  try { await api("POST", "/api/gmail/connect", { url: document.getElementById("paste-url").value }); location.reload(); }
+  catch (e) { err(e.message); }
+});
+document.getElementById("save-owners")?.addEventListener("click", async (ev) => {
+  const owners = document.getElementById("owners").value.split(/[\s,]+/).filter(Boolean);
+  try { await api("PUT", "/api/gmail/owners", { owners }); ev.target.textContent = "Saved"; setTimeout(() => (ev.target.textContent = "Save"), 1500); }
+  catch (e) { err(e.message); }
+});
+document.getElementById("disconnect")?.addEventListener("click", async () => {
+  if (!confirm("Disconnect this mailbox? Its email stops starting runs.")) return;
+  try { await api("DELETE", "/api/gmail"); location.reload(); } catch (e) { err(e.message); }
+});
+</script>
+</body>
+</html>
+{{end}}
+
+{{define "callback"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Connecting Gmail · Intelligence</title>
+{{template "css"}}
+</head>
+<body>
+<main class="container page narrow">
+<h1>Connecting Gmail…</h1>
+<p class="banner" id="error" hidden></p>
+<p><a href="/workflows/email">Back to Email</a></p>
+</main>
+<script>
+(async () => {
+  const q = new URLSearchParams(location.search), e = document.getElementById("error");
+  const fail = (m) => { e.hidden = false; e.textContent = m; };
+  if (q.get("error")) return fail("Google said: " + q.get("error"));
+  const res = await fetch("/api/gmail/connect", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code: q.get("code"), state: q.get("state") }) });
+  if (res.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname + location.search); return; }
+  if (!res.ok) return fail(await res.text());
+  location.replace("/workflows/email");
+})();
+</script>
+</body>
+</html>
+{{end}}

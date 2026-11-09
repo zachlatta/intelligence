@@ -329,3 +329,24 @@ func TestTheSchemaSaysHostNotBox(t *testing.T) {
 		t.Errorf("still box:\n%s", strings.Join(found, "\n"))
 	}
 }
+
+func TestPermissionAuditIsAccountScopedAndReadOnly(t *testing.T) {
+	d := dbtest.New(t)
+	_, ann, bob := twoAccounts(t, d)
+	for _, host := range []string{"ann-host", "bob-host"} {
+		if _, err := d.Owner.Exec(ctx, `INSERT INTO permission_resolutions
+ (host,agent_id,permission_id,provider,mode,tool,status,message,attempted_at,received_at)
+ VALUES($1,'a','p','claude','bypassPermissions','Bash','denied','rewrite',now(),now())`, host); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, p := range map[string]*pgxpool.Pool{"ann": ann, "bob": bob} {
+		got := strings1(t, p, "SELECT host FROM permission_resolutions")
+		if len(got) != 1 || got[0] != name+"-host" {
+			t.Fatal(name, got)
+		}
+		if _, err := p.Exec(ctx, "DELETE FROM permission_resolutions"); err == nil {
+			t.Fatal("audit writable")
+		}
+	}
+}

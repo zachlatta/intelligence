@@ -95,12 +95,14 @@ func TestChatKeysSendOnceAtATime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, script, ok := strings.Cut(string(src), "<script>\nconst isWorking")
+	_, shared, foundShared := strings.Cut(string(src), "<script>\nconst isWorking")
+	isWorking, _, _ := strings.Cut(shared, "\n")
+	_, script, ok := strings.Cut(string(src), "<script>\n// The chat box writes")
 	script, _, ok2 := strings.Cut(script, "</script>")
-	if !ok || !ok2 {
+	if !foundShared || !ok || !ok2 {
 		t.Fatal("transcript.html: no chat script")
 	}
-	out, err := exec.Command(node, "-e", chatKeysHarness, "const isWorking"+script).CombinedOutput()
+	out, err := exec.Command(node, "-e", chatKeysHarness, "const isWorking"+isWorking+"\n// The chat box writes"+script).CombinedOutput()
 	if err != nil || strings.TrimSpace(string(out)) != "ok" {
 		t.Fatalf("the chat script: %v\n%s", err, out)
 	}

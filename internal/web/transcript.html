@@ -226,13 +226,14 @@
   <h1>{{or .Agent.Title "(untitled)"}}</h1>
   <div class="meta">
     <span class="pill {{.Agent.Status}}" id="status">{{if working .Agent.Status}}<span class="spinner"></span>{{else}}<span class="dot {{.Agent.Status}}"></span>{{end}}{{.Agent.Status}}</span>
+    {{if .Agent.PermissionStuck}}<span class="pill attn">permission recovery stuck</span>{{end}}
     {{if .Agent.RequiresAttention}}<span class="pill attn">needs attention{{if .Agent.AttentionReason}}: {{.Agent.AttentionReason}}{{end}}</span>{{end}}
     <span>{{.Agent.Provider}}{{if .Agent.Model}} · {{.Agent.Model}}{{end}}{{if .Agent.Thinking}} · {{.Agent.Thinking}}{{end}}</span>
     {{if not .Agent.CreatedAt.IsZero}}<span>started {{ago .Now .Agent.CreatedAt}}</span>{{end}}
     {{if .Synced}}<span>{{plural .Stats.Turns "turn"}} · {{plural .Stats.Tools "tool call"}} · {{plural .Stats.Entries "entry"}}</span>{{end}}
     <span title="{{.Agent.ID}}"><code>{{shortID .Agent.ID}}</code></span>
     {{if .Live}}<span title="New entries appear as the agent works"><span class="dot live"></span> live</span>{{end}}
-    <button class="btn ghost sm" type="button" id="archive" data-archive="agent" data-host="{{.Host}}" data-id="{{.Agent.ID}}" data-name="{{or .Agent.Title .Agent.ID}}" data-running="{{if working .Agent.Status}}1{{else}}0{{end}}" data-then="/" title="Archive this agent">Archive</button>
+    {{if not .Agent.Archived}}<button class="btn ghost sm" type="button" id="archive" data-archive="agent" data-host="{{.Host}}" data-id="{{.Agent.ID}}" data-name="{{or .Agent.Title .Agent.ID}}" data-running="{{if working .Agent.Status}}1{{else}}0{{end}}" data-then="/" title="Archive this agent">Archive</button>{{end}}
   </div>
   {{template "resources" .Resources}}
 </div></header>
@@ -287,6 +288,7 @@
 </aside>
 {{end}}
 <script>
+const isWorking = st => st === 'running' || st === 'initializing';
 // The side panels: the workspace's agents (left) and its diff (right). Each opens and closes with
 // its buttons or [ and ], and is remembered; on a narrow screen they lie over the page, one at a
 // time, and start closed. Both read through the read-only SQL API.
@@ -446,6 +448,7 @@
 })();
 </script>
 
+{{if .Agent.Archived}}<p class="banner note">This agent was archived with its workflow run. This transcript is read-only.</p>{{else}}
 <form id="chat" class="chat" data-commands="{{.Chat.Commands}}" data-agent="{{.Agent.ID}}" data-host="{{.Host}}"
   data-pending-sql="{{.Chat.PendingSQL}}" data-queue-ttl="{{.Chat.QueueTTL}}" data-status="{{.Agent.Status}}"{{if .Chat.Dictation}} data-dictation="{{.Chat.Dictation}}"{{end}}><div class="wrap">
   <ul id="pending" class="pending" aria-label="Messages not yet delivered" hidden></ul>
@@ -463,7 +466,6 @@
 </div></form>
 
 <script>
-const isWorking = st => st === 'running' || st === 'initializing';
 // The chat box writes through the commands API (send_message with a behavior) and reads back the
 // messages not yet delivered through the read-only SQL API.
 (() => {
@@ -606,6 +608,7 @@ const isWorking = st => st === 'running' || st === 'initializing';
     warn: msg => { hint.textContent = msg; hint.className = 'hint warn'; } });
 })();
 </script>{{end}}
+{{end}}
 
 <script>
 (() => {

@@ -27,7 +27,7 @@ func TestEveryPageLoadsTheSubmitKeys(t *testing.T) {
 	c := signInAs(t, h)
 	sendBatch(t, h, batch(true, "ep1", tentry(1, `{"type":"user_message","text":"go"}`)))
 	wf := createWorkflow(t, h, workflow.Starting)
-	for _, path := range []string{"/", "/usage", "/resources", "/login", "/account", "/schedules", "/workflows", "/workflows/" + wf,
+	for _, path := range []string{"/", "/usage", "/resources", "/login", "/account", "/schedules", "/hosts/host-1/schedules/new", "/workflows/email", "/gmail/callback", "/workflows", "/workflows/" + wf,
 		newAgentPath, "/hosts/host-1/workspaces/new", "/hosts/host-1/agents/" + agentA1} {
 		rec := call(t, h, http.MethodGet, path, "", nil, c)
 		if rec.Code != http.StatusOK {
@@ -46,7 +46,7 @@ func TestTextBoxesOutsideAFormNameTheirSendButton(t *testing.T) {
 	sendReport(t, h, wfReport())
 	wf := createWorkflow(t, h, workflow.Starting)
 	list := get(t, h, "/workflows", nil).Body.String()
-	if !strings.Contains(list, `<div class="composer" data-submit="#submit-task">`) {
+	if !strings.Contains(list, `<div class="composer" data-submit="#submit-task"`) {
 		t.Error("the new task box should send with #submit-task")
 	}
 	ed := get(t, h, "/workflows/"+wf, nil).Body.String()
@@ -55,12 +55,22 @@ func TestTextBoxesOutsideAFormNameTheirSendButton(t *testing.T) {
 			t.Errorf("the editor misses %q", want)
 		}
 	}
+	email, err := os.ReadFile("email.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`class="owners" data-submit="#save-owners"`, `id="paste" data-submit="#paste-go"`} {
+		if !strings.Contains(string(email), want) {
+			t.Errorf("email text box misses %q", want)
+		}
+	}
+
 	// the reply box only shows while a run waits on Zach, so check its template
 	src, err := os.ReadFile("workflows.html")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(src), `<div class="reply-host" data-submit="#send">`) {
+	if !strings.Contains(string(src), `<div class="reply-host" data-submit="#send"`) {
 		t.Error("the reply box should send with #send")
 	}
 }
