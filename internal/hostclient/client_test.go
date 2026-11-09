@@ -13,7 +13,7 @@ import (
 // hostRig runs a Client against a fake daemon and a scripted server, with short intervals.
 func hostRig(t *testing.T, s *streamServer, d *paseotest.Daemon, opts ...func(*Client)) *Client {
 	t.Helper()
-	b := &Client{Name: "host", Version: "v1", StatusEvery: 20 * time.Millisecond, LiveEvery: 20 * time.Millisecond,
+	b := &Client{Name: "host", Version: "v1", StatusEvery: 20 * time.Millisecond, LiveEvery: 20 * time.Millisecond, DiffEvery: 20 * time.Millisecond,
 		Settle: 10 * time.Millisecond, Logf: t.Logf,
 		Watcher: &Watcher{RetryEvery: 20 * time.Millisecond, Dial: func(ctx context.Context) (*paseo.Client, error) {
 			return paseo.Dial(ctx, paseo.Target{URL: d.URL(), Token: tok, ClientID: "test"})
