@@ -9,13 +9,16 @@ import (
 )
 
 // A run's names: its workspace title "<workflow>: <task> · <run>" and its worktree branch
-// "wf-<workflow>-<task>-<run>". <task> is the task's first real sentence as written, code and its
-// punctuation included: lines and sentences that are only a heading, a greeting ("Hi!", "Hey
-// Claude,") or a pleasantry ("Thanks!", "Hope you're well.") are skipped, and only a polite
-// opening ("could you please") goes, so "not", "no", "never", "without" and "a" always stay
-// and the name never says the opposite of the task. It is cut at whole words to titleWords words
-// and titleMax characters; a longer first word, or a script written without spaces, is cut to
-// titleMax characters ending in "…".
+// "wf-<workflow>-<task>-<run>". <task> is the task's first real sentence as written: lines and
+// sentences that are only a heading, a greeting ("Hi!", "Hey Claude,") or a pleasantry
+// ("Thanks!", "Hope you're well.") are skipped. Then only a polite opening ("could you please")
+// and the dash after a greeting, quotes around the whole sentence, and a . , ; : ! or ? stuck to
+// the end of its last word outside code go; every other word stays as written (articles,
+// negations, code, operators, paths, URLs, quotes), so the name never says less or the opposite
+// of the task. It is cut at whole words to titleWords words and titleMax characters, never
+// ending a cut on a connective; a cut inside a code span closes it with "…`", and a longer first
+// word, or a script written without spaces, is cut to titleMax characters ending in "…". A first
+// word of plain letters gets a capital ("fix" -> "Fix", never "go.mod").
 //
 // The title keeps any script. The branch keeps lowercase ASCII only, because the Paseo daemon
 // refuses any other worktree branch (validateBranchSlug in @getpaseo/protocol: [a-z0-9-/], no
@@ -86,11 +89,10 @@ func taskWords(input string) []string {
 	if sentence == nil {
 		sentence = fallback // nothing but greetings: the first one stands in
 	}
-	words := trimPunctuation(dropOpening(sentence))
+	words := unquote(dropDashes(dropOpening(sentence)))
 	if len(words) == 0 {
 		return nil
 	}
-	words[0] = strings.TrimLeft(words[0], `"'“‘`)
 	if r := []rune(words[0]); len(r) > titleMax {
 		return []string{string(r[:titleMax-1]) + "…"}
 	}
@@ -108,22 +110,66 @@ func taskWords(input string) []string {
 		n += size
 	}
 	if len(out) < len(words) {
-		out = trimConnectives(out)
+		if openSpan(out) {
+			// cut inside code: close the span, marking the cut
+			for len(out) > 1 && n+2 > titleMax {
+				n -= utf8.RuneCountInString(out[len(out)-1]) + 1
+				out = out[:len(out)-1]
+			}
+			out[len(out)-1] += "…`"
+			return out
+		}
+		if t := trimConnectives(out); len(t) > 0 {
+			out = t
+		}
 	}
-	out = trimPunctuation(out)
-	if len(out) > 0 {
-		out[len(out)-1] = strings.TrimRight(out[len(out)-1], `.,;:!?"”’'`)
+	// a mark ending the sentence goes, when it is on a word and not in code
+	if last := strings.TrimRight(out[len(out)-1], ".,;:!?"); last != "" && !openSpan(out) {
+		out[len(out)-1] = last
 	}
 	return out
 }
 
-// trimPunctuation is words without the words at either end that are only punctuation ("—").
-func trimPunctuation(words []string) []string {
-	for len(words) > 0 && lowerWord(words[0]) == "" {
+// openSpan reports whether words leave a code span (`…`) open.
+func openSpan(words []string) bool {
+	n := 0
+	for _, w := range words {
+		n += strings.Count(w, "`")
+	}
+	return n%2 == 1
+}
+
+// dropDashes is words without the dashes or bullets they open with ("Good morning — fix…").
+func dropDashes(words []string) []string {
+	for len(words) > 0 && strings.Trim(words[0], "-–—•·:,;") == "" {
 		words = words[1:]
 	}
-	for len(words) > 0 && lowerWord(words[len(words)-1]) == "" {
-		words = words[:len(words)-1]
+	return words
+}
+
+// unquote is words without the quotes around all of them (`"Show each agent's model."`).
+func unquote(words []string) []string {
+	if len(words) == 0 {
+		return words
+	}
+	quotes := 0
+	for _, w := range words {
+		quotes += strings.Count(w, `"`) + strings.Count(w, "“") + strings.Count(w, "”")
+	}
+	first, last := words[0], words[len(words)-1]
+	open := strings.HasPrefix(first, `"`) || strings.HasPrefix(first, "“")
+	end := strings.TrimRight(last, ".,;:!?")
+	closed := strings.HasSuffix(end, `"`) || strings.HasSuffix(end, "”")
+	if quotes != 2 || !open || !closed || (len(words) == 1 && utf8.RuneCountInString(first) < 3) {
+		return words
+	}
+	words = slices.Clone(words)
+	_, n := utf8.DecodeRuneInString(first)
+	words[0] = first[n:]
+	_, m := utf8.DecodeLastRuneInString(end)
+	words[len(words)-1] = end[:len(end)-m] + last[len(end):]
+	if words[0] == "" {
+		words = words[1:]
 	}
 	return words
 }
@@ -159,14 +205,20 @@ func plainWord(w string) bool {
 
 func notWordRune(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) }
 
+// abbreviations end with a full stop but not a sentence.
+var abbreviations = map[string]bool{"e.g.": true, "i.e.": true, "etc.": true, "vs.": true, "cf.": true, "approx.": true}
+
 // splitSentences splits words after each that ends a sentence (with ., ! or ?, before any
-// closing quote or bracket).
+// closing quote or bracket), but not inside a code span or quotes, nor after an abbreviation.
 func splitSentences(words []string) [][]string {
 	var out [][]string
-	start := 0
+	start, ticks, quotes := 0, 0, 0
 	for i, w := range words {
-		w = strings.TrimRight(w, `"'”’)]}*_`)
-		if strings.HasSuffix(w, ".") || strings.HasSuffix(w, "!") || strings.HasSuffix(w, "?") || i == len(words)-1 {
+		ticks += strings.Count(w, "`")
+		quotes += strings.Count(w, `"`) + strings.Count(w, "“") + strings.Count(w, "”")
+		t := strings.TrimRight(w, `"'”’)]}*_`)
+		ends := strings.HasSuffix(t, ".") || strings.HasSuffix(t, "!") || strings.HasSuffix(t, "?")
+		if i == len(words)-1 || (ends && ticks%2 == 0 && quotes%2 == 0 && !abbreviations[strings.ToLower(w)]) {
 			out = append(out, words[start:i+1])
 			start = i + 1
 		}
@@ -174,9 +226,10 @@ func splitSentences(words []string) [][]string {
 	return out
 }
 
-// lowerWord is w in lowercase without surrounding punctuation, with ’ as '.
-func lowerWord(w string) string {
-	return strings.ToLower(strings.ReplaceAll(strings.TrimFunc(w, notWordRune), "’", "'"))
+// openingWord is w as a polite opening would be written: lowercase, without the marks after it
+// ("Hey,", "Hi!"). Code ("`please`") is never one.
+func openingWord(w string) string {
+	return strings.ToLower(strings.TrimRight(strings.ReplaceAll(w, "’", "'"), ",.!?:;—–-"))
 }
 
 // hasPrefix reports whether words open with phrase (lowercase words).
@@ -185,7 +238,7 @@ func hasPrefix(words []string, phrase []string) bool {
 		return false
 	}
 	for i, p := range phrase {
-		if lowerWord(words[i]) != p {
+		if openingWord(words[i]) != p {
 			return false
 		}
 	}
@@ -227,7 +280,8 @@ func social(s []string) bool {
 // openings are what a request may open with that says nothing of the task.
 var openings = func() [][]string {
 	var out [][]string
-	for _, p := range []string{"hi there", "hey there", "hello there", "hi", "hey", "hello", "ok", "okay", "so",
+	for _, p := range []string{"hi there", "hey there", "hello there", "hi", "hey", "hello", "dear", "greetings",
+		"good morning", "good afternoon", "good evening", "ok", "okay", "so",
 		"please", "pls", "kindly", "can you", "could you", "would you", "will you", "can we", "could we",
 		"i want you to", "i'd like you to", "i would like you to", "i need you to", "go ahead and", "make sure to",
 		"when you get a chance", "when you have a moment", "if you can", "if possible", "thanks", "thank you"} {
@@ -260,7 +314,7 @@ func dropOpening(s []string) []string {
 // in code ("`a`") and negations are not among them.
 var connectives = map[string]bool{"a": true, "an": true, "the": true, "and": true, "or": true, "but": true, "with": true, "to": true, "for": true, "of": true,
 	"in": true, "on": true, "at": true, "by": true, "from": true, "into": true, "that": true, "which": true, "who": true,
-	"as": true, "than": true, "then": true, "so": true, "if": true, "when": true, "while": true, "because": true}
+	"as": true, "before": true, "after": true, "than": true, "then": true, "so": true, "if": true, "when": true, "while": true, "because": true}
 
 func trimConnectives(words []string) []string {
 	for len(words) > 0 && connectives[strings.ToLower(strings.TrimRight(words[len(words)-1], ",;:"))] {

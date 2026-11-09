@@ -318,13 +318,17 @@ version it started with. A run:
    `create_workspace`: a git worktree of the repository (or the home directory, for none) with the
    orchestrator in it. Its names say which workflow runs, what for and which run: the workspace is
    `<workflow>: <task> · <run>` and the branch `wf-<workflow>-<task>-<run>`. The task is the
-   input's first real sentence, as written (code and its punctuation included): lines and sentences
-   that are only a heading (`Task:`, `## Goal`), a greeting (“Hi!”, “Hey Claude,”, “Good morning —”)
-   or a pleasantry (“Thanks!”, “Hope you're well.”) are skipped, and only a polite opening (“could
-   you please”) goes: articles, a “not” or “never”, and code stay. It is cut at whole words to
-   8 words and 60 characters (a cut never leaves it ending on “the” or “and”); a longer first word, or a script written without spaces, is cut to 60
-   characters ending in “…”. In Factory Task, “Hi!” on one line and “Could you please fix the login
-   page?” on the next is the workspace “Factory Task: Fix the login page · 1bf01c44a2b3” on branch
+   input's first real sentence, as written: lines and sentences that are only a heading (`Task:`,
+   `## Goal`), a greeting (“Hi!”, “Hey Claude,”, “Good morning —”) or a pleasantry (“Thanks!”,
+   “Hope you're well.”) are skipped (a full stop in code, in quotes or in “e.g.” ends no sentence).
+   Then only these go: a polite opening (“could you please”) and the dash after a greeting, quotes
+   around the whole sentence, and a `. , ; : ! ?` stuck to the end of its last word outside code.
+   Every other word stays as written: articles, a “not” or “never”, code, operators, paths, URLs
+   and quotes. It is cut at whole words to 8 words and 60 characters, and a cut never leaves it
+   ending on “the” or “and”; a cut inside a code span closes it with “…`”, and a longer first word,
+   or a script written without spaces, is cut to 60 characters ending in “…”. A first word of plain
+   letters gets a capital (“fix” → “Fix”, never “go.mod”). In Factory Task, “Hi!” on one line and
+   “Could you please fix the login page?” on the next is the workspace “Factory Task: Fix the login page · 1bf01c44a2b3” on branch
    `wf-factory-task-fix-the-login-page-1bf01c44a2b3`. The run is its id's first 12 hex digits (48
    random bits) in both, which makes two runs sharing a name vanishingly unlikely. The title keeps
    any script; the branch is lowercase ASCII, because Paseo accepts no other worktree branch, so
