@@ -155,3 +155,48 @@ func TestWorkflowRunOffersDictationOnlyWithAKey(t *testing.T) {
 		})
 	}
 }
+
+// TestEveryTaskEntryPointOffersDictation: every form that creates a task or starts agent work (a
+// workflow task, a workflow run, a new agent, a new workspace, a new schedule) offers the shared
+// dictation button, loads the engine and wires it to that form's own text box; none does without a key.
+func TestEveryTaskEntryPointOffersDictation(t *testing.T) {
+	entries := []struct {
+		name, path string
+		wiring     []string // the box the button dictates into, and how it sends
+	}{
+		{"workflow task", "/workflows", []string{`<textarea id="task"`, `text: document.getElementById("task")`,
+			`send: () => submit.click()`, `#task-dictation .dictation`, `.composer .task-actions[hidden] { display: none; }`}},
+		{"workflow run", "/workflows/{id}", []string{`<textarea id="s-input"`, `text: document.getElementById("s-input")`}},
+		{"new agent", newAgentPath, []string{`id="spawn"`, `text: form.prompt`}},
+		{"new workspace", "/hosts/host-1/workspaces/new", []string{`id="spawn"`, `text: form.prompt`}},
+		{"new schedule", "/hosts/host-1/schedules/new", []string{`id="schedule"`, `text: form.prompt`,
+			`send: () => form.requestSubmit()`}},
+	}
+	for _, key := range []string{"k", ""} {
+		h := dictationServer(t, key, "")
+		id := createWorkflow(t, h, workflow.Starting)
+		for _, e := range entries {
+			rec := get(t, h, strings.Replace(e.path, "{id}", id, 1), nil)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s: %d %s", e.name, rec.Code, rec.Body)
+			}
+			page := rec.Body.String()
+			if key == "" {
+				if strings.Contains(page, `id="dictate"`) || strings.Contains(page, `/dictation.js`) {
+					t.Errorf("%s without a key offers dictation", e.name)
+				}
+				continue
+			}
+			want := append([]string{`data-dictation="/api/dictation/token"`, `id="dictate"`, `src="/dictation.js"`,
+				`mic: document.getElementById("dictate")`}, e.wiring...)
+			for _, w := range want {
+				if !strings.Contains(page, w) {
+					t.Errorf("%s misses %s", e.name, w)
+				}
+			}
+			if n := strings.Count(page, `id="dictate"`); n != 1 {
+				t.Errorf("%s has %d dictation buttons, want 1", e.name, n)
+			}
+		}
+	}
+}

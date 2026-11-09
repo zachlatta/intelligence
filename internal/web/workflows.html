@@ -37,6 +37,11 @@
   .composer .side { display: flex; flex-direction: column; gap: .4rem; min-width: 12rem; }
   .composer .pick { display: grid; grid-template-columns: 4.5rem 1fr; align-items: center; gap: .5rem; }
   .composer .pick label { margin: 0; font-size: 12.5px; color: var(--muted); font-weight: 500; }
+  .composer .task-actions { display: flex; gap: .4rem; }
+  .composer .task-actions #submit-task { flex: 1; }
+  .composer .task-actions[hidden] { display: none; }
+  #task-dictation .dictation { flex-wrap: wrap; }
+  #task-dictation .dictation .dstatus { flex-basis: 100%; }
   .builder { display: grid; grid-template-columns: minmax(0, 1fr) 24rem; gap: 1.5rem; align-items: start; }
   @media (max-width: 62rem) { .builder { grid-template-columns: 1fr; } }
   .pipe { max-width: 36rem; }
@@ -128,12 +133,12 @@
 {{else}}
 {{if .Tasks}}
 <section class="card"><div class="card-body">
-  <div class="composer">
+  <div class="composer" id="task-dictation"{{if .Dictation}} data-dictation="{{.Dictation}}"{{end}}>
     <textarea id="task" placeholder="New task: describe what you want done. Its project is found for you."></textarea>
     <div class="side">
       <div class="pick"><label for="task-workflow">Workflow</label>
         <select id="task-workflow">{{range .Tasks}}<option value="{{.ID}}"{{if .IsDefault}} selected{{end}}>{{.Name}}{{with .Definition.Host}} · {{.}}{{end}}</option>{{end}}</select></div>
-      <button class="btn primary" id="submit-task">Submit task</button>
+      <div class="task-actions"><button class="btn primary" id="submit-task">Submit task</button>{{if .Dictation}}{{template "dictationbutton"}}{{end}}</div>
     </div>
   </div>
 </div></section>
@@ -211,6 +216,17 @@ setInterval(async () => {
   } catch {}
 }, 10000);
 </script>
+{{if and .Tasks .Dictation}}<script src="/dictation.js"></script>
+<script>
+(() => {
+  const box = document.getElementById("task-dictation"), submit = document.getElementById("submit-task");
+  const error = document.getElementById("error");
+  dictation({ text: document.getElementById("task"), tokenPath: box.dataset.dictation,
+    mic: document.getElementById("dictate"), row: box.querySelector(".task-actions"),
+    label: () => submit.textContent, send: () => submit.click(), onstart: () => { error.hidden = true; error.textContent = ""; },
+    warn: (msg) => err(msg) });
+})();
+</script>{{end}}
 {{template "wffoot" .}}{{end}}
 
 {{define "editor"}}{{template "wfhead" .Workflow.Name}}

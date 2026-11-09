@@ -503,7 +503,7 @@ func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 			}
 		}
 		renderWorkflows(w, "list", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Workflows": wfs, "Runs": runs,
-			"Hosts": hosts, "Tasks": tasks, "Starting": workflow.Starting})
+			"Hosts": hosts, "Tasks": tasks, "Starting": workflow.Starting, "Dictation": dictationPath(cfg)})
 	}
 }
 
