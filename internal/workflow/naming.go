@@ -9,18 +9,16 @@ import (
 )
 
 // A run's names: its workspace title "<workflow>: <task> · <run>" and its worktree branch
-// "wf-<workflow>-<task>-<run>". <task> is the task's first real sentence as written: lines and
-// sentences that are only a heading, a greeting ("Hi!", "Hey Claude,") or a pleasantry
-// from the closed list in pleasantries ("Thanks!", "Hope you're well.") are skipped, and one that
-// opens with a listed pleasantry before a clause break loses only that ("Thanks for the fix, but
-// …"); anything not on the list is kept. Then only a polite opening ("could you please")
-// and the dash after a greeting, quotes around the whole sentence, and a . , ; : ! or ? stuck to
-// the end of its last word outside code go; every other word stays as written (articles,
-// negations, code, operators, paths, URLs, quotes), so the name never says less or the opposite
-// of the task. It is cut at whole words to titleWords words and titleMax characters, never
-// ending a cut on a connective; a cut inside a code span closes it with "…`", and a longer first
-// word, or a script written without spaces, is cut to titleMax characters ending in "…". A first
-// word of plain letters gets a capital ("fix" -> "Fix", never "go.mod").
+// "wf-<workflow>-<task>-<run>". <task> is the task's first real sentence as written, with only
+// these removed (the README lists them with examples): heading and label lines and Markdown
+// markers (taskLine); sentences that are only a greeting, listed pleasantries or no words
+// (social); lead-ins at the start whose end is clear from a mark, a dash or a request after them
+// (dropOpening, unsocial); quotes around the whole sentence (unquote); and a . , ; : ! or ? stuck
+// to the end of its last word outside code. Anything ambiguous is kept, so the name never says
+// less or the opposite of the task. It is cut at whole words to titleWords words and titleMax
+// characters, never ending a cut on a connective; a cut inside a code span closes it with "…`",
+// and a longer first word, or a script written without spaces, is cut to titleMax characters
+// ending in "…". A first word of plain letters gets a capital ("fix" -> "Fix", never "go.mod").
 //
 // The title keeps any script. The branch keeps lowercase ASCII only, because the Paseo daemon
 // refuses any other worktree branch (validateBranchSlug in @getpaseo/protocol: [a-z0-9-/], no
@@ -208,7 +206,9 @@ func plainWord(w string) bool {
 func notWordRune(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) }
 
 // abbreviations end with a full stop but not a sentence.
-var abbreviations = map[string]bool{"e.g.": true, "i.e.": true, "etc.": true, "vs.": true, "cf.": true, "approx.": true}
+var abbreviations = map[string]bool{"e.g.": true, "i.e.": true, "etc.": true, "vs.": true, "cf.": true, "approx.": true,
+	"inc.": true, "ltd.": true, "co.": true, "corp.": true, "mr.": true, "mrs.": true, "ms.": true, "dr.": true, "st.": true,
+	"jr.": true, "sr.": true, "no.": true}
 
 // splitSentences splits words after each that ends a sentence (with ., ! or ?, before any
 // closing quote or bracket), but not inside a code span or quotes, nor after an abbreviation.
@@ -290,19 +290,29 @@ func phrases(ps ...string) [][]string {
 	return out
 }
 
-// social reports whether a sentence is only social: a greeting with at most a name ("Hey
-// Claude,"), only listed pleasantries ("Thanks so much!", "Thanks, hope you're well."), or no
+// social reports whether a sentence is only social: a greeting alone or with a name and a mark
+// after it ("Hi", "Hey Claude,", but not "Hey Jude"), only listed pleasantries ("Thanks so much!", "Thanks, hope you're well."), or no
 // words at all ("🙏").
 func social(s []string) bool {
 	if !slices.ContainsFunc(s, func(w string) bool { return socialWord(w) != "" }) {
 		return true
 	}
 	for _, p := range greetings {
-		if hasPrefix(s, p) && len(s) <= len(p)+1 {
+		if hasPrefix(s, p) && (len(s) == len(p) || len(s) == len(p)+1 && punctuated(s[len(p)])) {
 			return true
 		}
 	}
-	return len(unsocial(s)) == 0
+	for len(s) > 0 {
+		for len(s) > 0 && (socialWord(s[0]) == "" || conjunctions[socialWord(s[0])]) {
+			s = s[1:]
+		}
+		n := pleasantryAt(s)
+		if n == 0 {
+			return len(s) == 0
+		}
+		s = s[n:]
+	}
+	return true
 }
 
 // socialWord is w compared with the pleasantries: lowercase, with ’ as ', without the marks
@@ -328,63 +338,131 @@ func socialPrefix(s, phrase []string) bool {
 	return len(s) >= len(phrase) && slices.EqualFunc(phrase, s[:len(phrase)], func(p, w string) bool { return p == socialWord(w) })
 }
 
-// unsocial is s without the listed pleasantries it opens with, each only where a clause break
-// (a comma, semicolon, colon or dash), a conjunction or the sentence's end follows it, and
-// without a hope worded as a request ("I hope you can"); nil when nothing else is in s.
+// unsocial is s without the listed pleasantries it opens with, each only where its end is
+// clear: a mark after it (a comma, semicolon, colon, dash, "!" or "."), or a request after it
+// ("Thanks, but…", "Thanks can you fix…"); and without a hope worded as a request before a verb
+// ("I hope you can fix…"). nil when s is only social.
 func unsocial(s []string) []string {
+	if social(s) {
+		return nil
+	}
 	for len(s) > 0 {
 		for _, p := range hopeYouCan {
-			if len(s) > len(p) && socialPrefix(s, p) {
+			if socialPrefix(s, p) && request(s[len(p):]) {
 				return s[len(p):]
 			}
 		}
 		n := pleasantryAt(s)
-		if n == 0 {
+		if n == 0 || n == len(s) || !(punctuated(s[n-1]) || isDash(s[n]) || request(s[n:])) {
 			return s
 		}
-		if n < len(s) && !strings.ContainsAny(s[n-1][len(s[n-1])-1:], ",;:—–-") && socialWord(s[n]) != "" && !conjunctions[socialWord(s[n])] {
-			return s // a listed phrase going on into more ("Thanks page shows…")
-		}
 		s = s[n:]
-		for len(s) > 0 && (socialWord(s[0]) == "" || conjunctions[socialWord(s[0])]) {
+		for len(s) > 0 && (isDash(s[0]) || conjunctions[socialWord(s[0])]) {
 			s = s[1:]
 		}
 	}
-	return nil
+	return s
 }
 
-// openings are what a request may open with that says nothing of the task.
-var openings = func() [][]string {
-	var out [][]string
-	for _, p := range []string{"hi there", "hey there", "hello there", "hi", "hey", "hello", "dear", "greetings",
-		"good morning", "good afternoon", "good evening", "ok", "okay", "so",
-		"please", "pls", "kindly", "can you", "could you", "would you", "will you", "can we", "could we",
-		"i want you to", "i'd like you to", "i would like you to", "i need you to", "go ahead and", "make sure to",
-		"when you get a chance", "when you have a moment", "if you can", "if possible",
-		"thanks in advance for", "thank you in advance for"} {
-		out = append(out, strings.Fields(p))
+// punctuated reports whether w ends with a mark that ends a clause.
+func punctuated(w string) bool {
+	r, _ := utf8.DecodeLastRuneInString(w)
+	return strings.ContainsRune(",;:.!?—–", r) || isDash(w)
+}
+
+func isDash(w string) bool { return w != "" && strings.Trim(w, "-–—") == "" }
+
+// verbs open a request ("fix the login page"): a closed list, so a lead-in before anything else
+// ("Please field is mislabeled", "Could you believe…") is kept.
+var verbs = func() map[string]bool {
+	m := map[string]bool{}
+	for _, v := range strings.Fields(`add allow analyze archive audit automate avoid backfill benchmark bisect block book build
+		bump buy call cancel change check clean clear close compare configure confirm convert copy create debug delete
+		deploy describe design disable do don't document double-check draft drop edit email enable ensure explain export
+		extract figure file find finish fix flag follow generate get give go handle help hide implement import improve
+		include install investigate keep kill let limit list load log look make measure merge migrate monitor move name
+		notify open optimize pay pin ping plan port post prepare prevent print profile publish pull push put read rebuild
+		reduce refactor release reload remove rename reorder repair replace reply report rerun research reset resolve
+		restart restore retry return revert review rewrite rotate run save schedule search see send set share ship show
+		simplify skip sort speed split start stop summarize support swap switch sync tell test tidy track translate trim
+		try turn tweak undo unify update upgrade upload use validate verify watch wire write`) {
+		m[v] = true
 	}
-	return out
+	return m
 }()
 
-// dropOpening is s without the polite openings it starts with, and the name a greeting
-// addresses ("Hey Claude, can you…").
+// request reports whether s opens a request: a listed verb, perhaps after "never", "not",
+// "also" or "just", or a polite opening before one ("please fix…").
+func request(s []string) bool {
+	for len(s) > 0 && slices.Contains([]string{"never", "not", "also", "just", "then", "now"}, socialWord(s[0])) {
+		s = s[1:]
+	}
+	if len(s) == 0 {
+		return false
+	}
+	if verbs[socialWord(s[0])] {
+		return true
+	}
+	t, ok := dropOne(s)
+	return ok && len(t) < len(s) && request(t)
+}
+
+// openings are what a request may open with that says nothing of the task, each going only
+// with clear evidence of where it ends:
+//   - greetings and asides ("hi", "ok", "so", "when you get a chance") before a mark or a dash,
+//     or before a request; a greeting also takes a name with a mark after it ("Hey Claude,");
+//   - polite requests ("please", "could you", "I'd like you to") before a request;
+//   - "thanks in advance for" before a verb in -ing.
+var (
+	greetOpenings = phrases("hi there", "hey there", "hello there", "hi", "hey", "hello", "dear", "greetings",
+		"good morning", "good afternoon", "good evening")
+	asideOpenings = phrases("ok", "okay", "so", "when you get a chance", "when you have a moment", "if you can",
+		"if possible")
+	requestOpenings = phrases("please", "pls", "kindly", "can you", "could you", "would you", "will you", "can we",
+		"could we", "i want you to", "i'd like you to", "i would like you to", "i need you to", "go ahead and",
+		"make sure to")
+	gerundOpenings = phrases("thanks in advance for", "thank you in advance for")
+)
+
+// dropOpening is s without the openings it starts with.
 func dropOpening(s []string) []string {
-	for again := true; again; {
-		again = false
-		for _, p := range openings {
-			if len(s) > len(p) && hasPrefix(s, p) {
-				greeted := slices.ContainsFunc(greetings, func(g []string) bool { return slices.Equal(g, p) })
-				named := !strings.HasSuffix(s[len(p)-1], ",") && strings.HasSuffix(s[len(p)], ",")
-				s, again = s[len(p):], true
-				if greeted && named && len(s) > 1 {
-					s = s[1:]
-				}
-				break
+	for {
+		t, ok := dropOne(s)
+		if !ok {
+			return s
+		}
+		s = t
+	}
+}
+
+// dropOne is s without the one opening it starts with, if that opening's end is clear.
+func dropOne(s []string) ([]string, bool) {
+	for _, p := range greetOpenings {
+		if n := len(p); len(s) > n && hasPrefix(s, p) {
+			switch {
+			case punctuated(s[n-1]), isDash(s[n]), request(s[n:]):
+				return s[n:], true
+			case len(s) > n+1 && plainWord(strings.TrimRight(s[n], ",;:!.—–")) && punctuated(s[n]):
+				return s[n+1:], true // "Hey Claude, …"
 			}
 		}
 	}
-	return s
+	for _, p := range asideOpenings {
+		if n := len(p); len(s) > n && hasPrefix(s, p) && (punctuated(s[n-1]) || isDash(s[n]) || request(s[n:])) {
+			return s[n:], true
+		}
+	}
+	for _, p := range requestOpenings {
+		if n := len(p); len(s) > n && hasPrefix(s, p) && request(s[n:]) {
+			return s[n:], true
+		}
+	}
+	for _, p := range gerundOpenings {
+		if n := len(p); len(s) > n && hasPrefix(s, p) && strings.HasSuffix(socialWord(s[n]), "ing") {
+			return s[n:], true
+		}
+	}
+	return s, false
 }
 
 // connectives join words, and articles lead to one: a name cut short never ends on either. Words

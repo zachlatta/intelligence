@@ -318,34 +318,40 @@ version it started with. A run:
    `create_workspace`: a git worktree of the repository (or the home directory, for none) with the
    orchestrator in it. Its names say which workflow runs, what for and which run: the workspace is
    `<workflow>: <task> · <run>` and the branch `wf-<workflow>-<task>-<run>`. The task is the
-   input's first real sentence, as written. Skipped are lines that are only a heading (`Task:`,
-   `## Goal`) and sentences that are only a greeting with at most a name (“Hi!”, “Hey Claude,”,
-   “Good morning —”), only phrases from a closed list of pleasantries (`pleasantries` in
-   `internal/workflow/naming.go`: “Thanks!”, “Thank you so much.”, “Hope you're well.”, “Hope this
-   helps!”, “Sorry for the delay.”, joined by “and”, “but”, “so” or “also”), or no words at all (“🙏”); a
-   full stop in code, in quotes or in “e.g.” ends no sentence. A listed pleasantry opening a
-   sentence goes only when a comma, semicolon, colon, dash or one of those conjunctions follows it (“Thanks for
-   the fix, but login still crashes.” is “Login still crashes”), and a hope worded as a request
-   (“I hope you can”, “hoping you could”) goes before the request. Anything else is kept: “I hope
-   we can ship this today” and “Thanks page shows wrong totals” stay whole. Then only these go: a
-   polite opening (“could you please”, “thanks in advance for”) and the dash after a greeting,
-   quotes around the whole sentence, and a `. , ; : ! ?` stuck to the end of its last word outside
-   code.
-   Every other word stays as written: articles, a “not” or “never”, code, operators, paths, URLs
-   and quotes. It is cut at whole words to 8 words and 60 characters, and a cut never leaves it
-   ending on “the” or “and”; a cut inside a code span closes it with “…`”, and a longer first word,
-   or a script written without spaces, is cut to 60 characters ending in “…”. A first word of plain
+   input's first real sentence, as written, with only these removed:
+   - lines that are only a heading or a label (`Task:`, `## Goal`, `TASK (from Zach):`), and the
+     Markdown marker opening a line (`#`, `-`, `1.`);
+   - sentences that are only a greeting, alone or with a name and a mark (“Hi!”, “Hey Claude,”,
+     but not “Hey Jude”), only phrases from a closed list (`pleasantries` in
+     `internal/workflow/naming.go`: “Thanks!”, “Thank you so much.”, “Hope you're well.”) joined
+     by “and”, “but”, “so” or “also”, or no words at all (“🙏”). A full stop in code, in quotes or
+     in an abbreviation (“e.g.”, “Inc.”) ends no sentence;
+   - at the start, a lead-in whose end is clear: a greeting, “ok”, “so” or “when you get a chance”
+     before a mark (`, ; : . ! ?`), a dash or a request; a greeting's name with a mark after it
+     (“Hey Claude,”); a listed pleasantry before a mark, a dash or a request (“Thanks for the fix,
+     but…”), with a dash or conjunction after it; a polite request (“please”, “could you”, “I'd
+     like you to”, “(I) hope you can”) before a request; “thanks in advance for” before a verb in
+     -ing. A request is a verb from a closed list (`verbs`), perhaps after “never”, “not”, “also”
+     or “just”. So “Hello, fix the login page” is “Fix the login page”, but “Hello world example
+     is broken”, “Please field is mislabeled” and “I hope we can ship this today” stay whole;
+   - quotes around the whole sentence, and a `. , ; : ! ?` stuck to the end of its last word
+     outside code.
+
+   It is cut at whole words to 8 words and 60 characters, and a cut never leaves it ending on
+   “the” or “and”; a cut inside a code span closes it with “…`”, and a longer first word, or a
+   script written without spaces, is cut to 60 characters ending in “…”. A first word of plain
    letters gets a capital (“fix” → “Fix”, never “go.mod”). In Factory Task, “Hi!” on one line and
-   “Could you please fix the login page?” on the next is the workspace “Factory Task: Fix the login page · 1bf01c44a2b3” on branch
-   `wf-factory-task-fix-the-login-page-1bf01c44a2b3`. The run is its id's first 12 hex digits (48
-   random bits) in both, which makes two runs sharing a name vanishingly unlikely. The title keeps
-   any script; the branch is lowercase ASCII, because Paseo accepts no other worktree branch, so
-   accents are folded and a task with no ASCII rendering (in Chinese, say) leaves the branch only
-   the workflow and the run. In the branch the workflow (up to 24 characters) and the task (up to
-   40) are cut between the parts of their words (“dependency-vulnerability-review” keeps
-   `dependency-vulnerability`), and a first part longer than that is truncated, never dropped. Both are on the run
-   (`workflow_runs.workspace_title`, `branch`) and its page. The orchestrator's first message is its standing
-   instructions, the input, the list of steps, the commands below, and the first step.
+   “Could you please fix the login page?” on the next is the workspace “Factory Task: Fix the login
+   page · 1bf01c44a2b3” on branch `wf-factory-task-fix-the-login-page-1bf01c44a2b3`. The run is its
+   id's first 12 hex digits (48 random bits) in both, which makes two runs sharing a name
+   vanishingly unlikely. The title keeps any script; the branch is lowercase ASCII, because Paseo
+   accepts no other worktree branch, so accents are folded and a task with no ASCII rendering (in
+   Chinese, say) leaves the branch only the workflow and the run. In the branch the workflow (up to
+   24 characters) and the task (up to 40) are cut between the parts of their words
+   (“dependency-vulnerability-review” keeps `dependency-vulnerability`), and a first part longer
+   than that is truncated, never dropped. Both are on the run (`workflow_runs.workspace_title`,
+   `branch`) and its page. The orchestrator's first message is its standing instructions, the input,
+   the list of steps, the commands below, and the first step.
 3. **The orchestrator moves through the steps.** It never does the work itself: it starts
    sub-agents for it (`paseo run` in its workspace, so they are its sub-agents), and decides when a
    step is done. A step is only instructions to it; its kind (`step`, `gate` or `signoff`) changes
