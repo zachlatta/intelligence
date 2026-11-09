@@ -248,6 +248,18 @@ func short(v string) string {
 	return v
 }
 
+// humanDuration reads as 42s, 5m 0s or 1h 4m.
+func humanDuration(d time.Duration) string {
+	d = max(0, d).Truncate(time.Second)
+	switch {
+	case d >= time.Hour:
+		return fmt.Sprintf("%dh %dm", int(d.Hours()), int(d.Minutes())%60)
+	case d >= time.Minute:
+		return fmt.Sprintf("%dm %ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+	return fmt.Sprintf("%ds", int(d.Seconds()))
+}
+
 // ago says how long before now t was, in whole seconds, minutes, hours or days.
 func ago(now, t time.Time) string {
 	if t.IsZero() {

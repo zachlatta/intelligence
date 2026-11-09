@@ -88,7 +88,9 @@ The hierarchy is hosts > workspaces > agents:
   of each cookie's token), `host_keys` (each host's account and a hash of its key) and
   `host_enrollments` (hosts waiting for their code to be entered). An account reads only its own.
 - `workflows`, `workflow_versions` (every saved definition), `workflow_runs` and
-  `workflow_run_events` (what happened in each run, in order): Workflows, below.
+  `workflow_run_events` (what happened in each run, in order), with the views
+  `workflow_run_step_visits` (each time a run was on a step, from its moves) and
+  `workflow_run_step_times` (each step's visits and time spent, the current one to now): Workflows, below.
 - `gmail_connections` (the account's Gmail mailbox: its address, the account holder's own
   addresses, how far it is read, and its Google token, sealed with `CONNECTIONS_KEY`, so reading it
   gives nothing) and `emails` (every email it received, and what it did and why): Email triggers,
@@ -351,6 +353,10 @@ key as the host client does (`HOST_SERVER` from `~/.config/intelligence/host.env
 `host.key`, or their `devbox` names). The run follows the commands it queued (the finder, the
 workspace) through their results: a failed one fails the run.
 
+A run is on a step from the move that hands it the step (the orchestrator starting, for the first;
+`next`, `skip` or `back`) to the move that leaves it (`next`, `skip`, `back`, `done`, `fail`, or a
+cancel); waiting for Zach's reply counts toward the step. `workflow_run_step_visits` reads each visit.
+
 Variables in instructions: `{{input}}`, `{{repo}}`, `{{branch}}` and `{{run}}`.
 
 ### Email triggers
@@ -576,7 +582,8 @@ origin (another site's request is refused with 403), and those with a body must 
   (its workspaces' `project_root`s), or typed. The “Run this workflow” dialog takes the run's task;
   with `ASSEMBLYAI_API_KEY` set, its mic button or ⌘D/Ctrl+D uses the shared dictation controls.
 - `GET /workflow-runs/{id}`: a run: its project, the orchestrator and its sub-agents, each step's
-  state and what happened in it, and, while it waits, the orchestrator's note with a reply box,
+  state, how long the run spent on it (summed over its visits, each visit in the tooltip; the
+  current step so far) and what happened in it, and, while it waits, the orchestrator's note with a reply box,
   which takes dictation.
 - `POST /api/workflows` with `{"name", "description", "definition"}`: 201 `{"id", "version": 1}`;
   400 for a definition that cannot run. `PUT /api/workflows/{id}`, the same body: the next version.

@@ -337,3 +337,30 @@ func TestHomePageShowsWorkspaceTags(t *testing.T) {
 		t.Errorf("only the tagged workspaces should show a tag: %d", strings.Count(page, tag))
 	}
 }
+
+// TestDurationsReadAlike: a step's time, a schedule run's and an agent's CPU read the same way.
+func TestDurationsReadAlike(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		0: "0s", 400 * time.Millisecond: "0s", 42 * time.Second: "42s", 5 * time.Minute: "5m 0s",
+		2*time.Minute + 15*time.Second: "2m 15s", time.Hour + 4*time.Minute + 59*time.Second: "1h 4m", 30 * time.Hour: "30h 0m",
+	} {
+		if got := humanDuration(d); got != want {
+			t.Errorf("humanDuration(%v) = %q, want %q", d, got, want)
+		}
+	}
+	start := time.Date(2026, 11, 9, 9, 0, 0, 0, time.UTC)
+	if got := runDuration(start.Add(time.Hour+4*time.Minute), hostclient.ScheduleRun{StartedAt: start}); got != "1h 4m" {
+		t.Errorf("runDuration so far = %q", got)
+	}
+	if got := runDuration(start, hostclient.ScheduleRun{StartedAt: start, EndedAt: start.Add(2*time.Minute + 15*time.Second)}); got != "2m 15s" {
+		t.Errorf("runDuration = %q", got)
+	}
+	if got := runDuration(start, hostclient.ScheduleRun{}); got != "" {
+		t.Errorf("runDuration not started = %q", got)
+	}
+	for secs, want := range map[float64]string{4.25: "4.2s", 180: "3m 0s", 3725: "1h 2m"} {
+		if got := dur(secs); got != want {
+			t.Errorf("dur(%v) = %q, want %q", secs, got, want)
+		}
+	}
+}
