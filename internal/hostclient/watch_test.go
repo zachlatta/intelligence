@@ -93,6 +93,22 @@ func TestWatcherReportsProjectsWithoutWorkspacesAndRefreshesThem(t *testing.T) {
 	eventually(t, w, "removed project", func(s PaseoStatus) bool { return len(s.Projects) == 0 })
 }
 
+func TestAFailedProjectReadOnReconnectKeepsTheLastProjects(t *testing.T) {
+	d := daemon(t)
+	d.SetProjects(map[string]any{"projectId": "p1", "projectDisplayName": "files", "projectKind": "git", "projectRootPath": "/w/files"})
+	w := watcher(t, d)
+	eventually(t, w, "projects", func(s PaseoStatus) bool { return len(s.Projects) == 1 })
+	d.FailProjects("boom")
+	d.SetAgents(paseotest.Agent("a9", "w2", "idle"))
+	d.DropAll()
+	s := eventually(t, w, "the reconnect", func(s PaseoStatus) bool {
+		return s.Connected && len(s.Agents) == 1 && s.Agents[0].ID == "a9"
+	})
+	if len(s.Projects) != 1 {
+		t.Fatalf("projects after a failed read = %+v, want the last ones kept", s.Projects)
+	}
+}
+
 func TestWatcherAppliesPushedUpdatesAndSignalsThem(t *testing.T) {
 	d := daemon(t)
 	w := watcher(t, d)

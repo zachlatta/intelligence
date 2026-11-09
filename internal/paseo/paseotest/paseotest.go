@@ -24,19 +24,20 @@ type Daemon struct {
 	token string
 	srv   *httptest.Server
 
-	mu         sync.Mutex
-	hellos     []map[string]any
-	requests   []map[string]any
-	conns      []*websocket.Conn
-	agents     []map[string]any
-	workspaces []map[string]any
-	projects   []map[string]any
-	statusErr  string // daemon.get_status answers rpc_error with this
-	silent     bool   // never answers requests
-	accepted   int
-	timelines  map[string]timeline
-	created    map[string]map[string]any // what each creation idempotency key made
-	nextID     int
+	mu          sync.Mutex
+	hellos      []map[string]any
+	requests    []map[string]any
+	conns       []*websocket.Conn
+	agents      []map[string]any
+	workspaces  []map[string]any
+	projects    []map[string]any
+	projectsErr string // project.list answers rpc_error with this
+	statusErr   string // daemon.get_status answers rpc_error with this
+	silent      bool   // never answers requests
+	accepted    int
+	timelines   map[string]timeline
+	created     map[string]map[string]any // what each creation idempotency key made
+	nextID      int
 
 	schedules   []map[string]any  // schedules.go
 	noSchedules bool              // every schedule request fails, as on a daemon without them
@@ -48,6 +49,10 @@ type Daemon struct {
 	diffs map[string]diff // diff.go, by checkout directory
 }
 
+// FailProjects makes project.list answer rpc_error with msg ("" answers normally).
+func (f *Daemon) FailProjects(msg string) { f.mu.Lock(); f.projectsErr = msg; f.mu.Unlock() }
+
+// SetProjects sets the project catalog project.list answers with.
 func (f *Daemon) SetProjects(projects ...map[string]any) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -202,6 +207,10 @@ func (f *Daemon) answer(c *websocket.Conn, msg map[string]any) {
 		}
 		f.write(c, session("agent_permission_resolved", map[string]any{"requestId": id, "agentId": msg["agentId"], "resolution": response}))
 	case "project.list.request":
+		if f.projectsErr != "" {
+			f.write(c, session("rpc_error", map[string]any{"requestId": id, "error": f.projectsErr, "code": "project_list_failed"}))
+			return
+		}
 		f.write(c, session("project.list.response", map[string]any{"requestId": id, "projects": f.projects}))
 	case "daemon.get_status.request":
 		if f.statusErr != "" {

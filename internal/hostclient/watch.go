@@ -112,8 +112,8 @@ func (w *Watcher) session(ctx context.Context) error {
 	}
 	// status too, so the first snapshot of this connection is whole
 	status, statusErr := c.DaemonStatus(readCtx)
-	catalog, _ := c.ProviderCatalog(readCtx) // a failure keeps the last; the next status read tries again
-	projects, _ := c.Projects(readCtx)
+	catalog, _ := c.ProviderCatalog(readCtx)     // a failure keeps the last; the next status read tries again
+	projects, projectsErr := c.Projects(readCtx) // a failure keeps the last, like the catalog
 	ids := make([]string, len(workspaces))
 	for i, x := range workspaces {
 		ids[i] = x.ID
@@ -126,7 +126,9 @@ func (w *Watcher) session(ctx context.Context) error {
 		w.status, w.statusAt, w.statusErr = status, w.Now(), ""
 	}
 	w.mergeCatalogLocked(catalog)
-	w.projects = projects
+	if projectsErr == nil {
+		w.projects = projects
+	}
 	w.client, w.err, w.info = c, "", c.Info()
 	w.workspaces = make(map[string]paseo.Workspace, len(workspaces))
 	for _, x := range workspaces {
