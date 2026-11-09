@@ -99,8 +99,8 @@ func (c *Changes) listen(ctx context.Context) error {
 	if _, err := conn.Exec(ctx, "LISTEN "+channel); err != nil {
 		return err
 	}
+	c.wakeAll() // before Ready returns, so a waiter that drains after Ready sees only new changes
 	c.once.Do(func() { close(c.ready) })
-	c.wakeAll()
 	for {
 		n, err := conn.WaitForNotification(ctx)
 		if err != nil {
