@@ -56,7 +56,7 @@ func TestResourcesPageChartsEachHostAndRanksAgents(t *testing.T) {
 		t.Fatalf("status %d", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{`id="host-1"`, "<polyline", "Fix the", "3m 0s", "300 commands", "OOM kills", "node", "9.0 GB",
+	for _, want := range []string{"<title>Host monitoring · Intelligence</title>", "<h1>Host monitoring</h1>", `id="host-1"`, "<polyline", "Fix the", "3m 0s", "300 commands", "OOM kills", "node", "9.0 GB",
 		"eBPF probe v", "Paseo"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("resources page misses %q", want)

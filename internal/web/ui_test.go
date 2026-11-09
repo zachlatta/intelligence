@@ -42,7 +42,7 @@ func TestEveryPageSharesTheStylesheetAndTopBar(t *testing.T) {
 		}
 		page := rec.Body.String()
 		nav, _, _ := strings.Cut(page[strings.Index(page, `class="topnav"`)+1:], "</nav>")
-		for _, tab := range []string{">Hosts<", ">Plans<", ">Resources<", ">Account<"} { // one tab each
+		for _, tab := range []string{">Hosts<", ">Plans<", ">Host monitoring<", ">Account<"} { // one tab each
 			if n := strings.Count(nav, tab); n != 1 {
 				t.Errorf("%s: %d tabs %s, want 1", p.path, n, tab)
 			}
