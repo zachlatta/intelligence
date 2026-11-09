@@ -178,6 +178,7 @@ legend { font-size: 13px; font-weight: 600; padding: 0 .35rem; }
 
 /* Dictation (dictation.js): the bar that stands in for a form's buttons while it listens. */
 .mic svg { width: 15px; height: 15px; }
+.btn[hidden] { display: none; }
 .form-actions[hidden], .dictation[hidden] { display: none; }
 .dictation { display: flex; gap: .4rem; align-items: center; }
 .dictation .dstatus { flex: 1; min-width: 0; font-size: .75rem; color: var(--muted); display: flex; gap: .45rem; align-items: center; }

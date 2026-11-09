@@ -145,7 +145,9 @@ func TestWorkflowRunOffersDictationOnlyWithAKey(t *testing.T) {
 				}
 				return
 			}
-			for _, want := range []string{`data-dictation="/api/dictation/token"`, `id="dictate"`, `src="/dictation.js"`, `text: document.getElementById("s-input")`, `send: () => form.requestSubmit(start)`, `active: () => dlg.open`} {
+			for _, want := range []string{`data-dictation="/api/dictation/token"`, `id="dictate"`, `src="/dictation.js"`, `text: document.getElementById("s-input")`, `send: () => form.requestSubmit(start)`, `active: () => dlg.open`,
+				`onstart: clearWarning`, `dlg.addEventListener("toggle", clearWarning)`,
+				`error.textContent = ""; error.hidden = true;`, `#start .dictation { margin-top: 1.4rem; }`} {
 				if !strings.Contains(page, want) {
 					t.Errorf("workflow run box misses %s", want)
 				}

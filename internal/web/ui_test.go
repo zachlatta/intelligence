@@ -12,7 +12,7 @@ func TestTheStylesheetIsServed(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/css") {
 		t.Fatalf("ui.css: %d %q", rec.Code, rec.Header().Get("Content-Type"))
 	}
-	for _, want := range []string{"--accent", ".topnav", ".card", ".badge", ".btn", "prefers-color-scheme: dark"} {
+	for _, want := range []string{"--accent", ".topnav", ".card", ".badge", ".btn", "prefers-color-scheme: dark", ".btn[hidden] { display: none; }"} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("ui.css misses %q", want)
 		}

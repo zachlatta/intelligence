@@ -516,7 +516,8 @@ origin (another site's request is refused with 403), and those with a body must 
   read-only query, as the account's own role, so it reads only the account's rows. Returns `{"columns": [{"name", "type"}], "rows": [[...]], "rowCount",
   "truncated"}`, or 400 with `{"error"}`. At most 10000 rows; 5 seconds per query.
 - `GET /api/host/binary/{os}/{arch}`: the host binary at the server's version.
-- `GET /dictation.js`: the dictation engine the chat box and the new agent and workspace forms share.
+- `GET /dictation.js`: the dictation engine shared by the chat box, the new agent and workspace forms,
+  and the workflow run dialog.
 - `GET /ui.css`: the one stylesheet every page shares, with the top bar (`layout.html`) that links the
   pages.
 - `GET /workflows`: a new task (for workflows triggered by a task: pick the workflow, which names
@@ -529,7 +530,8 @@ origin (another site's request is refused with 403), and those with a body must 
 - `GET /workflows/{id}`: the editor: the host and trigger, how the project is found, the orchestrator, and
   the steps (add, reorder, edit, remove), or the definition as JSON. Saving makes a new version.
   A project that is always the same repository is picked from those the workflow's host reported
-  (its workspaces' `project_root`s), or typed.
+  (its workspaces' `project_root`s), or typed. The “Run this workflow” dialog takes the run's task;
+  with `ASSEMBLYAI_API_KEY` set, its mic button or ⌘D/Ctrl+D uses the shared dictation controls.
 - `GET /workflow-runs/{id}`: a run: its project, the orchestrator and its sub-agents, each step's
   state and what happened in it, and, while it waits, the orchestrator's note with a reply box.
 - `POST /api/workflows` with `{"name", "description", "definition"}`: 201 `{"id", "version": 1}`;
@@ -558,7 +560,8 @@ Server:
   is named after it, and its password derived from its password (keep the name under 40 characters).
 - `PORT`: listen port, default `8080`.
 - `HOST_BINARIES`: where the host binaries are; default `/usr/local/share/intelligence/host`.
-- `ASSEMBLYAI_API_KEY`: optional; turns on dictation in the chat box. Unset, there is none.
+- `ASSEMBLYAI_API_KEY`: optional; turns on dictation in the chat box, new agent and workspace forms,
+  and workflow run dialog. Unset, there is none.
 
 The version is stamped at build (`-X main.buildCommit`, from Coolify's `SOURCE_COMMIT` build
 argument); else `SOURCE_COMMIT` at run time, else Go's VCS stamp, else `dev`.
