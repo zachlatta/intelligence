@@ -17,7 +17,7 @@ func TestPermissionRecovery(t *testing.T) {
 		want           bool
 	}{
 		{"claude", "bypassPermissions", true}, {"codex", "full-access", true}, {"muse", "allowAll", true}, {"antigravity", "full-access", true},
-		{"claude", "default", false}, {"claude", "", false}, {"unknown", "full-access", false}, {"codex", "auto", false},
+		{"claude", "default", false}, {"claude", "", false}, {"unknown", "full-access", false}, {"unknown", "", false}, {"codex", "auto", false},
 	} {
 		t.Run(tc.provider+tc.mode, func(t *testing.T) {
 			a := paseo.Agent{ID: "a", Provider: tc.provider, CurrentModeID: tc.mode, PendingPermissions: []paseo.Permission{{ID: "p", Name: "Bash"}}}

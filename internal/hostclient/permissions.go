@@ -31,18 +31,6 @@ type PermissionResolution struct {
 	At           time.Time     `json:"at"`
 }
 
-func neverAsk(provider, mode string) bool {
-	switch provider {
-	case "claude":
-		return mode == "bypassPermissions"
-	case "codex", "antigravity":
-		return mode == "full-access"
-	case "muse":
-		return mode == "allowAll"
-	}
-	return false
-}
-
 // PermissionSync keeps one audit row per prompt. Failed denials and uploads
 // back off independently, doubling from one second to five minutes.
 type PermissionSync struct {
@@ -144,7 +132,7 @@ func (s *PermissionSync) Sync(ctx context.Context, agents []paseo.Agent) error {
 			}
 			key := a.ID + "/" + request.ID
 			live[key] = true
-			if !neverAsk(a.Provider, a.CurrentModeID) {
+			if mode := paseo.UnattendedMode(a.Provider); mode == "" || a.CurrentModeID != mode {
 				continue
 			}
 			allowed[key] = true

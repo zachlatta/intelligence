@@ -188,10 +188,23 @@ func TestWorkflowPromptsAvoidPermissionTraps(t *testing.T) {
 		if n := strings.Count(p, UnattendedShellRule); n != 1 {
 			t.Errorf("unattended guidance occurs %d times, want once", n)
 		}
-		for _, want := range []string{"Write/Edit", "heredoc", "--mode bypassPermissions", "--mode full-access"} {
+		for _, want := range []string{"Write/Edit", "heredoc"} {
 			if !strings.Contains(p, want) {
 				t.Errorf("prompt misses %q", want)
 			}
 		}
+	}
+}
+
+func TestUnattendedModeGuidanceIsNotDuplicated(t *testing.T) {
+	p := OrchestratorPrompt("task", Starting, Vars{Run: "r"})
+	for _, provider := range Providers() {
+		want := "--mode " + agentMode(provider) + " for " + provider
+		if n := strings.Count(p, want); n != 1 {
+			t.Errorf("mode guidance %q appears %d times", want, n)
+		}
+	}
+	if strings.Contains(UnattendedShellRule, "--mode ") {
+		t.Fatal("shell guidance duplicates the shared mode guidance")
 	}
 }
