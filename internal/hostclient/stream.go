@@ -25,33 +25,37 @@ func StreamPath(host string) string { return "/api/hosts/" + host + "/stream" }
 // Frame is one message on the stream, as JSON. A host frame with an ID is answered by an ack frame
 // with the same ID, saying whether the server stored it.
 type Frame struct {
-	Type       string            `json:"type"`
-	ID         uint64            `json:"id,omitempty"`
-	Hello      *Hello            `json:"hello,omitempty"`      // hello: server -> host, first
-	Report     *Report           `json:"report,omitempty"`     // report: host -> server
-	Transcript *TranscriptBatch  `json:"transcript,omitempty"` // transcript: host -> server
-	Update     *CommandUpdate    `json:"update,omitempty"`     // command_update: host -> server
-	Usage      *usage.Report     `json:"usage,omitempty"`      // usage: host -> server
-	Host       *resources.Report `json:"host,omitempty"`       // host: host -> server
-	Schedules  *ScheduleReport   `json:"schedules,omitempty"`  // schedules: host -> server
-	Diff       *WorkspaceDiff    `json:"diff,omitempty"`       // diff: host -> server
-	Command    *Command          `json:"command,omitempty"`    // command: server -> host
-	Error      string            `json:"error,omitempty"`      // ack: refused, and why
-	Code       string            `json:"code,omitempty"`       // ack: AckResend or AckNotYet
+	PermissionRestore *PermissionRestore    `json:"permissionRestore,omitempty"`
+	Permission        *PermissionResolution `json:"permission,omitempty"`
+	Type              string                `json:"type"`
+	ID                uint64                `json:"id,omitempty"`
+	Hello             *Hello                `json:"hello,omitempty"`      // hello: server -> host, first
+	Report            *Report               `json:"report,omitempty"`     // report: host -> server
+	Transcript        *TranscriptBatch      `json:"transcript,omitempty"` // transcript: host -> server
+	Update            *CommandUpdate        `json:"update,omitempty"`     // command_update: host -> server
+	Usage             *usage.Report         `json:"usage,omitempty"`      // usage: host -> server
+	Host              *resources.Report     `json:"host,omitempty"`       // host: host -> server
+	Schedules         *ScheduleReport       `json:"schedules,omitempty"`  // schedules: host -> server
+	Diff              *WorkspaceDiff        `json:"diff,omitempty"`       // diff: host -> server
+	Command           *Command              `json:"command,omitempty"`    // command: server -> host
+	Error             string                `json:"error,omitempty"`      // ack: refused, and why
+	Code              string                `json:"code,omitempty"`       // ack: AckResend or AckNotYet
 }
 
 // Frame types.
 const (
-	HelloFrame         = "hello"
-	ReportFrame        = "report"
-	TranscriptFrame    = "transcript"
-	CommandUpdateFrame = "command_update"
-	UsageFrame         = "usage"
-	HostFrame          = "host"
-	SchedulesFrame     = "schedules"
-	DiffFrame          = "diff"
-	CommandFrame       = "command"
-	AckFrame           = "ack"
+	PermissionRestoreFrame = "permission_restore"
+	PermissionFrame        = "permission"
+	HelloFrame             = "hello"
+	ReportFrame            = "report"
+	TranscriptFrame        = "transcript"
+	CommandUpdateFrame     = "command_update"
+	UsageFrame             = "usage"
+	HostFrame              = "host"
+	SchedulesFrame         = "schedules"
+	DiffFrame              = "diff"
+	CommandFrame           = "command"
+	AckFrame               = "ack"
 )
 
 // Ack codes for a refused transcript batch.
@@ -99,11 +103,12 @@ type Link struct {
 	connected chan struct{}
 	nextID    atomic.Uint64
 
-	mu      sync.Mutex
-	conn    *websocket.Conn
-	hello   Hello
-	pending map[uint64]chan Frame
-	err     string
+	mu         sync.Mutex
+	conn       *websocket.Conn
+	generation uint64
+	hello      Hello
+	pending    map[uint64]chan Frame
+	err        string
 }
 
 func (l *Link) init() {
@@ -204,6 +209,7 @@ func (l *Link) session(ctx context.Context) error {
 	cancel()
 	l.mu.Lock()
 	l.conn, l.hello, l.err = conn, *hello.Hello, ""
+	l.generation++
 	l.mu.Unlock()
 	select {
 	case l.connected <- struct{}{}:
@@ -316,7 +322,9 @@ func (l *Link) TranscriptCursors(context.Context) (map[string]TranscriptCursor, 
 }
 
 // call sends f and waits for its ack. A stream that does not ack in AckTimeout is dropped.
-func (l *Link) call(ctx context.Context, f Frame) error {
+func (l *Link) call(ctx context.Context, f Frame) error { return l.exchange(ctx, f, nil) }
+
+func (l *Link) exchange(ctx context.Context, f Frame, receive func(Frame)) error {
 	l.init()
 	f.ID = l.nextID.Add(1)
 	ch := make(chan Frame, 1)
@@ -358,6 +366,9 @@ func (l *Link) call(ctx context.Context, f Frame) error {
 		case ack.Error != "":
 			return fmt.Errorf("server refused a %s: %s", f.Type, ack.Error)
 		}
+		if receive != nil {
+			receive(ack)
+		}
 		return nil
 	case <-wctx.Done():
 		drop()
@@ -391,4 +402,51 @@ func ReadFrame(ctx context.Context, conn *websocket.Conn) (Frame, error) {
 	var f Frame
 	err := readFrame(ctx, conn, &f)
 	return f, err
+}
+
+func (l *Link) Permission(ctx context.Context, r PermissionResolution) error {
+	return l.call(ctx, Frame{Type: PermissionFrame, Permission: &r})
+}
+
+// Generation identifies a connected server stream without consuming Connected.
+func (l *Link) Generation() (uint64, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.generation, l.conn != nil
+}
+
+const PermissionRestorePage = 200
+
+// PermissionRestore pages unresolved records on the authenticated host stream.
+type PermissionRestore struct {
+	Records           []PermissionResolution `json:"records,omitempty"`
+	AfterAgentID      string                 `json:"afterAgentId,omitempty"`
+	AfterPermissionID string                 `json:"afterPermissionId,omitempty"`
+	More              bool                   `json:"more,omitempty"`
+}
+
+func (l *Link) PermissionRecords(ctx context.Context) ([]PermissionResolution, error) {
+	var records []PermissionResolution
+	cursor := PermissionRestore{}
+	for {
+		var page *PermissionRestore
+		if err := l.exchange(ctx, Frame{Type: PermissionRestoreFrame, PermissionRestore: &cursor}, func(ack Frame) { page = ack.PermissionRestore }); err != nil {
+			return nil, err
+		}
+		if page == nil {
+			return nil, errors.New("server did not return permission restore state")
+		}
+		records = append(records, page.Records...)
+		if !page.More {
+			return records, nil
+		}
+		if len(page.Records) == 0 {
+			return nil, errors.New("permission restore page made no progress")
+		}
+		last := page.Records[len(page.Records)-1]
+		if last.AgentID < cursor.AfterAgentID || (last.AgentID == cursor.AfterAgentID && last.PermissionID <= cursor.AfterPermissionID) {
+			return nil, errors.New("permission restore cursor did not advance")
+		}
+		cursor.AfterAgentID, cursor.AfterPermissionID = last.AgentID, last.PermissionID
+	}
 }

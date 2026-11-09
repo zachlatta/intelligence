@@ -37,14 +37,10 @@ func gb(b int64) string { return fmt.Sprintf("%.1f GB", float64(b)/(1<<30)) }
 
 // dur is CPU seconds as 3h 2m, 3m 0s or 4.2s.
 func dur(secs float64) string {
-	d := time.Duration(secs * float64(time.Second))
-	switch {
-	case d >= time.Hour:
-		return fmt.Sprintf("%dh %dm", int(d.Hours()), int(d.Minutes())%60)
-	case d >= time.Minute:
-		return fmt.Sprintf("%dm %ds", int(d.Minutes()), int(d.Seconds())%60)
+	if secs < 60 {
+		return fmt.Sprintf("%.1fs", secs)
 	}
-	return fmt.Sprintf("%.1fs", secs)
+	return humanDuration(time.Duration(secs * float64(time.Second)))
 }
 
 // hostLine is a host's newest minute in a line: CPU, memory, disk, pressure.

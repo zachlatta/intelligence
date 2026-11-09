@@ -19,6 +19,22 @@ func TestTheStylesheetIsServed(t *testing.T) {
 	}
 }
 
+// The shared assets are revalidated on each load, and a browser's copy that is current is not sent again.
+func TestTheSharedAssetsAreRevalidated(t *testing.T) {
+	h, _ := dbServer(t)
+	for _, path := range []string{"/ui.css", "/dictation.js", "/submitkeys.js"} {
+		rec := get(t, h, path, nil)
+		tag := rec.Header().Get("ETag")
+		if rec.Code != http.StatusOK || tag == "" || rec.Header().Get("Cache-Control") != "no-cache" {
+			t.Errorf("%s: %d, etag %q, cache-control %q", path, rec.Code, tag, rec.Header().Get("Cache-Control"))
+			continue
+		}
+		if again := get(t, h, path, map[string]string{"If-None-Match": tag}); again.Code != http.StatusNotModified {
+			t.Errorf("%s with its own etag: %d, want 304", path, again.Code)
+		}
+	}
+}
+
 // Every page shares one stylesheet and one top bar, with its own tab marked.
 func TestEveryPageSharesTheStylesheetAndTopBar(t *testing.T) {
 	h, _ := cmdServer(t)
@@ -54,6 +70,22 @@ func TestEveryPageSharesTheStylesheetAndTopBar(t *testing.T) {
 		}
 		if strings.Count(nav, `aria-current="page"`) != 1 {
 			t.Errorf("%s should mark exactly one tab", p.path)
+		}
+	}
+}
+
+// TestNoRenamedCSSProperties: a code rename once turned box-shadow into host-shadow, which a
+// browser drops without a word, so the workflow editor lost its selection ring and drop marks.
+func TestNoRenamedCSSProperties(t *testing.T) {
+	for name, src := range map[string]string{
+		"ui.css": string(uiCSS), "layout": layoutHTML, "index": indexHTML, "resources": resourcesHTML,
+		"schedules": schedulesHTML, "spawn": spawnHTML, "account": accountHTML, "usage": usageHTML, "plan": planHTML,
+		"transcript": transcriptHTML, "blocks": blocksHTML, "workflows": workflowsHTML, "hostresources": hostResourcesHTML,
+	} {
+		for _, bad := range []string{"host-shadow", "host-sizing"} {
+			if strings.Contains(src, bad) {
+				t.Errorf("%s has %q", name, bad)
+			}
 		}
 	}
 }

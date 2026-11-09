@@ -104,6 +104,7 @@
       <li>
         <span class="status st-{{.Status}}">{{.Status}}</span>
         <a class="name grow" href="/hosts/{{$host}}/agents/{{.ID}}" title="{{.ID}}">{{or .Title "(untitled)"}}</a>
+        {{if .PermissionStuck}}<span class="badge orange">permission recovery stuck</span>{{end}}
         {{if .RequiresAttention}}<span class="badge orange" title="{{.AttentionReason}}">needs attention</span>{{end}}
         <span class="meta">{{.Model}}{{with agentMem (index $.Resources $host) .ID}} · {{.}}{{end}}{{if not .CreatedAt.IsZero}} · {{ago $.Now .CreatedAt}}{{end}}</span>
         <button class="btn ghost sm archive" type="button" data-archive="agent" data-host="{{$host}}" data-id="{{.ID}}" data-name="{{or .Title .ID}}" data-running="{{if working .Status}}1{{else}}0{{end}}" title="Archive this agent">Archive</button>

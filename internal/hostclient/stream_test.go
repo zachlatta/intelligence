@@ -31,7 +31,13 @@ type streamServer struct {
 }
 
 func newStreamServer(t *testing.T) *streamServer {
-	s := &streamServer{t: t, answer: func(f Frame) Frame { return Frame{Type: AckFrame, ID: f.ID} }}
+	s := &streamServer{t: t, answer: func(f Frame) Frame {
+		ack := Frame{Type: AckFrame, ID: f.ID}
+		if f.Type == PermissionRestoreFrame {
+			ack.PermissionRestore = &PermissionRestore{}
+		}
+		return ack
+	}}
 	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(VersionHeader, "srv-v2")
 		s.mu.Lock()
@@ -280,5 +286,40 @@ func TestLinkSendsHostMinutes(t *testing.T) {
 	defer s.mu.Unlock()
 	if len(s.got) != 1 || s.got[0].Type != HostFrame || s.got[0].Host == nil || s.got[0].Host.Minutes[0].Samples != 12 {
 		t.Fatalf("got %+v", s.got)
+	}
+}
+
+func TestPermissionRestoreReadsAllPages(t *testing.T) {
+	s := newStreamServer(t)
+	s.answer = func(f Frame) Frame {
+		ack := Frame{Type: AckFrame, ID: f.ID}
+		if f.Type == PermissionRestoreFrame {
+			page := &PermissionRestore{}
+			if f.PermissionRestore.AfterAgentID == "" {
+				page.Records = []PermissionResolution{{AgentID: "a", PermissionID: "p"}}
+				page.More = true
+			} else if f.PermissionRestore.AfterAgentID == "a" && f.PermissionRestore.AfterPermissionID == "p" {
+				page.Records = []PermissionResolution{{AgentID: "b", PermissionID: "q"}}
+			} else {
+				ack.Error = "wrong cursor"
+			}
+			ack.PermissionRestore = page
+		}
+		return ack
+	}
+	l, _ := link(t, s)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, up := l.Generation(); up {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("not connected")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	got, err := l.PermissionRecords(context.Background())
+	if err != nil || len(got) != 2 || got[1].AgentID != "b" {
+		t.Fatal(got, err)
 	}
 }

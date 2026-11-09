@@ -17,13 +17,15 @@ import (
 	"strings"
 
 	"github.com/zachlatta/intelligence/internal/hostclient"
+	"github.com/zachlatta/intelligence/internal/paseo"
 )
 
 // Definition is one version of a workflow: the host it runs on, what starts it, how its project
 // is found, its orchestrator, and its steps, in order.
 type Definition struct {
-	Host         string       `json:"host"`    // the account's host every run happens on
-	Trigger      string       `json:"trigger"` // task (submitted on the Workflows page) or manual
+	Host         string       `json:"host"`            // the account's host every run happens on
+	Trigger      string       `json:"trigger"`         // task (submitted on the Workflows page), manual or email
+	Email        *EmailFilter `json:"email,omitempty"` // email: which email starts a run
 	Project      Project      `json:"project"`
 	Orchestrator Orchestrator `json:"orchestrator"`
 	Steps        []Step       `json:"steps"`
@@ -61,6 +63,7 @@ type Step struct {
 const (
 	TriggerTask   = "task"
 	TriggerManual = "manual"
+	TriggerEmail  = "email" // an email to the account's connected Gmail matches Email
 	ProjectMatch  = "match"
 	ProjectFixed  = "fixed"
 	KindStep      = "step"
@@ -89,8 +92,12 @@ func (d Definition) Validate() error {
 		return errors.New("a workflow needs a host to run on")
 	case !hostclient.ValidName(d.Host):
 		return fmt.Errorf("host %q is not a host's name", d.Host)
-	case d.Trigger != TriggerTask && d.Trigger != TriggerManual:
-		return fmt.Errorf("trigger %q: want %s or %s", d.Trigger, TriggerTask, TriggerManual)
+	case d.Trigger != TriggerTask && d.Trigger != TriggerManual && d.Trigger != TriggerEmail:
+		return fmt.Errorf("trigger %q: want %s, %s or %s", d.Trigger, TriggerTask, TriggerManual, TriggerEmail)
+	case d.Trigger == TriggerEmail && d.Email == nil:
+		return errors.New("an email trigger needs an email filter: which senders, address or words start a run")
+	case d.Trigger != TriggerEmail && d.Email != nil:
+		return fmt.Errorf("only an email trigger has an email filter, not %s", d.Trigger)
 	case d.Project.Mode == ProjectFixed && (d.Project.Directory == "" || !path.IsAbs(d.Project.Directory)):
 		return errors.New("a fixed project needs the absolute directory of its repository on the host")
 	case d.Project.Mode == ProjectMatch && blank(d.Project.Provider):
@@ -105,6 +112,11 @@ func (d Definition) Validate() error {
 		return errors.New("the orchestrator needs instructions")
 	case len(d.Steps) == 0:
 		return errors.New("a workflow needs at least one step")
+	}
+	if d.Email != nil {
+		if err := d.Email.Normalize(); err != nil {
+			return err
+		}
 	}
 	seen := map[string]bool{}
 	for i, s := range d.Steps {
@@ -162,11 +174,31 @@ func ProjectPrompt(run string, d Definition, input string, repos []string) strin
 	return b.String()
 }
 
-// OrchestratorPrompt is the orchestrator's first message: its standing instructions, the run, the
-// steps, the commands that move it, and the first step.
+// Providers are the providers the workflow editor offers: those with a mode that never asks.
+func Providers() []string { return paseo.UnattendedProviders() }
+
+// agentMode is the provider's unattended mode, or its default for unknown providers.
+func agentMode(provider string) string { return paseo.UnattendedMode(provider) }
+
+// subAgentModes tells the orchestrator which mode to start each provider's sub-agents in. It is
+// in the prompt, not only the instructions, so definitions saved before it get it too: `paseo
+// run` starts an agent in its provider's default mode, which may ask, unless given --mode.
+func subAgentModes() string {
+	providers := Providers()
+	modes := make([]string, len(providers))
+	for i, provider := range providers {
+		modes[i] = fmt.Sprintf("--mode %s for %s", agentMode(provider), provider)
+	}
+	return "Every sub-agent works unattended, so start each in the mode that never asks for permission: " +
+		strings.Join(modes, ", ") + " (paseo run --mode <mode>). Without it, a permission prompt stalls the run."
+}
+
+// OrchestratorPrompt is the orchestrator's first message: its standing instructions, the mode its
+// sub-agents start in, the run, the steps, the commands that move it, the workflow contract, and
+// the first step.
 func OrchestratorPrompt(name string, d Definition, v Vars) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n\nThis is run %s of the workflow “%s”. You are its orchestrator", strings.TrimSpace(d.Orchestrator.Instructions), v.Run, name)
+	fmt.Fprintf(&b, "%s\n\n%s\n\nThis is run %s of the workflow “%s”. You are its orchestrator", strings.TrimSpace(d.Orchestrator.Instructions), subAgentModes(), v.Run, name)
 	if v.Repo != "" {
 		fmt.Fprintf(&b, ", in a worktree of %s on branch %s", v.Repo, v.Branch)
 	}
@@ -181,6 +213,16 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 		"  intelligence workflow ask --run %[1]s --note note.md    ask Zach (Markdown); then end your turn: his reply comes as your next message\n"+
 		"  intelligence workflow fail --run %[1]s --why \"<why>\"    the run cannot be done\n\n"+
 		"next after the last step finishes the run.\n\n", v.Run)
+	b.WriteString("Workflow instructions take precedence over conflicting shared skill defaults (including start-here, agent-factory and paseo-cli); " +
+		"keep system, host, repository and user constraints. Only the orchestrator moves the run. " +
+		"Pass each sub-agent its role, current step, run id, task context and limits, including this workflow contract. " +
+		"Follow this workflow's model choices rather than a shared skill's default.\n\n" +
+		"Builders may edit, test and commit in the worktree; do not push, land, deploy or change external systems before the step that authorizes it. " +
+		"Checkers follow their step's edit limits. Shared skill writes and queued mutations are external changes too: " +
+		"pass proposed edits and evidence to the landing step. " +
+		"The landing step also applies the run's approved external changes (skill edits, queued mutations). " +
+		"Preserve scratch needed by later steps. A worker reports back and ends its turn; the orchestrator owns reuse and archiving. " +
+		"After a successful ask, end your turn and wait for the reply message; do not poll or create a wakeup.\n\n")
 	b.WriteString(StepMessage(d, 0, v))
 	return b.String()
 }
@@ -188,7 +230,7 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 // StepMessage is step i's title and filled instructions, as the orchestrator gets them.
 func StepMessage(d Definition, i int, v Vars) string {
 	s := d.Steps[i]
-	return fmt.Sprintf("Step %d of %d: %s\n\n%s", i+1, len(d.Steps), s.Title, strings.TrimSpace(v.fill(s.Instructions)))
+	return fmt.Sprintf("Step %d of %d: %s\n\n%s", i+1, len(d.Steps), s.Title, strings.TrimSpace(v.fill(s.Instructions))+"\n\n"+UnattendedShellRule)
 }
 
 // OrchestratorInstructions are the starting workflow's standing instructions to its orchestrator.
@@ -196,7 +238,7 @@ const OrchestratorInstructions = `You run a workflow. You never do the work your
 
 Start a sub-agent in this workspace with the paseo CLI, for example:
 
-  paseo run --no-wait --title "<what it does>" --provider claude/claude-opus-5-5 "<its task, with all the context it needs>"
+  paseo run --no-wait --title "<what it does>" --provider claude/claude-opus-5-5 --mode bypassPermissions "<its task, with all the context it needs>"
 
 Then paseo wait <id> until it is done, and paseo logs <id> to read what it did. paseo send <id> "<message>" gives a sub-agent more work and keeps its context: use it when work comes back to a sub-agent that did it. A checker must be a fresh sub-agent that did none of the work. Archive sub-agents you are done with (paseo archive <id>).
 
@@ -225,6 +267,12 @@ var Starting = Definition{
 			"the architecture change before and after, before and after screenshots, and anything he needs to decide, with your recommendation. " +
 			"Ask, then do what his reply says."},
 		{ID: "land", Kind: KindStep, Title: "Land and deploy", Instructions: "Rebase on origin/main, land on main the way the repository's AGENTS.md says, " +
-			"and wait until the deploy reports the new version. Then move on, which finishes the run."},
+			"and wait until the deploy reports the new version. " +
+			"The landing step also applies the run's approved external changes (skill edits, queued mutations). " +
+			"Then move on, which finishes the run."},
 	},
 }
+
+// UnattendedShellRule is included for saved workflows too, not only Starting.
+const UnattendedShellRule = "Agents run unattended. Pass this shell guidance to each sub-agent. " +
+	"Even bypass mode can ask for permission on shell safety checks. Intelligence denies those prompts and asks for a safer approach. Use Write/Edit tools for prompt files and other multiline content instead of shell heredocs; split compound commands and use git -C instead of cd && git. A denial does not authorize broader actions. If blocked, report why."

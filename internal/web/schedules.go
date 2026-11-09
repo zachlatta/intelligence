@@ -100,7 +100,7 @@ func schedulePage(cfg Config, reg *fleet.Registry) http.HandlerFunc {
 		}
 		renderSchedules(w, "schedule", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Host": b, "S": s, "Runs": runs,
 			"Providers": withCurrent(availableProviders(b), s.Provider), "Catalog": providerCatalog(b), "Thinking": thinkingLevels,
-			"Commands": "/api/hosts/" + host + "/commands", "CommandSQL": scheduleCommandSQL})
+			"Commands": "/api/hosts/" + host + "/commands", "CommandSQL": scheduleCommandSQL, "Dictation": dictationPath(cfg)})
 	}
 }
 
@@ -222,14 +222,7 @@ func runDuration(now time.Time, r hostclient.ScheduleRun) string {
 	if end.IsZero() {
 		end = now
 	}
-	d := end.Sub(r.StartedAt).Round(time.Second)
-	switch {
-	case d >= time.Hour:
-		return fmt.Sprintf("%dh %dm", int(d.Hours()), int(d.Minutes())%60)
-	case d >= time.Minute:
-		return fmt.Sprintf("%dm %ds", int(d.Minutes()), int(d.Seconds())%60)
-	}
-	return d.String()
+	return humanDuration(end.Sub(r.StartedAt))
 }
 
 // localInput is t for a datetime-local input, in UTC (the page converts it to the browser's zone).

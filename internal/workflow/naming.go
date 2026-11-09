@@ -209,11 +209,17 @@ var (
 	listMarker = regexp.MustCompile(`^(?:#+|[-*+>]|\d+[.)])\s+`)
 	// label is a generic label at a line's start ("Task:", "TASK (from Zach):", "## Goal").
 	label = regexp.MustCompile(`(?i)^(?:task|tasks|goal|request|ask|todo|to-do|context|summary|description|title|prompt|issue|problem|objective|background|details|note|subject)\b(?:\s*\([^)]*\))?\s*(?::\s*|$)`)
+	// header is an email header line, as an email's run input has under its subject (Mail.Input).
+	header = regexp.MustCompile(`(?i)^(?:from|to|cc|bcc|date|sent|attachments):\s`)
 )
 
-// taskLine is line without Markdown markers or a generic label; "" when nothing else is on it.
+// taskLine is line without Markdown markers or a generic label; "" when nothing else is on it,
+// or when it is an email header ("From: …").
 func taskLine(line string) string {
 	line = strings.TrimSpace(line)
+	if header.MatchString(line) {
+		return ""
+	}
 	for {
 		m := listMarker.FindString(line + " ")
 		if m == "" {

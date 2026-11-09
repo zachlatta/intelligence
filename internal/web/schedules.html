@@ -245,7 +245,7 @@ document.querySelectorAll("input[type=datetime-local][data-utc]").forEach((i) =>
   data-name="{{.S.Name}}" data-prompt="{{.S.Prompt}}" data-cron="{{.S.Cron}}" data-timezone="{{.S.Timezone}}"
   data-every="{{if .S.EveryMs}}{{everyText .S.EveryMs}}{{end}}" data-provider="{{.S.Provider}}" data-model="{{.S.Model}}"
   data-thinking="{{.S.Thinking}}" data-mode="{{.S.Mode}}" data-cwd="{{.S.Cwd}}" data-isolation="{{or .S.Isolation "local"}}"
-  data-archive="{{.S.ArchiveOnFinish}}" data-max-runs="{{if .S.MaxRuns}}{{.S.MaxRuns}}{{end}}" data-expires="{{localInput .S.ExpiresAt}}">
+  data-archive="{{.S.ArchiveOnFinish}}" data-max-runs="{{if .S.MaxRuns}}{{.S.MaxRuns}}{{end}}" data-expires="{{localInput .S.ExpiresAt}}"{{if .Dictation}} data-dictation="{{.Dictation}}"{{end}}>
   <label for="name">Name</label><input id="name" name="name" maxlength="200" value="{{.S.Name}}">
   <label for="prompt">Prompt</label><textarea id="prompt" name="prompt" required>{{.S.Prompt}}</textarea>
   {{template "cadencefields" .S}}
@@ -260,7 +260,7 @@ document.querySelectorAll("input[type=datetime-local][data-utc]").forEach((i) =>
   </div>
   {{template "catalog" .Catalog}}
   {{template "runfields" .S}}
-  <div class="form-actions"><button class="btn primary" type="submit">Save</button></div>
+  <div class="form-actions"><button class="btn primary" type="submit">Save</button>{{if .Dictation}}{{template "dictationbutton"}}{{end}}</div>
 </form>
 {{end}}
 <footer title="{{.Version}}">version {{short .Version}}</footer>
@@ -306,6 +306,15 @@ if (edit) {
   });
 }
 </script>
+{{if and (eq .S.Target "new-agent") .Dictation}}<script src="/dictation.js"></script>
+<script>
+(() => {
+  // only puts words in the prompt: the schedule is saved with Save, never by dictation
+  dictation({ text: edit.prompt, tokenPath: edit.dataset.dictation, mic: document.getElementById("dictate"),
+    row: edit.querySelector(".form-actions"), label: () => "Done", insertOnly: true,
+    warn: (msg) => say(msg, true) });
+})();
+</script>{{end}}
 </body>
 </html>
 {{end}}
@@ -316,7 +325,7 @@ if (edit) {
 <div class="page-head"><div><h1>New schedule on {{.Host}}</h1>
 <p class="sub">A prompt Paseo runs on a cadence, each time in a new agent.</p></div></div>
 <form id="schedule" class="card form" data-host="{{.Host}}" data-kind="create_schedule"
-  data-default-provider="{{.Agent.Provider}}" data-default-model="{{.Agent.Model}}" data-default-mode="{{.Agent.Mode}}">
+  data-default-provider="{{.Agent.Provider}}" data-default-model="{{.Agent.Model}}" data-default-mode="{{.Agent.Mode}}"{{if .Dictation}} data-dictation="{{.Dictation}}"{{end}}>
   <label for="name">Name <span class="meta">(optional)</span></label><input id="name" name="name" maxlength="200">
   {{template "cadencefields" false}}
   <label for="dir">Directory</label>
@@ -330,7 +339,7 @@ if (edit) {
   {{template "runfields" false}}
   </fieldset>
   <label class="check"><input type="checkbox" name="runNow"> run it once now, too</label>
-  <div class="form-actions"><button class="btn primary" type="submit">Make schedule</button><a class="btn" href="/schedules">Cancel</a></div>
+  <div class="form-actions"><button class="btn primary" type="submit">Make schedule</button><a class="btn" href="/schedules">Cancel</a>{{if .Dictation}}{{template "dictationbutton"}}{{end}}</div>
   <p id="progress"></p>
 </form>
 <footer title="{{.Version}}">version {{short .Version}}</footer>
@@ -372,6 +381,15 @@ form.addEventListener("submit", async (e) => {
   }
 });
 </script>
+{{if .Dictation}}<script src="/dictation.js"></script>
+<script>
+(() => {
+  const start = form.querySelector(".form-actions .primary");
+  dictation({ text: form.prompt, tokenPath: form.dataset.dictation, mic: document.getElementById("dictate"),
+    row: form.querySelector(".form-actions"), label: () => start.textContent, send: () => form.requestSubmit(),
+    warn: (msg) => say(msg, true) });
+})();
+</script>{{end}}
 </body>
 </html>
 {{end}}
