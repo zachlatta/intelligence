@@ -141,6 +141,7 @@ function providerPickers(form, blank) {
 {{end}}
 
 {{define "spawnjs"}}
+<script src="/attachments.js"></script>
 {{template "pickersjs"}}
 <script>
 // The form writes through the commands API and follows its command through the read-only SQL API,
@@ -148,6 +149,7 @@ function providerPickers(form, blank) {
 const form = document.getElementById("spawn");
 const { host, commands, kind } = form.dataset;
 const progressSQL = form.dataset.progressSql;
+const attachments = imageAttachments(form.prompt, form);
 const out = document.getElementById("progress");
 providerPickers(form, "default");
 
@@ -192,12 +194,16 @@ async function follow(id) {
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
-  const button = form.querySelector("button");
+  const button = form.querySelector(".form-actions .primary");
+  if (button.disabled) return;
   button.disabled = true;
   say("Sending…");
   try {
+    const args = spawnArgs();
+    const agent = kind === "create_workspace" ? args.agent : args;
+    agent.prompt = await attachments.prompt(agent.prompt);
     const res = await fetch(commands, { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind, args: spawnArgs() }) });
+      body: JSON.stringify({ kind, args }) });
     if (res.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); return; }
     if (!res.ok) throw new Error(await res.text());
     await follow((await res.json()).id);

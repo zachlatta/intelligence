@@ -247,6 +247,16 @@ func TestRunNamesSayWhichWorkflowAndWhatTask(t *testing.T) {
 			"Factory Task: 🙏 · b7ea78381c2d", "wf-factory-task-b7ea78381c2d"},
 		{"only a heading and an emoji", "Factory Task", "Task:\n🙏", "Factory Task: Task: · b7ea78381c2d", "wf-factory-task-b7ea78381c2d"},
 		{"no workflow name", "", "Fix the login page", "Fix the login page · b7ea78381c2d", "wf-fix-the-login-page-b7ea78381c2d"},
+
+		// image attachment references ([attachment:<uuid>]) name nothing; an image alone is named as one
+		{"an image after the task", "Factory Task", "Fix the button in this screenshot [attachment:0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d]",
+			"Factory Task: Fix the button in this screenshot · b7ea78381c2d", "wf-factory-task-fix-the-button-in-this-screenshot-b7ea78381c2d"},
+		{"an image before the task", "Factory Task", "[attachment:0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d]\nThe header overlaps the logo",
+			"Factory Task: The header overlaps the logo · b7ea78381c2d", "wf-factory-task-the-header-overlaps-the-logo-b7ea78381c2d"},
+		{"only an image", "Factory Task", "[attachment:0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d]",
+			"Factory Task: Attached image · b7ea78381c2d", "wf-factory-task-attached-image-b7ea78381c2d"},
+		{"only images", "Factory Task", "[attachment:0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d] [attachment:1b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d]",
+			"Factory Task: 2 attached images · b7ea78381c2d", "wf-factory-task-2-attached-images-b7ea78381c2d"},
 	} {
 		title, br := runNames(id, c.workflow, taskName(c.input))
 		if title != c.title || br != c.branch {

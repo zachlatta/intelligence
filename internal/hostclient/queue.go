@@ -74,6 +74,9 @@ func (w *Watcher) sendQueued(ctx context.Context, cmd Command, a AgentArgs) erro
 			return fmt.Errorf("agent %s is not on this host (archived?)", a.AgentID)
 		}
 		if c != nil && first && settle <= 0 && !busy(ag.Status) {
+			if err := w.prepareMessageImages(a); err != nil {
+				return err
+			}
 			if err := c.SendMessage(ctx, a.AgentID, a.Text, cmd.ID, paseo.Steer); err != nil {
 				return err
 			}

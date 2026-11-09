@@ -103,6 +103,11 @@ func EnqueueTx(ctx context.Context, tx pgx.Tx, host, kind string, args json.RawM
 	if _, err := hostclient.ParseCommand(kind, args); err != nil {
 		return Command{}, &BadCommandError{err}
 	}
+	var resolveErr error
+	args, resolveErr = resolveImages(ctx, tx, host, kind, args)
+	if resolveErr != nil {
+		return Command{}, &BadCommandError{resolveErr}
+	}
 	if len(args) == 0 {
 		args = json.RawMessage("{}")
 	}

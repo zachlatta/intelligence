@@ -192,3 +192,14 @@ legend { font-size: 13px; font-weight: 600; padding: 0 .35rem; }
 @keyframes rec { 50% { opacity: .3; } }
 .dictation kbd { font: inherit; font-size: .7rem; opacity: .75; margin-left: .3rem; }
 textarea.listening, textarea.listening:focus { border-color: var(--red); box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 25%, transparent); }
+
+.attachments { margin: .6rem 0; padding: .6rem; border: 1px dashed var(--line); border-radius: var(--radius); }
+.attachments.dropping { outline: 2px solid var(--accent); }
+.attachment-previews { display: flex; flex-wrap: wrap; gap: .6rem; }
+.attachment-previews > div { display: flex; flex-direction: column; max-width: 180px; gap: .3rem; margin-top: .6rem; }
+.attachment-previews img { width: 160px; height: 110px; object-fit: contain; }
+.attachment-previews button { overflow-wrap: anywhere; white-space: normal; }
+.composer > .attachments { flex-basis: 100%; }
+.composer > textarea { order: 1; }
+.composer > .side { order: 2; }
+.composer > .attachments { order: 3; }

@@ -30,10 +30,16 @@ var dictationJS []byte
 //go:embed submitkeys.js
 var submitKeysJS []byte
 
+// attachmentsJS is the image picker every form that takes a prompt loads.
+//
+//go:embed attachments.js
+var attachmentsJS []byte
+
 var (
-	stylesheet       = asset("ui.css", "text/css; charset=utf-8", uiCSS)
-	dictationScript  = asset("dictation.js", "text/javascript; charset=utf-8", dictationJS)
-	submitKeysScript = asset("submitkeys.js", "text/javascript; charset=utf-8", submitKeysJS)
+	stylesheet        = asset("ui.css", "text/css; charset=utf-8", uiCSS)
+	dictationScript   = asset("dictation.js", "text/javascript; charset=utf-8", dictationJS)
+	submitKeysScript  = asset("submitkeys.js", "text/javascript; charset=utf-8", submitKeysJS)
+	attachmentsScript = asset("attachments.js", "text/javascript; charset=utf-8", attachmentsJS)
 )
 
 // asset serves an embedded file, revalidated on each load (by an ETag of its content) so a deploy's

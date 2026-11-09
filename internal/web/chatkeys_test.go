@@ -33,6 +33,8 @@ globalThis.document = {
 globalThis.sessionStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
 globalThis.location = { pathname: "/" };
 globalThis.setInterval = () => 0;
+// attachments.js's picker, with no images picked
+globalThis.imageAttachments = () => ({ hasImages: () => false, setDisabled() {}, clear() {}, prompt: async (m) => m });
 
 const posts = [];
 let release;

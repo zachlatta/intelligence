@@ -851,7 +851,7 @@ func TestFinishedWorkflowRetainsAgentsTranscriptsAndDiffAfterArchiveReport(t *te
 	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Preserved workflow result") {
 		t.Fatalf("transcript lost: %d", page.Code)
 	}
-	if strings.Contains(page.Body.String(), `id="archive"`) || strings.Contains(page.Body.String(), `id="chat"`) || !strings.Contains(page.Body.String(), "archived with its workflow run") {
+	if strings.Contains(page.Body.String(), `id="archive"`) || strings.Contains(page.Body.String(), `id="chat"`) || strings.Contains(page.Body.String(), `src="/attachments.js"`) || !strings.Contains(page.Body.String(), "archived with its workflow run") {
 		t.Error("history transcript is not read-only")
 	}
 	for _, kind := range []string{"archive_agent", "cancel_agent", "rename_agent", "send_message"} {
@@ -860,7 +860,9 @@ func TestFinishedWorkflowRetainsAgentsTranscriptsAndDiffAfterArchiveReport(t *te
 			args["title"] = "new name"
 		}
 		if kind == "send_message" {
-			args["text"] = "restart"
+			// An image reference must not bypass the archived-session guard or resolve uploads
+			// before that guard runs (this reference deliberately has no stored image).
+			args["text"] = "restart [attachment:00000000-0000-4000-8000-000000000001]"
 		}
 		body, _ := json.Marshal(map[string]any{"kind": kind, "args": args})
 		rec := call(t, h, http.MethodPost, "/api/hosts/host-1/commands", string(body), sameOriginFetch)

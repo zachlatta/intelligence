@@ -1,11 +1,14 @@
 package workflow
 
 import (
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/zachlatta/intelligence/internal/attachment"
 )
 
 // A run's names: its workspace title "<workflow>: <task> · <run>" and its worktree branch
@@ -37,11 +40,22 @@ const (
 
 // taskName is the name of input's task, the run's title (workflow_runs.title), from which every
 // other name of the run is made: its words (taskWords), with a first word of plain letters
-// capitalised; or, with none, the input's first line.
+// capitalised; or, with none, the input's first line. Image attachment references
+// ([attachment:<uuid>]) name nothing and are left out; an input of images alone is named
+// "Attached image" or "<n> attached images".
 func taskName(input string) string {
+	images := len(attachment.Reference.FindAllString(input, -1))
+	input = attachment.Reference.ReplaceAllString(input, "")
 	words := taskWords(input)
 	if len(words) == 0 {
-		return firstLine(input)
+		switch {
+		case strings.TrimSpace(input) != "" || images == 0:
+			return firstLine(input)
+		case images == 1:
+			return "Attached image"
+		default:
+			return fmt.Sprintf("%d attached images", images)
+		}
 	}
 	task := strings.Join(words, " ")
 	if plainWord(words[0]) {

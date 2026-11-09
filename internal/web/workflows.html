@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.}} · Intelligence</title>
+<script src="/attachments.js"></script>
 {{template "css"}}
 <style>
   .status { display: inline-flex; align-items: center; justify-content: center; gap: .3rem; height: 1.3rem; min-width: 4.6rem; padding: 0 .45rem;
@@ -213,12 +214,13 @@ async function addWorkflow(name, description) {
 document.getElementById("add-starting")?.addEventListener("click", () =>
   addWorkflow("Task from Intelligence", "Find the project, do the work, three gates, ask Zach only for broader changes, then land."));
 document.getElementById("new-workflow")?.addEventListener("click", () => addWorkflow("New workflow", ""));
+const taskImages = document.getElementById("task") ? imageAttachments(document.getElementById("task"), document.querySelector(".composer")) : null;
 document.getElementById("submit-task")?.addEventListener("click", async (ev) => {
   const input = document.getElementById("task").value.trim();
   if (!input) return document.getElementById("task").focus();
   ev.target.disabled = true;
   try {
-    const r = await api("POST", "/api/workflow-runs", { workflowId: document.getElementById("task-workflow").value, input });
+    const r = await api("POST", "/api/workflow-runs", { workflowId: document.getElementById("task-workflow").value, input: await taskImages.prompt(input) });
     location.href = "/workflow-runs/" + r.id;
   } catch (e) { err(e.message); ev.target.disabled = false; }
 });
@@ -589,13 +591,22 @@ $("#run").onclick = async () => {
   if (dirty && !(confirm("Save this version first, then run it?") && await save())) return;
   const dlg = $("#start"); dlg.returnValue = ""; dlg.showModal();
 };
-$("#start").addEventListener("close", async () => {
-  const dlg = $("#start"), input = $("#s-input").value.trim();
-  if (dlg.returnValue !== "ok" || !input) return;
-  const res = await fetch("/api/workflow-runs", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ workflowId: wf.id, input }) });
-  if (!res.ok) return err(await res.text());
-  location.href = "/workflow-runs/" + (await res.json()).id;
+const runImages = imageAttachments($("#s-input"));
+let starting = false;
+$("#start form").addEventListener("submit", async (ev) => {
+  if (ev.submitter?.value === "cancel") return;
+  ev.preventDefault();
+  const input = $("#s-input").value.trim();
+  if (!input || starting) return;
+  starting = true;
+  const button = $("#start form .primary"); button.disabled = true;
+  try {
+    const res = await fetch("/api/workflow-runs", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workflowId: wf.id, input: await runImages.prompt(input) }) });
+    if (!res.ok) throw new Error(await res.text());
+    location.href = "/workflow-runs/" + (await res.json()).id;
+  } catch (e) { $("#s-error").textContent = e.message; $("#s-error").hidden = false; }
+  finally { starting = false; button.disabled = false; }
 });
 window.addEventListener("beforeunload", (e) => { if (dirty) e.preventDefault(); });
 render();

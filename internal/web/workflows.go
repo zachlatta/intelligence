@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/zachlatta/intelligence/internal/fleet"
 	"github.com/zachlatta/intelligence/internal/workflow"
 )
 
@@ -53,7 +54,10 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 // workflowError answers err from the engine: 404, 400 or 409 for what the caller can fix.
 func workflowError(w http.ResponseWriter, err error) {
 	var ref *workflow.Refusal
+	var badCommand *fleet.BadCommandError
 	switch {
+	case errors.As(err, &badCommand):
+		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, workflow.ErrNotFound):
 		http.Error(w, "no such workflow or run in this account", http.StatusNotFound)
 	case errors.As(err, &ref) && ref.Conflict:
