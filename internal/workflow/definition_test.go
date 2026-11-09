@@ -109,3 +109,76 @@ func onHost(d Definition) Definition {
 	d.Host = "host-1"
 	return d
 }
+
+func TestWorkflowAgentsStartInTheModeThatNeverAsks(t *testing.T) {
+	// The ids are the modes paseo's provider catalogs mark isUnattended.
+	for provider, want := range map[string]string{"claude": "bypassPermissions", "codex": "full-access",
+		"muse": "allowAll", "antigravity": "full-access", "other": ""} {
+		if got := agentMode(provider); got != want {
+			t.Errorf("agentMode(%q) = %q, want %q", provider, got, want)
+		}
+	}
+	// Providers is what the editor offers: each has a mode that never asks, Claude first.
+	ps := Providers()
+	if len(ps) != 4 || ps[0] != "claude" {
+		t.Errorf("Providers() = %v", ps)
+	}
+	for _, p := range ps {
+		if agentMode(p) == "" {
+			t.Errorf("provider %q has no mode that never asks", p)
+		}
+	}
+}
+
+func TestTheOrchestratorStartsSubAgentsInTheModeThatNeverAsks(t *testing.T) {
+	if !strings.Contains(OrchestratorInstructions, "--provider claude/claude-opus-5-5 --mode "+agentMode("claude")) {
+		t.Errorf("the example sub-agent has no mode:\n%s", OrchestratorInstructions)
+	}
+	// A definition saved before the modes were in its instructions still gets them: the prompt says them.
+	d := clone(Starting)
+	d.Orchestrator.Instructions = "You run a workflow. Start sub-agents with paseo run."
+	p := OrchestratorPrompt("Task", d, Vars{Run: "run-1", Input: "x"})
+	for _, want := range []string{"--mode bypassPermissions for claude", "--mode full-access for codex", "--mode allowAll for muse", "--mode full-access for antigravity"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("orchestrator prompt misses %q:\n%s", want, p)
+		}
+	}
+}
+
+// Saved workflows can have older standing instructions. The generated prompt must still
+// tell the orchestrator to pass the current step's limits to workers.
+func TestSavedWorkflowsKeepWorkersInsideTheirAssignedStep(t *testing.T) {
+	d := clone(Starting)
+	d.Orchestrator.Instructions = "Coordinate this task."
+	p := OrchestratorPrompt("Saved workflow", d, Vars{Run: "run-1"})
+	for _, want := range []string{
+		"Workflow instructions take precedence over conflicting shared skill defaults",
+		"Pass each sub-agent its role, current step, run id, task context and limits",
+		"Only the orchestrator moves the run",
+		"Builders may edit, test and commit in the worktree",
+		"do not push, land, deploy or change external systems before the step that authorizes it",
+		"Follow this workflow's model choices",
+		"pass proposed edits and evidence to the landing step",
+		"After a successful ask, end your turn",
+		"his reply comes as your next message",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("saved workflow prompt misses %q", want)
+		}
+	}
+}
+
+func TestLandingOwnsApprovedExternalChanges(t *testing.T) {
+	const want = "The landing step also applies the run's approved external changes (skill edits, queued mutations)."
+	// Saved definitions get the contract too; neither their standing instructions nor
+	// their landing step needs to have been updated to the new defaults.
+	d := clone(Starting)
+	d.Orchestrator.Instructions = "Coordinate this task."
+	d.Steps[d.Index("land")].Instructions = "Land on main and wait for the deploy."
+	if p := OrchestratorPrompt("Saved workflow", d, Vars{Run: "run-1"}); !strings.Contains(p, want) {
+		t.Errorf("saved workflow does not assign approved external changes to landing")
+	}
+	if p := StepMessage(Starting, Starting.Index("land"), Vars{Run: "run-1"}); !strings.Contains(p, want) {
+		t.Errorf("landing step does not own approved external changes")
+	}
+}

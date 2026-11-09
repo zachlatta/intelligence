@@ -82,6 +82,14 @@
   .note { border: 1px solid var(--orange-line); }
   .note > .card-head { background: var(--orange-bg); } .note > .card-head h2 { color: var(--orange); }
   .md { font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+  .preview { border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-subtle); }
+  .preview .ph { display: flex; gap: .5rem; align-items: baseline; padding: .5rem .7rem; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .preview ul { list-style: none; margin: 0; padding: 0; max-height: 26rem; overflow: auto; }
+  .preview li { display: grid; grid-template-columns: 1rem minmax(0, 1fr); gap: .45rem; padding: .45rem .7rem; font-size: 12.5px; }
+  .preview li + li { border-top: 1px solid var(--line); }
+  .preview li.no { opacity: .55; }
+  .preview .ic { font-weight: 700; color: var(--green); } .preview li.no .ic { color: var(--faint); }
+  .preview .subj { color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .md img { max-width: 100%; }
   .md pre { background: var(--bg-muted); padding: .6rem; border-radius: var(--radius); overflow: auto; }
   .reply-host { display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-start; margin-top: .75rem; }
@@ -115,13 +123,13 @@
 </html>
 {{end}}
 
-{{define "chips"}}<span class="chip">{{if eq .Trigger "task"}}Task{{else}}By hand{{end}}</span><span class="arrow">→</span><span class="chip">Find the project</span><span class="arrow">→</span><span class="chip">Orchestrator</span>{{range .Steps}}<span class="arrow">→</span><span class="chip k-{{.Kind}}">{{.Title}}</span>{{end}}{{end}}
+{{define "chips"}}<span class="chip"{{if eq .Trigger "email"}} title="{{emailSummary .Email}}"{{end}}>{{if eq .Trigger "task"}}Task{{else if eq .Trigger "email"}}Email{{else}}By hand{{end}}</span><span class="arrow">→</span><span class="chip">Find the project</span><span class="arrow">→</span><span class="chip">Orchestrator</span>{{range .Steps}}<span class="arrow">→</span><span class="chip k-{{.Kind}}">{{.Title}}</span>{{end}}{{end}}
 
 {{define "list"}}{{template "wfhead" "Workflows"}}
 <main class="container page">
 <div class="page-head">
   <div><h1>Workflows</h1><p class="sub">Each run finds its project, starts an orchestrator in the worktree, and hands it the steps one at a time.</p></div>
-  <div class="actions">{{if .Workflows}}<button class="btn sm" id="new-workflow">New workflow</button>{{end}}</div>
+  <div class="actions"><a class="btn sm" href="/workflows/email">Email</a>{{if .Workflows}}<button class="btn sm" id="new-workflow">New workflow</button>{{end}}</div>
 </div>
 <p class="banner" id="error" hidden></p>
 {{if not .Workflows}}
@@ -148,7 +156,8 @@
 {{range .Workflows}}
 <section class="card wf-card">
   <div class="card-head"><h2><a href="/workflows/{{.ID}}">{{.Name}}</a></h2><span class="badge">v{{.Version}}</span>{{if .IsDefault}}<span class="badge">Default</span>{{end}}</div>
-  <div class="card-body">{{with .Description}}<div class="meta">{{.}}</div>{{end}}<div class="strip">{{template "chips" .Definition}}</div></div>
+  <div class="card-body">{{with .Description}}<div class="meta">{{.}}</div>{{end}}<div class="strip">{{template "chips" .Definition}}</div>
+    {{if eq .Definition.Trigger "email"}}<p class="hint">✉ {{emailSummary .Definition.Email}}</p>{{end}}</div>
   <div class="card-foot">{{if eq .Definition.Trigger "task"}}
     <button class="btn sm" data-default-workflow="{{.ID}}" data-default="{{if .IsDefault}}false{{else}}true{{end}}">{{if .IsDefault}}Clear default{{else}}Make default{{end}}</button>{{end}}
     <span class="grow"></span><a class="btn sm" href="/workflows/{{.ID}}">Edit</a></div>
@@ -263,6 +272,9 @@ const saved = {{json .Workflow}};
 // the repositories the account's hosts reported: a fixed project is picked from those on the workflow's host
 const allRepos = {{json .Repos}};
 const hosts = {{json .Hosts}};
+// email triggers: the mailbox, its recent email (the preview matches it), and the other workflows email starts
+const emailOn = {{json .EmailOn}}, mailbox = {{json .Mailbox}}, recentEmail = {{json .Emails}}, otherEmailWorkflows = {{json .Others}};
+const providers = {{json .Providers}}; // workflow.Providers: each runs its agents without asking
 let typingDir = false; // "Another directory…" chosen: the directory is typed
 const repoLabel = (r) => `${r.project || r.directory.split("/").pop()} · ${r.directory}`;
 let wf = structuredClone(saved), sel = "__trigger", json = false, dirty = false;
@@ -295,8 +307,10 @@ function head() {
 function fixedCards() {
   const d = def(), p = d.project, o = d.orchestrator;
   const card = (id, kind, ttl, body) => `<div class="node fixed click${sel === id ? " sel" : ""}" data-id="${id}"><div class="nh"><div><div class="kind">${kind}</div><div class="ttl">${ttl}</div></div></div><div class="nb">${body}</div></div>`;
-  return card("__trigger", "Trigger", d.trigger === "task" ? "Task in Intelligence" : "By hand",
-      (d.trigger === "task" ? "A task submitted on the Workflows page. It becomes " + V("input") + "." : "Someone presses Run and types what it should do.") +
+  return card("__trigger", "Trigger", d.trigger === "task" ? "Task in Intelligence" : d.trigger === "email" ? "Email" : "By hand",
+      (d.trigger === "task" ? "A task submitted on the Workflows page. It becomes " + V("input") + "." :
+        d.trigger === "email" ? esc(emailSummary(d.email)) + (mailbox ? ` to <b>${esc(mailbox)}</b>` : "") + ". The email becomes " + V("input") + "." :
+        "Someone presses Run and types what it should do.") +
       ` Runs on <b class="mono">${esc(d.host || "no host yet")}</b>.`) +
     `<div class="link"></div>` +
     card("__project", "Before the orchestrator", "Find the project", p.mode === "fixed" ? `Always ${esc(allRepos.find((r) => r.directory === p.directory)?.project || "")} <span class="mono">${esc(p.directory)}</span>.` :
@@ -332,6 +346,82 @@ function repoPicker(p) {
     <p class="hint">The repositories ${esc(def().host)} reported. Each run makes a worktree of it there.</p>`;
 }
 
+// --- email triggers: the filter (as workflow.EmailFilter), and a preview against recent email ---
+function emailSummary(f) {
+  if (!f) return "Email";
+  const p = [];
+  if (f.from?.length) p.push("from " + f.from.join(", "));
+  if (f.to) p.push("to " + f.to);
+  if (f.subject) p.push(`subject has “${f.subject}”`);
+  if (f.words) p.push(`has “${f.words}”`);
+  if (f.without) p.push(`without “${f.without}”`);
+  if (f.attachment) p.push("with an attachment");
+  return "Email " + (p.join(", ") || "(nothing chosen yet)");
+}
+const lower = (s) => String(s || "").trim().toLowerCase();
+const senders = (f) => (f.from || []).map(lower).filter(Boolean);
+// matchEmail is workflow.EmailFilter.Match, and a newsletter never starts a run
+function matchEmail(f, m) {
+  const has = (h, n) => String(h || "").toLowerCase().includes(n.toLowerCase());
+  const from = lower(m.from), list = senders(f), dom = from.slice(from.lastIndexOf("@"));
+  if (m.bulk) return [false, "a newsletter: never starts a run"];
+  if (list.length && !list.includes(from) && !list.includes(dom)) return [false, "not from these senders"];
+  if (list.length && !m.verified) return [false, "forged sender: Gmail could not verify it"];
+  if (lower(f.to) && !(m.to || []).includes(lower(f.to))) return [false, "not sent to " + lower(f.to)];
+  if (f.subject?.trim() && !has(m.subject, f.subject.trim())) return [false, `subject doesn't have “${f.subject.trim()}”`];
+  if (f.words?.trim() && !has(m.subject + "\n" + m.body, f.words.trim())) return [false, `doesn't have “${f.words.trim()}”`];
+  if (f.without?.trim() && has(m.subject + "\n" + m.body, f.without.trim())) return [false, `has “${f.without.trim()}”`];
+  if (f.attachment && !(m.attachments || []).length) return [false, "no attachment"];
+  if (!list.length && !lower(f.to) && !f.subject?.trim() && !f.words?.trim()) return [false, "choose a sender, a To address or words"];
+  return [true, ""];
+}
+// score is workflow.EmailFilter.Score: the higher starts when two match
+function score(f, m) {
+  let n = [senders(f).length, lower(f.to), f.subject?.trim(), f.words?.trim(), f.without?.trim(), f.attachment].filter(Boolean).length;
+  return n + (senders(f).includes(lower(m.from)) ? 1 : 0);
+}
+let showAll = false;
+function previewHTML(f) {
+  if (!emailOn) return `<p class="hint">Email triggers are off on this server: it needs GOOGLE_OAUTH_CLIENT_JSON and CONNECTIONS_KEY.</p>`;
+  if (!mailbox) return `<p class="hint">No mailbox is connected yet. <a href="/workflows/email">Connect Gmail</a>, and its last 30 days of email show here.</p>`;
+  if (!recentEmail.length) return `<p class="hint">No email from ${esc(mailbox)} yet.</p>`;
+  const rows = recentEmail.map((m) => {
+    const [ok, why] = matchEmail(f, m);
+    const other = ok && otherEmailWorkflows.map((o) => [o, matchEmail(o.definition.email, m)[0]]).find(([, hit]) => hit)?.[0];
+    let clash = "";
+    if (other) {
+      const mine = score(f, m), theirs = score(other.definition.email, m);
+      clash = mine > theirs ? `also matches “${esc(other.name)}”; this one is narrower, so it starts` :
+        mine < theirs ? `goes to “${esc(other.name)}”, which is narrower` : `also matches “${esc(other.name)}”: add a field to tell them apart`;
+    }
+    return { m, ok: ok && !(other && score(f, m) < score(other.definition.email, m)), why, clash };
+  });
+  const n = rows.filter((r) => r.ok).length;
+  const list = rows.filter((r) => showAll || r.ok || r.clash).slice(0, 60).map(({ m, ok, why, clash }) => `<li class="${ok ? "" : "no"}">
+      <span class="ic">${ok ? "✓" : "–"}</span><div style="min-width:0"><div><b>${esc(m.name || m.from)}</b> <span class="meta">${esc(m.from)}</span></div>
+      <div class="subj">${esc(m.subject || "(no subject)")}${(m.attachments || []).length ? " 📎" : ""}</div>
+      ${!ok && why ? `<div class="meta">${esc(why)}</div>` : ""}${clash ? `<div style="color:var(--orange)">${clash}</div>` : ""}</div></li>`).join("");
+  return `<div class="preview"><div class="ph"><b>${n} ${n === 1 ? "email matches" : "emails match"}</b><span class="meta">of ${recentEmail.length} recent</span>
+      <span class="grow"></span><a href="#" id="preview-all">${showAll ? "Only matches" : "Show all"}</a></div>
+    <ul>${list || `<li class="no"><span></span><span class="meta">None of the recent email matches.</span></li>`}</ul></div>
+    <p class="hint">Recent email to ${esc(mailbox)}, matched as you type. Replies in a run's thread go to that run instead.</p>`;
+}
+function emailPanel(f) {
+  return `${mailbox ? `<p class="hint">Email to <b>${esc(mailbox)}</b> that matches every field you fill in starts a run.</p>` : ""}
+    <label>From</label><input data-e="from" value="${esc((f.from || []).join(", "))}" placeholder="christina@example.com, @example.org">
+    <p class="hint">Any of these, separated by commas. <code>@domain</code> is anyone there. Forged senders never match.</p>
+    <label>To</label><input data-e="to" value="${esc(f.to || "")}" placeholder="bot+receipts@example.com">
+    <p class="hint">An address with a <code>+tag</code> lets you choose this workflow when you send.</p>
+    <div class="fields">
+      <div><label>Subject has</label><input data-e="subject" value="${esc(f.subject || "")}"></div>
+      <div><label>Has the words</label><input data-e="words" value="${esc(f.words || "")}"></div>
+      <div><label>Doesn't have</label><input data-e="without" value="${esc(f.without || "")}"></div></div>
+    <label class="check" style="margin-top:.8rem"><input type="checkbox" data-e="attachment"${f.attachment ? " checked" : ""}> Has an attachment</label>
+    <label>Replies in the same thread</label><select data-e="replies">${opts([["run", "go to the run the thread started"], ["new", "start a new run"], ["ignore", "are ignored"]], f.replies || "run")}</select>
+    <p class="hint">When the run asks you a question, your emailed reply is the answer. A reply after the run is over starts a new run.</p>
+    <label>Which email this takes</label><div id="preview">${previewHTML(f)}</div>`;
+}
+
 function inspector() {
   const d = def();
   const chips = `<div class="vars">${["input", "repo", "branch", "run"].map(V).map((v) => `<button type="button" data-var="${v}">${v}</button>`).join("")}</div>`;
@@ -339,13 +429,13 @@ function inspector() {
       <div><label>Provider</label><input data-${pre}="provider" value="${esc(o.provider)}" list="providers"></div>
       <div><label>Model</label><input data-${pre}="model" value="${esc(o.model)}" placeholder="provider default"></div>
       <div><label>Thinking</label><select data-${pre}="thinking">${opts(THINKING.map((t) => [t, t || "default"]), o.thinking || "")}</select></div></div>
-      <datalist id="providers"><option>claude</option><option>codex</option><option>muse</option><option>antigravity</option></datalist>`;
+      <datalist id="providers">${providers.map((p) => `<option>${esc(p)}</option>`).join("")}</datalist>`;
   const panel = (ttl, sub, body) => `<div class="card-head"><h2>${ttl}</h2>${sub ? `<span class="meta grow">${sub}</span>` : ""}</div><div class="card-body">${body}</div>`;
   if (sel === "__trigger") {
     const hostOpts = hosts.map((h) => [h, h]);
     if (d.host && !hosts.includes(d.host)) hostOpts.push([d.host, d.host + " (not in this account)"]);
-    return panel("Trigger", "", `<label>Starts when</label><select data-d="trigger">${opts([["task", "A task is submitted on the Workflows page"], ["manual", "Someone presses Run"]], d.trigger)}</select>
-    <p class="hint">What was submitted is ${V("input")} in the instructions.</p>
+    return panel("Trigger", "", `<label>Starts when</label><select data-d="trigger">${opts([["task", "A task is submitted on the Workflows page"], ["manual", "Someone presses Run"], ["email", "An email arrives"]], d.trigger)}</select>
+    ${d.trigger === "email" ? emailPanel(d.email) : `<p class="hint">What was submitted is ${V("input")} in the instructions.</p>`}
     <label>Runs on</label><select data-d="host">${d.host ? "" : `<option value="" selected disabled>Pick a host</option>`}${opts(hostOpts, d.host || "")}</select>
     <p class="hint">Every run of this workflow happens on this host: its project is found among the host's repositories, and its worktree and agents are made there.</p>`);
   }
@@ -375,6 +465,9 @@ function inspector() {
 }
 
 function render() {
+  const d = def();
+  if (d.trigger === "email" && !d.email) d.email = { from: [], replies: "run" };
+  if (d.trigger !== "email") delete d.email;
   head();
   if (json) {
     $("#editor").innerHTML = `<div class="card"><div class="card-head"><h2>As JSON</h2><span class="meta grow">What <code>PUT /api/workflows/{id}</code> takes as <code>definition</code>.</span><button class="btn sm" id="json-apply">Apply</button></div>
@@ -437,6 +530,16 @@ function bind() {
     def().project.directory = typingDir ? (allRepos.some((r) => r.directory === def().project.directory) ? "" : def().project.directory) : pick.value;
     markDirty(true);
   };
+  $$("#inspector [data-e]").forEach((el) => el.addEventListener(el.type === "checkbox" || el.tagName === "SELECT" ? "change" : "input", () => {
+    const f = def().email, k = el.dataset.e;
+    f[k] = k === "from" ? el.value.split(",").map((s) => s.trim()).filter(Boolean) : el.type === "checkbox" ? el.checked : el.value;
+    if (!f[k] || (Array.isArray(f[k]) && !f[k].length)) delete f[k];
+    markDirty(false);
+    $("#preview").innerHTML = previewHTML(f); bindPreview();
+    const card = $(`#pipe .node[data-id="__trigger"] .nb`);
+    if (card) card.firstChild.textContent = emailSummary(f);
+  }));
+  bindPreview();
   on("d", def); on("p", () => def().project); on("o", () => def().orchestrator); on("s", () => def().steps.find((x) => x.id === sel));
   $$("#inspector [data-var]").forEach((b) => b.onclick = () => {
     const t = $("#inspector textarea.prompt"); const a = t.selectionStart, z = t.selectionEnd;
@@ -445,6 +548,10 @@ function bind() {
   });
 }
 
+function bindPreview() {
+  const a = $("#preview-all");
+  if (a) a.onclick = (e) => { e.preventDefault(); showAll = !showAll; $("#preview").innerHTML = previewHTML(def().email); bindPreview(); };
+}
 document.addEventListener("click", (e) => { if (!e.target.closest("#menu") && !e.target.closest("[data-insert]")) $("#menu").hidden = true; });
 $("#wf-name").oninput = (e) => { wf.name = e.target.value; markDirty(false); };
 $("#wf-desc").oninput = (e) => { wf.description = e.target.value; markDirty(false); };
@@ -504,6 +611,8 @@ render();
   <div class="actions">{{if .Run.Live}}<button class="btn sm" id="cancel">Cancel run</button>{{end}}</div>
 </div>
 <div class="request">{{.Run.Input}}</div>
+{{if .Emails}}<section class="card"><div class="card-head"><h2>Email thread</h2><span class="meta grow">what each email in it did</span><a class="btn sm ghost" href="/workflows/email">All email</a></div>
+  <div class="card-body"><ul class="events">{{range .Emails}}<li><span class="t">{{.ReceivedAt.Format "Jan 2 15:04"}}</span><b>{{.Who}}</b> · {{or .Subject "(no subject)"}} · <span class="badge {{.Badge}}">{{.Label}}</span>{{with .Reason}} <span class="meta">{{.}}</span>{{end}}</li>{{end}}</ul></div></section>{{end}}
 {{if eq .Run.Status "failed"}}<p class="banner">{{or .Run.Error "The orchestrator marked the run failed."}}</p>{{end}}
 </div>
 <p class="banner" id="error" hidden></p>

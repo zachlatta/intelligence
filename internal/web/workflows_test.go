@@ -136,7 +136,7 @@ func TestAWorkflowRunFindsItsProjectThenTheOrchestratorMovesItThroughTheSteps(t 
 	finder := b.command()
 	var fa hostclient.CreateAgentArgs
 	json.Unmarshal(finder.Args, &fa)
-	if finder.Kind != hostclient.CreateAgentKind || fa.Cwd != "~" || fa.Provider != "claude" || fa.Labels["intelligence.run"] != run ||
+	if finder.Kind != hostclient.CreateAgentKind || fa.Cwd != "~" || fa.Provider != "claude" || fa.Mode != "bypassPermissions" || fa.Labels["intelligence.run"] != run ||
 		!strings.Contains(fa.Prompt, "- /w/app") || !strings.Contains(fa.Prompt, "intelligence workflow project --run "+run) {
 		t.Fatalf("project finder = %s %+v", finder.Kind, fa)
 	}
@@ -161,7 +161,7 @@ func TestAWorkflowRunFindsItsProjectThenTheOrchestratorMovesItThroughTheSteps(t 
 	ws := cmds[hostclient.CreateWorkspaceKind]
 	var wa hostclient.CreateWorkspaceArgs
 	json.Unmarshal(ws.Args, &wa)
-	if wa.Cwd != "/w/app" || !wa.Worktree || !strings.HasPrefix(wa.Branch, "wf-") || wa.Agent == nil || wa.Agent.Thinking != "high" ||
+	if wa.Cwd != "/w/app" || !wa.Worktree || !strings.HasPrefix(wa.Branch, "wf-") || wa.Agent == nil || wa.Agent.Thinking != "high" || wa.Agent.Mode != "bypassPermissions" ||
 		wa.Agent.Labels["intelligence.run"] != run || !strings.Contains(wa.Agent.Prompt, "Step 1 of 6: Do the work") ||
 		!strings.Contains(wa.Agent.Prompt, "Have sub-agents do this in /w/app:") || !strings.Contains(wa.Agent.Prompt, "intelligence workflow next --run "+run) {
 		t.Fatalf("workspace = %+v %+v", wa, wa.Agent)
@@ -399,6 +399,11 @@ func TestWorkflowPages(t *testing.T) {
 	}
 	if !strings.Contains(ed.Body.String(), `"host":"host-1"`) || !strings.Contains(ed.Body.String(), `const hosts = ["host-1"]`) {
 		t.Errorf("the editor should show the workflow's host and offer the account's")
+	}
+	// the editor offers the providers whose agents can run without asking, and only those
+	providers, _ := json.Marshal(workflow.Providers())
+	if !strings.Contains(ed.Body.String(), "const providers = "+string(providers)+";") || strings.Contains(ed.Body.String(), "<option>claude</option>") {
+		t.Errorf("the editor's providers should be workflow.Providers() = %s", providers)
 	}
 	// a fixed project is picked from the repositories the account's hosts reported
 	if !strings.Contains(ed.Body.String(), `const allRepos = [{"directory":"/w/app","project":"example/app","hosts":["host-1"]}]`) {
