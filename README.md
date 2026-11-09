@@ -321,7 +321,10 @@ version it started with. A run:
    input's first real sentence, as written: lines and sentences that are only a heading (`Task:`,
    `## Goal`), a greeting (“Hi!”, “Hey Claude,”, “Good morning —”) or a pleasantry (“Thanks!”,
    “Hope you're well.”) are skipped (a full stop in code, in quotes or in “e.g.” ends no sentence).
-   Then only these go: a polite opening (“could you please”) and the dash after a greeting, quotes
+   A sentence that opens with a pleasantry and goes on loses only that clause, up to its comma,
+   colon or dash, and a “but” or “and” after it: “Thanks for the fix, but login still crashes.” is
+   “Login still crashes”. Then only these go: a polite opening (“could you please”, “thanks in
+   advance for”) and the dash after a greeting, quotes
    around the whole sentence, and a `. , ; : ! ?` stuck to the end of its last word outside code.
    Every other word stays as written: articles, a “not” or “never”, code, operators, paths, URLs
    and quotes. It is cut at whole words to 8 words and 60 characters, and a cut never leaves it
@@ -333,7 +336,9 @@ version it started with. A run:
    random bits) in both, which makes two runs sharing a name vanishingly unlikely. The title keeps
    any script; the branch is lowercase ASCII, because Paseo accepts no other worktree branch, so
    accents are folded and a task with no ASCII rendering (in Chinese, say) leaves the branch only
-   the workflow and the run. Both are on the run
+   the workflow and the run. In the branch the workflow (up to 24 characters) and the task (up to
+   40) are cut between the parts of their words (“dependency-vulnerability-review” keeps
+   `dependency-vulnerability`), and a first part longer than that is truncated, never dropped. Both are on the run
    (`workflow_runs.workspace_title`, `branch`) and its page. The orchestrator's first message is its standing
    instructions, the input, the list of steps, the commands below, and the first step.
 3. **The orchestrator moves through the steps.** It never does the work itself: it starts

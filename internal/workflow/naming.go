@@ -11,7 +11,8 @@ import (
 // A run's names: its workspace title "<workflow>: <task> · <run>" and its worktree branch
 // "wf-<workflow>-<task>-<run>". <task> is the task's first real sentence as written: lines and
 // sentences that are only a heading, a greeting ("Hi!", "Hey Claude,") or a pleasantry
-// ("Thanks!", "Hope you're well.") are skipped. Then only a polite opening ("could you please")
+// ("Thanks!", "Hope you're well.") are skipped, and one that opens with a pleasantry and goes on
+// loses only that clause ("Thanks for the fix, but …"). Then only a polite opening ("could you please")
 // and the dash after a greeting, quotes around the whole sentence, and a . , ; : ! or ? stuck to
 // the end of its last word outside code go; every other word stays as written (articles,
 // negations, code, operators, paths, URLs, quotes), so the name never says less or the opposite
@@ -82,7 +83,7 @@ func taskWords(input string) []string {
 			sentences = sentences[1:]
 		}
 		if len(sentences) > 0 {
-			sentence = sentences[0]
+			sentence = unsocial(sentences[0])
 			break
 		}
 	}
@@ -250,8 +251,13 @@ func hasPrefix(words []string, phrase []string) bool {
 var greetings = phrases("hi", "hi there", "hey", "hey there", "hello", "hello there", "dear", "greetings",
 	"good morning", "good afternoon", "good evening")
 
-// pleasantries open a sentence that is only social, however long.
-var pleasantries = phrases("hope", "i hope", "thanks", "thank you", "i appreciate", "cheers")
+// pleasantries open a social clause: thanks, a hope, an apology. It runs to the first clause
+// break ("Thanks for the fix, but …"); a sentence with none is only social ("Thanks!").
+var pleasantries = phrases("thanks", "thank you", "many thanks", "cheers", "appreciate", "i appreciate",
+	"much appreciated", "appreciated", "hope", "i hope", "sorry", "apologies")
+
+// conjunctions join a social clause to the task after it ("…, but login still crashes").
+var conjunctions = map[string]bool{"but": true, "and": true, "so": true, "however": true, "though": true, "yet": true, "anyway": true}
 
 func phrases(ps ...string) [][]string {
 	var out [][]string
@@ -261,20 +267,44 @@ func phrases(ps ...string) [][]string {
 	return out
 }
 
-// social reports whether a sentence is only social: a greeting (with at most a name), a hope,
-// thanks.
+// social reports whether a sentence is only social: a greeting (with at most a name), or
+// pleasantries with nothing after them.
 func social(s []string) bool {
 	for _, p := range greetings {
 		if hasPrefix(s, p) && len(s) <= len(p)+1 {
 			return true
 		}
 	}
-	for _, p := range pleasantries {
-		if hasPrefix(s, p) {
-			return true
+	return len(unsocial(s)) == 0
+}
+
+// unsocial is s without the social clauses it opens with ("Thanks, hope you're well, and …"),
+// each through its clause break and a conjunction after it; nil when nothing else is in it.
+func unsocial(s []string) []string {
+	if hasPrefix(s, []string{"thanks", "in", "advance", "for"}) || hasPrefix(s, []string{"thank", "you", "in", "advance", "for"}) {
+		return s // thanks for the task itself: dropOpening leaves the task
+	}
+	for slices.ContainsFunc(pleasantries, func(p []string) bool { return hasPrefix(s, p) }) {
+		i := slices.IndexFunc(s, clauseBreak)
+		if i < 0 {
+			return nil
+		}
+		s = s[i+1:]
+		for len(s) > 0 && (conjunctions[openingWord(s[0])] || strings.Trim(s[0], "-–—") == "") {
+			s = s[1:]
 		}
 	}
-	return false
+	if len(s) == 0 {
+		return nil
+	}
+	return s
+}
+
+// clauseBreak reports whether w ends a clause: a comma, semicolon, colon or dash after it, or a
+// dash alone.
+func clauseBreak(w string) bool {
+	return strings.HasSuffix(w, ",") || strings.HasSuffix(w, ";") || strings.HasSuffix(w, ":") ||
+		strings.HasSuffix(w, "—") || strings.HasSuffix(w, "–") || strings.Trim(w, "-") == ""
 }
 
 // openings are what a request may open with that says nothing of the task.
@@ -284,7 +314,8 @@ var openings = func() [][]string {
 		"good morning", "good afternoon", "good evening", "ok", "okay", "so",
 		"please", "pls", "kindly", "can you", "could you", "would you", "will you", "can we", "could we",
 		"i want you to", "i'd like you to", "i would like you to", "i need you to", "go ahead and", "make sure to",
-		"when you get a chance", "when you have a moment", "if you can", "if possible", "thanks", "thank you"} {
+		"when you get a chance", "when you have a moment", "if you can", "if possible",
+		"thanks in advance for", "thank you in advance for"} {
 		out = append(out, strings.Fields(p))
 	}
 	return out
@@ -333,29 +364,45 @@ var fold = strings.NewReplacer("à", "a", "á", "a", "â", "a", "ã", "a", "ä",
 
 var nonSlug = regexp.MustCompile(`[^a-z0-9]+`)
 
-// slug is words as lowercase ASCII joined by hyphens, as many whole words as fit in max bytes,
-// and, when that cuts it short, not ending on a connective.
+// slug is words as lowercase ASCII joined by hyphens: as many of their parts (split at anything
+// but a letter or digit, so "dependency-vulnerability-review" is three) as fit in max bytes, and,
+// when that cuts it short, not ending on a connective outside code. A first part longer than max
+// is truncated to max, so the slug is never empty while there is ASCII to name it by.
 func slug(words []string, max int) string {
-	var parts, kept []string
-	n, cut := 0, false
+	type part struct {
+		s    string
+		code bool
+	}
+	var parts []part
 	for _, w := range words {
-		s := strings.Trim(nonSlug.ReplaceAllString(fold.Replace(strings.ToLower(w)), "-"), "-")
-		if s == "" {
-			continue
+		for _, s := range strings.Split(nonSlug.ReplaceAllString(fold.Replace(strings.ToLower(w)), "-"), "-") {
+			if s != "" {
+				parts = append(parts, part{s, strings.Contains(w, "`")})
+			}
 		}
-		size := len(s)
-		if len(parts) > 0 {
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	if len(parts[0].s) > max {
+		return parts[0].s[:max]
+	}
+	var kept []string
+	n, cut := 0, false
+	for _, p := range parts {
+		size := len(p.s)
+		if len(kept) > 0 {
 			size++
 		}
 		if n+size > max {
 			cut = true
 			break
 		}
-		parts, kept = append(parts, s), append(kept, w)
+		kept = append(kept, p.s)
 		n += size
 	}
-	if cut {
-		parts = parts[:len(trimConnectives(kept))]
+	for cut && len(kept) > 1 && !parts[len(kept)-1].code && connectives[kept[len(kept)-1]] {
+		kept = kept[:len(kept)-1]
 	}
-	return strings.Join(parts, "-")
+	return strings.Join(kept, "-")
 }
