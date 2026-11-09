@@ -389,6 +389,10 @@ func TestWorkflowPages(t *testing.T) {
 	if ed.Code != http.StatusOK || !strings.Contains(ed.Body.String(), "Meets the request") || !strings.Contains(ed.Body.String(), `"version":1`) {
 		t.Errorf("editor = %d", ed.Code)
 	}
+	// a fixed project is picked from the repositories the account's hosts reported
+	if !strings.Contains(ed.Body.String(), `const repos = [{"directory":"/w/app","project":"example/app","hosts":["host-1"]}]`) {
+		t.Errorf("the editor should offer the hosts' repositories")
+	}
 	if rec := get(t, h, "/workflows/00000000-0000-4000-8000-000000000000", nil); rec.Code != http.StatusNotFound {
 		t.Errorf("no such workflow = %d", rec.Code)
 	}

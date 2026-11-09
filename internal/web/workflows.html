@@ -234,6 +234,10 @@ setInterval(async () => {
 <script>
 "use strict";
 const saved = {{json .Workflow}};
+// the repositories the account's hosts reported: a fixed project is picked from these
+const repos = {{json .Repos}};
+let typingDir = false; // "Another directory…" chosen: the directory is typed
+const repoLabel = (r) => `${r.project || r.directory.split("/").pop()} · ${r.directory} (${r.hosts.join(", ")})`;
 let wf = structuredClone(saved), sel = "__trigger", json = false, dirty = false;
 const $ = (s, el = document) => el.querySelector(s), $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -267,7 +271,7 @@ function fixedCards() {
   return card("__trigger", "Trigger", d.trigger === "task" ? "Task in Intelligence" : "By hand",
       d.trigger === "task" ? "A task submitted on the Workflows page. It becomes " + V("input") + "." : "Someone presses Run and types what it should do.") +
     `<div class="link"></div>` +
-    card("__project", "Before the orchestrator", "Find the project", p.mode === "fixed" ? `Always <span class="mono">${esc(p.directory)}</span>.` :
+    card("__project", "Before the orchestrator", "Find the project", p.mode === "fixed" ? `Always ${esc(repos.find((r) => r.directory === p.directory)?.project || "")} <span class="mono">${esc(p.directory)}</span>.` :
       `An agent (${esc(p.provider)}${p.model ? " · " + esc(p.model) : ""}) picks one of the host's repositories, or none. Then the worktree is made.`) +
     `<div class="link"></div>` +
     card("__orch", "In the worktree", "Orchestrator", `${esc(o.provider)}${o.model ? " · " + esc(o.model) : ""}${o.thinking ? " · " + esc(o.thinking) : ""}. ` +
@@ -282,6 +286,21 @@ function stepCards() {
     ${i < def().steps.length - 1 ? `<div class="link"><button class="add" data-insert="${i + 1}" title="Add a step here">+</button></div>` : ""}`).join("") +
     `<p class="hint" style="margin:.8rem 0 0 .2rem">After the last step, <code>next</code> finishes the run.</p>
     <div style="margin-top:.6rem;display:flex;gap:.4rem">${Object.keys(KIND).map((k) => `<button class="btn sm ghost" data-append="${k}">+ ${KIND[k]}</button>`).join("")}</div>`;
+}
+
+// repoPicker is the repositories as a dropdown, with the one saved (if no host reports it) and
+// "Another directory…", which shows a field to type it.
+function repoPicker(p) {
+  const known = repos.some((r) => r.directory === p.directory);
+  const other = typingDir || (p.directory && !known);
+  const options = repos.map((r) => [r.directory, repoLabel(r)]);
+  if (!repos.length) return `<label>Its main checkout on the host</label><input data-p="directory" value="${esc(p.directory)}" placeholder="/path/to/the/repository">
+    <p class="hint">No host has reported a repository yet: type its directory.</p>`;
+  return `<label>The repository</label><select id="repo-pick">
+      ${!p.directory && !other ? `<option value="" selected disabled>Pick a repository</option>` : ""}
+      ${opts(options, other ? "" : p.directory)}<option value="__other"${other ? " selected" : ""}>Another directory…</option></select>
+    ${other ? `<label>Its main checkout on the host</label><input data-p="directory" value="${esc(p.directory)}" placeholder="/path/to/the/repository">` : ""}
+    <p class="hint">Each run makes a worktree of it on the host it runs on, so pick one that host has.</p>`;
 }
 
 function inspector() {
@@ -299,7 +318,7 @@ function inspector() {
     const p = d.project;
     return host("Find the project", "Runs before the orchestrator, which lives in the worktree", `<label>The project is</label>
       <select data-p="mode">${opts([["match", "Picked by an agent (or none)"], ["fixed", "Always one repository"]], p.mode)}</select>
-      ${p.mode === "fixed" ? `<label>Its main checkout on the host</label><input data-p="directory" value="${esc(p.directory)}" placeholder="/path/to/the/repository">`
+      ${p.mode === "fixed" ? repoPicker(p)
         : `${agentFields(p, "p")}<label>What the agent is told</label><textarea data-p="instructions" class="prompt">${esc(p.instructions)}</textarea>
            <p class="hint">It also gets the task, the host's repositories, and how to answer.</p>`}
       <p class="hint">Then Intelligence makes a git worktree of the repository (or uses the home directory, for none) and starts the orchestrator in it.</p>`);
@@ -377,6 +396,12 @@ function bind() {
       if (card) { $(".ttl", card).textContent = s.title; $(".instr", card).innerHTML = vars(s.instructions); }
     });
   });
+  const pick = $("#repo-pick");
+  if (pick) pick.onchange = () => {
+    typingDir = pick.value === "__other";
+    def().project.directory = typingDir ? (repos.some((r) => r.directory === def().project.directory) ? "" : def().project.directory) : pick.value;
+    markDirty(true);
+  };
   on("d", def); on("p", () => def().project); on("o", () => def().orchestrator); on("s", () => def().steps.find((x) => x.id === sel));
   $$("#inspector [data-var]").forEach((b) => b.onclick = () => {
     const t = $("#inspector textarea.prompt"); const a = t.selectionStart, z = t.selectionEnd;

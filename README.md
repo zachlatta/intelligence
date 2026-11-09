@@ -523,6 +523,8 @@ origin (another site's request is refused with 403), and those with a body must 
   their runs. Without workflows, a button adds the starting one (`workflow.Starting`).
 - `GET /workflows/{id}`: the editor: the trigger, how the project is found, the orchestrator, and
   the steps (add, reorder, edit, remove), or the definition as JSON. Saving makes a new version.
+  A project that is always the same repository is picked from those the account's hosts reported
+  (their workspaces' `project_root`s), or typed.
 - `GET /workflow-runs/{id}`: a run: its project, the orchestrator and its sub-agents, each step's
   state and what happened in it, and, while it waits, the orchestrator's note with a reply box.
 - `POST /api/workflows` with `{"name", "description", "definition"}`: 201 `{"id", "version": 1}`;

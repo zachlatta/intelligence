@@ -413,6 +413,31 @@ func readBoxes(ctx context.Context, p *pgxpool.Pool) ([]string, error) {
 	return pgx.CollectRows(rows, pgx.RowTo[string])
 }
 
+// repoOption is a repository a workflow can always use: a main checkout some of the account's
+// hosts reported (their workspaces' project root).
+type repoOption struct {
+	Directory string   `json:"directory"`
+	Project   string   `json:"project"`
+	Hosts     []string `json:"hosts"`
+}
+
+func readRepos(ctx context.Context, p *pgxpool.Pool) ([]repoOption, error) {
+	rows, err := p.Query(ctx, `SELECT project_root, max(project), array_agg(DISTINCT host ORDER BY host) FROM workspaces
+		WHERE project_root <> '' GROUP BY project_root ORDER BY lower(max(project)), project_root`)
+	if err != nil {
+		return nil, err
+	}
+	out, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (repoOption, error) {
+		var r repoOption
+		err := row.Scan(&r.Directory, &r.Project, &r.Hosts)
+		return r, err
+	})
+	if out == nil {
+		out = []repoOption{}
+	}
+	return out, err
+}
+
 var workflowIDRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 func renderWorkflows(w http.ResponseWriter, name string, data map[string]any) {
@@ -479,7 +504,12 @@ func workflowPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		renderWorkflows(w, "editor", map[string]any{"Version": cfg.Version, "Workflow": wfs[0], "Hosts": hosts})
+		repos, err := readRepos(r.Context(), v.pool)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		renderWorkflows(w, "editor", map[string]any{"Version": cfg.Version, "Workflow": wfs[0], "Hosts": hosts, "Repos": repos})
 	}
 }
 
