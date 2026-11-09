@@ -472,6 +472,13 @@ The denial asks the agent to rewrite the authorized step: Write/Edit for multili
 simple shell commands, and `git -C`. Generated workflow instructions carry the same guidance,
 including for saved definitions. This does not expand the agent's task or waive approvals.
 
+When investigating a stalled workflow, check the host's `client_version` against the deployed
+server before assuming this recovery is active. Check both the orchestrator and its workers
+for pending permissions, then follow their audit rows and transcripts: a cleared prompt proves
+the request disappeared, while a completed tool or workflow move proves work resumed. An idle
+orchestrator can be waiting on a live background command whose completion starts its next turn;
+idle status alone is not evidence of abandonment and does not trigger an automatic reminder.
+
 Each attempt first stores a `permission_resolutions` row through the authenticated host stream.
 The row is account-scoped and readable through `/api/sql`; it survives agent removal.
 `pending` means the audit landed before contacting the daemon; `denied` means the daemon
