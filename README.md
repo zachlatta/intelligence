@@ -318,15 +318,18 @@ version it started with. A run:
    `create_workspace`: a git worktree of the repository (or the home directory, for none) with the
    orchestrator in it. Its names say which workflow runs, what for and which run: the workspace is
    `<workflow>: <task> · <run>` and the branch `wf-<workflow>-<task>-<run>`. The task is the
-   input's first sentence that is more than a greeting, on its first line that is more than a
-   heading (`Task:`, `## Goal`), nearly as written: only a polite opening (“could you please”) and
-   articles go, so a “not” or “never” always stays, and it is cut at whole words. “Could you please
-   fix the login page?” in Factory Task is the workspace “Factory Task: Fix login page · 1bf01c44”
-   on branch `wf-factory-task-fix-login-page-1bf01c44a2b3`. The run is its id's first 8 hex digits
-   in the title and first 12 (48 random bits) in the branch, which makes two runs sharing a branch
-   vanishingly unlikely. The title keeps any script; the branch is lowercase ASCII, because Paseo
-   accepts no other worktree branch, so accents are folded and a task with no ASCII rendering (in
-   Chinese, say) leaves the branch only the workflow and the run. Both are on the run
+   input's first real sentence, as written (code and its punctuation included): lines and sentences
+   that are only a heading (`Task:`, `## Goal`), a greeting (“Hi!”, “Hey Claude,”, “Good morning —”)
+   or a pleasantry (“Thanks!”, “Hope you're well.”) are skipped, and only a polite opening (“could
+   you please”) and the articles go, so a “not” or “never” always stays. It is cut at whole words to
+   8 words and 60 characters; a longer first word, or a script written without spaces, is cut to 60
+   characters ending in “…”. In Factory Task, “Hi!” on one line and “Could you please fix the login
+   page?” on the next is the workspace “Factory Task: Fix login page · 1bf01c44a2b3” on branch
+   `wf-factory-task-fix-login-page-1bf01c44a2b3`. The run is its id's first 12 hex digits (48
+   random bits) in both, which makes two runs sharing a name vanishingly unlikely. The title keeps
+   any script; the branch is lowercase ASCII, because Paseo accepts no other worktree branch, so
+   accents are folded and a task with no ASCII rendering (in Chinese, say) leaves the branch only
+   the workflow and the run. Both are on the run
    (`workflow_runs.workspace_title`, `branch`) and its page. The orchestrator's first message is its standing
    instructions, the input, the list of steps, the commands below, and the first step.
 3. **The orchestrator moves through the steps.** It never does the work itself: it starts

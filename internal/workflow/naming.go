@@ -2,15 +2,20 @@ package workflow
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 )
 
 // A run's names: its workspace title "<workflow>: <task> · <run>" and its worktree branch
-// "wf-<workflow>-<task>-<run>". <task> is the task's first sentence nearly as written (only
-// greetings, a polite opening and articles go, so "not", "no", "never" and "without" always stay
-// and the name never says the opposite of the task), cut at whole words.
+// "wf-<workflow>-<task>-<run>". <task> is the task's first real sentence as written, code and its
+// punctuation included: lines and sentences that are only a heading, a greeting ("Hi!", "Hey
+// Claude,") or a pleasantry ("Thanks!", "Hope you're well.") are skipped, and only a polite
+// opening ("could you please") and articles go, so "not", "no", "never" and "without" always stay
+// and the name never says the opposite of the task. It is cut at whole words to titleWords words
+// and titleMax characters; a longer first word, or a script written without spaces, is cut to
+// titleMax characters ending in "…".
 //
 // The title keeps any script. The branch keeps lowercase ASCII only, because the Paseo daemon
 // refuses any other worktree branch (validateBranchSlug in @getpaseo/protocol: [a-z0-9-/], no
@@ -18,9 +23,8 @@ import (
 // (a Chinese task) leave the branch with just the workflow and the run, while the title, stored on
 // the run, keeps the original.
 //
-// <run> is the run id's first 8 hex digits in the title, enough to tell runs apart by eye, and
-// its first 12 (48 random bits of a version 4 UUID) in the branch, so two runs sharing a branch is
-// vanishingly unlikely.
+// <run> is the run id's first 12 hex digits (48 random bits of a version 4 UUID) in both, so
+// two runs sharing a name is vanishingly unlikely.
 const (
 	titleWords  = 8  // the task's words in a title, at most
 	titleMax    = 60 // and its characters
@@ -30,18 +34,19 @@ const (
 
 // runNames are a run's workspace title and worktree branch.
 //
-//	"Factory Task", "Please fix the login page" -> "Factory Task: Fix login page · 1bf01c44", "wf-factory-task-fix-login-page-1bf01c44a2b3"
+//	"Factory Task", "Please fix the login page" -> "Factory Task: Fix login page · 1bf01c44a2b3", "wf-factory-task-fix-login-page-1bf01c44a2b3"
 func runNames(id, workflow, input string) (wsTitle, branch string) {
 	hex := strings.ReplaceAll(id, "-", "")
 	words := taskWords(input)
 	task := strings.Join(words, " ")
-	if r, n := utf8.DecodeRuneInString(task); n > 0 {
+	if len(words) > 0 && plainWord(words[0]) {
+		r, n := utf8.DecodeRuneInString(task)
 		task = string(unicode.ToUpper(r)) + task[n:]
 	}
 	if task == "" {
 		task = title(input)
 	}
-	wsTitle = task + " · " + hex[:8]
+	wsTitle = task + " · " + hex[:12]
 	if workflow = strings.TrimSpace(workflow); workflow != "" {
 		wsTitle = workflow + ": " + wsTitle
 	}
@@ -54,31 +59,50 @@ func runNames(id, workflow, input string) (wsTitle, branch string) {
 	return wsTitle, branch
 }
 
-// taskWords are the words naming input's task: its first sentence that is more than a
-// greeting, on its first line that is more than a heading, without a polite opening or articles,
-// cut to titleWords words and titleMax characters at whole words.
+// taskWords are the words naming input's task, as written: its first sentence that is more
+// than a greeting or pleasantry, on its first line that is more than a heading or a greeting,
+// without a polite opening or articles, cut to titleWords words and titleMax characters at whole
+// words. A first word longer than titleMax (or a script written without spaces) is cut and
+// marked with "…".
 func taskWords(input string) []string {
-	var sentence []string
+	var sentence, fallback []string
 	for line := range strings.Lines(input) {
 		line = taskLine(line)
 		if line == "" {
 			continue
 		}
 		sentences := splitSentences(strings.Fields(line))
-		for len(sentences) > 1 && pleasantry(sentences[0]) {
+		if fallback == nil {
+			fallback = sentences[0]
+		}
+		for len(sentences) > 0 && social(sentences[0]) {
 			sentences = sentences[1:]
 		}
-		sentence = sentences[0]
-		break
+		if len(sentences) > 0 {
+			sentence = sentences[0]
+			break
+		}
 	}
-	sentence = dropOpening(sentence)
+	if sentence == nil {
+		sentence = fallback // nothing but greetings: the first one stands in
+	}
+	var words []string
+	for _, w := range dropOpening(sentence) {
+		if !article[lowerWord(w)] {
+			words = append(words, w)
+		}
+	}
+	words = trimPunctuation(words)
+	if len(words) == 0 {
+		return nil
+	}
+	words[0] = strings.TrimLeft(words[0], `"'“‘`)
+	if r := []rune(words[0]); len(r) > titleMax {
+		return []string{string(r[:titleMax-1]) + "…"}
+	}
 	var out []string
 	n := 0
-	for _, w := range sentence {
-		w = strings.TrimFunc(w, notWordRune)
-		if w == "" || article[strings.ToLower(w)] {
-			continue
-		}
+	for _, w := range words {
 		size := utf8.RuneCountInString(w)
 		if len(out) > 0 {
 			size++
@@ -89,7 +113,22 @@ func taskWords(input string) []string {
 		out = append(out, w)
 		n += size
 	}
-	return trimConnectives(out)
+	out = trimConnectives(trimPunctuation(out))
+	if len(out) > 0 {
+		out[len(out)-1] = strings.TrimRight(out[len(out)-1], `.,;:!?"”’'`)
+	}
+	return out
+}
+
+// trimPunctuation is words without the words at either end that are only punctuation ("—").
+func trimPunctuation(words []string) []string {
+	for len(words) > 0 && lowerWord(words[0]) == "" {
+		words = words[1:]
+	}
+	for len(words) > 0 && lowerWord(words[len(words)-1]) == "" {
+		words = words[:len(words)-1]
+	}
+	return words
 }
 
 var (
@@ -114,6 +153,11 @@ func taskLine(line string) string {
 		return ""
 	}
 	return line
+}
+
+// plainWord reports whether w is letters only (with apostrophes, as in "don't"), not code like "go.mod".
+func plainWord(w string) bool {
+	return !strings.ContainsFunc(w, func(r rune) bool { return !unicode.IsLetter(r) && r != '\'' && r != '’' })
 }
 
 func notWordRune(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) }
@@ -151,10 +195,31 @@ func hasPrefix(words []string, phrase []string) bool {
 	return true
 }
 
-// pleasantry reports whether a sentence is only social: a greeting, a hope, thanks.
-func pleasantry(s []string) bool {
-	for _, p := range [][]string{{"hi"}, {"hey"}, {"hello"}, {"dear"}, {"greetings"}, {"good", "morning"}, {"good", "afternoon"},
-		{"good", "evening"}, {"hope"}, {"i", "hope"}, {"thanks"}, {"thank", "you"}, {"i", "appreciate"}} {
+// greetings open a message; a sentence of a greeting and at most a name ("Hey Claude,") is only
+// social.
+var greetings = phrases("hi", "hi there", "hey", "hey there", "hello", "hello there", "dear", "greetings",
+	"good morning", "good afternoon", "good evening")
+
+// pleasantries open a sentence that is only social, however long.
+var pleasantries = phrases("hope", "i hope", "thanks", "thank you", "i appreciate", "cheers")
+
+func phrases(ps ...string) [][]string {
+	var out [][]string
+	for _, p := range ps {
+		out = append(out, strings.Fields(p))
+	}
+	return out
+}
+
+// social reports whether a sentence is only social: a greeting (with at most a name), a hope,
+// thanks.
+func social(s []string) bool {
+	for _, p := range greetings {
+		if hasPrefix(s, p) && len(s) <= len(p)+1 {
+			return true
+		}
+	}
+	for _, p := range pleasantries {
 		if hasPrefix(s, p) {
 			return true
 		}
@@ -168,19 +233,25 @@ var openings = func() [][]string {
 	for _, p := range []string{"hi there", "hey there", "hello there", "hi", "hey", "hello", "ok", "okay", "so",
 		"please", "pls", "kindly", "can you", "could you", "would you", "will you", "can we", "could we",
 		"i want you to", "i'd like you to", "i would like you to", "i need you to", "go ahead and", "make sure to",
-		"when you get a chance", "when you have a moment", "if you can", "if possible"} {
+		"when you get a chance", "when you have a moment", "if you can", "if possible", "thanks", "thank you"} {
 		out = append(out, strings.Fields(p))
 	}
 	return out
 }()
 
-// dropOpening is s without the polite openings it starts with.
+// dropOpening is s without the polite openings it starts with, and the name a greeting
+// addresses ("Hey Claude, can you…").
 func dropOpening(s []string) []string {
 	for again := true; again; {
 		again = false
 		for _, p := range openings {
 			if len(s) > len(p) && hasPrefix(s, p) {
+				greeted := slices.ContainsFunc(greetings, func(g []string) bool { return slices.Equal(g, p) })
+				named := !strings.HasSuffix(s[len(p)-1], ",") && strings.HasSuffix(s[len(p)], ",")
 				s, again = s[len(p):], true
+				if greeted && named && len(s) > 1 {
+					s = s[1:]
+				}
 				break
 			}
 		}

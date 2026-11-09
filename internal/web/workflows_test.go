@@ -265,8 +265,9 @@ func TestAFixedProjectStartsTheOrchestratorAtOnce(t *testing.T) {
 	var wa hostclient.CreateWorkspaceArgs
 	json.Unmarshal(ws.Args, &wa)
 	// the workspace and branch name the workflow and the task, and the branch the run
-	wantTitle := "Task from Intelligence: Fix login page · " + run[:8]
-	wantBranch := "wf-task-from-intelligence-fix-login-page-" + strings.ReplaceAll(run, "-", "")[:12]
+	hex := strings.ReplaceAll(run, "-", "")[:12]
+	wantTitle := "Task from Intelligence: Fix login page · " + hex
+	wantBranch := "wf-task-from-intelligence-fix-login-page-" + hex
 	if ws.Kind != hostclient.CreateWorkspaceKind || wa.Cwd != "/w/app" || wa.Title != wantTitle || wa.Branch != wantBranch {
 		t.Fatalf("command = %s %+v", ws.Kind, wa)
 	}
@@ -292,7 +293,7 @@ func TestNoProjectRunsTheOrchestratorInTheHomeDirectory(t *testing.T) {
 	var wa hostclient.CreateWorkspaceArgs
 	json.Unmarshal(ws.Args, &wa)
 	if ws.Kind != hostclient.CreateWorkspaceKind || wa.Cwd != "~" || wa.Worktree || wa.Branch != "" || wa.Agent == nil ||
-		wa.Title != "Task from Intelligence: What did we pay for hosting in October · "+run[:8] {
+		wa.Title != "Task from Intelligence: What did we pay for hosting in October · "+strings.ReplaceAll(run, "-", "")[:12] {
 		t.Fatalf("command = %s %+v", ws.Kind, wa)
 	}
 }
