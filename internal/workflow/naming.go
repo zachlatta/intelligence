@@ -11,8 +11,9 @@ import (
 // A run's names: its workspace title "<workflow>: <task> · <run>" and its worktree branch
 // "wf-<workflow>-<task>-<run>". <task> is the task's first real sentence as written: lines and
 // sentences that are only a heading, a greeting ("Hi!", "Hey Claude,") or a pleasantry
-// ("Thanks!", "Hope you're well.") are skipped, and one that opens with a pleasantry and goes on
-// loses only that clause ("Thanks for the fix, but …"). Then only a polite opening ("could you please")
+// from the closed list in pleasantries ("Thanks!", "Hope you're well.") are skipped, and one that
+// opens with a listed pleasantry before a clause break loses only that ("Thanks for the fix, but
+// …"); anything not on the list is kept. Then only a polite opening ("could you please")
 // and the dash after a greeting, quotes around the whole sentence, and a . , ; : ! or ? stuck to
 // the end of its last word outside code go; every other word stays as written (articles,
 // negations, code, operators, paths, URLs, quotes), so the name never says less or the opposite
@@ -251,13 +252,35 @@ func hasPrefix(words []string, phrase []string) bool {
 var greetings = phrases("hi", "hi there", "hey", "hey there", "hello", "hello there", "dear", "greetings",
 	"good morning", "good afternoon", "good evening")
 
-// pleasantries open a social clause: thanks, a hope, an apology. It runs to the first clause
-// break ("Thanks for the fix, but …"); a sentence with none is only social ("Thanks!").
-var pleasantries = phrases("thanks", "thank you", "many thanks", "cheers", "appreciate", "i appreciate",
-	"much appreciated", "appreciated", "hope", "i hope", "sorry", "apologies")
+// pleasantries is the closed list of social phrases: a sentence made only of these (and of
+// "and", "but", "so") is skipped, and one opening a sentence before a clause break is dropped.
+// Anything not on the list is kept: the list says what is social, never what might be.
+var pleasantries = phrases(
+	"thanks", "thank you", "thanks so much", "thank you so much", "thanks a lot", "thank you very much",
+	"many thanks", "much appreciated", "appreciate it", "i appreciate it", "cheers", "ty",
+	"thanks for the fix", "thanks for the help", "thanks for your help", "thanks for all your help",
+	"thanks so much for all your help", "thank you for your help", "thank you for all your help",
+	"thanks for the update", "thank you for the update",
+	"hope you're well", "hope you are well", "i hope you're well", "i hope you are well",
+	"hope you're doing well", "hope you are doing well", "i hope you're doing well", "i hope you are doing well",
+	"hope all is well", "i hope all is well", "hope your week is going well", "i hope your week is going well",
+	"hope you had a good weekend", "i hope you had a good weekend", "hope this helps", "i hope this helps",
+	"sorry to bother you", "sorry for the noise", "sorry for the delay", "sorry for the late reply",
+	"apologies for the delay", "apologies for the noise")
+
+// hopeYouCan opens a request worded as a hope ("I hope you can fix…"): the request follows.
+var hopeYouCan = func() [][]string {
+	var out [][]string
+	for _, h := range []string{"hope", "i hope", "hoping", "i'm hoping"} {
+		for _, v := range []string{"can", "could", "will", "would"} {
+			out = append(out, strings.Fields(h+" you "+v))
+		}
+	}
+	return out
+}()
 
 // conjunctions join a social clause to the task after it ("…, but login still crashes").
-var conjunctions = map[string]bool{"but": true, "and": true, "so": true, "however": true, "though": true, "yet": true, "anyway": true}
+var conjunctions = map[string]bool{"but": true, "and": true, "so": true, "also": true}
 
 func phrases(ps ...string) [][]string {
 	var out [][]string
@@ -267,9 +290,13 @@ func phrases(ps ...string) [][]string {
 	return out
 }
 
-// social reports whether a sentence is only social: a greeting (with at most a name), or
-// pleasantries with nothing after them.
+// social reports whether a sentence is only social: a greeting with at most a name ("Hey
+// Claude,"), only listed pleasantries ("Thanks so much!", "Thanks, hope you're well."), or no
+// words at all ("🙏").
 func social(s []string) bool {
+	if !slices.ContainsFunc(s, func(w string) bool { return socialWord(w) != "" }) {
+		return true
+	}
 	for _, p := range greetings {
 		if hasPrefix(s, p) && len(s) <= len(p)+1 {
 			return true
@@ -278,33 +305,52 @@ func social(s []string) bool {
 	return len(unsocial(s)) == 0
 }
 
-// unsocial is s without the social clauses it opens with ("Thanks, hope you're well, and …"),
-// each through its clause break and a conjunction after it; nil when nothing else is in it.
-func unsocial(s []string) []string {
-	if hasPrefix(s, []string{"thanks", "in", "advance", "for"}) || hasPrefix(s, []string{"thank", "you", "in", "advance", "for"}) {
-		return s // thanks for the task itself: dropOpening leaves the task
-	}
-	for slices.ContainsFunc(pleasantries, func(p []string) bool { return hasPrefix(s, p) }) {
-		i := slices.IndexFunc(s, clauseBreak)
-		if i < 0 {
-			return nil
+// socialWord is w compared with the pleasantries: lowercase, with ’ as ', without the marks
+// around it; "" for a token of no letters or digits (a dash, an emoji).
+func socialWord(w string) string {
+	return strings.ToLower(strings.TrimFunc(strings.ReplaceAll(w, "’", "'"), func(r rune) bool { return notWordRune(r) && r != '\'' }))
+}
+
+// pleasantryAt is how many words of s, from its start, the longest listed pleasantry takes; 0
+// for none.
+func pleasantryAt(s []string) int {
+	best := 0
+	for _, p := range pleasantries {
+		if len(p) > best && socialPrefix(s, p) {
+			best = len(p)
 		}
-		s = s[i+1:]
-		for len(s) > 0 && (conjunctions[openingWord(s[0])] || strings.Trim(s[0], "-–—") == "") {
+	}
+	return best
+}
+
+// socialPrefix reports whether s opens with phrase, compared as socialWords.
+func socialPrefix(s, phrase []string) bool {
+	return len(s) >= len(phrase) && slices.EqualFunc(phrase, s[:len(phrase)], func(p, w string) bool { return p == socialWord(w) })
+}
+
+// unsocial is s without the listed pleasantries it opens with, each only where a clause break
+// (a comma, semicolon, colon or dash), a conjunction or the sentence's end follows it, and
+// without a hope worded as a request ("I hope you can"); nil when nothing else is in s.
+func unsocial(s []string) []string {
+	for len(s) > 0 {
+		for _, p := range hopeYouCan {
+			if len(s) > len(p) && socialPrefix(s, p) {
+				return s[len(p):]
+			}
+		}
+		n := pleasantryAt(s)
+		if n == 0 {
+			return s
+		}
+		if n < len(s) && !strings.ContainsAny(s[n-1][len(s[n-1])-1:], ",;:—–-") && socialWord(s[n]) != "" && !conjunctions[socialWord(s[n])] {
+			return s // a listed phrase going on into more ("Thanks page shows…")
+		}
+		s = s[n:]
+		for len(s) > 0 && (socialWord(s[0]) == "" || conjunctions[socialWord(s[0])]) {
 			s = s[1:]
 		}
 	}
-	if len(s) == 0 {
-		return nil
-	}
-	return s
-}
-
-// clauseBreak reports whether w ends a clause: a comma, semicolon, colon or dash after it, or a
-// dash alone.
-func clauseBreak(w string) bool {
-	return strings.HasSuffix(w, ",") || strings.HasSuffix(w, ";") || strings.HasSuffix(w, ":") ||
-		strings.HasSuffix(w, "—") || strings.HasSuffix(w, "–") || strings.Trim(w, "-") == ""
+	return nil
 }
 
 // openings are what a request may open with that says nothing of the task.

@@ -318,14 +318,19 @@ version it started with. A run:
    `create_workspace`: a git worktree of the repository (or the home directory, for none) with the
    orchestrator in it. Its names say which workflow runs, what for and which run: the workspace is
    `<workflow>: <task> · <run>` and the branch `wf-<workflow>-<task>-<run>`. The task is the
-   input's first real sentence, as written: lines and sentences that are only a heading (`Task:`,
-   `## Goal`), a greeting (“Hi!”, “Hey Claude,”, “Good morning —”) or a pleasantry (“Thanks!”,
-   “Hope you're well.”) are skipped (a full stop in code, in quotes or in “e.g.” ends no sentence).
-   A sentence that opens with a pleasantry and goes on loses only that clause, up to its comma,
-   colon or dash, and a “but” or “and” after it: “Thanks for the fix, but login still crashes.” is
-   “Login still crashes”. Then only these go: a polite opening (“could you please”, “thanks in
-   advance for”) and the dash after a greeting, quotes
-   around the whole sentence, and a `. , ; : ! ?` stuck to the end of its last word outside code.
+   input's first real sentence, as written. Skipped are lines that are only a heading (`Task:`,
+   `## Goal`) and sentences that are only a greeting with at most a name (“Hi!”, “Hey Claude,”,
+   “Good morning —”), only phrases from a closed list of pleasantries (`pleasantries` in
+   `internal/workflow/naming.go`: “Thanks!”, “Thank you so much.”, “Hope you're well.”, “Hope this
+   helps!”, “Sorry for the delay.”, joined by “and”, “but”, “so” or “also”), or no words at all (“🙏”); a
+   full stop in code, in quotes or in “e.g.” ends no sentence. A listed pleasantry opening a
+   sentence goes only when a comma, semicolon, colon, dash or one of those conjunctions follows it (“Thanks for
+   the fix, but login still crashes.” is “Login still crashes”), and a hope worded as a request
+   (“I hope you can”, “hoping you could”) goes before the request. Anything else is kept: “I hope
+   we can ship this today” and “Thanks page shows wrong totals” stay whole. Then only these go: a
+   polite opening (“could you please”, “thanks in advance for”) and the dash after a greeting,
+   quotes around the whole sentence, and a `. , ; : ! ?` stuck to the end of its last word outside
+   code.
    Every other word stays as written: articles, a “not” or “never”, code, operators, paths, URLs
    and quotes. It is cut at whole words to 8 words and 60 characters, and a cut never leaves it
    ending on “the” or “and”; a cut inside a code span closes it with “…`”, and a longer first word,
