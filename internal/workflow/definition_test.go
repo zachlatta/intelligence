@@ -158,6 +158,7 @@ func TestSavedWorkflowsKeepWorkersInsideTheirAssignedStep(t *testing.T) {
 		"Builders may edit, test and commit in the worktree",
 		"do not push, land, deploy or change external systems before the step that authorizes it",
 		"Follow this workflow's model choices",
+		"pass proposed edits and evidence to the landing step",
 		"After a successful ask, end your turn",
 		"his reply comes as your next message",
 	} {
