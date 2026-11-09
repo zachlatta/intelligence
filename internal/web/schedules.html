@@ -245,7 +245,7 @@ document.querySelectorAll("input[type=datetime-local][data-utc]").forEach((i) =>
   data-name="{{.S.Name}}" data-prompt="{{.S.Prompt}}" data-cron="{{.S.Cron}}" data-timezone="{{.S.Timezone}}"
   data-every="{{if .S.EveryMs}}{{everyText .S.EveryMs}}{{end}}" data-provider="{{.S.Provider}}" data-model="{{.S.Model}}"
   data-thinking="{{.S.Thinking}}" data-mode="{{.S.Mode}}" data-cwd="{{.S.Cwd}}" data-isolation="{{or .S.Isolation "local"}}"
-  data-archive="{{.S.ArchiveOnFinish}}" data-max-runs="{{if .S.MaxRuns}}{{.S.MaxRuns}}{{end}}" data-expires="{{localInput .S.ExpiresAt}}">
+  data-archive="{{.S.ArchiveOnFinish}}" data-max-runs="{{if .S.MaxRuns}}{{.S.MaxRuns}}{{end}}" data-expires="{{localInput .S.ExpiresAt}}"{{if .Dictation}} data-dictation="{{.Dictation}}"{{end}}>
   <label for="name">Name</label><input id="name" name="name" maxlength="200" value="{{.S.Name}}">
   <label for="prompt">Prompt</label><textarea id="prompt" name="prompt" required>{{.S.Prompt}}</textarea>
   {{template "cadencefields" .S}}
@@ -260,7 +260,7 @@ document.querySelectorAll("input[type=datetime-local][data-utc]").forEach((i) =>
   </div>
   {{template "catalog" .Catalog}}
   {{template "runfields" .S}}
-  <div class="form-actions"><button class="btn primary" type="submit">Save</button></div>
+  <div class="form-actions"><button class="btn primary" type="submit">Save</button>{{if .Dictation}}{{template "dictationbutton"}}{{end}}</div>
 </form>
 {{end}}
 <footer title="{{.Version}}">version {{short .Version}}</footer>
@@ -306,6 +306,16 @@ if (edit) {
   });
 }
 </script>
+{{if and (eq .S.Target "new-agent") .Dictation}}<script src="/dictation.js"></script>
+<script>
+(() => {
+  const save = edit.querySelector(".form-actions .primary");
+  dictation({ text: edit.prompt, tokenPath: edit.dataset.dictation, mic: document.getElementById("dictate"),
+    row: edit.querySelector(".form-actions"), label: () => save.textContent, send: () => edit.requestSubmit(),
+    warn: (msg) => say(msg, true) });
+})();
+</script>
+<style>#edit .dictation { margin-top: 1.4rem; }</style>{{end}}
 </body>
 </html>
 {{end}}

@@ -157,7 +157,8 @@ func TestWorkflowRunOffersDictationOnlyWithAKey(t *testing.T) {
 }
 
 // TestEveryTaskEntryPointOffersDictation: every form that creates a task or starts agent work (a
-// workflow task, a workflow run, a new agent, a new workspace, a new schedule) offers the shared
+// workflow task, a workflow run, a reply to a waiting run, a new agent, a new workspace, a new or
+// edited schedule) offers the shared
 // dictation button, loads the engine and wires it to that form's own text box; none does without a key.
 func TestEveryTaskEntryPointOffersDictation(t *testing.T) {
 	entries := []struct {
@@ -171,18 +172,33 @@ func TestEveryTaskEntryPointOffersDictation(t *testing.T) {
 		{"new workspace", "/hosts/host-1/workspaces/new", []string{`id="spawn"`, `text: form.prompt`}},
 		{"new schedule", "/hosts/host-1/schedules/new", []string{`id="schedule"`, `text: form.prompt`,
 			`send: () => form.requestSubmit()`}},
+		{"schedule edit", "/hosts/host-1/schedules/sch-nightly", []string{`id="edit"`, `text: edit.prompt`,
+			`send: () => edit.requestSubmit()`, `#edit .dictation`}},
+		{"reply to a waiting run", "/workflow-runs/{run}", []string{`<textarea id="reply"`, `text: reply`,
+			`send: () => send.click()`, `active: () => reply.isConnected`, `.reply-host .side[hidden] { display: none; }`,
+			`reply.classList.contains("listening")`}},
 	}
 	for _, key := range []string{"k", ""} {
-		h := dictationServer(t, key, "")
+		d := dbtest.New(t)
+		h := newServer(t, d, d.Owner, "v", func(c *Config) { c.AssemblyAIKey = key })
+		sendReport(t, h, sampleReport)
+		sendSchedules(t, h, sampleSchedules)
 		id := createWorkflow(t, h, workflow.Starting)
+		run := startRun(t, h, id, "Dictate everywhere")
+		if _, err := d.Owner.Exec(t.Context(), `UPDATE workflow_runs SET status = 'waiting', step = 4, note = 'Ship it?' WHERE id = $1`, run); err != nil {
+			t.Fatal(err)
+		}
 		for _, e := range entries {
-			rec := get(t, h, strings.Replace(e.path, "{id}", id, 1), nil)
+			rec := get(t, h, strings.NewReplacer("{id}", id, "{run}", run).Replace(e.path), nil)
 			if rec.Code != http.StatusOK {
 				t.Fatalf("%s: %d %s", e.name, rec.Code, rec.Body)
 			}
 			page := rec.Body.String()
+			if strings.Contains(page, "SpeechRecognition") {
+				t.Errorf("%s uses the browser's own speech recognition, not the shared dictation", e.name)
+			}
 			if key == "" {
-				if strings.Contains(page, `id="dictate"`) || strings.Contains(page, `/dictation.js`) {
+				if strings.Contains(page, `id="dictate"`) || strings.Contains(page, `/dictation.js`) || strings.Contains(page, `id="mic"`) {
 					t.Errorf("%s without a key offers dictation", e.name)
 				}
 				continue

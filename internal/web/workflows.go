@@ -589,7 +589,7 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 			}
 		}
 		renderWorkflows(w, "run", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Run": run, "Steps": stepViews(run, events),
-			"Agents": agents, "Before": before, "Events": events})
+			"Agents": agents, "Before": before, "Events": events, "Dictation": dictationPath(cfg)})
 	}
 }
 

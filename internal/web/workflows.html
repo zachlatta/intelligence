@@ -88,6 +88,7 @@
   .reply-host { display: flex; gap: .5rem; align-items: flex-start; margin-top: .75rem; }
   .reply-host textarea { min-height: 5rem; flex: 1; }
   .reply-host .side { display: flex; flex-direction: column; gap: .4rem; }
+  .reply-host .side[hidden] { display: none; }
   .mic.on { background: var(--red-bg); border-color: var(--red-line); color: var(--red); }
   .events { list-style: none; margin: .4rem 0 0; padding: 0; font-size: 12.5px; }
   .events li { padding: .15rem 0; color: var(--fg-2); white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -511,8 +512,8 @@ render();
 <div id="ask">{{if eq .Run.Status "waiting"}}
 <section class="card note"><div class="card-head"><h2>The orchestrator is asking you</h2><span class="meta grow">at {{(index .Run.Steps .Run.Step).Title}}</span></div>
   <div class="card-body"><div class="md" id="note">{{markdown .Run.Note}}</div>
-    <div class="reply-host"><textarea id="reply" placeholder="Reply in your own words. The orchestrator reads it and decides what to do."></textarea>
-      <div class="side"><button class="btn primary sm" id="send">Send</button><button class="btn sm mic" id="mic" hidden>Dictate</button></div></div>
+    <div class="reply-host"{{if $.Dictation}} data-dictation="{{$.Dictation}}"{{end}}><textarea id="reply" placeholder="Reply in your own words. The orchestrator reads it and decides what to do."></textarea>
+      <div class="side"><button class="btn primary sm" id="send">Send</button>{{if $.Dictation}}{{template "dictationbutton"}}{{end}}</div></div>
   </div></section>{{end}}</div>
 <div id="steps" class="builder">
   <div class="pipe">
@@ -537,7 +538,8 @@ render();
   <aside class="card"><div class="card-head"><h2>What happened</h2></div><div class="card-body">
     <ul class="events">{{range .Events}}<li><span class="t">{{.At.Format "Jan 2 15:04"}}</span>{{with .Step}}<b>{{add . 1}}.</b> {{end}}{{.Line}}</li>{{end}}</ul></div></aside>
 </div>
-<script>
+{{if .Dictation}}<script src="/dictation.js"></script>
+{{end}}<script>
 "use strict";
 const run = {{json .Run.ID}};
 const $ = (s) => document.querySelector(s);
@@ -558,19 +560,14 @@ function bind() {
     try { await post(`/api/workflow-runs/${run}/reply`, { text }); $("#reply").value = ""; refresh(true); }
     catch (e) { err(e.message); ev.target.disabled = false; }
   };
-  // dictation, where the browser has speech recognition
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition, mic = $("#mic");
-  if (SR && mic) {
-    mic.hidden = false;
-    let rec = null;
-    mic.onclick = () => {
-      if (rec) return rec.stop();
-      rec = new SR(); rec.continuous = true; rec.interimResults = true;
-      const base = $("#reply").value;
-      rec.onresult = (e) => { $("#reply").value = (base ? base + " " : "") + [...e.results].map((r) => r[0].transcript).join(""); };
-      rec.onend = rec.onerror = () => { rec = null; mic.classList.remove("on"); mic.textContent = "Dictate"; };
-      rec.start(); mic.classList.add("on"); mic.textContent = "Stop";
-    };
+  // dictation into the reply, once for each reply box (a refresh can bring a new one); a replaced
+  // box's shortcuts stop acting once it leaves the page
+  const reply = $("#reply"), send = $("#send");
+  if (window.dictation && reply && !reply.dataset.dictating) {
+    reply.dataset.dictating = "on";
+    dictation({ text: reply, tokenPath: reply.parentElement.dataset.dictation, mic: document.getElementById("dictate"),
+      row: send.parentElement, label: () => send.textContent, send: () => send.click(), active: () => reply.isConnected,
+      onstart: () => err(""), warn: (msg) => err(msg) });
   }
 }
 // keep the page current; leave a reply being written alone
@@ -579,7 +576,7 @@ async function refresh(all) {
     const res = await fetch(location.href, { cache: "no-store" });
     if (!res.ok) return;
     const next = new DOMParser().parseFromString(await res.text(), "text/html");
-    const reply = $("#reply"), writing = reply && (reply.value || document.activeElement === reply);
+    const reply = $("#reply"), writing = reply && (reply.value || document.activeElement === reply || reply.classList.contains("listening"));
     for (const id of ["live", "steps"].concat(writing && !all ? [] : ["ask"])) {
       const n = next.getElementById(id), cur = document.getElementById(id);
       if (n && cur && n.innerHTML !== cur.innerHTML) cur.replaceWith(n);

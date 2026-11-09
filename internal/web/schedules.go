@@ -100,7 +100,7 @@ func schedulePage(cfg Config, reg *fleet.Registry) http.HandlerFunc {
 		}
 		renderSchedules(w, "schedule", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Host": b, "S": s, "Runs": runs,
 			"Providers": withCurrent(availableProviders(b), s.Provider), "Catalog": providerCatalog(b), "Thinking": thinkingLevels,
-			"Commands": "/api/hosts/" + host + "/commands", "CommandSQL": scheduleCommandSQL})
+			"Commands": "/api/hosts/" + host + "/commands", "CommandSQL": scheduleCommandSQL, "Dictation": dictationPath(cfg)})
 	}
 }
 
