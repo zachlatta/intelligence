@@ -374,6 +374,11 @@ func TestRunnerLetsAQueuedMessageWaitUntilItExpires(t *testing.T) {
 		Args: json.RawMessage(`{"agentId":"a1","text":"x","behavior":"queue"}`)})
 	r.run(context.Background(), Command{ID: "s", Kind: SendMessageKind, ExpiresAt: expires,
 		Args: json.RawMessage(`{"agentId":"a1","text":"x"}`)})
+	r.run(context.Background(), Command{ID: "archive", Kind: ArchiveWorkspaceKind, ExpiresAt: expires,
+		Args: json.RawMessage(`{"workspaceId":"w1","waitForAgent":"a1"}`)})
+	if !deadlines[2].Equal(expires) {
+		t.Errorf("archive deadline = %v, want its expiry %v", deadlines[2], expires)
+	}
 	if !deadlines[0].Equal(expires) {
 		t.Errorf("queued deadline = %v, want its expiry %v", deadlines[0], expires)
 	}
@@ -436,5 +441,78 @@ func TestExecuteTakesTildeAsTheHomeDirectory(t *testing.T) {
 		if got := expandHome(in, "/home/someone"); got != want {
 			t.Errorf("expandHome(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestWorkflowArchiveWaitsForOrchestrator(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	done := make(chan error, 1)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	go func() {
+		_, err := w.Execute(ctx, Command{ID: "cleanup", Kind: ArchiveWorkspaceKind,
+			Args: json.RawMessage(`{"workspaceId":"w1","waitForAgent":"a1"}`)})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("archive returned during the workflow move: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if len(d.Requests("archive_agent_request")) != 0 || len(d.Requests("archive_workspace_request")) != 0 {
+		t.Fatal("archived before the orchestrator's turn ended")
+	}
+	d.SetAgents(paseotest.Agent("a1", "w1", "idle"), paseotest.Agent("a2", "w1", "running"))
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Requests("archive_agent_request")) != 2 || len(d.Requests("archive_workspace_request")) != 1 {
+		t.Fatal("workspace and sub-agents were not archived")
+	}
+}
+
+func TestWorkflowArchiveExpiresWithoutInterruptingOrchestrator(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	_, err := w.Execute(ctx, Command{ID: "cleanup", Kind: ArchiveWorkspaceKind,
+		Args: json.RawMessage(`{"workspaceId":"w1","waitForAgent":"a1"}`)})
+	if err == nil || !strings.Contains(err.Error(), "waiting") {
+		t.Fatalf("error = %v", err)
+	}
+	if len(d.Requests("archive_agent_request")) != 0 {
+		t.Fatal("interrupted the orchestrator")
+	}
+}
+
+func TestWorkflowArchiveSurvivesDaemonRestart(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "agents", func(s PaseoStatus) bool { return len(s.Agents) == 2 })
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := w.Execute(ctx, Command{ID: "restart-cleanup", Kind: ArchiveWorkspaceKind, Args: json.RawMessage(`{"workspaceId":"w1","waitForAgent":"a1"}`)})
+		done <- err
+	}()
+	time.Sleep(100 * time.Millisecond)
+	d.DropAll()
+	eventually(t, w, "reconnected", func(s PaseoStatus) bool { return s.Connected && d.Connections() > 1 })
+	select {
+	case err := <-done:
+		t.Fatalf("archive stopped after restart: %v", err)
+	case <-time.After(1100 * time.Millisecond):
+	}
+	d.SetAgents(paseotest.Agent("a1", "w1", "idle"), paseotest.Agent("a2", "w1", "idle"))
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Requests("archive_workspace_request")) != 1 {
+		t.Fatal("workspace not archived")
 	}
 }

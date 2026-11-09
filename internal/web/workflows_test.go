@@ -3,9 +3,14 @@ package web
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/zachlatta/intelligence/internal/db"
+	"github.com/zachlatta/intelligence/internal/dbtest"
 	"github.com/zachlatta/intelligence/internal/hostclient"
 	"github.com/zachlatta/intelligence/internal/workflow"
 )
@@ -136,7 +141,7 @@ func TestAWorkflowRunFindsItsProjectThenTheOrchestratorMovesItThroughTheSteps(t 
 	finder := b.command()
 	var fa hostclient.CreateAgentArgs
 	json.Unmarshal(finder.Args, &fa)
-	if finder.Kind != hostclient.CreateAgentKind || fa.Cwd != "~" || fa.Provider != "claude" || fa.Labels["intelligence.run"] != run ||
+	if finder.Kind != hostclient.CreateAgentKind || fa.Cwd != "~" || fa.Provider != "claude" || fa.Mode != "bypassPermissions" || fa.Labels["intelligence.run"] != run ||
 		!strings.Contains(fa.Prompt, "- /w/app") || !strings.Contains(fa.Prompt, "intelligence workflow project --run "+run) {
 		t.Fatalf("project finder = %s %+v", finder.Kind, fa)
 	}
@@ -161,7 +166,7 @@ func TestAWorkflowRunFindsItsProjectThenTheOrchestratorMovesItThroughTheSteps(t 
 	ws := cmds[hostclient.CreateWorkspaceKind]
 	var wa hostclient.CreateWorkspaceArgs
 	json.Unmarshal(ws.Args, &wa)
-	if wa.Cwd != "/w/app" || !wa.Worktree || !strings.HasPrefix(wa.Branch, "wf-") || wa.Agent == nil || wa.Agent.Thinking != "high" ||
+	if wa.Cwd != "/w/app" || !wa.Worktree || !strings.HasPrefix(wa.Branch, "wf-") || wa.Agent == nil || wa.Agent.Thinking != "high" || wa.Agent.Mode != "bypassPermissions" ||
 		wa.Agent.Labels["intelligence.run"] != run || !strings.Contains(wa.Agent.Prompt, "Step 1 of 6: Do the work") ||
 		!strings.Contains(wa.Agent.Prompt, "Have sub-agents do this in /w/app:") || !strings.Contains(wa.Agent.Prompt, "intelligence workflow next --run "+run) {
 		t.Fatalf("workspace = %+v %+v", wa, wa.Agent)
@@ -245,6 +250,21 @@ func TestAWorkflowRunFindsItsProjectThenTheOrchestratorMovesItThroughTheSteps(t 
 	}
 	if code, _ := move(t, h, key, run, map[string]string{"move": "next"}); code != http.StatusConflict {
 		t.Errorf("a finished run moved: %d", code)
+	}
+
+	cleanup := b.command()
+	if cleanup.Kind != hostclient.ArchiveWorkspaceKind {
+		t.Fatalf("cleanup = %+v", cleanup)
+	}
+	succeed(t, b, cleanup, `{"workspaceId":"w-run","archivedAgents":3}`)
+	if r := readRun(t, h, run); r["status"] != "succeeded" {
+		t.Fatalf("cleanup changed run: %v", r)
+	}
+	if page := get(t, h, "/workflow-runs/"+run, nil); strings.Contains(page.Body.String(), `<p class="banner">Workspace archive: succeeded`) {
+		t.Error("successful archive looks like an error")
+	}
+	if page := get(t, h, "/workflow-runs/"+run, nil); !strings.Contains(page.Body.String(), "Workspace archive: succeeded") {
+		t.Fatal("run page hides archive success")
 	}
 
 	code, r := sqlPost(t, h, q(`SELECT string_agg(kind, ' ' ORDER BY id) FROM workflow_run_events WHERE run_id = '`+run+`'`))
@@ -400,6 +420,11 @@ func TestWorkflowPages(t *testing.T) {
 	if !strings.Contains(ed.Body.String(), `"host":"host-1"`) || !strings.Contains(ed.Body.String(), `const hosts = ["host-1"]`) {
 		t.Errorf("the editor should show the workflow's host and offer the account's")
 	}
+	// the editor offers the providers whose agents can run without asking, and only those
+	providers, _ := json.Marshal(workflow.Providers())
+	if !strings.Contains(ed.Body.String(), "const providers = "+string(providers)+";") || strings.Contains(ed.Body.String(), "<option>claude</option>") {
+		t.Errorf("the editor's providers should be workflow.Providers() = %s", providers)
+	}
 	// a fixed project is picked from the repositories the account's hosts reported
 	if !strings.Contains(ed.Body.String(), `const allRepos = [{"directory":"/w/app","project":"example/app","hosts":["host-1"]}]`) {
 		t.Errorf("the editor should offer the hosts' repositories")
@@ -551,5 +576,572 @@ func TestDefaultWorkflowRespectsAccountAndRequestBoundaries(t *testing.T) {
 	id := createWorkflow(t, h, manual)
 	if rec := call(t, h, http.MethodPut, "/api/workflows/"+id+"/default", `{"default":true}`, sameOriginFetch); rec.Code != http.StatusBadRequest {
 		t.Errorf("manual workflow default: %d", rec.Code)
+	}
+}
+
+// fakeClock is a clock a test moves by hand.
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *fakeClock) Now() time.Time      { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
+func (c *fakeClock) Add(d time.Duration) { c.mu.Lock(); defer c.mu.Unlock(); c.t = c.t.Add(d) }
+
+// TestARunShowsHowLongEachStepTook: each step's visits are readable with SQL, and the run page
+// shows the time spent on each step, summed over its visits, with the current step's time so far.
+func TestARunShowsHowLongEachStepTook(t *testing.T) {
+	d := dbtest.New(t)
+	clock := &fakeClock{t: time.Date(2026, 11, 9, 9, 0, 0, 0, time.UTC)}
+	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.Now = clock.Now })
+	sendReport(t, h, wfReport())
+	key := keyOf(t, h, "host-1")
+	b := openStream(t, h, "host-1")
+	def := workflow.Starting
+	def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+	run := startRun(t, h, createWorkflow(t, h, def), "Time the steps")
+	clock.Add(30 * time.Second) // making the worktree is not a step
+	succeed(t, b, b.command(), `{"workspaceId":"w-run","agentId":"orch-1"}`)
+
+	moveAfter := func(d time.Duration, m map[string]string) {
+		t.Helper()
+		clock.Add(d)
+		if code, msg := move(t, h, key, run, m); code != http.StatusOK {
+			t.Fatalf("%v: %d %s", m, code, msg)
+		}
+	}
+	moveAfter(5*time.Minute, map[string]string{"move": "next", "summary": "built"})                       // build: 5m
+	moveAfter(3*time.Minute, map[string]string{"move": "back", "step": "build", "why": "missing a test"}) // meets: 3m
+	moveAfter(2*time.Minute+15*time.Second, map[string]string{"move": "next", "summary": "added it"})     // build again: 2m15s
+	moveAfter(time.Hour+4*time.Minute, map[string]string{"move": "skip", "why": "n/a"})                   // meets again: 1h4m
+	clock.Add(42 * time.Second)                                                                           // fit, so far
+
+	code, r := sqlPost(t, h, q(`SELECT step, visit, extract(epoch FROM ended_at - started_at)::int, ended_by
+		FROM workflow_run_step_visits WHERE run_id = '`+run+`' ORDER BY started_at`))
+	if code != http.StatusOK {
+		t.Fatalf("visits: %d %+v", code, r)
+	}
+	want := [][]any{{0, 1, 300, "next"}, {1, 1, 180, "back"}, {0, 2, 135, "next"}, {1, 2, 3840, "skip"}, {2, 1, nil, nil}}
+	if len(r.Rows) != len(want) {
+		t.Fatalf("visits = %v, want %v", r.Rows, want)
+	}
+	for i, row := range r.Rows {
+		for j, v := range want[i] {
+			if f, ok := v.(int); ok {
+				v = float64(f)
+			}
+			if row[j] != v {
+				t.Errorf("visit %d = %v, want %v", i, row, want[i])
+				break
+			}
+		}
+	}
+
+	code, r = sqlPost(t, h, q(`SELECT step, step_id, title, visits, extract(epoch FROM time_spent)::int, current
+		FROM workflow_run_step_times WHERE run_id = '`+run+`' AND step < 2 ORDER BY step`))
+	if code != http.StatusOK || len(r.Rows) != 2 || r.Rows[0][1] != "build" || r.Rows[0][2] != "Do the work" || r.Rows[0][3] != float64(2) ||
+		r.Rows[0][4] != float64(435) || r.Rows[0][5] != false || r.Rows[1][4] != float64(4020) {
+		t.Errorf("step times = %d %v", code, r.Rows)
+	}
+
+	page := get(t, h, "/workflow-runs/"+run, nil).Body.String()
+	for _, want := range []string{
+		`<span class="spent" title="2 visits: 5m 0s, 2m 15s">7m 15s</span>`,
+		`<span class="spent" title="2 visits: 3m 0s, 1h 4m">1h 7m</span>`,
+		`<span class="spent" title="so far">42s so far</span>`,
+		`<span class="meta">2 times</span>`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("run page misses %q", want)
+		}
+	}
+}
+
+func TestFinishedWorkflowQueuesArchiveAndKeepsArchiveFailureSeparate(t *testing.T) {
+	for _, ending := range []string{"next", "skip", "done"} {
+		t.Run(ending, func(t *testing.T) {
+			h, _ := dbServer(t)
+			sendReport(t, h, wfReport())
+			key := keyOf(t, h, "host-1")
+			b := openStream(t, h, "host-1")
+			def := workflow.Starting
+			def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+			def.Steps = def.Steps[:1]
+			run := startRun(t, h, createWorkflow(t, h, def), "finish me")
+			succeed(t, b, b.command(), `{"workspaceId":"w-run","agentId":"orch-1"}`)
+			code, rows := sqlPost(t, h, q(`SELECT count(*) FROM commands WHERE kind = 'archive_workspace'`))
+			if code != http.StatusOK || rows.Rows[0][0] != float64(0) {
+				t.Fatal("archived an active run")
+			}
+			if code, msg := move(t, h, key, run, map[string]string{"move": ending, "why": "reason"}); code != http.StatusOK {
+				t.Fatalf("finish: %d %s", code, msg)
+			}
+			code, rows = sqlPost(t, h, q(`SELECT c.kind, c.args->>'workspaceId', c.args->>'waitForAgent' FROM workflow_runs r JOIN commands c ON c.id = r.archive_command WHERE r.id = '`+run+`'`))
+			if code != http.StatusOK || len(rows.Rows) != 1 {
+				t.Fatalf("archive command missing: %d %+v", code, rows)
+			}
+			if rows.Rows[0][0] != "archive_workspace" || rows.Rows[0][1] != "w-run" || rows.Rows[0][2] != "orch-1" {
+				t.Fatalf("archive: %+v", rows)
+			}
+			c := b.command()
+			if ack := b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{ID: c.ID, Status: hostclient.CommandFailed, Error: "archive refused"}}); ack.Error != "" {
+				t.Fatal(ack.Error)
+			}
+			page := get(t, h, "/workflow-runs/"+run, nil)
+			if !strings.Contains(page.Body.String(), "Workspace archive: failed") || !strings.Contains(page.Body.String(), "archive refused") {
+				t.Fatalf("run page hides cleanup failure: %s", page.Body)
+			}
+			if r := readRun(t, h, run); r["status"] != "succeeded" {
+				t.Fatalf("archive failure changed outcome: %v", r)
+			}
+			code, rows = sqlPost(t, h, q(`SELECT c.status, c.error FROM workflow_runs r JOIN commands c ON c.id = r.archive_command WHERE r.id = '`+run+`'`))
+			if code != http.StatusOK || rows.Rows[0][0] != "failed" || rows.Rows[0][1] != "archive refused" {
+				t.Fatalf("archive failure not readable: %+v", rows)
+			}
+			if code, _ := move(t, h, key, run, map[string]string{"move": ending}); code != http.StatusConflict {
+				t.Fatal("finished run moved again")
+			}
+			code, rows = sqlPost(t, h, q(`SELECT count(*) FROM commands WHERE kind = 'archive_workspace'`))
+			if code != http.StatusOK || rows.Rows[0][0] != float64(1) {
+				t.Fatal("duplicate archive")
+			}
+		})
+	}
+}
+
+func TestFailedOrchestratorStartArchivesItsPartialWorkspace(t *testing.T) {
+	h, _ := dbServer(t)
+	sendReport(t, h, wfReport())
+	b := openStream(t, h, "host-1")
+	def := workflow.Starting
+	def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+	run := startRun(t, h, createWorkflow(t, h, def), "anything")
+	c := b.command()
+	if ack := b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{
+		ID: c.ID, Status: hostclient.CommandFailed, Error: "agent failed to start", Result: json.RawMessage(`{"workspaceId":"partial"}`),
+	}}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	cleanup := b.command()
+	var args map[string]string
+	json.Unmarshal(cleanup.Args, &args)
+	if cleanup.Kind != hostclient.ArchiveWorkspaceKind || args["workspaceId"] != "partial" || args["waitForAgent"] != "" {
+		t.Fatalf("cleanup = %+v", cleanup)
+	}
+	succeed(t, b, cleanup, `{"workspaceId":"partial"}`)
+	if r := readRun(t, h, run); r["status"] != "failed" || !strings.Contains(r["error"].(string), "agent failed to start") {
+		t.Fatalf("run = %v", r)
+	}
+}
+
+func TestFailedWorkflowLeavesWorkspaceAndExplainsExternalCleanup(t *testing.T) {
+	h, _ := dbServer(t)
+	sendReport(t, h, wfReport())
+	b := openStream(t, h, "host-1")
+	def := workflow.Starting
+	def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+	run := startRun(t, h, createWorkflow(t, h, def), "fail me")
+	succeed(t, b, b.command(), `{"workspaceId":"w-run","agentId":"orch-1"}`)
+	code, msg := move(t, h, keyOf(t, h, "host-1"), run, map[string]string{"move": "fail", "why": "needs inspection"})
+	if code != http.StatusOK || !strings.Contains(msg, "outside this workspace") || strings.Contains(msg, "archived automatically") {
+		t.Fatalf("fail reply: %d %s", code, msg)
+	}
+	code, rows := sqlPost(t, h, q(`SELECT count(*) FROM commands WHERE kind = 'archive_workspace'`))
+	if code != http.StatusOK || rows.Rows[0][0] != float64(0) {
+		t.Fatal("failed run queued cleanup")
+	}
+}
+
+func TestFinishedWorkflowRetainsAgentsTranscriptsAndDiffAfterArchiveReport(t *testing.T) {
+	h, _ := dbServer(t)
+	rep := wfReport()
+	sendReport(t, h, rep)
+	b := openStream(t, h, "host-1")
+	def := workflow.Starting
+	def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+	run := startRun(t, h, createWorkflow(t, h, def), "keep history")
+	succeed(t, b, b.command(), `{"workspaceId":"w-app","agentId":"`+agentA1+`"}`)
+	rep.Paseo.Agents = append([]hostclient.Agent(nil), rep.Paseo.Agents...)
+	rep.Paseo.Agents[1].ParentID = agentA1
+	rep.Paseo.Agents[2].ParentID = agentA1
+	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	tr := batch(true, "history", tentry(1, `{"type":"assistant_message","text":"Preserved workflow result"}`))
+	if ack := b.call(hostclient.Frame{Type: hostclient.TranscriptFrame, Transcript: &tr}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	child := tr
+	child.AgentID = rep.Paseo.Agents[1].ID
+	child.Entries = []hostclient.TranscriptEntry{tentry(1, `{"type":"assistant_message","text":"Preserved external child result"}`)}
+	if ack := b.call(hostclient.Frame{Type: hostclient.TranscriptFrame, Transcript: &child}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	rep.Paseo.Agents = append(rep.Paseo.Agents[:1:1], rep.Paseo.Agents[2:]...)
+	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	diff := sampleDiff()
+	if ack := b.call(hostclient.Frame{Type: hostclient.DiffFrame, Diff: &diff}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	code, msg := move(t, h, keyOf(t, h, "host-1"), run, map[string]string{"move": "done"})
+	if code != http.StatusOK || !strings.Contains(msg, "outside this workspace") {
+		t.Fatalf("done: %d %s", code, msg)
+	}
+	succeed(t, b, b.command(), `{"workspaceId":"w-app"}`)
+	rep.Paseo.Workspaces = nil
+	rep.Paseo.Agents = nil
+	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	} // later reports must retain the history too
+	page := get(t, h, "/workflow-runs/"+run, nil)
+	for _, a := range wfReport().Paseo.Agents {
+		if !strings.Contains(page.Body.String(), `/hosts/host-1/agents/`+a.ID) {
+			t.Errorf("run lost agent %s", a.ID)
+		}
+	}
+	page = get(t, h, "/hosts/host-1/agents/"+agentA1, nil)
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Preserved workflow result") {
+		t.Fatalf("transcript lost: %d", page.Code)
+	}
+	if strings.Contains(page.Body.String(), `id="archive"`) || strings.Contains(page.Body.String(), `id="chat"`) || strings.Contains(page.Body.String(), `src="/attachments.js"`) || !strings.Contains(page.Body.String(), "archived with its workflow run") {
+		t.Error("history transcript is not read-only")
+	}
+	for _, kind := range []string{"archive_agent", "cancel_agent", "rename_agent", "send_message"} {
+		args := map[string]string{"agentId": agentA1}
+		if kind == "rename_agent" {
+			args["title"] = "new name"
+		}
+		if kind == "send_message" {
+			// An image reference must not bypass the archived-session guard or resolve uploads
+			// before that guard runs (this reference deliberately has no stored image).
+			args["text"] = "restart [attachment:00000000-0000-4000-8000-000000000001]"
+		}
+		body, _ := json.Marshal(map[string]any{"kind": kind, "args": args})
+		rec := call(t, h, http.MethodPost, "/api/hosts/host-1/commands", string(body), sameOriginFetch)
+		if rec.Code != http.StatusConflict {
+			t.Errorf("historical %s accepted: %d %s", kind, rec.Code, rec.Body)
+		}
+	}
+	if strings.Contains(get(t, h, "/", nil).Body.String(), `/hosts/host-1/agents/`+agentA1+`"`) {
+		t.Fatal("archived agent appears in live fleet")
+	}
+	childPage := get(t, h, "/hosts/host-1/agents/"+wfReport().Paseo.Agents[1].ID, nil)
+	if childPage.Code != http.StatusOK || !strings.Contains(childPage.Body.String(), "Preserved external child result") {
+		t.Fatal("lost child archived before workflow finished")
+	}
+	late := tr
+	late.Replace = false
+	late.Entries = []hostclient.TranscriptEntry{tentry(2, `{"type":"assistant_message","text":"Late final batch"}`)}
+	if ack := b.call(hostclient.Frame{Type: hostclient.TranscriptFrame, Transcript: &late}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	code, diffs := sqlPost(t, h, q(`SELECT path FROM workspace_diff_files WHERE workspace_id = 'w-app'`))
+	if code != http.StatusOK || len(diffs.Rows) != 1 || diffs.Rows[0][0] != "login.go" {
+		t.Fatalf("lost run diff: %+v", diffs)
+	}
+	code, rows := sqlPost(t, h, q(`SELECT count(*) FROM transcript_entries WHERE text = 'Preserved workflow result'`))
+	if code != http.StatusOK || rows.Rows[0][0] != float64(1) {
+		t.Fatalf("SQL lost transcript: %+v", rows)
+	}
+	ts := h.(*testServer)
+	bob, err := ts.store.Create(t.Context(), "bob", testPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asBob := sessionFor(t, ts.store, bob)
+	for _, table := range []string{"workflow_run_agents", "recorded_agents", "recorded_workspaces", "recorded_workspace_status", "archived_workflow_agents", "transcript_entries", "workspace_diffs"} {
+		rec := call(t, h, http.MethodGet, "/api/sql?q=SELECT+count(*)+FROM+"+table, "", nil, asBob)
+		if !strings.Contains(rec.Body.String(), `"rows":[[0]]`) {
+			t.Errorf("history leaked through %s: %s", table, rec.Body)
+		}
+	}
+
+}
+
+func TestEndedWorkflowStopsCapturingHistory(t *testing.T) {
+	for _, ending := range []string{"fail", "done"} {
+		t.Run(ending, func(t *testing.T) {
+			h, d := dbServer(t)
+			rep := wfReport()
+			sendReport(t, h, rep)
+			b := openStream(t, h, "host-1")
+			def := workflow.Starting
+			def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+			run := startRun(t, h, createWorkflow(t, h, def), "bounded history")
+			succeed(t, b, b.command(), `{"workspaceId":"w-app","agentId":"`+agentA1+`"}`)
+			if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+				t.Fatal(ack.Error)
+			}
+			if code, msg := move(t, h, keyOf(t, h, "host-1"), run, map[string]string{"move": ending, "why": "inspect"}); code != http.StatusOK {
+				t.Fatalf("finish %d %s", code, msg)
+			}
+			if ending == "done" {
+				succeed(t, b, b.command(), `{"workspaceId":"w-app"}`)
+			}
+			var before string
+			if err := d.Owner.QueryRow(t.Context(), "SELECT max(captured_at)::text FROM workflow_run_agents WHERE run_id=$1", run).Scan(&before); err != nil {
+				t.Fatal(err)
+			}
+			rep.Paseo.Agents = append(append([]hostclient.Agent{}, rep.Paseo.Agents...), hostclient.Agent{ID: "later-agent", WorkspaceID: "w-app", ParentID: agentA1, Title: "Later work"})
+			if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+				t.Fatal(ack.Error)
+			}
+			var after string
+			var pinned int
+			if err := d.Owner.QueryRow(t.Context(), "SELECT max(captured_at)::text,count(*) FILTER (WHERE agent_id='later-agent') FROM workflow_run_agents WHERE run_id=$1", run).Scan(&after, &pinned); err != nil {
+				t.Fatal(err)
+			}
+			if page := get(t, h, "/workflow-runs/"+run, nil); strings.Contains(page.Body.String(), "/agents/later-agent") {
+				t.Error("ended run lists later work")
+			}
+			if before != after || pinned != 0 {
+				t.Fatalf("ended run kept capturing: before %s after %s new agents %d", before, after, pinned)
+			}
+		})
+	}
+}
+
+func TestArchiveStatusUsesNeutralStyleUnlessFailed(t *testing.T) {
+	for _, status := range []string{"queued", "sent", "running", "succeeded", "failed", "expired"} {
+		rec := httptest.NewRecorder()
+		renderWorkflows(rec, "run", map[string]any{"Run": runRow{Status: "succeeded"}, "Now": t0, "ArchiveStatus": status, "Agents": []agentRow{}})
+		class := "banner note"
+		if status == "failed" || status == "expired" {
+			class = "banner"
+		}
+		if !strings.Contains(rec.Body.String(), `<p class="`+class+`">Workspace archive: `+status) {
+			t.Errorf("wrong archive style for %s", status)
+		}
+	}
+}
+
+func TestLegacyFinishedRunKeepsLiveAgentLinksAndBackfillsHistory(t *testing.T) {
+	for _, status := range []string{"succeeded", "failed", "canceled"} {
+		t.Run(status, func(t *testing.T) {
+			h, d := dbServer(t)
+			rep := wfReport()
+			rep.Paseo.Agents = append([]hostclient.Agent{}, rep.Paseo.Agents...)
+			rep.Paseo.Agents[1].ParentID = agentA1
+			rep.Paseo.Agents[2].ParentID = agentA1
+			sendReport(t, h, rep)
+			b := openStream(t, h, "host-1")
+			def := workflow.Starting
+			def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+			run := startRun(t, h, createWorkflow(t, h, def), "legacy history")
+			succeed(t, b, b.command(), `{"workspaceId":"w-app","agentId":"`+agentA1+`"}`)
+			if _, err := d.Owner.Exec(t.Context(), "UPDATE workflow_runs SET status=$2,finished_at=now() WHERE id=$1", run, status); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := d.Owner.Exec(t.Context(), "DELETE FROM workflow_run_agents WHERE run_id=$1", run); err != nil {
+				t.Fatal(err)
+			}
+			rep.Paseo.Agents = append(rep.Paseo.Agents, hostclient.Agent{ID: "later-legacy-agent", WorkspaceID: "w-app", ParentID: agentA1, CreatedAt: time.Now().Add(time.Hour)})
+			if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+				t.Fatal(ack.Error)
+			}
+			page := get(t, h, "/workflow-runs/"+run, nil)
+			for _, a := range wfReport().Paseo.Agents {
+				if !strings.Contains(page.Body.String(), "/agents/"+a.ID) {
+					t.Errorf("legacy %s lost agent %s", status, a.ID)
+				}
+			}
+			if strings.Contains(page.Body.String(), "/agents/later-legacy-agent") {
+				t.Error("legacy fallback includes later work")
+			}
+			if _, err := d.Owner.Exec(t.Context(), "DELETE FROM schema_migrations WHERE version='0021_workflow_history_upgrade'"); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Migrate(t.Context(), d.Owner); err != nil {
+				t.Fatal(err)
+			}
+			code, rows := sqlPost(t, h, q(`SELECT count(*) FROM workflow_run_agents WHERE run_id='`+run+`'`))
+			if code != http.StatusOK || rows.Rows[0][0] != float64(3) {
+				t.Fatalf("legacy backfill missing or includes later work: %+v", rows)
+			}
+			rep.Paseo.Workspaces = nil
+			rep.Paseo.Agents = nil
+			if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+				t.Fatal(ack.Error)
+			}
+			page = get(t, h, "/workflow-runs/"+run, nil)
+			for _, a := range wfReport().Paseo.Agents {
+				if !strings.Contains(page.Body.String(), "/agents/"+a.ID) {
+					t.Errorf("backfilled run lost %s", a.ID)
+				}
+			}
+		})
+	}
+}
+
+func TestDaemonGapDoesNotMakeWorkflowAgentsReadOnly(t *testing.T) {
+	h, _ := dbServer(t)
+	rep := wfReport()
+	sendReport(t, h, rep)
+	b := openStream(t, h, "host-1")
+	def := workflow.Starting
+	def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+	run := startRun(t, h, createWorkflow(t, h, def), "gap")
+	succeed(t, b, b.command(), `{"workspaceId":"w-app","agentId":"`+agentA1+`"}`)
+	// First live report, then a daemon outage: metadata must survive without implying archival.
+	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	rep.Paseo.Connected = false
+	rep.Paseo.Agents = nil
+	rep.Paseo.Workspaces = nil
+	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	rec := call(t, h, http.MethodPost, "/api/hosts/host-1/commands", `{"kind":"send_message","args":{"agentId":"`+agentA1+`","text":"continue"}}`, sameOriginFetch)
+	if rec.Code != http.StatusAccepted {
+		t.Errorf("daemon gap treated as archival: %d %s", rec.Code, rec.Body)
+	}
+	page := get(t, h, "/hosts/host-1/agents/"+agentA1, nil)
+	if !strings.Contains(page.Body.String(), `id="chat"`) {
+		t.Error("daemon gap hid live agent controls")
+	}
+	if r := readRun(t, h, run); r["status"] != "running" {
+		t.Fatalf("outage changed run: %v", r)
+	}
+	rep.Paseo.Connected = true // now the daemon confirms the agent is gone
+	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	rep.Paseo.Connected = false // a later outage must not erase that confirmation
+	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	rec = call(t, h, http.MethodPost, "/api/hosts/host-1/commands", `{"kind":"send_message","args":{"agentId":"`+agentA1+`","text":"restart"}}`, sameOriginFetch)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("confirmed archive became writable during outage: %d", rec.Code)
+	}
+}
+
+func TestSuccessfulArchiveStaysReadOnlyBeforeNextConnectedReport(t *testing.T) {
+	h, _ := dbServer(t)
+	rep := wfReport()
+	sendReport(t, h, rep)
+	b := openStream(t, h, "host-1")
+	def := workflow.Starting
+	def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+	run := startRun(t, h, createWorkflow(t, h, def), "archived before outage")
+	succeed(t, b, b.command(), `{"workspaceId":"w-app","agentId":"`+agentA1+`"}`)
+	if code, msg := move(t, h, keyOf(t, h, "host-1"), run, map[string]string{"move": "done"}); code != http.StatusOK {
+		t.Fatalf("done: %d %s", code, msg)
+	}
+	succeed(t, b, b.command(), `{"workspaceId":"w-app"}`)
+	rep.Paseo.Connected = false
+	rep.Paseo.Agents = nil
+	rep.Paseo.Workspaces = nil
+	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	rec := call(t, h, http.MethodPost, "/api/hosts/host-1/commands", `{"kind":"send_message","args":{"agentId":"`+agentA1+`","text":"restart"}}`, sameOriginFetch)
+	if rec.Code != http.StatusConflict {
+		t.Errorf("successful archive became writable: %d", rec.Code)
+	}
+	page := get(t, h, "/hosts/host-1/agents/"+agentA1, nil)
+	if strings.Contains(page.Body.String(), `id="chat"`) {
+		t.Error("successful archive shows chat during outage")
+	}
+}
+
+// TestDeletingAWorkflowKeepsItsRuns: a deleted workflow leaves the list, the editor and the task
+// picker, and cannot be edited, chosen or run; its finished runs stay readable. A workflow with a
+// run still going is not deleted until that run ends.
+func TestDeletingAWorkflowKeepsItsRuns(t *testing.T) {
+	h, _ := dbServer(t)
+	ts := h.(*testServer)
+	sendReport(t, h, wfReport())
+	keep := createWorkflow(t, h, workflow.Starting)
+	wf := createWorkflow(t, h, workflow.Starting)
+	if rec := call(t, h, http.MethodPut, "/api/workflows/"+wf+"/default", `{"default":true}`, sameOriginFetch); rec.Code != http.StatusNoContent {
+		t.Fatalf("set default = %d", rec.Code)
+	}
+	run := startRun(t, h, wf, "Delete me later")
+	path := "/api/workflows/" + wf
+
+	// a run still going holds the workflow
+	if rec := call(t, h, http.MethodDelete, path, "", sameOriginFetch); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "cancel") {
+		t.Fatalf("delete with a live run = %d %s", rec.Code, rec.Body)
+	}
+	if rec := call(t, h, http.MethodPost, "/api/workflow-runs/"+run+"/cancel", `{}`, sameOriginFetch); rec.Code != http.StatusNoContent {
+		t.Fatalf("cancel = %d %s", rec.Code, rec.Body)
+	}
+
+	// only its own account, from the same origin, signed in
+	bob, err := ts.store.Create(t.Context(), "bob", testPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := call(t, h, http.MethodDelete, path, "", sameOriginFetch, sessionFor(t, ts.store, bob)); rec.Code != http.StatusNotFound {
+		t.Errorf("bob deleted someone's workflow: %d", rec.Code)
+	}
+	if rec := call(t, anon(h), http.MethodDelete, path, "", sameOriginFetch); rec.Code != http.StatusUnauthorized {
+		t.Errorf("anonymous delete: %d", rec.Code)
+	}
+	if rec := call(t, h, http.MethodDelete, path, "", map[string]string{"Content-Type": "application/json", "Origin": "https://other.example.com"}); rec.Code != http.StatusForbidden {
+		t.Errorf("cross-origin delete: %d", rec.Code)
+	}
+	for _, id := range []string{"bad-id", "00000000-0000-4000-8000-000000000000"} {
+		if rec := call(t, h, http.MethodDelete, "/api/workflows/"+id, "", sameOriginFetch); rec.Code != http.StatusNotFound {
+			t.Errorf("delete %s = %d", id, rec.Code)
+		}
+	}
+
+	if rec := call(t, h, http.MethodDelete, path, "", sameOriginFetch); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete = %d %s", rec.Code, rec.Body)
+	}
+	if rec := call(t, h, http.MethodDelete, path, "", sameOriginFetch); rec.Code != http.StatusNotFound {
+		t.Errorf("deleted twice: %d", rec.Code)
+	}
+
+	// readable with SQL: when it was deleted, and it is no longer the default
+	code, rows := sqlPost(t, h, q("SELECT deleted_at IS NOT NULL, is_default FROM workflows WHERE id = '"+wf+"'"))
+	if code != http.StatusOK || len(rows.Rows) != 1 || rows.Rows[0][0] != true || rows.Rows[0][1] != false {
+		t.Fatalf("deleted workflow through SQL: %d %+v", code, rows)
+	}
+	if r := readRun(t, h, run); r["status"] != "canceled" {
+		t.Errorf("run = %v", r)
+	}
+
+	// it can no longer be edited, chosen or run
+	if rec := call(t, h, http.MethodPut, path, wfBody(t, "back", workflow.Starting), sameOriginFetch); rec.Code != http.StatusNotFound {
+		t.Errorf("edit deleted: %d", rec.Code)
+	}
+	if rec := call(t, h, http.MethodPut, path+"/default", `{"default":true}`, sameOriginFetch); rec.Code != http.StatusNotFound {
+		t.Errorf("default deleted: %d", rec.Code)
+	}
+	body, _ := json.Marshal(map[string]string{"workflowId": wf, "input": "x"})
+	if rec := call(t, h, http.MethodPost, "/api/workflow-runs", string(body), sameOriginFetch); rec.Code != http.StatusNotFound {
+		t.Errorf("run deleted: %d", rec.Code)
+	}
+
+	// pages: gone from the list and the editor; its run is still there, without a link to it
+	if rec := get(t, h, "/workflows/"+wf, nil); rec.Code != http.StatusNotFound {
+		t.Errorf("editor of deleted = %d", rec.Code)
+	}
+	list := get(t, h, "/workflows", nil).Body.String()
+	if strings.Contains(list, `href="/workflows/`+wf+`"`) || strings.Contains(list, `value="`+wf+`"`) {
+		t.Error("the list still offers the deleted workflow")
+	}
+	if !strings.Contains(list, `href="/workflows/`+keep+`"`) || !strings.Contains(list, "Delete me later") {
+		t.Error("the list lost the other workflow or the deleted one's run")
+	}
+	rp := get(t, h, "/workflow-runs/"+run, nil)
+	if rp.Code != http.StatusOK || strings.Contains(rp.Body.String(), `href="/workflows/`+wf+`"`) || !strings.Contains(rp.Body.String(), "(deleted)") {
+		t.Errorf("run page of a deleted workflow = %d", rp.Code)
+	}
+
+	// the pages offer Delete, behind a confirmation, through the API
+	for _, page := range []string{list, get(t, h, "/workflows/"+keep, nil).Body.String()} {
+		if !strings.Contains(page, `"DELETE"`) || !strings.Contains(page, "confirm(") || !strings.Contains(page, ">Delete<") {
+			t.Error("a workflows page lacks the Delete action")
+		}
 	}
 }

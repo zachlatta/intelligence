@@ -63,6 +63,9 @@ func TestTranscriptPageSaysWhyThereIsNone(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "closed before") {
 		t.Errorf("a closed agent with no transcript should say why: %d", rec.Code)
 	}
+	if !strings.Contains(rec.Body.String(), `id="chat"`) || !strings.Contains(rec.Body.String(), `id="archive"`) {
+		t.Error("live closed agent lost its controls")
+	}
 	if rec := get(t, h, "/hosts/host-1/agents/nope", nil); rec.Code != http.StatusNotFound {
 		t.Errorf("unknown agent: %d, want 404", rec.Code)
 	}

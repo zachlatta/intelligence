@@ -46,7 +46,7 @@ var blocksTmpl = transcriptTmpl
 
 // agentContext finds an agent on host, its workspace and the other agents in that workspace.
 func agentContext(r *http.Request, reg *fleet.Registry, host, agentID string) (*fleet.AgentView, *fleet.WorkspaceAgents, []fleet.AgentView, error) {
-	hosts, err := reg.List(r.Context())
+	hosts, err := reg.ListWithHistory(r.Context())
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -137,7 +137,7 @@ type panels struct {
 func panelsFor(host string, ws *fleet.WorkspaceAgents) panels {
 	h, id := sqlString(host), sqlString(ws.ID)
 	return panels{
-		AgentsSQL: `SELECT id, title, status, requires_attention, parent_id, provider, created_at FROM agents WHERE host = ` + h +
+		AgentsSQL: `SELECT id, title, status, requires_attention, parent_id, provider, created_at FROM recorded_agents WHERE host = ` + h +
 			` AND workspace_id = ` + id + ` ORDER BY (status IN ('running', 'initializing')) DESC, created_at DESC, id`,
 		HasDiff: ws.Branch != "",
 		DiffSQL: `SELECT error, too_large, file_count, additions, deletions, files, collected_at FROM workspace_diffs WHERE host = ` +

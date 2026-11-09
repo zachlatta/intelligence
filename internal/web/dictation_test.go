@@ -105,18 +105,28 @@ func TestChatBoxOffersDictationOnlyWithAKey(t *testing.T) {
 	}
 }
 
-func TestSpawnPagesOfferDictationOnlyWithAKey(t *testing.T) {
-	aai := fakeAssemblyAI(t, "k", "t")
-	for _, p := range []string{newAgentPath, "/hosts/host-1/workspaces/new"} {
-		page := get(t, dictationServer(t, "k", aai.URL), p, nil).Body.String()
-		for _, want := range []string{`data-dictation="/api/dictation/token"`, `id="dictate"`, `src="/dictation.js"`} {
-			if !strings.Contains(page, want) {
-				t.Errorf("%s with a key misses %s", p, want)
-			}
+// TestDictationCanOnlyInsert: with insertOnly, an empty box does not choose sending: dictation
+// always appends at the cursor, and stopping it never calls send.
+func TestDictationCanOnlyInsert(t *testing.T) {
+	js := string(dictationJS)
+	for _, want := range []string{`insertOnly = false`, `const mode = insertOnly || text.value.trim() ? 'append' : 'send';`} {
+		if !strings.Contains(js, want) {
+			t.Errorf("dictation.js misses %s", want)
 		}
-		page = get(t, dictationServer(t, "", aai.URL), p, nil).Body.String()
-		if strings.Contains(page, `id="dictate"`) || strings.Contains(page, `/dictation.js`) {
-			t.Errorf("%s without a key offers dictation", p)
+	}
+}
+
+// TestDictationBarWrapsOnNarrowScreens: on a phone the bar keeps its status readable and its
+// buttons on the screen: the buttons are one group that wraps under the status when it must.
+func TestDictationBarWrapsOnNarrowScreens(t *testing.T) {
+	if !strings.Contains(string(dictationJS), `<span class="dactions">`) {
+		t.Error("dictation.js does not group the bar's buttons")
+	}
+	css := string(uiCSS)
+	for _, want := range []string{`.form-actions + .dictation { margin-top: 1.4rem; }`, `.dictation { display: flex; flex-wrap: wrap;`, `.dictation .dstatus { flex: 1 1 8rem;`,
+		`.dictation .dactions { display: flex; flex-wrap: wrap; justify-content: flex-end;`} {
+		if !strings.Contains(css, want) {
+			t.Errorf("ui.css misses %s", want)
 		}
 	}
 }
@@ -129,29 +139,79 @@ func TestDictationScriptIsServed(t *testing.T) {
 	}
 }
 
-func TestWorkflowRunOffersDictationOnlyWithAKey(t *testing.T) {
+// TestEveryTaskEntryPointOffersDictation: every form that creates a task or starts agent work (a
+// workflow task, a workflow run, a reply to a waiting run, a new agent, a new workspace, a new or
+// edited schedule) offers the shared dictation button, loads the engine and wires it to that form's own text box; none does without a key.
+func TestEveryTaskEntryPointOffersDictation(t *testing.T) {
+	entries := []struct {
+		name, path string
+		wiring     []string // the box the button dictates into, and how it sends
+		absent     []string // what the page must not do
+	}{
+		{"workflow task", "/workflows", []string{`<textarea id="task"`, `text: document.getElementById("task")`,
+			`send: () => submit.click()`, `#task-dictation .dictation`, `.composer .task-actions[hidden] { display: none; }`}, nil},
+		{"workflow run", "/workflows/{id}", []string{`<textarea id="s-input"`, `text: document.getElementById("s-input")`,
+			`send: () => form.requestSubmit(start)`, `active: () => dlg.open`, `onstart: clearWarning`,
+			`dlg.addEventListener("toggle", clearWarning)`, `error.textContent = ""; error.hidden = true;`}, nil},
+		{"new agent", newAgentPath, []string{`id="spawn"`, `text: form.prompt`}, nil},
+		{"new workspace", "/hosts/host-1/workspaces/new", []string{`id="spawn"`, `text: form.prompt`}, nil},
+		{"new schedule", "/hosts/host-1/schedules/new", []string{`id="schedule"`, `text: form.prompt`,
+			`send: () => form.requestSubmit()`}, nil},
+		// editing a schedule, dictation only puts words in the prompt: saving stays a click on Save,
+		// even when the prompt was cleared first
+		{"schedule edit", "/hosts/host-1/schedules/sch-nightly", []string{`id="edit"`, `text: edit.prompt`,
+			`insertOnly: true`}, []string{`send: () => edit.requestSubmit()`}},
+		{"reply to a waiting run", "/workflow-runs/{run}", []string{`<textarea id="reply"`, `text: reply`,
+			`send: () => send.click()`, `active: () => reply.isConnected`, `.reply-host .side[hidden] { display: none; }`,
+			`reply.classList.contains("listening")`,
+			// the bar takes its own row under the reply, so a phone keeps the reply's width while dictating
+			`.reply-host { display: flex; flex-wrap: wrap;`, `.reply-host .dictation { flex: 1 1 100%;`}, nil},
+	}
 	for _, key := range []string{"k", ""} {
-		t.Run("key="+key, func(t *testing.T) {
-			h := dictationServer(t, key, "")
-			id := createWorkflow(t, h, workflow.Starting)
-			rec := get(t, h, "/workflows/"+id, nil)
+		d := dbtest.New(t)
+		h := newServer(t, d, d.Owner, "v", func(c *Config) { c.AssemblyAIKey = key })
+		sendReport(t, h, sampleReport)
+		sendSchedules(t, h, sampleSchedules)
+		id := createWorkflow(t, h, workflow.Starting)
+		run := startRun(t, h, id, "Dictate everywhere")
+		if _, err := d.Owner.Exec(t.Context(), `UPDATE workflow_runs SET status = 'waiting', step = 4, note = 'Ship it?' WHERE id = $1`, run); err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			rec := get(t, h, strings.NewReplacer("{id}", id, "{run}", run).Replace(e.path), nil)
 			if rec.Code != http.StatusOK {
-				t.Fatalf("workflow page: %d %s", rec.Code, rec.Body)
+				t.Fatalf("%s: %d %s", e.name, rec.Code, rec.Body)
 			}
 			page := rec.Body.String()
+			if strings.Contains(page, "SpeechRecognition") {
+				t.Errorf("%s uses the browser's own speech recognition, not the shared dictation", e.name)
+			}
 			if key == "" {
-				if strings.Contains(page, `id="dictate"`) || strings.Contains(page, `/dictation.js`) {
-					t.Error("without a key, the workflow run box offers dictation")
+				if strings.Contains(page, `id="dictate"`) || strings.Contains(page, `/dictation.js`) || strings.Contains(page, `id="mic"`) {
+					t.Errorf("%s without a key offers dictation", e.name)
 				}
-				return
+				continue
 			}
-			for _, want := range []string{`data-dictation="/api/dictation/token"`, `id="dictate"`, `src="/dictation.js"`, `text: document.getElementById("s-input")`, `send: () => form.requestSubmit(start)`, `active: () => dlg.open`,
-				`onstart: clearWarning`, `dlg.addEventListener("toggle", clearWarning)`,
-				`error.textContent = ""; error.hidden = true;`, `#start .dictation { margin-top: 1.4rem; }`} {
-				if !strings.Contains(page, want) {
-					t.Errorf("workflow run box misses %s", want)
+			want := append([]string{`data-dictation="/api/dictation/token"`, `id="dictate"`, `src="/dictation.js"`,
+				`mic: document.getElementById("dictate")`}, e.wiring...)
+			for _, w := range e.absent {
+				if strings.Contains(page, w) {
+					t.Errorf("%s has %s", e.name, w)
 				}
 			}
-		})
+			for _, w := range want {
+				if !strings.Contains(page, w) {
+					t.Errorf("%s misses %s", e.name, w)
+				}
+			}
+			// a form's bar stands in for its .form-actions row and takes its spacing from ui.css's
+			// one rule, not from a copy on each page
+			if strings.Contains(page, `.dictation { margin-top:`) {
+				t.Errorf("%s spaces its dictation bar itself", e.name)
+			}
+			if n := strings.Count(page, `id="dictate"`); n != 1 {
+				t.Errorf("%s has %d dictation buttons, want 1", e.name, n)
+			}
+		}
 	}
 }

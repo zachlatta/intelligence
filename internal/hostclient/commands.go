@@ -90,8 +90,9 @@ type CreateAgentArgs struct {
 
 // WorkspaceArgs name a workspace: archive_workspace, and rename_workspace with Title ("" resets it).
 type WorkspaceArgs struct {
-	WorkspaceID string `json:"workspaceId"`
-	Title       string `json:"title,omitempty"`
+	WorkspaceID  string `json:"workspaceId"`
+	Title        string `json:"title,omitempty"`
+	WaitForAgent string `json:"waitForAgent,omitempty"` // archive: let this agent finish its turn first
 }
 
 // AgentArgs name an agent: archive_agent, cancel_agent, rename_agent with Title, send_message with
@@ -111,8 +112,12 @@ const (
 	Queue     = "queue"     // waits for the running turn, and the messages queued before it, to end
 )
 
-// waitsForTurn: a queued message, which may wait as long as the command lives.
+// waitsForTurn: a queued message or deferred archive may wait as long as the command lives.
 func (c Command) waitsForTurn() bool {
+	if c.Kind == ArchiveWorkspaceKind {
+		var a WorkspaceArgs
+		return json.Unmarshal(c.Args, &a) == nil && a.WaitForAgent != ""
+	}
 	if c.Kind != SendMessageKind {
 		return false
 	}
@@ -179,6 +184,9 @@ func ParseCommand(kind string, args json.RawMessage) (any, error) {
 		if a.WorkspaceID == "" {
 			return nil, fmt.Errorf("%s needs workspaceId", kind)
 		}
+		if kind == RenameWorkspaceKind && a.WaitForAgent != "" {
+			return nil, errors.New("rename_workspace takes no waitForAgent")
+		}
 		if kind == ArchiveWorkspaceKind && a.Title != "" {
 			return nil, errors.New("archive_workspace takes no title")
 		}
@@ -216,6 +224,9 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 	parsed, err := ParseCommand(cmd.Kind, cmd.Args)
 	if err != nil {
 		return CommandResult{}, err
+	}
+	if a, ok := parsed.(WorkspaceArgs); ok && cmd.Kind == ArchiveWorkspaceKind && a.WaitForAgent != "" {
+		return w.archiveAfterTurn(ctx, a)
 	}
 	w.mu.Lock()
 	c := w.client
@@ -285,6 +296,47 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 		}
 	}
 	return CommandResult{}, fmt.Errorf("unknown command kind %q", cmd.Kind)
+}
+
+// archiveAfterTurn uses the current connection on each attempt: a daemon restart or
+// self-update while the orchestrator finishes must not abandon durable cleanup.
+func (w *Watcher) archiveAfterTurn(ctx context.Context, a WorkspaceArgs) (CommandResult, error) {
+	for {
+		w.mu.Lock()
+		c := w.client
+		w.mu.Unlock()
+		if c != nil {
+			agents, err := c.Agents(ctx)
+			if err == nil {
+				running := false
+				for _, ag := range agents {
+					if ag.ID == a.WaitForAgent {
+						running = busy(ag.Status)
+						break
+					}
+				}
+				w.mu.Lock()
+				current := w.client
+				w.mu.Unlock()
+				if !running && current != nil && current == c {
+					result, err := w.archiveWorkspace(ctx, current, a.WorkspaceID)
+					if err == nil {
+						return result, nil
+					}
+					select {
+					case <-current.Done(): // retry after a transport failure; archives are idempotent
+					default:
+						return result, err
+					}
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return CommandResult{WorkspaceID: a.WorkspaceID}, fmt.Errorf("waiting for orchestrator's turn to end: %w", ctx.Err())
+		case <-time.After(time.Second):
+		}
+	}
 }
 
 // archiveWorkspace archives each agent in the workspace, then the workspace. Paseo 0.15 archives a

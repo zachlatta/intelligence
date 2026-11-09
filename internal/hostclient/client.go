@@ -72,6 +72,7 @@ func (b *Client) Run(ctx context.Context) error {
 		b.Watcher.Run,
 		b.Link.Run,
 		b.runCommands,
+		b.watchPermissions,
 		func(ctx context.Context) { b.syncTranscripts(ctx, reported) },
 		func(ctx context.Context) { b.syncDiffs(ctx, diffed) },
 		func(ctx context.Context) { b.update(ctx, versions) },

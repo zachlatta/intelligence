@@ -38,7 +38,7 @@ type Entry struct {
 func (r *Registry) StoreTranscript(ctx context.Context, b hostclient.TranscriptBatch, at time.Time) error {
 	return pgx.BeginFunc(ctx, r.p, func(tx pgx.Tx) error {
 		var known bool
-		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM agents WHERE host = $1 AND id = $2)", b.Host, b.AgentID).Scan(&known); err != nil {
+		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM recorded_agents WHERE host = $1 AND id = $2)", b.Host, b.AgentID).Scan(&known); err != nil {
 			return err
 		}
 		if !known {

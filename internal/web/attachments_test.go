@@ -41,7 +41,7 @@ func TestImageAttachments(t *testing.T) {
 	cmd := b.command()
 	var agent hostclient.CreateAgentArgs
 	json.Unmarshal(cmd.Args, &agent)
-	if len(agent.Attachments) != 1 || !bytes.Equal(agent.Attachments[0].Data, img.Bytes()) || strings.Contains(agent.Prompt, "attachment:") {
+	if len(agent.Attachments) != 1 || !bytes.Equal(agent.Attachments[0].Data, img.Bytes()) || strings.Contains(agent.Prompt, "attachment:") || agent.Mode != "bypassPermissions" {
 		t.Fatalf("no materialized image: %s", cmd.Args)
 	}
 	succeed(t, b, cmd, `{"agentId":"finder-1"}`)
@@ -51,7 +51,7 @@ func TestImageAttachments(t *testing.T) {
 	cmds := commandsByKind(t, b, 2)
 	var ws hostclient.CreateWorkspaceArgs
 	json.Unmarshal(cmds[hostclient.CreateWorkspaceKind].Args, &ws)
-	if ws.Agent == nil || len(ws.Agent.Attachments) != 1 || !bytes.Equal(ws.Agent.Attachments[0].Data, img.Bytes()) {
+	if ws.Agent == nil || len(ws.Agent.Attachments) != 1 || !bytes.Equal(ws.Agent.Attachments[0].Data, img.Bytes()) || ws.Agent.Mode != "bypassPermissions" {
 		t.Fatalf("orchestrator images: %+v", ws.Agent)
 	}
 	// The same references work in direct agent-session commands.

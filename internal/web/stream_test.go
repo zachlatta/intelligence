@@ -24,6 +24,11 @@ type rawHost struct {
 	next  uint64
 }
 
+// streamWait bounds each wait on a host stream: the hello, an ack, a command. It only ends a
+// wait that would fail anyway, so it is generous: under -race, with every package's tests
+// sharing the machine and Postgres, the hello's three queries can take more than a few seconds.
+const streamWait = 30 * time.Second
+
 func wsURL(srv *httptest.Server, host string) string {
 	return "ws" + strings.TrimPrefix(srv.URL, "http") + hostclient.StreamPath(host)
 }
@@ -31,7 +36,7 @@ func wsURL(srv *httptest.Server, host string) string {
 // dialStream opens host's stream to h with token; the response is the refusal when err is set.
 func dialStream(t *testing.T, srv *httptest.Server, host, token string) (*rawHost, *http.Response, error) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), streamWait)
 	defer cancel()
 	hdr := http.Header{}
 	if token != "" {
@@ -70,7 +75,7 @@ func (b *rawHost) call(f hostclient.Frame) hostclient.Frame {
 	b.t.Helper()
 	b.next++
 	f.ID = b.next
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), streamWait)
 	defer cancel()
 	if err := hostclient.WriteFrame(ctx, b.conn, f); err != nil {
 		b.t.Fatal(err)
@@ -92,7 +97,7 @@ func (b *rawHost) call(f hostclient.Frame) hostclient.Frame {
 // command reads frames until a command arrives.
 func (b *rawHost) command() hostclient.Command {
 	b.t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), streamWait)
 	defer cancel()
 	for {
 		f, err := hostclient.ReadFrame(ctx, b.conn)
