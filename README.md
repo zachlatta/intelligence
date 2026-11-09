@@ -54,8 +54,12 @@ The hierarchy is hosts > workspaces > agents:
   why in `paseo_error`), the daemon's version, listen address, pid, start and providers.
 - `workspaces`: each host's Paseo workspaces: a directory, local checkout or git worktree that agents
   run in (`kind`), with its status, project and its repository's main checkout (`project_root`),
-  branch, diff and directory. `listed = false` is a
-  workspace Paseo no longer lists (archived or background) that still has an agent in it.
+  branch, diff, directory and `tags`. `listed = false` is a
+  workspace Paseo no longer lists (archived or background) that still has an agent in it. Tags say
+  where a workspace came from: `Paseo GUI` is one made in the Paseo app (desktop, web or mobile).
+  The host reads it from the daemon's creation receipt (`~/.paseo/creations`): the app keys each
+  creation `draft_…`, the CLI, MCP tools and Intelligence's commands do not. A workspace with no
+  receipt (made before the daemon kept them, or opened rather than created) has no tag.
 - `agents`: every unarchived agent, in its workspace (`host`, `workspace_id`), with its model,
   thinking level, status, attention, parent (for sub-agents) and times.
 - `transcripts` and `transcript_entries`: each agent's transcript, its projected Paseo timeline.

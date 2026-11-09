@@ -18,6 +18,9 @@ type Watcher struct {
 	Dial       func(ctx context.Context) (*paseo.Client, error)
 	RetryEvery time.Duration // between dial attempts; default 5s
 	Now        func() time.Time
+	// Tags, when set, gives a workspace's tags (tags.go). It is asked once per workspace, and again
+	// only after it fails.
+	Tags func(workspaceID string) ([]string, error)
 
 	mu         sync.Mutex
 	client     *paseo.Client
@@ -28,6 +31,7 @@ type Watcher struct {
 	statusErr  string
 	workspaces map[string]paseo.Workspace
 	agents     map[string]paseo.Agent
+	tags       map[string][]string // each workspace's, kept across connections: they do not change
 	changed    chan struct{}
 	once       sync.Once
 
@@ -105,6 +109,11 @@ func (w *Watcher) session(ctx context.Context) error {
 	}
 	// status too, so the first snapshot of this connection is whole
 	status, statusErr := c.DaemonStatus(readCtx)
+	ids := make([]string, len(workspaces))
+	for i, x := range workspaces {
+		ids[i] = x.ID
+	}
+	w.tag(ids)
 	w.mu.Lock()
 	if statusErr != nil {
 		w.statusErr = statusErr.Error()
@@ -137,6 +146,9 @@ func (w *Watcher) session(ctx context.Context) error {
 }
 
 func (w *Watcher) apply(e paseo.Event) {
+	if e.Workspace != nil {
+		w.tag([]string{e.Workspace.ID})
+	}
 	w.mu.Lock()
 	switch {
 	case e.Agent != nil:
@@ -148,6 +160,7 @@ func (w *Watcher) apply(e paseo.Event) {
 		w.workspaces[e.Workspace.ID] = *e.Workspace
 	case e.WorkspaceRemoved != "":
 		delete(w.workspaces, e.WorkspaceRemoved)
+		delete(w.tags, e.WorkspaceRemoved)
 	}
 	w.wakeLocked()
 	w.mu.Unlock()
@@ -205,7 +218,8 @@ func (w *Watcher) Snapshot() PaseoStatus {
 	for _, x := range w.workspaces {
 		s.Workspaces = append(s.Workspaces, Workspace{ID: x.ID, Name: cmp.Or(x.Title, x.Name), Kind: x.Kind, Status: x.Status,
 			Directory: x.Directory, Project: x.Project, ProjectRoot: x.ProjectRoot, Branch: x.Branch(), Dirty: x.Dirty(), Additions: x.Additions(),
-			Deletions: x.Deletions(), CreatedAt: x.CreatedAt, ActivityAt: x.ActivityAt, LastUserMessageAt: x.LastUserMessageAt})
+			Deletions: x.Deletions(), CreatedAt: x.CreatedAt, ActivityAt: x.ActivityAt, LastUserMessageAt: x.LastUserMessageAt,
+			Tags: w.tags[x.ID]})
 	}
 	slices.SortFunc(s.Workspaces, func(a, b Workspace) int { return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.ID, b.ID)) })
 	for _, a := range w.agents {

@@ -254,7 +254,7 @@ func runHost(ctx context.Context) error {
 				return nil, err
 			}
 			return paseo.Dial(ctx, t)
-		}},
+		}, Tags: hostclient.PaseoHomeTags(c.PaseoHome)},
 		// with no key yet, the host joins an account: it logs a code to enter on the server's account page
 		Link: &hostclient.Link{Server: c.Server, Host: c.Name, Keys: &hostclient.Keys{File: c.KeyFile, Server: c.Server, Host: c.Name}}}
 	if c.AutoUpdate {

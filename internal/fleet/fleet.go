@@ -74,7 +74,7 @@ func (r *Registry) Record(ctx context.Context, rep hostclient.Report, at time.Ti
 			}
 			listed[w.ID] = true
 			wrows = append(wrows, []any{rep.Name, w.ID, true, w.Name, w.Kind, w.Status, w.Directory, w.Project, w.Branch, w.Dirty,
-				w.Additions, w.Deletions, nullTime(w.CreatedAt), nullTime(w.ActivityAt), nullTime(w.LastUserMessageAt), w.ProjectRoot})
+				w.Additions, w.Deletions, nullTime(w.CreatedAt), nullTime(w.ActivityAt), nullTime(w.LastUserMessageAt), w.ProjectRoot, nonNil(w.Tags)})
 		}
 		seen := map[string]bool{}
 		var arows [][]any
@@ -85,7 +85,7 @@ func (r *Registry) Record(ctx context.Context, rep hostclient.Report, at time.Ti
 			seen[a.ID] = true
 			if !listed[a.WorkspaceID] {
 				listed[a.WorkspaceID] = true // keep the agent: its workspace is archived or in the background
-				wrows = append(wrows, []any{rep.Name, a.WorkspaceID, false, "", "", "", a.Cwd, "", "", false, 0, 0, nil, nil, nil, ""})
+				wrows = append(wrows, []any{rep.Name, a.WorkspaceID, false, "", "", "", a.Cwd, "", "", false, 0, 0, nil, nil, nil, "", []string{}})
 			}
 			arows = append(arows, []any{rep.Name, a.ID, a.WorkspaceID, a.ParentID, a.Title, a.Provider, a.Model, a.Thinking,
 				a.Status, a.Cwd, a.RequiresAttention, a.AttentionReason, nullTime(a.CreatedAt), nullTime(a.UpdatedAt),
@@ -93,7 +93,7 @@ func (r *Registry) Record(ctx context.Context, rep hostclient.Report, at time.Ti
 		}
 		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"workspaces"}, []string{"host", "id", "listed", "name", "kind", "status",
 			"directory", "project", "branch", "dirty", "additions", "deletions", "created_at", "activity_at",
-			"last_user_message_at", "project_root"}, pgx.CopyFromRows(wrows)); err != nil {
+			"last_user_message_at", "project_root", "tags"}, pgx.CopyFromRows(wrows)); err != nil {
 			return err
 		}
 		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"agents"}, []string{"host", "id", "workspace_id", "parent_id", "title",
@@ -172,7 +172,7 @@ func (r *Registry) List(ctx context.Context) ([]Host, error) {
 	}
 
 	rows, err = r.p.Query(ctx, `SELECT host, id, listed, name, kind, status, directory, project, branch, dirty, additions,
-		deletions, created_at, activity_at, last_user_message_at, project_root
+		deletions, created_at, activity_at, last_user_message_at, project_root, tags
 		FROM workspace_status
 		ORDER BY host, running_agents > 0 DESC, agents > 0 DESC,
 		         greatest(activity_at, last_user_message_at, created_at) DESC NULLS LAST, name, id`)
@@ -182,8 +182,11 @@ func (r *Registry) List(ctx context.Context) ([]Host, error) {
 	var w WorkspaceAgents
 	var wCreated, wActivity, wLastMsg *time.Time
 	if _, err := pgx.ForEachRow(rows, []any{&host, &w.ID, &w.Listed, &w.Name, &w.Kind, &w.Status, &w.Directory, &w.Project,
-		&w.Branch, &w.Dirty, &w.Additions, &w.Deletions, &wCreated, &wActivity, &wLastMsg, &w.ProjectRoot}, func() error {
+		&w.Branch, &w.Dirty, &w.Additions, &w.Deletions, &wCreated, &wActivity, &wLastMsg, &w.ProjectRoot, &w.Tags}, func() error {
 		w.CreatedAt, w.ActivityAt, w.LastUserMessageAt = deref(wCreated), deref(wActivity), deref(wLastMsg)
+		if len(w.Tags) == 0 {
+			w.Tags = nil
+		}
 		w.Agents = agents[key{host, w.ID}]
 		if i, ok := index[host]; ok {
 			hosts[i].Workspaces = append(hosts[i].Workspaces, w)

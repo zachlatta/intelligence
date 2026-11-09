@@ -91,6 +91,7 @@
       <span class="chev"></span>
       <span class="name">{{if .Listed}}{{or .Name .ID}}{{else}}{{.ID}}{{end}}</span>
       {{if .Project}}<span class="badge">{{.Project}}</span>{{else if not .Listed}}<span class="meta">not listed by Paseo</span>{{end}}
+      {{range .Tags}}<span class="badge tag">{{.}}</span>{{end}}
       <span class="meta grow" style="text-align:right">{{agents .Agents}}</span>
       <a class="new btn ghost sm" href="/hosts/{{$host}}/workspaces/{{.ID}}/agents/new" title="Start an agent here">+ agent</a>
     </summary>
@@ -109,7 +110,7 @@
   {{$idle := idleWorkspaces .}}{{if $idle}}
   <details class="quiet" id="idle-{{$host}}">
     <summary><span class="chev"></span>{{plural (len $idle) "workspace"}} without agents</summary>
-    <ul>{{range $idle}}<li title="{{.Directory}}"><span>{{or .Name .ID}}</span>{{if .Project}} <span class="badge">{{.Project}}</span>{{end}}
+    <ul>{{range $idle}}<li title="{{.Directory}}"><span>{{or .Name .ID}}</span>{{if .Project}} <span class="badge">{{.Project}}</span>{{end}}{{range .Tags}} <span class="badge tag">{{.}}</span>{{end}}
       <a class="new btn ghost sm" href="/hosts/{{$host}}/workspaces/{{.ID}}/agents/new" title="Start an agent here">+ agent</a></li>{{end}}</ul>
   </details>
   {{end}}

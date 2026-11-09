@@ -1,8 +1,13 @@
 package paseo
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -35,3 +40,48 @@ func LocalTarget(home, clientID string) (Target, error) {
 	}
 	return Target{URL: "ws://" + net.JoinHostPort(host, port) + "/ws", Token: strings.TrimSpace(string(tok)), ClientID: clientID}, nil
 }
+
+// CreationKey is the idempotency key a workspace was created with, from the receipt the daemon
+// keeps in home/creations (the same directory as LocalTarget's). The daemon writes the receipt and
+// its claim on the workspace id before the workspace exists, so a workspace with no receipt never
+// gets one: it was made before the daemon kept receipts, or opened rather than created. That is
+// "" with no error.
+func CreationKey(home, workspaceID string) (string, error) {
+	dir := filepath.Join(home, "creations")
+	var id bytes.Buffer
+	enc := json.NewEncoder(&id) // as the daemon's JSON.stringify: no HTML escaping
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode([]string{"workspace", workspaceID}); err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(bytes.TrimSuffix(id.Bytes(), []byte("\n")))
+	identity, err := os.ReadFile(filepath.Join(dir, hex.EncodeToString(sum[:])+".claim"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	name := strings.TrimSpace(string(identity))
+	if name == "" || strings.ContainsAny(name, `/\.`) {
+		return "", fmt.Errorf("workspace %s: a bad creation claim", workspaceID)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, name+".json"))
+	if err != nil {
+		return "", fmt.Errorf("workspace %s: its creation receipt: %w", workspaceID, err)
+	}
+	var receipt struct {
+		Snapshot struct {
+			IdempotencyKey string `json:"idempotencyKey"`
+		} `json:"snapshot"`
+	}
+	if err := json.Unmarshal(b, &receipt); err != nil {
+		return "", fmt.Errorf("workspace %s: its creation receipt: %w", workspaceID, err)
+	}
+	return receipt.Snapshot.IdempotencyKey, nil
+}
+
+// CreatedInApp reports whether a creation's idempotency key is one the Paseo app (desktop, web or
+// mobile) makes: its composer keys each draft "draft_<message id>". The CLI, MCP tools and
+// Intelligence's commands use other keys.
+func CreatedInApp(key string) bool { return strings.HasPrefix(key, "draft_") }

@@ -231,3 +231,35 @@ func TestWorkspacesKeepTheirProjectRoot(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkspacesKeepTheirTags(t *testing.T) {
+	d := dbtest.New(t)
+	r := New(d.Owner)
+	rep := full()
+	rep.Paseo.Workspaces[0].Tags = []string{hostclient.TagPaseoGUI}
+	record(t, r, rep, t1)
+	for _, w := range list(t, r)[0].Workspaces {
+		if want := map[string]int{"w1": 1}[w.ID]; len(w.Tags) != want {
+			t.Errorf("%s tags = %v", w.ID, w.Tags)
+		}
+	}
+	// readable with SQL: a workspace with none has an empty array, not null
+	var gui []string
+	rows, err := dbtest.Reader(t, d, "host-1").Query(ctx,
+		"SELECT id FROM workspace_status WHERE 'Paseo GUI' = ANY (tags) AND tags IS NOT NULL ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var id string
+		rows.Scan(&id)
+		gui = append(gui, id)
+	}
+	if rows.Err() != nil || strings.Join(gui, ",") != "w1" {
+		t.Errorf("Paseo GUI workspaces = %v, %v", gui, rows.Err())
+	}
+	var untagged int
+	if err := dbtest.Reader(t, d, "host-1").QueryRow(ctx, "SELECT count(*) FROM workspaces WHERE tags = '{}'").Scan(&untagged); err != nil || untagged != 2 {
+		t.Errorf("untagged = %d, %v", untagged, err)
+	}
+}

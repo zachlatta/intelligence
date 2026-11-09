@@ -57,6 +57,7 @@ type Workspace struct {
 	CreatedAt         time.Time `json:"createdAt,omitzero"`
 	ActivityAt        time.Time `json:"activityAt,omitzero"`
 	LastUserMessageAt time.Time `json:"lastUserMessageAt,omitzero"`
+	Tags              []string  `json:"tags,omitempty"` // such as TagPaseoGUI
 }
 
 // Agent is one Paseo agent, in one workspace.

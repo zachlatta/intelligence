@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -312,5 +313,27 @@ func TestHomePageRefreshesWithoutResettingTheTree(t *testing.T) {
 	}
 	if !strings.Contains(page, "<script>") || !strings.Contains(page, "setInterval") {
 		t.Errorf("the page should refresh the tree in place")
+	}
+}
+
+func TestHomePageShowsWorkspaceTags(t *testing.T) {
+	h, _ := dbServer(t)
+	rep := sampleReport
+	rep.Paseo.Workspaces = slices.Clone(sampleReport.Paseo.Workspaces)
+	rep.Paseo.Workspaces[0].Tags = []string{hostclient.TagPaseoGUI} // w-app, with agents
+	rep.Paseo.Workspaces[2].Tags = []string{hostclient.TagPaseoGUI} // w-idle, without
+	sendReport(t, h, rep)
+	page := get(t, h, "/", nil).Body.String()
+	tag := `<span class="badge tag">Paseo GUI</span>`
+	app := page[strings.Index(page, `id="ws-host-1-w-app"`):]
+	if !strings.Contains(app[:strings.Index(app, "</summary>")], tag) {
+		t.Errorf("a tagged workspace should show its tag in its summary")
+	}
+	idle := page[strings.Index(page, `id="idle-host-1"`):]
+	if !strings.Contains(idle[:strings.Index(idle, "</details>")], tag) {
+		t.Errorf("a tagged workspace without agents should show its tag too")
+	}
+	if strings.Count(page, tag) != 2 {
+		t.Errorf("only the tagged workspaces should show a tag: %d", strings.Count(page, tag))
 	}
 }

@@ -2,6 +2,8 @@ package paseo_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -302,5 +304,54 @@ func TestTimelineErrorsComeBack(t *testing.T) {
 	c := dial(t, paseotest.New(t, token))
 	if _, err := c.Timeline(ctx5(t), "nope", nil); err == nil || !strings.Contains(err.Error(), "agent not found") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// creation writes what the daemon keeps of one workspace creation in home/creations: the receipt,
+// named for the creation's identity, and the claim on the workspace id, which names the receipt.
+func creation(t *testing.T, home, workspaceID, key string) {
+	t.Helper()
+	dir := filepath.Join(home, "creations")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	identity := "4b1c" + strings.Repeat("0", 60)
+	receipt := `{"fingerprint":"f","inFlight":null,"snapshot":{"kind":"workspace","idempotencyKey":"` + key +
+		`","phase":"completed","workspaceId":"` + workspaceID + `"}}`
+	// sha256 of the JSON ["workspace","<id>"], as the daemon names a workspace's claim
+	sum := sha256.Sum256([]byte(`["workspace","` + workspaceID + `"]`))
+	for name, body := range map[string]string{identity + ".json": receipt, hex.EncodeToString(sum[:]) + ".claim": identity} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestCreationKeyReadsTheDaemonsReceipt(t *testing.T) {
+	home := t.TempDir()
+	creation(t, home, "wks_5d8ec80b0643cc24", "draft_msg_1794182094800_sw78to36g")
+	key, err := CreationKey(home, "wks_5d8ec80b0643cc24")
+	if err != nil || key != "draft_msg_1794182094800_sw78to36g" {
+		t.Errorf("key = %q, %v", key, err)
+	}
+	// a workspace made before the daemon kept receipts, or opened rather than created, has none
+	if key, err := CreationKey(home, "wks_0000000000000000"); err != nil || key != "" {
+		t.Errorf("no receipt: key = %q, %v", key, err)
+	}
+	if key, err := CreationKey(t.TempDir(), "wks_5d8ec80b0643cc24"); err != nil || key != "" {
+		t.Errorf("no creations dir: key = %q, %v", key, err)
+	}
+}
+
+func TestCreatedInTheApp(t *testing.T) {
+	for key, want := range map[string]bool{
+		"draft_msg_1794182094800_sw78to36g":    true,  // the app's composer
+		"0c8e2b1e-5a6f-4c55-9d7e-0d6a3f2b9c11": false, // CLI, MCP
+		"intelligence.command=42":              false,
+		"":                                     false,
+	} {
+		if got := CreatedInApp(key); got != want {
+			t.Errorf("CreatedInApp(%q) = %v", key, got)
+		}
 	}
 }
