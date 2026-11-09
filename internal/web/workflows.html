@@ -142,9 +142,9 @@
 <div class="wf-grid">
 {{range .Workflows}}
 <section class="card wf-card">
-  <div class="card-head"><h2><a href="/workflows/{{.ID}}">{{.Name}}</a></h2><span class="badge">v{{.Version}}</span></div>
+  <div class="card-head"><h2><a href="/workflows/{{.ID}}">{{.Name}}</a></h2><span class="badge">v{{.Version}}</span>{{if .IsDefault}}<span class="badge">Default</span>{{end}}</div>
   <div class="card-body">{{with .Description}}<div class="meta">{{.}}</div>{{end}}<div class="strip">{{template "chips" .Definition}}</div></div>
-  <div class="card-foot">{{if eq .Definition.Trigger "task"}}{{if .IsDefault}}<span class="badge">Default</span>{{end}}
+  <div class="card-foot">{{if eq .Definition.Trigger "task"}}
     <button class="btn sm" data-default-workflow="{{.ID}}" data-default="{{if .IsDefault}}false{{else}}true{{end}}">{{if .IsDefault}}Clear default{{else}}Make default{{end}}</button>{{end}}
     <span class="grow"></span><a class="btn sm" href="/workflows/{{.ID}}">Edit</a></div>
 </section>

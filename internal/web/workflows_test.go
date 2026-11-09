@@ -467,6 +467,15 @@ func TestDefaultWorkflowIsFirstAndSelectedForTasks(t *testing.T) {
 	}
 	set(first, `{"default":true}`)
 	checkOrder(first, second, true)
+	// The Default badge sits in the card head beside the version, not among the footer buttons.
+	page := get(t, h, "/workflows", nil).Body.String()
+	head := page[strings.Index(page, `<div class="card-head"><h2><a href="/workflows/`+first+`">`):]
+	if head = head[:strings.Index(head, "</div>")]; !strings.Contains(head, `<span class="badge">Default</span>`) {
+		t.Fatalf("default card head lacks the Default badge: %s", head)
+	}
+	if strings.Count(page, `<span class="badge">Default</span>`) != 1 {
+		t.Fatal("Default badge shown more than once")
+	}
 	set(second, `{"default":false}`) // clearing another workflow leaves the default alone
 	checkOrder(first, second, true)
 	set(first, `{"default":false}`)
@@ -501,7 +510,7 @@ func TestDefaultWorkflowIsFirstAndSelectedForTasks(t *testing.T) {
 	if code != http.StatusOK || rows.Rows[0][0] != float64(0) {
 		t.Fatalf("manual trigger kept default: %d %+v", code, rows)
 	}
-	page := get(t, h, "/workflows", nil).Body.String()
+	page = get(t, h, "/workflows", nil).Body.String()
 	if !strings.Contains(page, "Make default") || !strings.Contains(page, "/default") {
 		t.Fatal("workflows UI lacks the default action")
 	}
