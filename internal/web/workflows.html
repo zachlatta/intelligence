@@ -40,9 +40,9 @@
   .builder { display: grid; grid-template-columns: minmax(0, 1fr) 24rem; gap: 1.5rem; align-items: start; }
   @media (max-width: 62rem) { .builder { grid-template-columns: 1fr; } }
   .pipe { max-width: 36rem; }
-  .node { position: relative; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius); host-shadow: var(--shadow); }
+  .node { position: relative; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: var(--shadow); }
   .node.click { cursor: pointer; } .node.click:hover { border-color: var(--faint); }
-  .node.sel { border-color: var(--accent); host-shadow: 0 0 0 3px var(--ring); }
+  .node.sel { border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
   .node.fixed { background: var(--bg-subtle); border-style: dashed; }
   .node .nh { display: flex; align-items: center; gap: .6rem; padding: .65rem .8rem; }
   .node .kind { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--faint); font-weight: 600; }
@@ -56,7 +56,7 @@
   .node .spent { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; cursor: help; }
   .node .grip { color: var(--faint); cursor: grab; user-select: none; }
   .node.dragging { opacity: .4; }
-  .node.drop-before { host-shadow: 0 -3px 0 var(--accent); } .node.drop-after { host-shadow: 0 3px 0 var(--accent); }
+  .node.drop-before { box-shadow: 0 -3px 0 var(--accent); } .node.drop-after { box-shadow: 0 3px 0 var(--accent); }
   .link { height: 1.6rem; margin-left: 1.5rem; border-left: 1.5px solid var(--line-strong); position: relative; }
   .link.done { border-left-color: var(--green); }
   .link .add { position: absolute; left: 0; top: 50%; transform: translate(-50%, -50%); width: 1.3rem; height: 1.3rem; border-radius: 50%;
@@ -103,7 +103,7 @@
   dialog form { padding: 1rem; }
   #start .dictation { margin-top: 1.4rem; }
   .menu { position: absolute; z-index: 20; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius);
-    host-shadow: 0 6px 24px rgba(0,0,0,.12); padding: .3rem; width: 17rem; }
+    box-shadow: 0 6px 24px rgba(0,0,0,.12); padding: .3rem; width: 17rem; }
   .menu button { display: block; width: 100%; text-align: left; padding: .45rem .5rem; border: 0; background: none; border-radius: 4px;
     font: inherit; color: var(--fg); cursor: pointer; }
   .menu button:hover { background: var(--bg-muted); }
@@ -228,8 +228,8 @@ setInterval(async () => {
 <div class="crumbs"><a href="/workflows">Workflows</a><span class="sep">/</span><span id="crumb">{{.Workflow.Name}}</span></div>
 <div class="page-head">
   <div style="flex:1;min-width:16rem">
-    <input id="wf-name" aria-label="Name" style="font-size:1.4rem;font-weight:600;border-color:transparent;host-shadow:none;padding:.1rem .3rem;margin-left:-.3rem">
-    <input id="wf-desc" aria-label="Description" placeholder="What is this workflow for?" style="border-color:transparent;host-shadow:none;padding:.1rem .3rem;margin-left:-.3rem;color:var(--muted)">
+    <input id="wf-name" aria-label="Name" style="font-size:1.4rem;font-weight:600;border-color:transparent;box-shadow:none;padding:.1rem .3rem;margin-left:-.3rem">
+    <input id="wf-desc" aria-label="Description" placeholder="What is this workflow for?" style="border-color:transparent;box-shadow:none;padding:.1rem .3rem;margin-left:-.3rem;color:var(--muted)">
   </div>
   <div class="actions">
     <span class="meta" id="saved"></span>
