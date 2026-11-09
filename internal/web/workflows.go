@@ -122,6 +122,27 @@ func (a *app) updateWorkflow(v viewer) http.HandlerFunc {
 	}
 }
 
+// setDefaultWorkflow: PUT /api/workflows/{id}/default {"default": true|false}.
+func (a *app) setDefaultWorkflow(v viewer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Default *bool `json:"default"`
+		}
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+		if req.Default == nil {
+			http.Error(w, "default is required", http.StatusBadRequest)
+			return
+		}
+		if err := a.wf.SetDefault(r.Context(), v.acct.ID, r.PathValue("id"), *req.Default); err != nil {
+			workflowError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 // startRun: POST /api/workflow-runs {"workflowId", "input"}: on the host the workflow names.
 func (a *app) startRun(v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -218,20 +239,21 @@ type workflowRow struct {
 	Name        string              `json:"name"`
 	Description string              `json:"description"`
 	Version     int                 `json:"version"`
+	IsDefault   bool                `json:"isDefault"`
 	Definition  workflow.Definition `json:"definition"`
 }
 
 func readWorkflows(ctx context.Context, p *pgxpool.Pool, id string) ([]workflowRow, error) {
-	rows, err := p.Query(ctx, `SELECT w.id::text, w.name, w.description, w.version, v.definition FROM workflows w
+	rows, err := p.Query(ctx, `SELECT w.id::text, w.name, w.description, w.version, w.is_default, v.definition FROM workflows w
 		JOIN workflow_versions v ON v.workflow_id = w.id AND v.version = w.version
-		WHERE $1 = '' OR w.id::text = $1 ORDER BY w.created_at, w.id`, id)
+		WHERE $1 = '' OR w.id::text = $1 ORDER BY w.is_default DESC, w.created_at, w.id`, id)
 	if err != nil {
 		return nil, err
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (workflowRow, error) {
 		var w workflowRow
 		var def []byte
-		err := row.Scan(&w.ID, &w.Name, &w.Description, &w.Version, &def)
+		err := row.Scan(&w.ID, &w.Name, &w.Description, &w.Version, &w.IsDefault, &def)
 		if err == nil {
 			err = json.Unmarshal(def, &w.Definition)
 		}

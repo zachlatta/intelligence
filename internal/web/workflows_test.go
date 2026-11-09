@@ -427,3 +427,120 @@ func TestAWorkflowSavedWithoutAHostAsksForOne(t *testing.T) {
 		t.Errorf("start = %d %s", rec.Code, rec.Body)
 	}
 }
+
+func TestDefaultWorkflowIsFirstAndSelectedForTasks(t *testing.T) {
+	h, d := dbServer(t)
+	sendReport(t, h, wfReport())
+	first := createWorkflow(t, h, workflow.Starting)
+	second := createWorkflow(t, h, workflow.Starting)
+	checkOrder := func(want, next string, selected bool) {
+		t.Helper()
+		page := get(t, h, "/workflows", nil).Body.String()
+		start := strings.Index(page, "<select id=\"task-workflow\">")
+		if start < 0 {
+			t.Fatal("task workflow picker missing")
+		}
+		picker := page[start : strings.Index(page[start:], "</select>")+start]
+		if strings.Index(picker, want) < 0 || strings.Index(picker, want) > strings.Index(picker, next) {
+			t.Fatalf("wrong task order: %s", picker)
+		}
+		if selected && !strings.Contains(picker, `value="`+want+`" selected`) {
+			t.Fatalf("default not selected: %s", picker)
+		}
+	}
+	set := func(id, body string) {
+		t.Helper()
+		rec := call(t, h, http.MethodPut, "/api/workflows/"+id+"/default", body, sameOriginFetch)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("set default = %d %s", rec.Code, rec.Body)
+		}
+	}
+	checkOrder(first, second, false)
+	set(second, `{"default":true}`)
+	checkOrder(second, first, true)
+	code, rows := sqlPost(t, h, q("SELECT id::text FROM workflows WHERE is_default"))
+	if code != http.StatusOK || len(rows.Rows) != 1 || rows.Rows[0][0] != second {
+		t.Fatalf("default through read-only SQL: %d %+v", code, rows)
+	}
+	if _, err := d.Owner.Exec(t.Context(), "UPDATE workflows SET is_default = true WHERE id = $1", first); err == nil {
+		t.Fatal("database allowed two defaults")
+	}
+	set(first, `{"default":true}`)
+	checkOrder(first, second, true)
+	set(second, `{"default":false}`) // clearing another workflow leaves the default alone
+	checkOrder(first, second, true)
+	set(first, `{"default":false}`)
+	checkOrder(first, second, false)
+	code, rows = sqlPost(t, h, q("SELECT count(*) FROM workflows WHERE is_default"))
+	if code != http.StatusOK || rows.Rows[0][0] != float64(0) {
+		t.Fatalf("clear default: %d %+v", code, rows)
+	}
+	// Concurrent choices both succeed, with exactly one final default.
+	results := make(chan int, 2)
+	for _, id := range []string{first, second} {
+		go func() {
+			results <- call(t, h, http.MethodPut, "/api/workflows/"+id+"/default", `{"default":true}`, sameOriginFetch).Code
+		}()
+	}
+	for range 2 {
+		if code := <-results; code != http.StatusNoContent {
+			t.Fatalf("concurrent default choice: %d", code)
+		}
+	}
+	code, rows = sqlPost(t, h, q("SELECT count(*) FROM workflows WHERE is_default"))
+	if code != http.StatusOK || rows.Rows[0][0] != float64(1) {
+		t.Fatalf("concurrent choices: %d %+v", code, rows)
+	}
+	set(second, `{"default":true}`)
+	manual := workflow.Starting
+	manual.Trigger = workflow.TriggerManual
+	if rec := call(t, h, http.MethodPut, "/api/workflows/"+second, wfBody(t, "By hand", manual), sameOriginFetch); rec.Code != http.StatusOK {
+		t.Fatalf("change trigger: %d %s", rec.Code, rec.Body)
+	}
+	code, rows = sqlPost(t, h, q("SELECT count(*) FROM workflows WHERE is_default"))
+	if code != http.StatusOK || rows.Rows[0][0] != float64(0) {
+		t.Fatalf("manual trigger kept default: %d %+v", code, rows)
+	}
+	page := get(t, h, "/workflows", nil).Body.String()
+	if !strings.Contains(page, "Make default") || !strings.Contains(page, "/default") {
+		t.Fatal("workflows UI lacks the default action")
+	}
+}
+
+func TestDefaultWorkflowRespectsAccountAndRequestBoundaries(t *testing.T) {
+	h, _ := dbServer(t)
+	ts := h.(*testServer)
+	sendReport(t, h, wfReport())
+	wf := createWorkflow(t, h, workflow.Starting)
+	bob, err := ts.store.Create(t.Context(), "bob", testPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asBob := sessionFor(t, ts.store, bob)
+	path := "/api/workflows/" + wf + "/default"
+	for _, id := range []string{"bad-id", "00000000-0000-4000-8000-000000000000"} {
+		if rec := call(t, h, http.MethodPut, "/api/workflows/"+id+"/default", `{"default":true}`, sameOriginFetch); rec.Code != http.StatusNotFound {
+			t.Errorf("missing workflow: %d", rec.Code)
+		}
+	}
+	if rec := call(t, h, http.MethodPut, path, `{"default":true}`, sameOriginFetch, asBob); rec.Code != http.StatusNotFound {
+		t.Errorf("another account changed default: %d", rec.Code)
+	}
+	if rec := call(t, anon(h), http.MethodPut, path, `{"default":true}`, sameOriginFetch); rec.Code != http.StatusUnauthorized {
+		t.Errorf("anonymous changed default: %d", rec.Code)
+	}
+	if rec := call(t, h, http.MethodPut, path, `{"default":true}`, map[string]string{"Content-Type": "application/json", "Origin": "https://other.example.com"}); rec.Code != http.StatusForbidden {
+		t.Errorf("cross origin changed default: %d", rec.Code)
+	}
+	for _, body := range []string{`{}`, `{"default":"yes"}`, `{"default":true,"extra":1}`} {
+		if rec := call(t, h, http.MethodPut, path, body, sameOriginFetch); rec.Code != http.StatusBadRequest {
+			t.Errorf("bad body %s: %d", body, rec.Code)
+		}
+	}
+	manual := workflow.Starting
+	manual.Trigger = workflow.TriggerManual
+	id := createWorkflow(t, h, manual)
+	if rec := call(t, h, http.MethodPut, "/api/workflows/"+id+"/default", `{"default":true}`, sameOriginFetch); rec.Code != http.StatusBadRequest {
+		t.Errorf("manual workflow default: %d", rec.Code)
+	}
+}

@@ -131,7 +131,7 @@
     <textarea id="task" placeholder="New task: describe what you want done. Its project is found for you."></textarea>
     <div class="side">
       <div class="pick"><label for="task-workflow">Workflow</label>
-        <select id="task-workflow">{{range .Tasks}}<option value="{{.ID}}">{{.Name}}{{with .Definition.Host}} · {{.}}{{end}}</option>{{end}}</select></div>
+        <select id="task-workflow">{{range .Tasks}}<option value="{{.ID}}"{{if .IsDefault}} selected{{end}}>{{.Name}}{{with .Definition.Host}} · {{.}}{{end}}</option>{{end}}</select></div>
       <button class="btn primary" id="submit-task">Submit task</button>
     </div>
   </div>
@@ -144,7 +144,9 @@
 <section class="card wf-card">
   <div class="card-head"><h2><a href="/workflows/{{.ID}}">{{.Name}}</a></h2><span class="badge">v{{.Version}}</span></div>
   <div class="card-body">{{with .Description}}<div class="meta">{{.}}</div>{{end}}<div class="strip">{{template "chips" .Definition}}</div></div>
-  <div class="card-foot"><span class="grow"></span><a class="btn sm" href="/workflows/{{.ID}}">Edit</a></div>
+  <div class="card-foot">{{if eq .Definition.Trigger "task"}}{{if .IsDefault}}<span class="badge">Default</span>{{end}}
+    <button class="btn sm" data-default-workflow="{{.ID}}" data-default="{{if .IsDefault}}false{{else}}true{{end}}">{{if .IsDefault}}Clear default{{else}}Make default{{end}}</button>{{end}}
+    <span class="grow"></span><a class="btn sm" href="/workflows/{{.ID}}">Edit</a></div>
 </section>
 {{end}}
 </div>
@@ -172,6 +174,13 @@ async function api(method, path, body) {
   if (!res.ok) throw new Error(await res.text());
   return res.status === 204 ? null : res.json();
 }
+document.querySelectorAll("[data-default-workflow]").forEach(button => button.addEventListener("click", async () => {
+  button.disabled = true;
+  try {
+    await api("PUT", "/api/workflows/" + button.dataset.defaultWorkflow + "/default", { default: button.dataset.default === "true" });
+    location.reload();
+  } catch (e) { err(e.message); button.disabled = false; }
+}));
 async function addWorkflow(name, description) {
   if (!hosts.length) return err("Add a host first (Account): a workflow runs on one.");
   try { const w = await api("POST", "/api/workflows", { name, description, definition: { ...starting, host: hosts[0] } }); location.href = "/workflows/" + w.id; }

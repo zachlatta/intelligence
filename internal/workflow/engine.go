@@ -105,6 +105,40 @@ func (e *Engine) CreateWorkflow(ctx context.Context, account int64, name, descri
 	return id, err
 }
 
+// SetDefault chooses (or clears) the task workflow shown first for this account.
+// Lock the account so concurrent choices replace each other without racing the unique index.
+func (e *Engine) SetDefault(ctx context.Context, account int64, id string, chosen bool) error {
+	if !uuidRe.MatchString(id) {
+		return ErrNotFound
+	}
+	return pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		var accountID int64
+		if err := tx.QueryRow(ctx, "SELECT id FROM accounts WHERE id = $1 FOR NO KEY UPDATE", account).Scan(&accountID); err != nil {
+			return err
+		}
+		var trigger string
+		err := tx.QueryRow(ctx, `SELECT v.definition ->> 'trigger' FROM workflows w
+			JOIN workflow_versions v ON v.workflow_id = w.id AND v.version = w.version
+			WHERE w.id = $1 AND w.account_id = $2 FOR UPDATE OF w`, id, account).Scan(&trigger)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if chosen && trigger != TriggerTask {
+			return bad("only a task workflow can be the default")
+		}
+		if chosen {
+			if _, err := tx.Exec(ctx, "UPDATE workflows SET is_default = false WHERE account_id = $1 AND is_default", account); err != nil {
+				return err
+			}
+		}
+		_, err = tx.Exec(ctx, "UPDATE workflows SET is_default = $3 WHERE id = $1 AND account_id = $2", id, account, chosen)
+		return err
+	})
+}
+
 // UpdateWorkflow saves d as the next version of account's workflow id, and returns that version.
 // Runs keep the version they started with.
 func (e *Engine) UpdateWorkflow(ctx context.Context, account int64, id, name, description string, d Definition) (int, error) {
@@ -132,8 +166,9 @@ func (e *Engine) UpdateWorkflow(ctx context.Context, account int64, id, name, de
 		if err := ownsHost(ctx, tx, account, d.Host); err != nil {
 			return err
 		}
-		err := tx.QueryRow(ctx, `UPDATE workflows SET name = $3, description = $4, version = version + 1, updated_at = $5
-			WHERE id = $1 AND account_id = $2 RETURNING version`, id, account, name, strings.TrimSpace(description), at).Scan(&version)
+		err := tx.QueryRow(ctx, `UPDATE workflows SET name = $3, description = $4, version = version + 1, updated_at = $5,
+			is_default = is_default AND $6
+			WHERE id = $1 AND account_id = $2 RETURNING version`, id, account, name, strings.TrimSpace(description), at, d.Trigger == TriggerTask).Scan(&version)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}

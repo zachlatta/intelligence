@@ -158,6 +158,7 @@ func New(cfg Config) http.Handler {
 	// workflows: written through the API, read through the account's role; a host's agents move runs with its key
 	mux.HandleFunc("POST /api/workflows", a.write(a.createWorkflow))
 	mux.HandleFunc("PUT /api/workflows/{id}", a.write(a.updateWorkflow))
+	mux.HandleFunc("PUT /api/workflows/{id}/default", a.write(a.setDefaultWorkflow))
 	mux.HandleFunc("POST /api/workflow-runs", a.write(a.startRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/reply", a.write(a.replyToRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/cancel", a.write(a.cancelRun))

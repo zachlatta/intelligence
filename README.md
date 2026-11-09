@@ -520,8 +520,12 @@ origin (another site's request is refused with 403), and those with a body must 
 - `GET /ui.css`: the one stylesheet every page shares, with the top bar (`layout.html`) that links the
   pages.
 - `GET /workflows`: a new task (for workflows triggered by a task: pick the workflow, which names
-  its host), the account's workflows and their runs. Without workflows, a button adds the starting
-  one (`workflow.Starting`) on the account's first host.
+  its host, with the default first and selected), the account's workflows and their runs. Without
+  workflows, a button adds the starting one (`workflow.Starting`) on the account's first host.
+- Task workflow cards offer Make default (one per account) and Clear default; without a default,
+  the task picker keeps creation order. The choice is readable as `workflows.is_default`.
+- `PUT /api/workflows/{id}/default` with `{"default": true}` (or `false` to clear):
+  chooses the account's default task workflow (204); 404 for another account's workflow.
 - `GET /workflows/{id}`: the editor: the host and trigger, how the project is found, the orchestrator, and
   the steps (add, reorder, edit, remove), or the definition as JSON. Saving makes a new version.
   A project that is always the same repository is picked from those the workflow's host reported
