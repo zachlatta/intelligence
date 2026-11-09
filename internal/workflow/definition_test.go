@@ -182,3 +182,13 @@ func TestLandingOwnsApprovedExternalChanges(t *testing.T) {
 		t.Errorf("landing step does not own approved external changes")
 	}
 }
+
+func TestWorkflowPromptsAvoidPermissionTraps(t *testing.T) {
+	for _, p := range []string{OrchestratorPrompt("task", Starting, Vars{Run: "r"}), StepMessage(Starting, 0, Vars{})} {
+		for _, want := range []string{"Write/Edit", "heredoc", "--mode bypassPermissions", "--mode full-access"} {
+			if !strings.Contains(p, want) {
+				t.Errorf("prompt misses %q", want)
+			}
+		}
+	}
+}

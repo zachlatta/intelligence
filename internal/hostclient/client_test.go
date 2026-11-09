@@ -161,3 +161,34 @@ func TestHostSendsItsWorkspacesDiffs(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestHostWatchdogHandlesExistingAndPushedPrompts(t *testing.T) {
+	s, d := newStreamServer(t), daemon(t)
+	a := paseotest.Agent("a1", "w1", "running")
+	a["currentModeId"] = "bypassPermissions"
+	a["pendingPermissions"] = []any{map[string]any{"id": "permission-first", "name": "Bash"}}
+	d.SetAgents(a)
+	hostRig(t, s, d)
+	waitAudit := func(id string) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			for _, f := range s.frames(PermissionFrame) {
+				if f.Permission.PermissionID == id && f.Permission.Status == "denied" {
+					return
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatal("no denied audit for", id)
+	}
+	waitAudit("permission-first")
+	a = paseotest.Agent("a1", "w1", "running")
+	a["currentModeId"] = "bypassPermissions"
+	a["pendingPermissions"] = []any{map[string]any{"id": "permission-next", "name": "Bash"}}
+	d.Push("agent_update", map[string]any{"kind": "upsert", "agent": a})
+	waitAudit("permission-next")
+	if n := len(d.Requests("agent_permission_response")); n != 2 {
+		t.Fatal("denials", n)
+	}
+}

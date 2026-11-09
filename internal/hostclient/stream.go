@@ -25,23 +25,25 @@ func StreamPath(host string) string { return "/api/hosts/" + host + "/stream" }
 // Frame is one message on the stream, as JSON. A host frame with an ID is answered by an ack frame
 // with the same ID, saying whether the server stored it.
 type Frame struct {
-	Type       string            `json:"type"`
-	ID         uint64            `json:"id,omitempty"`
-	Hello      *Hello            `json:"hello,omitempty"`      // hello: server -> host, first
-	Report     *Report           `json:"report,omitempty"`     // report: host -> server
-	Transcript *TranscriptBatch  `json:"transcript,omitempty"` // transcript: host -> server
-	Update     *CommandUpdate    `json:"update,omitempty"`     // command_update: host -> server
-	Usage      *usage.Report     `json:"usage,omitempty"`      // usage: host -> server
-	Host       *resources.Report `json:"host,omitempty"`       // host: host -> server
-	Schedules  *ScheduleReport   `json:"schedules,omitempty"`  // schedules: host -> server
-	Diff       *WorkspaceDiff    `json:"diff,omitempty"`       // diff: host -> server
-	Command    *Command          `json:"command,omitempty"`    // command: server -> host
-	Error      string            `json:"error,omitempty"`      // ack: refused, and why
-	Code       string            `json:"code,omitempty"`       // ack: AckResend or AckNotYet
+	Permission *PermissionResolution `json:"permission,omitempty"`
+	Type       string                `json:"type"`
+	ID         uint64                `json:"id,omitempty"`
+	Hello      *Hello                `json:"hello,omitempty"`      // hello: server -> host, first
+	Report     *Report               `json:"report,omitempty"`     // report: host -> server
+	Transcript *TranscriptBatch      `json:"transcript,omitempty"` // transcript: host -> server
+	Update     *CommandUpdate        `json:"update,omitempty"`     // command_update: host -> server
+	Usage      *usage.Report         `json:"usage,omitempty"`      // usage: host -> server
+	Host       *resources.Report     `json:"host,omitempty"`       // host: host -> server
+	Schedules  *ScheduleReport       `json:"schedules,omitempty"`  // schedules: host -> server
+	Diff       *WorkspaceDiff        `json:"diff,omitempty"`       // diff: host -> server
+	Command    *Command              `json:"command,omitempty"`    // command: server -> host
+	Error      string                `json:"error,omitempty"`      // ack: refused, and why
+	Code       string                `json:"code,omitempty"`       // ack: AckResend or AckNotYet
 }
 
 // Frame types.
 const (
+	PermissionFrame    = "permission"
 	HelloFrame         = "hello"
 	ReportFrame        = "report"
 	TranscriptFrame    = "transcript"
@@ -391,4 +393,8 @@ func ReadFrame(ctx context.Context, conn *websocket.Conn) (Frame, error) {
 	var f Frame
 	err := readFrame(ctx, conn, &f)
 	return f, err
+}
+
+func (l *Link) Permission(ctx context.Context, r PermissionResolution) error {
+	return l.call(ctx, Frame{Type: PermissionFrame, Permission: &r})
 }

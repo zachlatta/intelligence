@@ -456,6 +456,35 @@ only the fields stored here: agent records can carry credentials in other fields
 not published as stable; `internal/paseo/paseotest` is a fake daemon that validates requests the
 way Paseo 0.15 does, and the client was checked against a live daemon.
 
+### Unattended permission recovery
+
+The host watches pending permissions from its initial agent read and pushed updates once a
+second, on a worker separate from transcript and status reporting. It acts only on explicit
+never-ask modes: Claude `bypassPermissions`, Codex and Antigravity `full-access`, and Muse
+`allowAll`. Other modes and unknown providers are left alone. This covers all unarchived
+agents on the enrolled host, including workflow sub-agents.
+
+A bypass mode is not a promise that the provider will never prompt. Claude Code can still
+request permission on shell safety checks. One stalled workflow was writing a prompt file
+with a compound shell command and a heredoc; the pending Bash prompt supplied no reason.
+The exact provider check was not retained, so attributing it to a particular parser rule
+would be speculation. Intelligence previously discarded both the pending requests and the
+current mode, leaving no recovery path.
+
+Following Agent Factory's policy, Intelligence **denies**, never approves, these prompts.
+The denial asks the agent to rewrite the authorized step: Write/Edit for multiline files,
+simple shell commands, and `git -C`. Generated workflow instructions carry the same guidance,
+including for saved definitions. This does not expand the agent's task or waive approvals.
+
+Each attempt first stores a `permission_resolutions` row through the authenticated host stream.
+The row is account-scoped and readable through `/api/sql`; it survives agent removal.
+`pending` means the audit landed before contacting the daemon; `denied` means the daemon
+acknowledged; `error` means the attempt failed and will retry. Reports and daemon reconnects
+do not remove the audit. Failed uploads retry, even after a prompt disappears. A host process
+crash between denial and its final upload can leave `pending`, which deliberately does not
+claim a confirmed outcome. While the server is unreachable the worker waits to store the audit
+before acting. Raw commands, tool inputs and prompt contents are not copied into this table.
+
 ### Self-update
 
 Every response carries `X-Intelligence-Version`, the server's commit. The image builds the host

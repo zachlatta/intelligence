@@ -224,7 +224,8 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 	if v.Repo != "" {
 		fmt.Fprintf(&b, ", in a worktree of %s on branch %s", v.Repo, v.Branch)
 	}
-	fmt.Fprintf(&b, ".\n\nWhat started it:\n\n%s\n\nIts steps:\n\n", strings.TrimSpace(v.Input))
+	b.WriteString(".\n\n" + UnattendedShellRule)
+	fmt.Fprintf(&b, "\n\nWhat started it:\n\n%s\n\nIts steps:\n\n", strings.TrimSpace(v.Input))
 	for i, s := range d.Steps {
 		fmt.Fprintf(&b, "%d. %s (%s, id %s)\n", i+1, s.Title, s.Kind, s.ID)
 	}
@@ -252,7 +253,7 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 // StepMessage is step i's title and filled instructions, as the orchestrator gets them.
 func StepMessage(d Definition, i int, v Vars) string {
 	s := d.Steps[i]
-	return fmt.Sprintf("Step %d of %d: %s\n\n%s", i+1, len(d.Steps), s.Title, strings.TrimSpace(v.fill(s.Instructions)))
+	return fmt.Sprintf("Step %d of %d: %s\n\n%s", i+1, len(d.Steps), s.Title, strings.TrimSpace(v.fill(s.Instructions))+"\n\n"+UnattendedShellRule)
 }
 
 // OrchestratorInstructions are the starting workflow's standing instructions to its orchestrator.
@@ -294,3 +295,7 @@ var Starting = Definition{
 			"Then move on, which finishes the run."},
 	},
 }
+
+// UnattendedShellRule is included for saved workflows too, not only Starting.
+const UnattendedShellRule = "Agents run unattended. Start sub-agents with --mode bypassPermissions for claude, --mode full-access for codex or antigravity, and --mode allowAll for muse. Pass this guidance to each sub-agent. " +
+	"Even bypass mode can ask for permission on shell safety checks. Intelligence denies those prompts and asks for a safer approach. Use Write/Edit tools for prompt files and other multiline content instead of shell heredocs; split compound commands and use git -C instead of cd && git. A denial does not authorize broader actions. If blocked, report why."

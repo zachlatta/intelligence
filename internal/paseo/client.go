@@ -57,25 +57,33 @@ type Provider struct {
 	Error     string `json:"error"`
 }
 
+// Permission is the identity of a pending prompt; tool input is deliberately omitted.
+type Permission struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 // Agent is the part of an agent snapshot Intelligence reads.
 type Agent struct {
-	ID                string                 `json:"id"`
-	Title             string                 `json:"title"`
-	Provider          string                 `json:"provider"`
-	Model             string                 `json:"model"`
-	RuntimeInfo       struct{ Model string } `json:"runtimeInfo"`
-	ThinkingOptionID  string                 `json:"thinkingOptionId"`
-	EffectiveThinking string                 `json:"effectiveThinkingOptionId"`
-	Status            string                 `json:"status"` // running, idle, closed, error, ...
-	Cwd               string                 `json:"cwd"`
-	WorkspaceID       string                 `json:"workspaceId"`
-	CreatedAt         time.Time              `json:"createdAt"`
-	UpdatedAt         time.Time              `json:"updatedAt"`
-	LastUserMessageAt time.Time              `json:"lastUserMessageAt"`
-	ArchivedAt        time.Time              `json:"archivedAt"`
-	RequiresAttention bool                   `json:"requiresAttention"`
-	AttentionReason   string                 `json:"attentionReason"`
-	Labels            map[string]string      `json:"labels"`
+	CurrentModeID      string                 `json:"currentModeId"`
+	PendingPermissions []Permission           `json:"pendingPermissions"`
+	ID                 string                 `json:"id"`
+	Title              string                 `json:"title"`
+	Provider           string                 `json:"provider"`
+	Model              string                 `json:"model"`
+	RuntimeInfo        struct{ Model string } `json:"runtimeInfo"`
+	ThinkingOptionID   string                 `json:"thinkingOptionId"`
+	EffectiveThinking  string                 `json:"effectiveThinkingOptionId"`
+	Status             string                 `json:"status"` // running, idle, closed, error, ...
+	Cwd                string                 `json:"cwd"`
+	WorkspaceID        string                 `json:"workspaceId"`
+	CreatedAt          time.Time              `json:"createdAt"`
+	UpdatedAt          time.Time              `json:"updatedAt"`
+	LastUserMessageAt  time.Time              `json:"lastUserMessageAt"`
+	ArchivedAt         time.Time              `json:"archivedAt"`
+	RequiresAttention  bool                   `json:"requiresAttention"`
+	AttentionReason    string                 `json:"attentionReason"`
+	Labels             map[string]string      `json:"labels"`
 }
 
 // ModelName is the model the agent runs: what its runtime reports, else what it was started with.
@@ -338,7 +346,10 @@ func (c *Client) fetchAll(ctx context.Context, typ, sortKey string, page func(js
 
 // request sends msg as a session request and decodes its response payload into out.
 func (c *Client) request(ctx context.Context, msg map[string]any, out any) error {
-	id := "i" + strconv.FormatUint(c.nextID.Add(1), 10)
+	id, _ := msg["requestId"].(string)
+	if id == "" {
+		id = "i" + strconv.FormatUint(c.nextID.Add(1), 10)
+	}
 	msg["requestId"] = id
 	ch := make(chan reply, 1)
 	c.mu.Lock()
