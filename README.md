@@ -331,8 +331,8 @@ version it started with. A run:
      (“Hey Claude,”); a listed pleasantry before a mark, a dash or a request (“Thanks for the fix,
      but…”), with a dash or conjunction after it; a polite request (“please”, “could you”, “I'd
      like you to”, “(I) hope you can”) before a request; “thanks in advance for” before a verb in
-     -ing. A request is a verb from a closed list (`verbs`), perhaps after “never”, “not”, “also”
-     or “just”. So “Hello, fix the login page” is “Fix the login page”, but “Hello world example
+     -ing. A request is a verb from a closed list (`verbs`), perhaps after “never”, “not”, “also”,
+     “just”, “then” or “now”. So “Hello, fix the login page” is “Fix the login page”, but “Hello world example
      is broken”, “Please field is mislabeled” and “I hope we can ship this today” stay whole;
    - quotes around the whole sentence, and a `. , ; : ! ?` stuck to the end of its last word
      outside code.

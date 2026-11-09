@@ -247,13 +247,8 @@ func hasPrefix(words []string, phrase []string) bool {
 	return true
 }
 
-// greetings open a message; a sentence of a greeting and at most a name ("Hey Claude,") is only
-// social.
-var greetings = phrases("hi", "hi there", "hey", "hey there", "hello", "hello there", "dear", "greetings",
-	"good morning", "good afternoon", "good evening")
-
 // pleasantries is the closed list of social phrases: a sentence made only of these (and of
-// "and", "but", "so") is skipped, and one opening a sentence before a clause break is dropped.
+// conjunctions) is skipped, and one opening a sentence before a clause break is dropped.
 // Anything not on the list is kept: the list says what is social, never what might be.
 var pleasantries = phrases(
 	"thanks", "thank you", "thanks so much", "thank you so much", "thanks a lot", "thank you very much",
@@ -267,17 +262,6 @@ var pleasantries = phrases(
 	"hope you had a good weekend", "i hope you had a good weekend", "hope this helps", "i hope this helps",
 	"sorry to bother you", "sorry for the noise", "sorry for the delay", "sorry for the late reply",
 	"apologies for the delay", "apologies for the noise")
-
-// hopeYouCan opens a request worded as a hope ("I hope you can fix…"): the request follows.
-var hopeYouCan = func() [][]string {
-	var out [][]string
-	for _, h := range []string{"hope", "i hope", "hoping", "i'm hoping"} {
-		for _, v := range []string{"can", "could", "will", "would"} {
-			out = append(out, strings.Fields(h+" you "+v))
-		}
-	}
-	return out
-}()
 
 // conjunctions join a social clause to the task after it ("…, but login still crashes").
 var conjunctions = map[string]bool{"but": true, "and": true, "so": true, "also": true}
@@ -297,7 +281,7 @@ func social(s []string) bool {
 	if !slices.ContainsFunc(s, func(w string) bool { return socialWord(w) != "" }) {
 		return true
 	}
-	for _, p := range greetings {
+	for _, p := range greetOpenings {
 		if hasPrefix(s, p) && (len(s) == len(p) || len(s) == len(p)+1 && punctuated(s[len(p)])) {
 			return true
 		}
@@ -340,18 +324,12 @@ func socialPrefix(s, phrase []string) bool {
 
 // unsocial is s without the listed pleasantries it opens with, each only where its end is
 // clear: a mark after it (a comma, semicolon, colon, dash, "!" or "."), or a request after it
-// ("Thanks, but…", "Thanks can you fix…"); and without a hope worded as a request before a verb
-// ("I hope you can fix…"). nil when s is only social.
+// ("Thanks, but…", "Thanks can you fix…"). nil when s is only social.
 func unsocial(s []string) []string {
 	if social(s) {
 		return nil
 	}
 	for len(s) > 0 {
-		for _, p := range hopeYouCan {
-			if socialPrefix(s, p) && request(s[len(p):]) {
-				return s[len(p):]
-			}
-		}
 		n := pleasantryAt(s)
 		if n == 0 || n == len(s) || !(punctuated(s[n-1]) || isDash(s[n]) || request(s[n:])) {
 			return s
@@ -392,7 +370,7 @@ var verbs = func() map[string]bool {
 }()
 
 // request reports whether s opens a request: a listed verb, perhaps after "never", "not",
-// "also" or "just", or a polite opening before one ("please fix…").
+// "also", "just", "then" or "now", or a polite opening before one ("please fix…").
 func request(s []string) bool {
 	for len(s) > 0 && slices.Contains([]string{"never", "not", "also", "just", "then", "now"}, socialWord(s[0])) {
 		s = s[1:]
@@ -411,7 +389,8 @@ func request(s []string) bool {
 // with clear evidence of where it ends:
 //   - greetings and asides ("hi", "ok", "so", "when you get a chance") before a mark or a dash,
 //     or before a request; a greeting also takes a name with a mark after it ("Hey Claude,");
-//   - polite requests ("please", "could you", "I'd like you to") before a request;
+//   - polite requests ("please", "could you", "I'd like you to", "I hope you can") before a
+//     request;
 //   - "thanks in advance for" before a verb in -ing.
 var (
 	greetOpenings = phrases("hi there", "hey there", "hello there", "hi", "hey", "hello", "dear", "greetings",
@@ -420,7 +399,10 @@ var (
 		"if possible")
 	requestOpenings = phrases("please", "pls", "kindly", "can you", "could you", "would you", "will you", "can we",
 		"could we", "i want you to", "i'd like you to", "i would like you to", "i need you to", "go ahead and",
-		"make sure to")
+		"make sure to", "hope you can", "hope you could", "hope you will", "hope you would", "i hope you can",
+		"i hope you could", "i hope you will", "i hope you would", "hoping you can", "hoping you could",
+		"hoping you will", "hoping you would", "i'm hoping you can", "i'm hoping you could", "i'm hoping you will",
+		"i'm hoping you would")
 	gerundOpenings = phrases("thanks in advance for", "thank you in advance for")
 )
 

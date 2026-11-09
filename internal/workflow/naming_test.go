@@ -220,6 +220,8 @@ func TestRunNamesSayWhichWorkflowAndWhatTask(t *testing.T) {
 			"Factory Task: Thanks for nothing, the login still crashes · b7ea78381c2d", "wf-factory-task-thanks-for-nothing-the-login-still-b7ea78381c2d"},
 		{"social with emoji", "Factory Task", "Thank you so much!!! 🙏\nFix the login page",
 			"Factory Task: Fix the login page · b7ea78381c2d", "wf-factory-task-fix-the-login-page-b7ea78381c2d"},
+		{"please then", "Factory Task", "Please now fix the login page",
+			"Factory Task: Now fix the login page · b7ea78381c2d", "wf-factory-task-now-fix-the-login-page-b7ea78381c2d"},
 		{"two lead-ins", "Factory Task", "Thanks, hope you're well, and please fix the login page",
 			"Factory Task: Fix the login page · b7ea78381c2d", "wf-factory-task-fix-the-login-page-b7ea78381c2d"},
 
@@ -241,6 +243,8 @@ func TestRunNamesSayWhichWorkflowAndWhatTask(t *testing.T) {
 		{"no ASCII task", "Factory Task", "修复登录页面",
 			"Factory Task: 修复登录页面 · b7ea78381c2d", "wf-factory-task-b7ea78381c2d"},
 		{"no ASCII at all", "任务", "修复登录页面", "任务: 修复登录页面 · b7ea78381c2d", "wf-b7ea78381c2d"},
+		{"no words: the first line stands in", "Factory Task", "🙏",
+			"Factory Task: 🙏 · b7ea78381c2d", "wf-factory-task-b7ea78381c2d"},
 		{"no workflow name", "", "Fix the login page", "Fix the login page · b7ea78381c2d", "wf-fix-the-login-page-b7ea78381c2d"},
 	} {
 		title, br := runNames(id, c.workflow, c.input)
