@@ -166,3 +166,16 @@ func TestSavedWorkflowsKeepWorkersInsideTheirAssignedStep(t *testing.T) {
 		}
 	}
 }
+
+func TestLandingOwnsApprovedExternalChanges(t *testing.T) {
+	const want = "The landing step also applies the run's approved external changes (skill edits, queued mutations)."
+	// Saved definitions get the contract too; do not rely on new workflow defaults.
+	d := clone(Starting)
+	d.Orchestrator.Instructions = "Coordinate this task."
+	if p := OrchestratorPrompt("Saved workflow", d, Vars{Run: "run-1"}); !strings.Contains(p, want) {
+		t.Errorf("saved workflow does not assign approved external changes to landing")
+	}
+	if p := StepMessage(Starting, Starting.Index("land"), Vars{Run: "run-1"}); !strings.Contains(p, want) {
+		t.Errorf("landing step does not own approved external changes")
+	}
+}

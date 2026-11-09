@@ -321,7 +321,9 @@ version it started with. A run:
 2. **Starts the orchestrator in the worktree.** The server archives the finder and queues
    `create_workspace`: a git worktree of the repository on branch `wf-<run>-<title>` (or the home
    directory, for none) with the orchestrator in it. Its first message is its standing
-   instructions, the input, the list of steps, the commands below, and the first step.
+   instructions, the input, the list of steps, the commands below, the workflow contract and the first step.
+   The contract sets role and model handoffs, limits work to the assigned step, and assigns
+   approved external changes to landing.
 3. **The orchestrator moves through the steps.** It never does the work itself: it starts
    sub-agents for it (`paseo run` in its workspace, so they are its sub-agents), and decides when a
    step is done. Every agent of a run works unattended, so each starts in its provider's mode that

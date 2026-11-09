@@ -235,7 +235,7 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 		"  intelligence workflow fail --run %[1]s --why \"<why>\"    the run cannot be done\n\n"+
 		"next after the last step finishes the run.\n\n", v.Run)
 	b.WriteString("Workflow instructions take precedence over conflicting shared skill defaults (including start-here, agent-factory and paseo-cli); keep system, host, repository and user constraints. Only the orchestrator moves the run. Pass each sub-agent its role, current step, run id, task context and limits, including this workflow contract. Follow this workflow's model choices rather than a shared skill's default.\n\n" +
-		"Builders may edit, test and commit in the worktree; do not push, land, deploy or change external systems before the step that authorizes it. Checkers follow their step's edit limits. Shared skill writes and queued mutations are external changes too: pass proposed edits and evidence to the authorized step. Preserve scratch needed by later steps. A worker reports back and ends its turn; the orchestrator owns reuse and archiving. After a successful ask, end your turn and wait for the reply message; do not poll or create a wakeup.\n\n")
+		"Builders may edit, test and commit in the worktree; do not push, land, deploy or change external systems before the step that authorizes it. Checkers follow their step's edit limits. Shared skill writes and queued mutations are external changes too: pass proposed edits and evidence to the authorized step. The landing step also applies the run's approved external changes (skill edits, queued mutations). Preserve scratch needed by later steps. A worker reports back and ends its turn; the orchestrator owns reuse and archiving. After a successful ask, end your turn and wait for the reply message; do not poll or create a wakeup.\n\n")
 	b.WriteString(StepMessage(d, 0, v))
 	return b.String()
 }
@@ -280,6 +280,6 @@ var Starting = Definition{
 			"the architecture change before and after, before and after screenshots, and anything he needs to decide, with your recommendation. " +
 			"Ask, then do what his reply says."},
 		{ID: "land", Kind: KindStep, Title: "Land and deploy", Instructions: "Rebase on origin/main, land on main the way the repository's AGENTS.md says, " +
-			"and wait until the deploy reports the new version. Then move on, which finishes the run."},
+			"and wait until the deploy reports the new version. The landing step also applies the run's approved external changes (skill edits, queued mutations). Then move on, which finishes the run."},
 	},
 }
