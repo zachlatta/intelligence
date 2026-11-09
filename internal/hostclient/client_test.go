@@ -192,3 +192,44 @@ func TestHostWatchdogHandlesExistingAndPushedPrompts(t *testing.T) {
 		t.Fatal("denials", n)
 	}
 }
+
+func TestHostRestoresPermissionAuditsOnStartAndBothReconnects(t *testing.T) {
+	server, d := newStreamServer(t), daemon(t)
+	old := time.Now().Add(-time.Hour)
+	server.answer = func(f Frame) Frame {
+		ack := Frame{Type: AckFrame, ID: f.ID}
+		if f.Type == PermissionRestoreFrame {
+			ack.PermissionRestore = &PermissionRestore{Records: []PermissionResolution{
+				{AgentID: "gone", PermissionID: "p", Status: "stuck", At: old, FirstSeenAt: old, StuckAt: old, DeniedAt: old},
+			}}
+		}
+		return ack
+	}
+	hostRig(t, server, d)
+	waitCleared := func(n int) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			count := 0
+			for _, f := range server.frames(PermissionFrame) {
+				if f.Permission.Status == "cleared" {
+					count++
+				}
+			}
+			if count >= n {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatal("did not reconcile restored audit", n)
+	}
+	waitCleared(1)
+	server.mu.Lock()
+	for _, c := range server.conns {
+		c.CloseNow()
+	}
+	server.mu.Unlock()
+	waitCleared(2)
+	d.DropAll()
+	waitCleared(3)
+}

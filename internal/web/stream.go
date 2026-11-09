@@ -159,6 +159,12 @@ func receive(ctx context.Context, a *app, host string, f hostclient.Frame) hostc
 		err = reg.RecordUsage(ctx, host, *f.Usage, cfg.Now())
 	case f.Type == hostclient.SchedulesFrame && f.Schedules != nil:
 		err = reg.RecordSchedules(ctx, host, *f.Schedules, cfg.Now())
+	case f.Type == hostclient.PermissionRestoreFrame && f.PermissionRestore != nil:
+		var rows []hostclient.PermissionResolution
+		rows, err = reg.PermissionRecords(ctx, host, f.PermissionRestore.AfterAgentID, f.PermissionRestore.AfterPermissionID)
+		if err == nil {
+			ack.PermissionRestore = &hostclient.PermissionRestore{Records: rows, More: len(rows) == hostclient.PermissionRestorePage}
+		}
 	case f.Type == hostclient.PermissionFrame && f.Permission != nil:
 		err = reg.RecordPermission(ctx, host, *f.Permission, cfg.Now())
 	case f.Type == hostclient.DiffFrame && f.Diff != nil:

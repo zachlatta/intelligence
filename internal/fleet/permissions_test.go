@@ -61,3 +61,23 @@ func TestPermissionAuditEscalatesAndClearsOneRow(t *testing.T) {
 		t.Fatal(n, err)
 	}
 }
+
+func TestPermissionRestorePagesUnresolvedRows(t *testing.T) {
+	r := New(dbtestOwner(t))
+	record(t, r, full(), t1)
+	if _, err := r.p.Exec(ctx, `INSERT INTO permission_resolutions
+ (host,agent_id,permission_id,provider,mode,tool,status,message,attempted_at,received_at)
+ SELECT 'host-1','a',lpad(n::text,4,'0'),'claude','bypassPermissions','Bash','pending','rewrite',$1,$1
+ FROM generate_series(1,201) n`, t1); err != nil {
+		t.Fatal(err)
+	}
+	first, err := r.PermissionRecords(ctx, "host-1", "", "")
+	if err != nil || len(first) != hostclient.PermissionRestorePage {
+		t.Fatal(len(first), err)
+	}
+	last := first[len(first)-1]
+	next, err := r.PermissionRecords(ctx, "host-1", last.AgentID, last.PermissionID)
+	if err != nil || len(next) != 1 || next[0].PermissionID != "0201" {
+		t.Fatal(next, err)
+	}
+}

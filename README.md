@@ -490,8 +490,14 @@ After 20 minutes pending following a confirmed denial, or 20 minutes of failing 
 prompt, its status becomes `stuck`. The host and agent pages show “permission recovery stuck”.
 SQL exposes `first_seen_at`, `denied_at`, `stuck_at` and `cleared_at`; when the watcher observes
 the prompt gone it marks the row `cleared` and removes the warning. A daemon disconnect is not
-treated as proof of clearance. Retry timers are in-process and restart with the host client;
-the audit remains in Postgres. No email is sent. Reports and daemon reconnects
+treated as proof of clearance. On host startup and on either daemon or server reconnect,
+the watchdog loads this host's unresolved audits in pages over its authenticated stream,
+then reconciles them against the first authoritative daemon snapshot. Missing prompts are
+cleared even when they were first observed by a previous host process. Confirmed denials and
+stuck timestamps are retained, and `next_retry_at` / `retry_delay_ns` restore failed denials'
+backoff. A restore failure backs off and prevents recovery from acting on incomplete state.
+Newer local outcomes awaiting upload are preserved during reconnect. Audit-upload backoff is
+in-process; denial backoff and the audit remain in Postgres. No email is sent. Reports and daemon reconnects
 do not remove the audit. Failed uploads retry, even after a prompt disappears. A host process
 crash between denial and its final upload can leave `pending`, which deliberately does not
 claim a confirmed outcome. While the server is unreachable the worker waits to store the audit

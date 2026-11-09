@@ -14,19 +14,21 @@ const permissionRewrite = "Intelligence denied this permission prompt automatica
 // PermissionResolution is an audit of one prompt. pending is stored before the
 // daemon is contacted; denied means the daemon acknowledged, error means retry.
 type PermissionResolution struct {
-	AgentID      string    `json:"agentId"`
-	PermissionID string    `json:"permissionId"`
-	Provider     string    `json:"provider"`
-	Mode         string    `json:"mode"`
-	Tool         string    `json:"tool"`
-	Status       string    `json:"status"`
-	Message      string    `json:"message"`
-	Error        string    `json:"error,omitempty"`
-	FirstSeenAt  time.Time `json:"firstSeenAt,omitzero"`
-	DeniedAt     time.Time `json:"deniedAt,omitzero"`
-	StuckAt      time.Time `json:"stuckAt,omitzero"`
-	ClearedAt    time.Time `json:"clearedAt,omitzero"`
-	At           time.Time `json:"at"`
+	NextRetryAt  time.Time     `json:"nextRetryAt,omitzero"`
+	RetryDelay   time.Duration `json:"retryDelay,omitempty"`
+	AgentID      string        `json:"agentId"`
+	PermissionID string        `json:"permissionId"`
+	Provider     string        `json:"provider"`
+	Mode         string        `json:"mode"`
+	Tool         string        `json:"tool"`
+	Status       string        `json:"status"`
+	Message      string        `json:"message"`
+	Error        string        `json:"error,omitempty"`
+	FirstSeenAt  time.Time     `json:"firstSeenAt,omitzero"`
+	DeniedAt     time.Time     `json:"deniedAt,omitzero"`
+	StuckAt      time.Time     `json:"stuckAt,omitzero"`
+	ClearedAt    time.Time     `json:"clearedAt,omitzero"`
+	At           time.Time     `json:"at"`
 }
 
 func neverAsk(provider, mode string) bool {
@@ -44,10 +46,14 @@ func neverAsk(provider, mode string) bool {
 // PermissionSync keeps one audit row per prompt. Failed denials and uploads
 // back off independently, doubling from one second to five minutes.
 type PermissionSync struct {
-	Send    func(context.Context, PermissionResolution) error
-	Deny    func(context.Context, string, string) error
-	Now     func() time.Time
-	prompts map[string]*permissionPrompt
+	Send      func(context.Context, PermissionResolution) error
+	Deny      func(context.Context, string, string) error
+	Now       func() time.Time
+	Load      func(context.Context) ([]PermissionResolution, error)
+	loaded    bool
+	nextLoad  time.Time
+	loadDelay time.Duration
+	prompts   map[string]*permissionPrompt
 }
 
 type permissionPrompt struct {
@@ -79,12 +85,51 @@ func (s *PermissionSync) upload(ctx context.Context, p *permissionPrompt, now ti
 	return nil
 }
 
-func (s *PermissionSync) Sync(ctx context.Context, agents []paseo.Agent) error {
+// Reset restores server state on the next pass without discarding newer local
+// outcomes whose uploads may still be waiting for acknowledgement.
+func (s *PermissionSync) Reset() {
+	s.loaded = false
+	s.nextLoad = time.Time{}
+	s.loadDelay = 0
+}
+
+func (s *PermissionSync) restore(ctx context.Context) error {
 	if s.Now == nil {
 		s.Now = time.Now
 	}
 	if s.prompts == nil {
 		s.prompts = map[string]*permissionPrompt{}
+	}
+	if s.loaded || s.Load == nil {
+		return nil
+	}
+	now := s.Now()
+	if now.Before(s.nextLoad) {
+		return errors.New("permission restore waiting to retry")
+	}
+	records, err := s.Load(ctx)
+	if err != nil {
+		s.loadDelay = retryDelay(s.loadDelay)
+		s.nextLoad = s.Now().Add(s.loadDelay)
+		return err
+	}
+	for _, r := range records {
+		if r.Status == "cleared" || !r.ClearedAt.IsZero() {
+			continue
+		}
+		key := r.AgentID + "/" + r.PermissionID
+		if local := s.prompts[key]; local != nil && (local.dirty || !local.record.At.Before(r.At)) {
+			continue
+		}
+		s.prompts[key] = &permissionPrompt{record: r, nextDeny: r.NextRetryAt, denyDelay: r.RetryDelay}
+	}
+	s.loaded = true
+	return nil
+}
+
+func (s *PermissionSync) Sync(ctx context.Context, agents []paseo.Agent) error {
+	if err := s.restore(ctx); err != nil {
+		return err
 	}
 	now := s.Now()
 	live := map[string]bool{}
@@ -153,10 +198,12 @@ func (s *PermissionSync) Sync(ctx context.Context, agents []paseo.Agent) error {
 					r.Status = "error"
 				}
 				p.denyDelay = retryDelay(p.denyDelay)
-				p.nextDeny = now.Add(p.denyDelay)
+				p.nextDeny = s.Now().Add(p.denyDelay)
+				r.NextRetryAt, r.RetryDelay = p.nextDeny, p.denyDelay
 				errs = append(errs, err)
 			} else {
-				r.DeniedAt, r.Error = now, ""
+				r.DeniedAt, r.Error = s.Now(), ""
+				r.NextRetryAt, r.RetryDelay = time.Time{}, 0
 				if r.StuckAt.IsZero() {
 					r.Status = "denied"
 				}
@@ -171,7 +218,7 @@ func (s *PermissionSync) Sync(ctx context.Context, agents []paseo.Agent) error {
 }
 
 func (b *Client) watchPermissions(ctx context.Context) {
-	s := PermissionSync{Send: b.Link.Permission, Deny: func(ctx context.Context, agent, id string) error {
+	s := PermissionSync{Load: b.Link.PermissionRecords, Send: b.Link.Permission, Deny: func(ctx context.Context, agent, id string) error {
 		b.Watcher.mu.Lock()
 		c := b.Watcher.client
 		b.Watcher.mu.Unlock()
@@ -183,6 +230,8 @@ func (b *Client) watchPermissions(ctx context.Context) {
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	last := ""
+	var lastDaemon *paseo.Client
+	var lastStream uint64
 	for {
 		select {
 		case <-ctx.Done():
@@ -190,17 +239,35 @@ func (b *Client) watchPermissions(ctx context.Context) {
 		case <-tick.C:
 		}
 		b.Watcher.mu.Lock()
-		connected := b.Watcher.client != nil
-		var agents []paseo.Agent
-		for _, a := range b.Watcher.agents {
-			agents = append(agents, a)
-		}
+		daemon := b.Watcher.client
 		b.Watcher.mu.Unlock()
-		if !connected {
+		generation, connected := b.Link.Generation()
+		if daemon == nil || !connected {
 			continue
-		} // absence during a disconnect is not proof the prompt cleared
+		}
+		if daemon != lastDaemon || generation != lastStream {
+			s.Reset()
+			lastDaemon, lastStream = daemon, generation
+		}
 		call, cancel := context.WithTimeout(ctx, 30*time.Second)
-		err := s.Sync(call, agents)
+		err := s.restore(call)
+		if err == nil {
+			// Read the authoritative snapshot AFTER loading the server's audit,
+			// and discard the pass if either connection changed during the load.
+			b.Watcher.mu.Lock()
+			sameDaemon := b.Watcher.client == daemon
+			var agents []paseo.Agent
+			if sameDaemon {
+				for _, a := range b.Watcher.agents {
+					agents = append(agents, a)
+				}
+			}
+			b.Watcher.mu.Unlock()
+			current, up := b.Link.Generation()
+			if sameDaemon && up && current == generation {
+				err = s.Sync(call, agents)
+			}
+		}
 		cancel()
 		if err != nil && fmt.Sprint(err) != last && ctx.Err() == nil {
 			b.Logf("permission watchdog: %v", err)

@@ -195,3 +195,133 @@ func TestPermissionRetryStopsWhenModeChanges(t *testing.T) {
 		t.Fatal("acted on a prompt outside never-ask mode", calls, last)
 	}
 }
+
+func TestPermissionRestartClearsPersistedStuckPrompt(t *testing.T) {
+	now := time.Unix(1, 0)
+	var row PermissionResolution
+	send := func(_ context.Context, r PermissionResolution) error { row = r; return nil }
+	deny := func(context.Context, string, string) error { return nil }
+	a := paseo.Agent{ID: "a", Provider: "claude", CurrentModeID: "bypassPermissions", PendingPermissions: []paseo.Permission{{ID: "p"}}}
+	s := PermissionSync{Now: func() time.Time { return now }, Send: send, Deny: deny}
+	_ = s.Sync(context.Background(), []paseo.Agent{a})
+	now = now.Add(20 * time.Minute)
+	_ = s.Sync(context.Background(), []paseo.Agent{a})
+	if row.Status != "stuck" {
+		t.Fatal(row)
+	}
+	s = PermissionSync{Now: func() time.Time { return now }, Send: send, Deny: deny,
+		Load: func(context.Context) ([]PermissionResolution, error) { return []PermissionResolution{row}, nil }}
+	now = now.Add(time.Second)
+	if err := s.Sync(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != "cleared" || row.ClearedAt.IsZero() {
+		t.Fatal("restart left stale stuck state", row)
+	}
+}
+
+func TestPermissionRestoreResumesBackoffAndStuckTracking(t *testing.T) {
+	now := time.Unix(1, 0)
+	row := PermissionResolution{AgentID: "a", PermissionID: "p", Provider: "claude", Mode: "bypassPermissions", Status: "error",
+		FirstSeenAt: now.Add(-20 * time.Minute), At: now, NextRetryAt: now.Add(time.Minute), RetryDelay: time.Minute}
+	calls, loads := 0, 0
+	s := PermissionSync{Now: func() time.Time { return now },
+		Load: func(context.Context) ([]PermissionResolution, error) {
+			loads++
+			return []PermissionResolution{row}, nil
+		},
+		Send: func(_ context.Context, r PermissionResolution) error { row = r; return nil },
+		Deny: func(context.Context, string, string) error { calls++; return errors.New("reject") }}
+	a := paseo.Agent{ID: "a", Provider: "claude", CurrentModeID: "bypassPermissions", PendingPermissions: []paseo.Permission{{ID: "p"}}}
+	_ = s.Sync(context.Background(), []paseo.Agent{a})
+	if row.Status != "stuck" || calls != 0 {
+		t.Fatal("lost restored age or backoff", row, calls)
+	}
+	now = now.Add(time.Minute)
+	_ = s.Sync(context.Background(), []paseo.Agent{a})
+	if calls != 1 || row.RetryDelay != 2*time.Minute {
+		t.Fatal(row, calls)
+	}
+	s.Reset()
+	_ = s.Sync(context.Background(), []paseo.Agent{a})
+	if loads != 2 || calls != 1 {
+		t.Fatal("reconnect did not restore", loads, calls)
+	}
+}
+
+func TestPermissionRestoreFailureBlocksRecoveryAndRetries(t *testing.T) {
+	now := time.Unix(1, 0)
+	calls, loads := 0, 0
+	offline := true
+	s := PermissionSync{Now: func() time.Time { return now }, Load: func(context.Context) ([]PermissionResolution, error) {
+		loads++
+		if offline {
+			return nil, errors.New("offline")
+		}
+		return nil, nil
+	},
+		Send: func(context.Context, PermissionResolution) error { return nil }, Deny: func(context.Context, string, string) error { calls++; return nil }}
+	a := paseo.Agent{ID: "a", Provider: "claude", CurrentModeID: "bypassPermissions", PendingPermissions: []paseo.Permission{{ID: "p"}}}
+	_ = s.Sync(context.Background(), []paseo.Agent{a})
+	_ = s.Sync(context.Background(), []paseo.Agent{a})
+	if calls != 0 || loads != 1 {
+		t.Fatal(calls, loads)
+	}
+	offline = false
+	now = now.Add(time.Second)
+	if err := s.Sync(context.Background(), []paseo.Agent{a}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatal(calls)
+	}
+}
+
+func TestPermissionRestoreDoesNotReplaceUnuploadedDenial(t *testing.T) {
+	now := time.Unix(1, 0)
+	old := PermissionResolution{AgentID: "a", PermissionID: "p", Provider: "claude", Mode: "bypassPermissions", Status: "pending", At: now, FirstSeenAt: now}
+	fail := true
+	calls := 0
+	s := PermissionSync{Now: func() time.Time { return now }, Load: func(context.Context) ([]PermissionResolution, error) { return []PermissionResolution{old}, nil },
+		Send: func(_ context.Context, r PermissionResolution) error {
+			if fail && r.Status == "denied" {
+				return errors.New("lost ack")
+			}
+			return nil
+		},
+		Deny: func(context.Context, string, string) error { calls++; return nil }}
+	a := paseo.Agent{ID: "a", Provider: "claude", CurrentModeID: "bypassPermissions", PendingPermissions: []paseo.Permission{{ID: "p"}}}
+	_ = s.Sync(context.Background(), []paseo.Agent{a})
+	fail = false
+	now = now.Add(time.Second)
+	s.Reset()
+	if err := s.Sync(context.Background(), []paseo.Agent{a}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatal("denied again after restoring stale row", calls)
+	}
+}
+
+func TestPermissionRestoreKeepsConfirmedDenialAndOriginalAge(t *testing.T) {
+	now := time.Unix(1, 0)
+	row := PermissionResolution{AgentID: "a", PermissionID: "p", Provider: "claude", Mode: "bypassPermissions", Status: "denied",
+		At: now, FirstSeenAt: now.Add(-time.Hour), DeniedAt: now.Add(-19 * time.Minute)}
+	s := PermissionSync{Now: func() time.Time { return now }, Load: func(context.Context) ([]PermissionResolution, error) { return []PermissionResolution{row}, nil },
+		Send: func(_ context.Context, r PermissionResolution) error { row = r; return nil },
+		Deny: func(context.Context, string, string) error { t.Fatal("repeated restored confirmed denial"); return nil }}
+	a := paseo.Agent{ID: "a", Provider: "claude", CurrentModeID: "bypassPermissions", PendingPermissions: []paseo.Permission{{ID: "p"}}}
+	if err := s.Sync(context.Background(), []paseo.Agent{a}); err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != "denied" {
+		t.Fatal("escalated before 20 minutes since denial", row)
+	}
+	now = now.Add(time.Minute)
+	if err := s.Sync(context.Background(), []paseo.Agent{a}); err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != "stuck" {
+		t.Fatal("lost denial age across restart", row)
+	}
+}
