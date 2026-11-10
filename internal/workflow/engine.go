@@ -447,6 +447,7 @@ func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo s
 		return err
 	}
 	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, repo = $3, branch = $4, workspace_title = $5, pending_command = $6, updated_at = $7,
+		start_retries=0, start_retry_at=NULL, error='',
 		title = $8 WHERE id = $1`, r.ID, StartingOrchestrator, repo, r.Branch, wsTitle, c.ID, e.Now(), r.Title)
 	return err
 }
@@ -480,10 +481,56 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 				what = "could not start the orchestrator"
 			}
 			msg := what + ": " + c.Error
+			if res.WorkspaceID == "" {
+				res.WorkspaceID = r.WorkspaceID
+			}
+			if r.Status == FindingProject || r.Status == StartingOrchestrator {
+				var retries int
+				var due *time.Time
+				if err := tx.QueryRow(ctx, "SELECT start_retries, start_retry_at FROM workflow_runs WHERE id=$1", r.ID).Scan(&retries, &due); err != nil {
+					return err
+				}
+				if retries < 3 {
+					if due == nil {
+						if err := e.event(ctx, tx, r, "start_retry", nil, nil, msg); err != nil {
+							return err
+						}
+						_, err := tx.Exec(ctx, "UPDATE workflow_runs SET error=$2, start_retry_at=$3, updated_at=$4, workspace_id=$5 WHERE id=$1", r.ID, msg, at.Add(15*time.Second*time.Duration(1<<retries)), at, res.WorkspaceID)
+						return err
+					}
+					if at.Before(*due) {
+						return nil
+					}
+					var connected bool
+					if err := tx.QueryRow(ctx, "SELECT connected AND start_retry_keys FROM hosts WHERE name=$1", r.Host).Scan(&connected); err != nil {
+						return err
+					}
+					if !connected {
+						return nil
+					}
+					// Reuse Paseo's creation key, but give this delivery a new ID: the host
+					// caches completed deliveries, including failures. The run lock serializes
+					// concurrent workers and leaves old/late command updates detached.
+					next, err := fleet.EnqueueTx(ctx, tx, r.Host, c.Kind, c.Args, commandTTL, at)
+					if err != nil {
+						return err
+					}
+					key := c.IdempotencyKey
+					if key == "" {
+						key = c.ID
+					}
+					if _, err := tx.Exec(ctx, "UPDATE commands SET idempotency_key=$2 WHERE id=$1", next.ID, key); err != nil {
+						return err
+					}
+					_, err = tx.Exec(ctx, `UPDATE workflow_runs SET pending_command=$2, start_retries=start_retries+1, start_retry_at=NULL,
+						project_command=CASE WHEN status='finding_project' THEN $2 ELSE project_command END, updated_at=$3 WHERE id=$1`, r.ID, next.ID, at)
+					return err
+				}
+			}
 			if err := e.event(ctx, tx, r, "error", nil, nil, msg); err != nil {
 				return err
 			}
-			_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, error = $3, pending_command = NULL, workspace_id = $4,
+			_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, error = $3, pending_command = NULL, start_retry_at=NULL, workspace_id = $4,
 				updated_at = $5, finished_at = $5 WHERE id = $1`, r.ID, Failed, msg, res.WorkspaceID, at)
 			if err != nil {
 				return err
@@ -492,7 +539,7 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 			return e.archiveRun(ctx, tx, r)
 		}
 		if r.Status == FindingProject {
-			_, err := tx.Exec(ctx, "UPDATE workflow_runs SET project_agent_id = $2, pending_command = NULL, updated_at = $3 WHERE id = $1",
+			_, err := tx.Exec(ctx, "UPDATE workflow_runs SET project_agent_id = $2, pending_command = NULL, error='', start_retries=0, start_retry_at=NULL, updated_at = $3 WHERE id = $1",
 				r.ID, res.AgentID, at)
 			return err
 		}
@@ -500,7 +547,7 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 			return err
 		}
 		_, err = tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, step = 0, workspace_id = $3, orchestrator_id = $4,
-			pending_command = NULL, updated_at = $5 WHERE id = $1`, r.ID, Running, res.WorkspaceID, res.AgentID, at)
+			pending_command = NULL, error='', start_retry_at=NULL, updated_at = $5 WHERE id = $1`, r.ID, Running, res.WorkspaceID, res.AgentID, at)
 		return err
 	})
 }
@@ -783,7 +830,7 @@ func (e *Engine) Cancel(ctx context.Context, account int64, runID string) error 
 		if err := e.event(ctx, tx, r, "cancel", nil, nil, ""); err != nil {
 			return err
 		}
-		_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, pending_command = NULL, updated_at = $3, finished_at = $3 WHERE id = $1`,
+		_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, pending_command = NULL, start_retry_at=NULL, updated_at = $3, finished_at = $3 WHERE id = $1`,
 			r.ID, Canceled, e.Now())
 		return err
 	})

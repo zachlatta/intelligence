@@ -92,6 +92,7 @@ func New(cfg Config) http.Handler {
 	context.AfterFunc(cfg.Context, roles.Close)
 	store := accounts.New(cfg.DB, roles)
 	a := &app{cfg: cfg, store: store, reg: reg, changes: changes, wf: workflow.NewEngine(cfg.DB, cfg.Now)}
+	go a.wf.RunStartRetries(cfg.Context)
 	if cfg.Google != nil && cfg.EmailKey != nil {
 		a.mail = &email.Service{DB: cfg.DB, Engine: a.wf, Google: cfg.Google, Key: cfg.EmailKey, Now: cfg.Now}
 		interval := cfg.EmailInterval

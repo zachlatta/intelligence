@@ -18,6 +18,7 @@ import (
 // wfReport is host-1 with one repository, /w/app (its workspaces' project root).
 func wfReport() hostclient.Report {
 	rep := sampleReport
+	rep.StartRetryKeys = true
 	rep.Paseo.Workspaces = append([]hostclient.Workspace(nil), sampleReport.Paseo.Workspaces...)
 	rep.Paseo.Workspaces[0].ProjectRoot = "/w/app"
 	return rep
@@ -393,11 +394,14 @@ func TestNoProjectRunsTheOrchestratorInTheHomeDirectory(t *testing.T) {
 }
 
 func TestAFailedStartFailsTheRun(t *testing.T) {
-	h, _ := dbServer(t)
+	h, db := dbServer(t)
 	sendReport(t, h, wfReport())
 	b := openStream(t, h, "host-1")
 	run := startRun(t, h, createWorkflow(t, h, workflow.Starting), "anything")
 	c := b.command()
+	if _, err := db.Owner.Exec(t.Context(), "UPDATE workflow_runs SET start_retries=3 WHERE id=$1", run); err != nil {
+		t.Fatal(err)
+	}
 	if ack := b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{ID: c.ID, Status: hostclient.CommandFailed,
 		Error: "provider claude is not available"}}); ack.Error != "" {
 		t.Fatal(ack.Error)
@@ -821,13 +825,16 @@ func TestFinishedWorkflowQueuesArchiveAndKeepsArchiveFailureSeparate(t *testing.
 }
 
 func TestFailedOrchestratorStartArchivesItsPartialWorkspace(t *testing.T) {
-	h, _ := dbServer(t)
+	h, db := dbServer(t)
 	sendReport(t, h, wfReport())
 	b := openStream(t, h, "host-1")
 	def := workflow.Starting
 	def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
 	run := startRun(t, h, createWorkflow(t, h, def), "anything")
 	c := b.command()
+	if _, err := db.Owner.Exec(t.Context(), "UPDATE workflow_runs SET start_retries=3 WHERE id=$1", run); err != nil {
+		t.Fatal(err)
+	}
 	if ack := b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{
 		ID: c.ID, Status: hostclient.CommandFailed, Error: "agent failed to start", Result: json.RawMessage(`{"workspaceId":"partial"}`),
 	}}); ack.Error != "" {

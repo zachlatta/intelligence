@@ -25,11 +25,12 @@ import (
 // idempotency key for creating or running a schedule, so only the Runner's memory of finished
 // commands keeps a repeat of those from running twice.
 type Command struct {
-	ID        string          `json:"id"`
-	Kind      string          `json:"kind"`
-	Args      json.RawMessage `json:"args"`
-	CreatedAt time.Time       `json:"createdAt,omitzero"`
-	ExpiresAt time.Time       `json:"expiresAt,omitzero"` // a host does not start a command after this
+	IdempotencyKey string          `json:"idempotencyKey,omitempty"` // stable across workflow start retries
+	ID             string          `json:"id"`
+	Kind           string          `json:"kind"`
+	Args           json.RawMessage `json:"args"`
+	CreatedAt      time.Time       `json:"createdAt,omitzero"`
+	ExpiresAt      time.Time       `json:"expiresAt,omitzero"` // a host does not start a command after this
 }
 
 // CommandUpdate is a command's progress: running, then succeeded (with Result) or failed (with Error).
@@ -238,18 +239,22 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 		return executeSchedule(ctx, c, cmd, parsed)
 	}
 	home, _ := os.UserHomeDir()
+	key := cmd.IdempotencyKey
+	if key == "" {
+		key = cmd.ID
+	}
 	switch a := parsed.(type) {
 	case CreateWorkspaceArgs:
 		a.Cwd = expandHome(a.Cwd, home)
 		ws, err := c.CreateWorkspace(ctx, paseo.CreateWorkspace{Cwd: a.Cwd, Worktree: a.Worktree, Branch: a.Branch, Base: a.Base,
-			Title: a.Title, IdempotencyKey: cmd.ID})
+			Title: a.Title, IdempotencyKey: key})
 		if err != nil || a.Agent == nil {
 			return CommandResult{WorkspaceID: ws.ID}, err
 		}
 		ag := *a.Agent
 		ag.WorkspaceID, ag.Cwd = ws.ID, ws.Directory
 		// its own idempotency key: a repeat returns the same agent, never the workspace
-		res, err := createAgent(ctx, c, ag, cmd.ID, cmd.ID+":agent")
+		res, err := createAgent(ctx, c, ag, key, key+":agent")
 		res.WorkspaceID = ws.ID
 		if err != nil {
 			err = fmt.Errorf("made workspace %s, but its agent: %w", ws.ID, err)
@@ -265,7 +270,7 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 				return CommandResult{}, fmt.Errorf("no workspace %s on this host", a.WorkspaceID)
 			}
 		}
-		return createAgent(ctx, c, a, cmd.ID, cmd.ID)
+		return createAgent(ctx, c, a, key, key)
 	case WorkspaceArgs:
 		if cmd.Kind == ArchiveWorkspaceKind {
 			return w.archiveWorkspace(ctx, c, a.WorkspaceID)

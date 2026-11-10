@@ -125,8 +125,8 @@ host as seen. A newer stream for the same host takes it over and ends the older 
 server instance holds it.
 
 Server instances learn of each other's changes through Postgres `NOTIFY` on the `fleet` channel
-(`fleet.Changes`): a queued command, a command's update and a stream taking a host over. Nothing on
-the server polls.
+(`fleet.Changes`): a queued command, a command's update and a stream taking a host over.
+Workflow start retries additionally reconcile finished startup commands every five seconds.
 
 ### Accounts and host keys
 
@@ -468,7 +468,18 @@ a reply cannot move, a canceled one says so), and answers with what the agent re
 is a `POST /api/workflow-runs/{id}/moves` with the run's host's key; the CLI reads the server and
 key as the host client does (`HOST_SERVER` from `~/.config/intelligence/host.env`, the key from
 `host.key`, or their `devbox` names). The run follows the commands it queued (the finder, the
-workspace) through their results: a failed one fails the run.
+workspace) through their results. A failed or expired start queues up to three retries, after
+15, 30 and 60 seconds. Retries wait while the host reports its Paseo daemon disconnected;
+the server checks every five seconds and resumes after a connected report. Each delivery uses
+the original Paseo creation key so an uncertain result cannot create a second workspace or agent.
+Retries also wait for `hosts.start_retry_keys`: an updated host's explicit support for that key,
+so an older host cannot ignore it during a rolling update.
+The existing durable `commands` queue handles host reconnects. `workflow_runs.start_retries`,
+`start_retry_at` and `error` expose the retry count, queued retry time and last failure through
+SQL; `pending_command` links to the current delivery, whose `idempotency_key` names the original
+command. Finder success resets the retry budget before the orchestrator starts. Exhausting the
+retries fails the run with the last error, and archives any partial workspace. Cancellation
+removes the pending retry. A new manual run still starts with its own creation key and budget.
 
 A run is on a step from the move that hands it the step (the orchestrator starting, for the first;
 `next`, `skip` or `back`) to the move that leaves it (`next`, `skip`, `back`, `done`, `fail`, or a

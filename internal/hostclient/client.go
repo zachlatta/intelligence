@@ -137,7 +137,7 @@ func (b *Client) report(ctx context.Context, reported ...*latest) {
 			continue
 		}
 		sendCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		err := b.Link.Report(sendCtx, Report{Name: b.Name, Version: b.Version, Paseo: snap, CollectedAt: time.Now()})
+		err := b.Link.Report(sendCtx, Report{Name: b.Name, Version: b.Version, Paseo: snap, CollectedAt: time.Now(), StartRetryKeys: true})
 		cancel()
 		if err != nil {
 			if msg := err.Error(); msg != lastErr && ctx.Err() == nil {

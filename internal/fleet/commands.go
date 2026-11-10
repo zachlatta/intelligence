@@ -31,19 +31,20 @@ func (e *BadCommandError) Unwrap() error { return e.Err }
 
 // Command is a command and how far it got (the commands table).
 type Command struct {
-	ID         string          `json:"id"`
-	Host       string          `json:"host"`
-	Kind       string          `json:"kind"`
-	Args       json.RawMessage `json:"args"`
-	Status     string          `json:"status"`
-	Result     json.RawMessage `json:"result,omitempty"`
-	Error      string          `json:"error,omitempty"`
-	Attempts   int             `json:"attempts"`
-	CreatedAt  time.Time       `json:"createdAt"`
-	ExpiresAt  time.Time       `json:"expiresAt"`
-	SentAt     time.Time       `json:"sentAt,omitzero"`
-	StartedAt  time.Time       `json:"startedAt,omitzero"`
-	FinishedAt time.Time       `json:"finishedAt,omitzero"`
+	IdempotencyKey string          `json:"idempotencyKey,omitempty"`
+	ID             string          `json:"id"`
+	Host           string          `json:"host"`
+	Kind           string          `json:"kind"`
+	Args           json.RawMessage `json:"args"`
+	Status         string          `json:"status"`
+	Result         json.RawMessage `json:"result,omitempty"`
+	Error          string          `json:"error,omitempty"`
+	Attempts       int             `json:"attempts"`
+	CreatedAt      time.Time       `json:"createdAt"`
+	ExpiresAt      time.Time       `json:"expiresAt"`
+	SentAt         time.Time       `json:"sentAt,omitzero"`
+	StartedAt      time.Time       `json:"startedAt,omitzero"`
+	FinishedAt     time.Time       `json:"finishedAt,omitzero"`
 }
 
 // Finished reports whether c will not change again (expired can, if a late result arrives).
@@ -53,17 +54,17 @@ func (c Command) Finished() bool {
 
 // Wire is the command as a host receives it.
 func (c Command) Wire() hostclient.Command {
-	return hostclient.Command{ID: c.ID, Kind: c.Kind, Args: c.Args, CreatedAt: c.CreatedAt, ExpiresAt: c.ExpiresAt}
+	return hostclient.Command{ID: c.ID, Kind: c.Kind, Args: c.Args, CreatedAt: c.CreatedAt, ExpiresAt: c.ExpiresAt, IdempotencyKey: c.IdempotencyKey}
 }
 
-const commandColumns = `id::text, host, kind, args, status, result, error, attempts, created_at, expires_at, sent_at, started_at, finished_at`
+const commandColumns = `id::text, host, kind, args, status, result, error, attempts, created_at, expires_at, sent_at, started_at, finished_at, idempotency_key`
 
 func scanCommand(row pgx.Row) (Command, error) {
 	var c Command
 	var result []byte
 	var sent, started, finished *time.Time
 	err := row.Scan(&c.ID, &c.Host, &c.Kind, &c.Args, &c.Status, &result, &c.Error, &c.Attempts, &c.CreatedAt, &c.ExpiresAt,
-		&sent, &started, &finished)
+		&sent, &started, &finished, &c.IdempotencyKey)
 	if result != nil {
 		c.Result = result
 	}
