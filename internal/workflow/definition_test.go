@@ -99,7 +99,7 @@ func TestSavedWorkflowStepsRequirePublicFileDelivery(t *testing.T) {
 // end with that result in his inbox, whatever the repository and whether or not anything lands.
 // Saved workflows get the rule too: runs of the saved Factory Task in other repositories than the
 // one its landing step named finished with the result only on the run page.
-func TestSavedWorkflowStepsEmailDeliverablesWhenTheRunLands(t *testing.T) {
+func TestSavedWorkflowStepsEmailDeliverablesEvenWhenNothingLands(t *testing.T) {
 	d := clone(Starting)
 	d.Orchestrator.Instructions = "Custom saved instructions"
 	d.Steps[len(d.Steps)-1].Instructions = "Land on main the way AGENTS.md says."
@@ -109,7 +109,7 @@ func TestSavedWorkflowStepsEmailDeliverablesWhenTheRunLands(t *testing.T) {
 				"report, investigation, answer, proposal, plan, deck or analysis",
 				"in any repository", "even when nothing lands",
 				"zrl-bot", "zrl-bot-email skill", "full substance in the body",
-				"Earlier steps draft", "only the last step sends", "before `done`",
+				"Earlier steps draft", "only the last step sends", "when the run ends early (fail or skip to the end)",
 				"search zrl-bot's sent mail from the run's request date", "by subject", "by the report's URL",
 				"in the request thread", "Inspect every match", "a recent-days window",
 				"once", "Pass this deliverable-email rule to every worker",
