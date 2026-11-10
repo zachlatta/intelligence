@@ -521,6 +521,33 @@ func TestWorkflowPages(t *testing.T) {
 	}
 }
 
+func TestWorkflowNotesAndStepReportsShowHostedFiles(t *testing.T) {
+	image := "https://files.zachlatta.com/random-namespace/shot.png"
+	report := "https://files.zachlatta.com/random-namespace/report.md"
+	text := "![Screenshot](" + image + ") [Report](" + report + ")\n\n<script>unsafe()</script>"
+	event := runEvent{Kind: "next", Text: text}
+	w := httptest.NewRecorder()
+	err := workflowsTmpl.ExecuteTemplate(w, "run", map[string]any{
+		"Run":    runRow{Title: "Files", Status: workflow.Waiting, Note: text, Steps: []workflow.Step{{Title: "Review"}}},
+		"Steps":  []stepView{{Step: workflow.Step{Title: "Build"}, Events: []runEvent{event}}},
+		"Events": []runEvent{event}, "Now": time.Now(), "Agents": []string{}, "Version": "test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != http.StatusOK {
+		t.Fatal(w.Body.String())
+	}
+	for _, want := range []string{`src="` + image + `"`, `href="` + report + `"`} {
+		if n := strings.Count(w.Body.String(), want); n != 3 {
+			t.Errorf("want %q in note, step report and history, got %d", want, n)
+		}
+	}
+	if strings.Contains(w.Body.String(), "<script>unsafe()") {
+		t.Fatal("file rendering allowed raw HTML")
+	}
+}
+
 // TestAWorkflowSavedWithoutAHostAsksForOne: workflows saved before they named their host do not run
 // until it is set in the editor.
 func TestAWorkflowSavedWithoutAHostAsksForOne(t *testing.T) {

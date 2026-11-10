@@ -72,6 +72,20 @@ func TestOrchestratorPinsWorkersToItsWorkspace(t *testing.T) {
 	}
 }
 
+func TestSavedWorkflowStepsRequirePublicFileDelivery(t *testing.T) {
+	d := clone(Starting)
+	d.Orchestrator.Instructions = "Custom saved instructions"
+	for i := range d.Steps {
+		for _, prompt := range []string{OrchestratorPrompt("Saved", d, Vars{}), StepMessage(d, i, Vars{})} {
+			for _, want := range []string{"files.zachlatta.com", "public, unguessable", "no authentication", "file-share", "anonymous GET", "text/plain; charset=utf-8", "Pass this file-delivery rule to every worker", "Do not upload before"} {
+				if !strings.Contains(prompt, want) {
+					t.Errorf("step %d misses file-delivery instruction %q", i, want)
+				}
+			}
+		}
+	}
+}
+
 func TestTheProjectFinderIsToldTheRepositoriesAndHowToAnswer(t *testing.T) {
 	p := ProjectPrompt("run-1", Starting, "Show each agent's model", []string{"/srv/dev/app", "/srv/dev/site"})
 	for _, want := range []string{Starting.Project.Instructions, "Show each agent's model", "- /srv/dev/app\n- /srv/dev/site",

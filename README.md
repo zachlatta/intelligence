@@ -658,7 +658,7 @@ the account and enrollment routes, the host binaries and the streams (with a hos
 - `GET /account`: the account's hosts (online, when each joined and last used its key), how to
   install one, the form that adds a host by its code, and the password form.
 - `GET /hosts/{host}/agents/{id}`: one agent's transcript as turns: messages rendered as Markdown
-  (raw HTML shown as text, unsafe links dropped, images named rather than loaded), thinking folded to
+  (raw HTML shown as text, unsafe links dropped, file-share images loaded inline and other images named), thinking folded to
   a line, and runs of tool calls as a compact list that opens per call (commands with exit codes,
   diffs, reads, writes, searches). Long output is cut, with a link to the whole entry. Search,
   thinking and tool toggles, and Archive (asking again while the
@@ -785,6 +785,17 @@ origin (another site's request is refused with 403), and those with a body must 
   unreachable.
 
 Pages read through SQL and write through the API (see `AGENTS.md`).
+
+Workflow prompts (including saved workflows) tell agents to publish images and Markdown reports
+to `https://files.zachlatta.com` with public, unguessable links, using the `file-share` skill on
+the agent's host. This overrides the skill's restricted-delivery default. Agents verify the hash
+and anonymous access, embed images with Markdown image syntax, and link Markdown reports uploaded
+as `text/plain; charset=utf-8` so they open in the browser. They also rewrite local file references
+inside those reports. Uploads still respect each step's external-write limits: a worker that cannot
+upload passes artifacts to the authorized landing step. No upload credentials are held by the app.
+Notes, step reports and transcripts render file-share images inline; other image origins and local
+paths remain placeholders. Existing local-path notes must be republished by an agent on the host
+that still holds the files; the server cannot recover them from a path alone.
 
 ## Configuration
 

@@ -192,6 +192,26 @@ func TestMarkdownImagesBecomePlaceholders(t *testing.T) {
 	}
 }
 
+func TestSharedImagesRenderInlineWithoutAllowingOtherOrigins(t *testing.T) {
+	url := "https://files.zachlatta.com/unknown-namespace/screenshot.png"
+	html := string(markdown(`![Grid & chart](` + url + `)`))
+	for _, want := range []string{`<img`, `src="` + url + `"`, `alt="Grid &amp; chart"`, `loading="lazy"`, `referrerpolicy="no-referrer"`} {
+		if !strings.Contains(html, want) {
+			t.Errorf("shared image misses %q: %s", want, html)
+		}
+	}
+	for _, dest := range []string{
+		"/home/someone/shot.png", "file:///shot.png", "javascript:alert(1)",
+		"https://files.zachlatta.com.evil.example/shot.png",
+		"https://files.zachlatta.com@example.com/shot.png",
+		"http://files.zachlatta.com/shot.png", "//files.zachlatta.com/shot.png",
+	} {
+		if got := string(markdown("![shot](" + dest + ")")); strings.Contains(got, "<img") {
+			t.Errorf("untrusted image loaded: %s", got)
+		}
+	}
+}
+
 func TestToolLabelsAreFriendly(t *testing.T) {
 	page := renderBlocksForTest(t, []fleet.Entry{fe(1,
 		`{"type":"tool_call","name":"task_notification","status":"completed","detail":{"type":"plain_text","label":"Done","text":"x"},"error":null}`)})

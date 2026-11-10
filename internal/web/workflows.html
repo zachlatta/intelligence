@@ -116,6 +116,9 @@
   .events { list-style: none; margin: .4rem 0 0; padding: 0; font-size: 12.5px; }
   .events li { padding: .15rem 0; color: var(--fg-2); white-space: pre-wrap; overflow-wrap: anywhere; }
   .events .t { color: var(--faint); font-family: var(--mono); font-size: 11px; margin-right: .4rem; }
+  .events .md { white-space: normal; }
+  .events .md > :first-child { margin-top: 0; }
+  .events .md > :last-child { margin-bottom: 0; }
   .run-meta { display: flex; flex-wrap: wrap; gap: .3rem 1.2rem; font-size: 13px; color: var(--muted); margin-top: .35rem; align-items: center; }
   .run-meta b { color: var(--fg-2); font-weight: 500; }
   dialog { border: 1px solid var(--line-strong); border-radius: 8px; padding: 0; background: var(--panel); color: var(--fg); width: min(36rem, 92vw); }
@@ -695,7 +698,7 @@ render();
     <div class="node fixed"><div class="nh"><div><div class="kind">Before the orchestrator</div><div class="ttl">Find the project</div></div>
       <span class="grow-r">{{if eq .Run.Status "finding_project"}}<span class="status st-running">running</span>{{else}}<span class="status st-done">done</span>{{end}}</span></div>
       <div class="nb">{{if eq .Run.Status "finding_project"}}An agent is choosing the repository.{{else if .Run.Repo}}<span class="mono">{{.Run.Repo}}</span>, worktree <span class="mono">{{.Run.Branch}}</span>{{else}}No repository: the home directory.{{end}}
-        <ul class="events">{{range .Before}}<li><span class="t">{{.At.Format "15:04"}}</span>{{.Line}}</li>{{end}}</ul></div></div>
+        <ul class="events">{{range .Before}}<li><span class="t">{{.At.Format "15:04"}}</span><div class="md">{{markdown .Line}}</div></li>{{end}}</ul></div></div>
     <div class="link{{if .Run.Orchestrator}} done{{end}}"></div>
     <div class="node fixed"><div class="nh"><div><div class="kind">In the worktree</div><div class="ttl">Orchestrator and its sub-agents</div></div></div>
       <div class="nb">{{if .Agents}}<div class="tree">{{range .Agents}}<div class="ag" style="padding-left:{{.Depth}}.2rem"><span class="status{{if eq .Status "running"}} st-running{{end}}">{{.Status}}</span>
@@ -706,12 +709,12 @@ render();
     <div class="node k-{{.Kind}} r-{{.State}}"><div class="nh"><div style="min-width:0"><div class="kind">{{kind .Kind}} {{.N}}</div><div class="ttl">{{.Title}}</div></div>
       <span class="grow-r">{{with .SpentLabel}}<span class="spent" title="{{$s.SpentDetail}}">{{.}}</span>{{end}}{{if gt (len .Visits) 1}}<span class="meta">{{len .Visits}} times</span>{{end}}<span class="status st-{{.State}}">{{.Label}}</span></span></div>
       <div class="nb"><details><summary class="meta">Instructions</summary><div class="instr" style="-webkit-line-clamp:unset">{{.Instructions}}</div></details>
-        {{if .Events}}<ul class="events">{{range .Events}}<li><span class="t">{{.At.Format "15:04"}}</span>{{.Line}}</li>{{end}}</ul>{{end}}</div></div>
+        {{if .Events}}<ul class="events">{{range .Events}}<li><span class="t">{{.At.Format "15:04"}}</span><div class="md">{{markdown .Line}}</div></li>{{end}}</ul>{{end}}</div></div>
     {{if lt (add $i 1) (len $.Steps)}}<div class="link{{if eq .State "done" "skipped"}} done{{end}}"></div>{{end}}
     {{end}}
   </div>
   <aside class="card"><div class="card-head"><h2>What happened</h2></div><div class="card-body">
-    <ul class="events">{{range .Events}}<li><span class="t">{{.At.Format "Jan 2 15:04"}}</span>{{with .Step}}<b>{{add . 1}}.</b> {{end}}{{.Line}}</li>{{end}}</ul></div></aside>
+    <ul class="events">{{range .Events}}<li><span class="t">{{.At.Format "Jan 2 15:04"}}</span>{{with .Step}}<b>{{add . 1}}.</b> {{end}}<div class="md">{{markdown .Line}}</div></li>{{end}}</ul></div></aside>
 </div>
 {{if .Dictation}}<script src="/dictation.js"></script>
 {{end}}<script>

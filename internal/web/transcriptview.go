@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"net/url"
 	"strings"
 	"time"
 
@@ -342,13 +343,17 @@ func (rawHTMLAsText) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
 		}
 		return ast.WalkSkipChildren, nil
 	})
-	// images point at files on the host (screenshots by path) that the page cannot load: name
-	// them, and link those on the web
+	// File-share images are deliverables intended for inline display. Keep other origins
+	// and local paths as placeholders; viewing a transcript must not fetch arbitrary URLs.
 	reg.Register(ast.KindImage, func(w util.BufWriter, src []byte, n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if entering {
 			img := n.(*ast.Image)
 			alt := cmpOr(strings.TrimSpace(string(nodeText(img, src))), "image")
 			dest := string(img.Destination)
+			if u, err := url.Parse(dest); err == nil && u.Scheme == "https" && u.Host == "files.zachlatta.com" && u.User == nil {
+				_, _ = w.WriteString(`<a href="` + template.HTMLEscapeString(dest) + `" rel="noreferrer noopener" target="_blank"><img class="shared-image" src="` + template.HTMLEscapeString(dest) + `" alt="` + template.HTMLEscapeString(alt) + `" loading="lazy" referrerpolicy="no-referrer"></a>`)
+				return ast.WalkSkipChildren, nil
+			}
 			_, _ = w.WriteString(`<span class="img">🖼 ` + template.HTMLEscapeString(alt))
 			switch {
 			case strings.HasPrefix(dest, "https://") || strings.HasPrefix(dest, "http://"):

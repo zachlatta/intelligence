@@ -231,8 +231,12 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 // StepMessage is step i's title and filled instructions, as the orchestrator gets them.
 func StepMessage(d Definition, i int, v Vars) string {
 	s := d.Steps[i]
-	return fmt.Sprintf("Step %d of %d: %s\n\n%s", i+1, len(d.Steps), s.Title, strings.TrimSpace(v.fill(s.Instructions))+"\n\n"+UnattendedShellRule)
+	return fmt.Sprintf("Step %d of %d: %s\n\n%s", i+1, len(d.Steps), s.Title, strings.TrimSpace(v.fill(s.Instructions))+"\n\n"+UnattendedShellRule+"\n\n"+FileDeliveryRule)
 }
+
+// FileDeliveryRule is appended at runtime so saved workflows get it too. Uploading belongs
+// on the agent's host: the server cannot read its files or decide which artifacts to publish.
+const FileDeliveryRule = `When showing Zach images or Markdown files in notes, asks, step summaries or chat reports, host them on https://files.zachlatta.com at public, unguessable URLs with no authentication. This explicit delivery preference overrides the file-share skill's restricted-delivery default. Read the file-share skill for the current upload API. Omit passwords and allowed_emails (or emails); omit namespace on the first upload so the service generates it. Do not invent a URL or reuse a predictable namespace. Check the returned SHA-256 against the local bytes and verify an anonymous GET returns 200 with the expected content type before linking it. Use ![description](https://...) for images and [report](https://...) for Markdown. Upload Markdown as text/plain; charset=utf-8 so browsers open it inline, and upload and rewrite any local image or Markdown references inside the report too. Never send local paths as deliverables. Pass this file-delivery rule to every worker. Do not upload before the workflow or user authorizes external writes; if uploads are prohibited in the current step, preserve the files and pass their paths and this rule to the authorized landing step. If upload or anonymous verification fails, report the failure and keep the files for retry; do not claim they were delivered.`
 
 // OrchestratorInstructions are the starting workflow's standing instructions to its orchestrator.
 const OrchestratorInstructions = `You run a workflow. You never do the work yourself: for each step, start sub-agents to do it, read what they report, and decide when the step is done.
