@@ -21,15 +21,11 @@ const (
 	RetryWaitLimit = 24 * time.Hour
 )
 
-// retryStart follows a failed or expired start command c of r (msg says why): it queues a
-// retry, sends a due one once the host can take it, or waits. handled is false when r has
-// no retries left or its queued retry timed out; the caller then fails the run with msg.
+// retryStart schedules a retry and makes it eligible for the host's capacity queue
+// when the backoff has elapsed and the host is ready. The caller holds the queue
+// and run locks. A false handled result means the caller should fail the run.
 func (e *Engine) retryStart(ctx context.Context, tx pgx.Tx, r run, c fleet.Command, msg, workspaceID string, at time.Time) (handled bool, _ string, _ error) {
-	var retries int
-	var due *time.Time
-	if err := tx.QueryRow(ctx, "SELECT start_retries, start_retry_at FROM workflow_runs WHERE id=$1", r.ID).Scan(&retries, &due); err != nil {
-		return false, msg, err
-	}
+	retries, due := r.StartRetries, r.StartRetryAt
 	if retries >= StartRetryLimit {
 		return false, msg, nil
 	}
@@ -52,43 +48,72 @@ func (e *Engine) retryStart(ctx context.Context, tx pgx.Tx, r run, c fleet.Comma
 		return true, msg, nil
 	}
 	if !at.Before(due.Add(RetryWaitLimit)) {
-		return false, "Start retry timed out after 24 hours waiting for the Paseo daemon to reconnect or the host to support retry keys. Last start error: " + msg, nil
+		return false, "Start retry timed out after 24 hours waiting for a ready host with capacity. Last start error: " + msg, nil
 	}
-	var ready bool
-	if err := tx.QueryRow(ctx, `SELECT s.online AND s.connected AND h.start_retry_keys
-		FROM host_status s JOIN hosts h USING (name) WHERE name=$1`, r.Host).Scan(&ready); err != nil || !ready {
+	ready, err := retryHostReady(ctx, tx, r.Host)
+	if err != nil {
 		return true, msg, err
 	}
+	// Preserve the run's original FIFO priority when it becomes eligible again.
+	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET start_retry_queued=$2, queue_reason=''
+		WHERE id=$1 AND start_retry_queued IS DISTINCT FROM $2`, r.ID, ready)
+	return true, msg, err
+}
+
+func retryHostReady(ctx context.Context, tx pgx.Tx, host string) (bool, error) {
+	var ready bool
+	err := tx.QueryRow(ctx, `SELECT s.online AND s.connected AND h.start_retry_keys
+		FROM host_status s JOIN hosts h USING (name) WHERE name=$1`, host).Scan(&ready)
+	return ready, err
+}
+
+// dequeueRetry runs only after the FIFO admits r. Lock the old command so a
+// late success either wins before admission or is superseded by this delivery.
+func (e *Engine) dequeueRetry(ctx context.Context, tx pgx.Tx, r run) (bool, error) {
+	var previous fleet.Command
+	err := tx.QueryRow(ctx, `SELECT c.id::text, c.kind, c.idempotency_key
+		FROM commands c JOIN workflow_runs r ON r.pending_command=c.id
+		WHERE r.id=$1 AND c.status IN ('failed','expired') FOR UPDATE OF c`, r.ID).
+		Scan(&previous.ID, &previous.Kind, &previous.IdempotencyKey)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil // reconciliation handles a result that won the race
+	}
+	if err != nil {
+		return false, err
+	}
 	// Reuse Paseo's creation key, but give this delivery a new ID: the host caches completed
-	// deliveries, including failures. The run lock serializes concurrent workers and leaves
-	// old/late command updates detached.
+	// deliveries, including failures.
 	var args json.RawMessage
-	var err error
 	if r.Status == FindingProject {
 		args, err = projectStartArgs(ctx, tx, r)
 	} else {
 		args, err = orchestratorStartArgs(r)
 	}
 	if err != nil {
-		return true, msg, err
+		return false, err
 	}
-	next, err := fleet.EnqueueTx(ctx, tx, r.Host, c.Kind, args, commandTTL, at)
+	at := e.Now()
+	next, err := fleet.EnqueueTx(ctx, tx, r.Host, previous.Kind, args, commandTTL, at)
 	if err != nil {
-		return true, msg, err
+		return false, err
 	}
-	key := c.IdempotencyKey
+	key := previous.IdempotencyKey
 	if key == "" {
-		key = c.ID
+		key = previous.ID
 	}
 	if _, err := tx.Exec(ctx, "UPDATE commands SET idempotency_key=$2 WHERE id=$1", next.ID, key); err != nil {
-		return true, msg, err
+		return false, err
 	}
-	if err := e.event(ctx, tx, r, "start_retry_sent", nil, nil, fmt.Sprintf("Retry %d of %d", retries+1, StartRetryLimit)); err != nil {
-		return true, msg, err
+	if err := e.recordDequeue(ctx, tx, r, r.Host+" has room for the retry"); err != nil {
+		return false, err
 	}
-	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET pending_command=$2, start_retries=start_retries+1, start_retry_at=NULL,
+	if err := e.event(ctx, tx, r, "start_retry_sent", nil, nil, fmt.Sprintf("Retry %d of %d", r.StartRetries+1, StartRetryLimit)); err != nil {
+		return false, err
+	}
+	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET pending_command=$2, launch_command=$2, launched_at=$3,
+		start_retries=start_retries+1, start_retry_at=NULL, start_retry_queued=false,
 		project_command=CASE WHEN status='finding_project' THEN $2 ELSE project_command END, updated_at=$3 WHERE id=$1`, r.ID, next.ID, at)
-	return true, msg, err
+	return err == nil, err
 }
 
 // RetryStarts reconciles finished startup commands, including results missed during a
@@ -117,6 +142,11 @@ func (e *Engine) RetryStarts(ctx context.Context) error {
 		if err := e.CommandUpdated(ctx, id); err != nil {
 			failures = append(failures, fmt.Errorf("command %s: %w", id, err))
 		}
+	}
+	if len(ids) > 0 {
+		// Failed attempts can release room, and due retries can join the FIFO.
+		// Use the same admission path as resource updates and the queue worker.
+		failures = append(failures, e.StartQueued(ctx))
 	}
 	// The worker logs the aggregate, including every bad command's ID, after all
 	// other runs have been reconciled. One corrupt run cannot starve the queue.

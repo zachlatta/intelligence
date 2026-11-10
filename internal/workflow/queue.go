@@ -92,11 +92,12 @@ func (e *Engine) room(ctx context.Context, tx pgx.Tx, host string) (string, erro
 	}
 	// starting: runs the newest minute cannot show at full size yet. A run is starting from its launch
 	// for as long as it finds its project (its orchestrator is still to come), and then until the host
-	// reports its start command (launch_command: the workspace and orchestrator) done, failed or
-	// expired, and that minute began after it.
+	// reports its start command (launch_command: the workspace and orchestrator) done and that
+	// minute began after it. A failed or expired attempt releases its projected footprint.
 	var started int
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM workflow_runs r LEFT JOIN commands c ON c.id = r.launch_command
 		WHERE r.host = $1 AND r.launched_at IS NOT NULL AND r.status NOT IN ($3, $4, $6)
+			AND r.start_retry_at IS NULL AND coalesce(c.status NOT IN ('failed','expired'), true)
 			AND (r.launched_at >= $2 OR r.status = $5 OR c.id IS NOT NULL AND (c.finished_at IS NULL OR c.finished_at > $2))`,
 		host, m.At, Failed, Canceled, FindingProject, Succeeded).Scan(&started); err != nil {
 		return "", err
@@ -149,7 +150,7 @@ func runsWord(n int) string {
 // or runs queued before it go first.
 func (e *Engine) queueReason(ctx context.Context, tx pgx.Tx, host string) (string, error) {
 	var ahead int
-	if err := tx.QueryRow(ctx, "SELECT count(*) FROM workflow_runs WHERE host = $1 AND status = $2", host, Queued).Scan(&ahead); err != nil {
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM workflow_run_queue WHERE host = $1", host).Scan(&ahead); err != nil {
 		return "", err
 	}
 	if ahead > 0 {
@@ -160,7 +161,7 @@ func (e *Engine) queueReason(ctx context.Context, tx pgx.Tx, host string) (strin
 
 // StartQueued starts, on each host with a queue, its queued runs in order while the host has room (room).
 func (e *Engine) StartQueued(ctx context.Context) error {
-	rows, err := e.p.Query(ctx, "SELECT DISTINCT host FROM workflow_runs WHERE status = $1", Queued)
+	rows, err := e.p.Query(ctx, "SELECT DISTINCT host FROM workflow_run_queue")
 	if err != nil {
 		return err
 	}
@@ -189,12 +190,21 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 	if err := lockQueue(ctx, tx, host); err != nil {
 		return false, err
 	}
-	r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.host = $1 AND r.status = $2 ORDER BY r.created_at, r.id LIMIT 1 FOR UPDATE OF r", host, Queued))
+	r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.host = $1 AND (r.status = $2 OR r.start_retry_queued) ORDER BY r.created_at, r.id LIMIT 1 FOR UPDATE OF r", host, Queued))
 	if errors.Is(err, ErrNotFound) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
+	}
+	if r.StartRetryAt != nil {
+		if !e.Now().Before(r.StartRetryAt.Add(RetryWaitLimit)) {
+			return false, nil // reconciliation records the timeout
+		}
+		ready, err := retryHostReady(ctx, tx, r.Host)
+		if err != nil || !ready {
+			return false, err // reconciliation removes it from the queue if readiness was lost
+		}
 	}
 	why, err := e.room(ctx, tx, host)
 	if err != nil {
@@ -204,18 +214,26 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 		_, err := tx.Exec(ctx, "UPDATE workflow_runs SET queue_reason = $2 WHERE id = $1 AND queue_reason <> $2", r.ID, why)
 		return false, err
 	}
+	if r.StartRetryAt != nil {
+		return e.dequeueRetry(ctx, tx, r)
+	}
 	return true, e.dequeue(ctx, tx, r, host+" has room")
 }
 
 // dequeue starts queued run r, saying why it starts now.
 func (e *Engine) dequeue(ctx context.Context, tx pgx.Tx, r run, why string) error {
-	if err := e.event(ctx, tx, r, "dequeued", nil, nil, why); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, "UPDATE workflow_runs SET dequeued_at = $2, updated_at = $2 WHERE id = $1", r.ID, e.Now()); err != nil {
+	if err := e.recordDequeue(ctx, tx, r, why); err != nil {
 		return err
 	}
 	return e.launch(ctx, tx, r)
+}
+
+func (e *Engine) recordDequeue(ctx context.Context, tx pgx.Tx, r run, why string) error {
+	if err := e.event(ctx, tx, r, "dequeued", nil, nil, why); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, "UPDATE workflow_runs SET dequeued_at = $2, updated_at = $2 WHERE id = $1", r.ID, e.Now())
+	return err
 }
 
 // StartNow starts account's queued run at once, ahead of its queue and whatever its host's load.

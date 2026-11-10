@@ -590,7 +590,8 @@ key as the host client does (`HOST_SERVER` from `~/.config/intelligence/host.env
 workspace) through their results. A failed or expired start queues up to three retries, after
 15, 30 and 60 seconds. The server checks every five seconds. A retry waits until the host is
 online and reports both a connected Paseo daemon and support for retry keys
-(`hosts.start_retry_keys`). A replacement stream must report support again before it can
+(`hosts.start_retry_keys`). Once ready, it joins the same capacity queue as new runs in
+original run creation order. A replacement stream must report support again before it can
 receive queued or unfinished retries. Each retry reuses the original Paseo creation key so a
 lost response does not create a second workspace or agent.
 
@@ -605,7 +606,7 @@ error and archives any partial workspace. Cancellation removes the scheduled ret
 run starts with its own creation key and budget.
 
 The run page shows each queued or sent retry, its last error, its next scheduled time, and whether
-it is waiting for the daemon to reconnect or the host to support retry keys. Each queued retry
+it is waiting for host recovery or capacity. Each queued retry
 has a deadline 24 hours after its scheduled time; at that deadline the run fails with the last
 start error and a timeout explanation. This allows a long outage or host update without leaving
 the run waiting forever. Queue and delivery events are recorded in the timeline. Reconciliation
@@ -679,11 +680,12 @@ one run's footprint for each run still starting, whose load the minute cannot sh
 for the run about to start. A run is starting from its launch (`workflow_runs.launched_at`) until
 its orchestrator has started: for its whole start-up. A run that finds its project first is
 starting all the while it finds it (its orchestrator is still to come), and every run is starting
-until the host reports its workspace and orchestrator command (`launch_command`) done, failed or
-expired, and the newest minute began after that. Runs that succeeded, failed or were canceled no longer count.
-Once admitted, a run is never queued again. So a run whose
-command waits for a slow or absent host keeps its place in the projection however many minutes
-come in meanwhile. The run queues when
+until the host reports its workspace and orchestrator command (`launch_command`) done and the
+newest minute began after that. A failed or expired launch releases its reservation. A retry
+reserves capacity when admitted, updating `launched_at` and `launch_command` with the new attempt
+in the same transaction. An admitted command waiting for a slow or absent host holds capacity
+until it finishes or expires. Runs that succeeded, failed or were canceled no longer count.
+The run queues when
 the projection reaches a limit: `WORKFLOW_QUEUE_CPU_PCT` (default 85%), `WORKFLOW_QUEUE_MEM_PCT`
 (90%) or `WORKFLOW_QUEUE_LOAD_PER_CPU` (1.5). So an idle host starts runs back to back, and a burst
 starts as many as fit: at 10% CPU, 7 of 10 runs started at once (about 80%), and the rest queue
@@ -713,14 +715,15 @@ Without fresh telemetry the server cannot know the host's capacity:
 - a host that never sent its resources, or one connected now that has sent none for 30 minutes
   (its monitoring stopped), gives no sign of being near capacity, so its runs start.
 
-**Start now** is the way past a hold.
+**Start now** bypasses the capacity hold for a new run. Automatic retries wait for admission.
 
 A run also queues while earlier runs wait in its host's queue, so the queue keeps its order. The
 decision and the start are made in one transaction holding the host's queue lock (an advisory
 lock per host), so runs started at the same moment are judged one after another, each counting
 those just before it.
 
-A queued run has no agents and no commands yet; `workflow_runs.queue_reason` says why it waits
+A new queued run has no agents or commands yet. A ready retry keeps its startup phase and joins
+the queue through `workflow_runs.start_retry_queued`. `workflow_runs.queue_reason` says why it waits
 (kept current while it waits, and kept after), its events say when it was `queued` and
 `dequeued`, and `workflow_run_queue` lists each host's queue in order (`position` 1 is next). The
 runs list and the run page show it queued, where in line (“2nd in line for host-1”) and why, and

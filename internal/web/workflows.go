@@ -336,6 +336,9 @@ func scanRunRow(row pgx.CollectableRow) (runRow, error) {
 
 // Where reads as: what a run is doing now.
 func (r runRow) Where() string {
+	if r.Position > 0 {
+		return r.InLine()
+	}
 	switch r.Status {
 	case workflow.Queued:
 		return r.InLine()

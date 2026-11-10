@@ -359,6 +359,8 @@ type run struct {
 	Step                                         int
 	WorkspaceID, ProjectAgent, Orchestrator      string
 	ProjectCommand                               *string
+	StartRetryAt                                 *time.Time
+	StartRetries                                 int
 	Name                                         string
 	Def                                          Definition
 }
@@ -366,14 +368,14 @@ type run struct {
 func (r run) vars() Vars { return Vars{Run: r.ID, Input: r.Input, Repo: r.Repo, Branch: r.Branch} }
 
 const runSelect = `SELECT r.id::text, r.host, r.title, r.input, r.status, r.repo, r.branch, r.account_id, r.step, r.workspace_id,
-	r.project_agent_id, r.orchestrator_id, r.project_command::text, w.name, v.definition
+	r.project_agent_id, r.orchestrator_id, r.project_command::text, w.name, v.definition, r.start_retry_at, r.start_retries
 	FROM workflow_runs r JOIN workflow_versions v USING (workflow_id, version) JOIN workflows w ON w.id = r.workflow_id `
 
 func scanRun(row pgx.Row) (run, error) {
 	var r run
 	var def []byte
 	err := row.Scan(&r.ID, &r.Host, &r.Title, &r.Input, &r.Status, &r.Repo, &r.Branch, &r.Account, &r.Step, &r.WorkspaceID,
-		&r.ProjectAgent, &r.Orchestrator, &r.ProjectCommand, &r.Name, &def)
+		&r.ProjectAgent, &r.Orchestrator, &r.ProjectCommand, &r.Name, &def, &r.StartRetryAt, &r.StartRetries)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, ErrNotFound
 	}
@@ -560,7 +562,7 @@ func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo s
 	// the workspace becomes the command that starts the run (launch_command): a run whose finder ran
 	// keeps its place in its host's projected load until the host has made its orchestrator too
 	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, repo = $3, branch = $4, workspace_title = $5, pending_command = $6, launch_command = $6, updated_at = $7,
-		start_retries=0, start_retry_at=NULL, error='',
+		start_retries=0, start_retry_at=NULL, start_retry_queued=false, error='',
 		title = $8 WHERE id = $1`, r.ID, StartingOrchestrator, repo, r.Branch, wsTitle, c.ID, e.Now(), r.Title)
 	return err
 }
@@ -580,6 +582,11 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 		_ = json.Unmarshal(c.Result, &res)
 	}
 	return pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		// Queue admission and retry eligibility share this lock. Take it
+		// before the run row, in the same order as startNext.
+		if err := lockQueue(ctx, tx, c.Host); err != nil {
+			return err
+		}
 		r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.pending_command = $1 FOR UPDATE OF r", commandID))
 		if errors.Is(err, ErrNotFound) {
 			return nil
@@ -606,7 +613,7 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 			if err := e.event(ctx, tx, r, "error", nil, nil, msg); err != nil {
 				return err
 			}
-			_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, error = $3, pending_command = NULL, start_retry_at=NULL, workspace_id = $4,
+			_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, error = $3, pending_command = NULL, start_retry_at=NULL, start_retry_queued=false, workspace_id = $4,
 				updated_at = $5, finished_at = $5 WHERE id = $1`, r.ID, Failed, msg, res.WorkspaceID, at)
 			if err != nil {
 				return err
@@ -615,7 +622,7 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 			return e.archiveRun(ctx, tx, r)
 		}
 		if r.Status == FindingProject {
-			_, err := tx.Exec(ctx, "UPDATE workflow_runs SET project_agent_id = $2, pending_command = NULL, error='', start_retries=0, start_retry_at=NULL, updated_at = $3 WHERE id = $1",
+			_, err := tx.Exec(ctx, "UPDATE workflow_runs SET project_agent_id = $2, pending_command = NULL, error='', start_retries=0, start_retry_at=NULL, start_retry_queued=false, updated_at = $3 WHERE id = $1",
 				r.ID, res.AgentID, at)
 			return err
 		}
@@ -623,7 +630,7 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 			return err
 		}
 		_, err = tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, step = 0, workspace_id = $3, orchestrator_id = $4,
-			pending_command = NULL, error='', start_retry_at=NULL, updated_at = $5 WHERE id = $1`, r.ID, Running, res.WorkspaceID, res.AgentID, at)
+			pending_command = NULL, error='', start_retry_at=NULL, start_retry_queued=false, updated_at = $5 WHERE id = $1`, r.ID, Running, res.WorkspaceID, res.AgentID, at)
 		return err
 	})
 }
@@ -908,7 +915,7 @@ func (e *Engine) Cancel(ctx context.Context, account int64, runID string) error 
 		if err := e.event(ctx, tx, r, "cancel", nil, nil, ""); err != nil {
 			return err
 		}
-		_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, pending_command = NULL, start_retry_at=NULL, updated_at = $3, finished_at = $3 WHERE id = $1`,
+		_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, pending_command = NULL, start_retry_at=NULL, start_retry_queued=false, updated_at = $3, finished_at = $3 WHERE id = $1`,
 			r.ID, Canceled, e.Now())
 		return err
 	})

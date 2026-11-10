@@ -690,7 +690,7 @@ render();
 {{if eq .Run.Status "failed"}}<p class="banner">{{or .Run.Error "The orchestrator marked the run failed."}}</p>{{end}}
 {{if .Run.RetryStatus}}<div class="banner note" id="start-retry" role="status">
   <strong>{{.Run.RetryStatus}}</strong>.
-  {{if .Run.StartRetryAt}}Next retry scheduled for <time datetime="{{.Run.StartRetryAt.Format "2006-01-02T15:04:05Z07:00"}}">{{.Run.StartRetryAt.Format "Jan 2, 2006 15:04:05 MST"}}</time>.
+  {{if .Run.StartRetryAt}}{{if .Run.Position}}Waiting for capacity, {{.Run.InLine}}. {{with .Run.QueueReason}}{{.}}. {{end}}Retry eligible since {{else}}Next retry scheduled for {{end}}<time datetime="{{.Run.StartRetryAt.Format "2006-01-02T15:04:05Z07:00"}}">{{.Run.StartRetryAt.Format "Jan 2, 2006 15:04:05 MST"}}</time>.
     {{if not .Run.HostOnline}}Waiting for the host to reconnect.{{else if not .Run.DaemonConnected}}Waiting for the Paseo daemon to reconnect.{{end}}
     {{if not .Run.RetryKeys}}Waiting for the host to support retry keys.{{end}}
     This queued retry can wait up to 24 hours, until {{.Run.RetryDeadline.Format "Jan 2, 2006 15:04:05 MST"}}.
