@@ -520,7 +520,7 @@ The starting workflow spreads frontier work across Claude Opus 5.5, Codex and Ge
 (`antigravity/gemini-4-carbon-high`). Antigravity encodes effort in the model ID; Carbon also has
 `gemini-4-carbon-medium` and `gemini-4-carbon-low`. Models are read from the host's Paseo catalog,
 with “other…” for an ID not yet listed. Argon remains usable for existing agents and explicit choices.
-Migration `0027_carbon_frontier` makes new versions of saved workflows that recommend Argon
+Migration `0028_carbon_frontier` makes new versions of saved workflows that recommend Argon
 or use the old starting frontier list; existing runs keep their original versions.
 
 ### Attachments

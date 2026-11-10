@@ -37,7 +37,7 @@ func TestCarbonMigrationVersionsSavedWorkflows(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Re-run only the new migration over definitions saved before the upgrade.
-	if _, err := d.Owner.Exec(ctx, `DELETE FROM schema_migrations WHERE version='0027_carbon_frontier'`); err != nil {
+	if _, err := d.Owner.Exec(ctx, `DELETE FROM schema_migrations WHERE version='0028_carbon_frontier'`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Migrate(ctx, d.Owner); err != nil {
