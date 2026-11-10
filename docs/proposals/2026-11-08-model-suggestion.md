@@ -1,5 +1,10 @@
 # Proposal: suggest a frontier model from usage
 
+> **Superseded in part** by [`2026-11-10-frontier-model-selection.md`](2026-11-10-frontier-model-selection.md),
+> which audits the current selection with sampled data and keeps this direction. Its section 5.9
+> lists the differences: the ranking is a SQL view, the score accounts for plan end dates, Paseo
+> labels record what ran instead of a new token table, and leases become a lighter penalty.
+
 **Add an advisory model suggestion to the existing workflow step output. Use the existing subscription meters, prefer capacity that will expire unused, and record the orchestrator's final choice.** Keep fixed rules and a human-approved frontier quality floor.
 
 ## 1. Build on the current app
