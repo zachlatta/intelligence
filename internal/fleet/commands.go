@@ -31,7 +31,6 @@ func (e *BadCommandError) Unwrap() error { return e.Err }
 
 // Command is a command and how far it got (the commands table).
 type Command struct {
-	IdempotencyKey string          `json:"idempotencyKey,omitempty"`
 	ID             string          `json:"id"`
 	Host           string          `json:"host"`
 	Kind           string          `json:"kind"`
@@ -45,6 +44,7 @@ type Command struct {
 	SentAt         time.Time       `json:"sentAt,omitzero"`
 	StartedAt      time.Time       `json:"startedAt,omitzero"`
 	FinishedAt     time.Time       `json:"finishedAt,omitzero"`
+	IdempotencyKey string          `json:"idempotencyKey,omitempty"`
 }
 
 // Finished reports whether c will not change again (expired can, if a late result arrives).

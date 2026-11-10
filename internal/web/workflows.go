@@ -350,9 +350,9 @@ func (r runRow) RetryStatus() string {
 		return ""
 	}
 	if r.StartRetryAt != nil {
-		return fmt.Sprintf("Retry %d of 3 queued", r.StartRetries+1)
+		return fmt.Sprintf("Retry %d of %d queued", r.StartRetries+1, workflow.StartRetryLimit)
 	}
-	return fmt.Sprintf("Retry %d of 3 sent", r.StartRetries)
+	return fmt.Sprintf("Retry %d of %d sent", r.StartRetries, workflow.StartRetryLimit)
 }
 
 func (r runRow) RetryDeadline() time.Time {

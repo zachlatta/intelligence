@@ -25,12 +25,12 @@ import (
 // idempotency key for creating or running a schedule, so only the Runner's memory of finished
 // commands keeps a repeat of those from running twice.
 type Command struct {
-	IdempotencyKey string          `json:"idempotencyKey,omitempty"` // stable across workflow start retries
 	ID             string          `json:"id"`
 	Kind           string          `json:"kind"`
 	Args           json.RawMessage `json:"args"`
 	CreatedAt      time.Time       `json:"createdAt,omitzero"`
-	ExpiresAt      time.Time       `json:"expiresAt,omitzero"` // a host does not start a command after this
+	ExpiresAt      time.Time       `json:"expiresAt,omitzero"`       // a host does not start a command after this
+	IdempotencyKey string          `json:"idempotencyKey,omitempty"` // stable across workflow start retries
 }
 
 // CommandUpdate is a command's progress: running, then succeeded (with Result) or failed (with Error).

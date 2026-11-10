@@ -502,72 +502,9 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 				res.WorkspaceID = r.WorkspaceID
 			}
 			if r.Status == FindingProject || r.Status == StartingOrchestrator {
-				var retries int
-				var due *time.Time
-				if err := tx.QueryRow(ctx, "SELECT start_retries, start_retry_at FROM workflow_runs WHERE id=$1", r.ID).Scan(&retries, &due); err != nil {
+				var handled bool
+				if handled, msg, err = e.retryStart(ctx, tx, r, c, msg, res.WorkspaceID, at); handled || err != nil {
 					return err
-				}
-				if retries < 3 {
-					if due == nil {
-						failedAt := at
-						// An offline host cannot report expiry. Count the recovery wait from
-						// the command's actual expiry, even after a long server outage.
-						if c.Status == hostclient.CommandExpired && c.ExpiresAt.Before(at) {
-							failedAt = c.ExpiresAt
-						}
-						nextAt := failedAt.Add(15 * time.Second * time.Duration(1<<retries))
-						text := fmt.Sprintf("Retry %d of 3 at %s. %s", retries+1, nextAt.UTC().Format(time.RFC3339), msg)
-						if err := e.event(ctx, tx, r, "start_retry", nil, nil, text); err != nil {
-							return err
-						}
-						_, err := tx.Exec(ctx, "UPDATE workflow_runs SET error=$2, start_retry_at=$3, updated_at=$4, workspace_id=$5 WHERE id=$1", r.ID, msg, nextAt, at, res.WorkspaceID)
-						return err
-					}
-					if at.Before(*due) {
-						return nil
-					}
-					if !at.Before(due.Add(RetryWaitLimit)) {
-						msg = "Start retry timed out after 24 hours waiting for the Paseo daemon to reconnect or the host to support retry keys. Last start error: " + msg
-					} else {
-						var connected bool
-						if err := tx.QueryRow(ctx, `SELECT s.online AND s.connected AND h.start_retry_keys
-							FROM host_status s JOIN hosts h USING (name) WHERE name=$1`, r.Host).Scan(&connected); err != nil {
-							return err
-						}
-						if !connected {
-							return nil
-						}
-						// Reuse Paseo's creation key, but give this delivery a new ID: the host
-						// caches completed deliveries, including failures. The run lock serializes
-						// concurrent workers and leaves old/late command updates detached.
-						var args json.RawMessage
-						var err error
-						if r.Status == FindingProject {
-							args, err = projectStartArgs(ctx, tx, r)
-						} else {
-							args, err = orchestratorStartArgs(r)
-						}
-						if err != nil {
-							return err
-						}
-						next, err := fleet.EnqueueTx(ctx, tx, r.Host, c.Kind, args, commandTTL, at)
-						if err != nil {
-							return err
-						}
-						key := c.IdempotencyKey
-						if key == "" {
-							key = c.ID
-						}
-						if _, err := tx.Exec(ctx, "UPDATE commands SET idempotency_key=$2 WHERE id=$1", next.ID, key); err != nil {
-							return err
-						}
-						if err := e.event(ctx, tx, r, "start_retry_sent", nil, nil, fmt.Sprintf("Retry %d of 3", retries+1)); err != nil {
-							return err
-						}
-						_, err = tx.Exec(ctx, `UPDATE workflow_runs SET pending_command=$2, start_retries=start_retries+1, start_retry_at=NULL,
-						project_command=CASE WHEN status='finding_project' THEN $2 ELSE project_command END, updated_at=$3 WHERE id=$1`, r.ID, next.ID, at)
-						return err
-					}
 				}
 			}
 			if err := e.event(ctx, tx, r, "error", nil, nil, msg); err != nil {

@@ -2,16 +2,94 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/zachlatta/intelligence/internal/fleet"
+	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
-// RetryWaitLimit bounds each queued start retry, including daemon and host upgrade waits.
-const RetryWaitLimit = 24 * time.Hour
+const (
+	// StartRetryLimit is how many times a failed or expired start is tried again.
+	StartRetryLimit = 3
+	// RetryWaitLimit bounds each queued start retry, including daemon and host upgrade waits.
+	RetryWaitLimit = 24 * time.Hour
+)
+
+// retryStart follows a failed or expired start command c of r (msg says why): it queues a
+// retry, sends a due one once the host can take it, or waits. handled is false when r has
+// no retries left or its queued retry timed out; the caller then fails the run with msg.
+func (e *Engine) retryStart(ctx context.Context, tx pgx.Tx, r run, c fleet.Command, msg, workspaceID string, at time.Time) (handled bool, _ string, _ error) {
+	var retries int
+	var due *time.Time
+	if err := tx.QueryRow(ctx, "SELECT start_retries, start_retry_at FROM workflow_runs WHERE id=$1", r.ID).Scan(&retries, &due); err != nil {
+		return false, msg, err
+	}
+	if retries >= StartRetryLimit {
+		return false, msg, nil
+	}
+	if due == nil {
+		failedAt := at
+		// An offline host cannot report expiry. Count the recovery wait from
+		// the command's actual expiry, even after a long server outage.
+		if c.Status == hostclient.CommandExpired && c.ExpiresAt.Before(at) {
+			failedAt = c.ExpiresAt
+		}
+		nextAt := failedAt.Add(15 * time.Second * time.Duration(1<<retries))
+		text := fmt.Sprintf("Retry %d of %d at %s. %s", retries+1, StartRetryLimit, nextAt.UTC().Format(time.RFC3339), msg)
+		if err := e.event(ctx, tx, r, "start_retry", nil, nil, text); err != nil {
+			return true, msg, err
+		}
+		_, err := tx.Exec(ctx, "UPDATE workflow_runs SET error=$2, start_retry_at=$3, updated_at=$4, workspace_id=$5 WHERE id=$1", r.ID, msg, nextAt, at, workspaceID)
+		return true, msg, err
+	}
+	if at.Before(*due) {
+		return true, msg, nil
+	}
+	if !at.Before(due.Add(RetryWaitLimit)) {
+		return false, "Start retry timed out after 24 hours waiting for the Paseo daemon to reconnect or the host to support retry keys. Last start error: " + msg, nil
+	}
+	var ready bool
+	if err := tx.QueryRow(ctx, `SELECT s.online AND s.connected AND h.start_retry_keys
+		FROM host_status s JOIN hosts h USING (name) WHERE name=$1`, r.Host).Scan(&ready); err != nil || !ready {
+		return true, msg, err
+	}
+	// Reuse Paseo's creation key, but give this delivery a new ID: the host caches completed
+	// deliveries, including failures. The run lock serializes concurrent workers and leaves
+	// old/late command updates detached.
+	var args json.RawMessage
+	var err error
+	if r.Status == FindingProject {
+		args, err = projectStartArgs(ctx, tx, r)
+	} else {
+		args, err = orchestratorStartArgs(r)
+	}
+	if err != nil {
+		return true, msg, err
+	}
+	next, err := fleet.EnqueueTx(ctx, tx, r.Host, c.Kind, args, commandTTL, at)
+	if err != nil {
+		return true, msg, err
+	}
+	key := c.IdempotencyKey
+	if key == "" {
+		key = c.ID
+	}
+	if _, err := tx.Exec(ctx, "UPDATE commands SET idempotency_key=$2 WHERE id=$1", next.ID, key); err != nil {
+		return true, msg, err
+	}
+	if err := e.event(ctx, tx, r, "start_retry_sent", nil, nil, fmt.Sprintf("Retry %d of %d", retries+1, StartRetryLimit)); err != nil {
+		return true, msg, err
+	}
+	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET pending_command=$2, start_retries=start_retries+1, start_retry_at=NULL,
+		project_command=CASE WHEN status='finding_project' THEN $2 ELSE project_command END, updated_at=$3 WHERE id=$1`, r.ID, next.ID, at)
+	return true, msg, err
+}
 
 // RetryStarts reconciles finished startup commands, including results missed during a
 // server restart and expiries with no host update. PostgreSQL holds all retry state.
