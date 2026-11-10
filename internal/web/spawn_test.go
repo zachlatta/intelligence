@@ -319,7 +319,11 @@ func TestSpawnFormsKnowEachProvidersModels(t *testing.T) {
 		Models: []hostclient.Model{{ID: "claude-opus-5-5", Label: "Opus 5.5", Default: true, Thinking: []string{"low", "medium"}, DefaultThinking: "medium"},
 			{ID: "claude-sonnet-5-5", Label: "Sonnet 5.5"}},
 		Modes: []hostclient.Mode{{ID: "auto", Label: "Auto mode"}, {ID: "bypassPermissions", Label: "Bypass"}}},
-		{Name: "codex", Available: true}, {Name: "copilot", Models: []hostclient.Model{{ID: "gpt"}}}}
+		{Name: "codex", Available: true}, {Name: "copilot", Models: []hostclient.Model{{ID: "gpt"}}},
+		{Name: "antigravity", Available: true, DefaultMode: "full-access",
+			Models: []hostclient.Model{{ID: "gemini-4-carbon-high", Label: "Gemini 4 Carbon (High)"},
+				{ID: "gemini-4-carbon-medium"}, {ID: "gemini-4-carbon-low"}, {ID: "gemini-4-argon-high"}},
+			Modes: []hostclient.Mode{{ID: "full-access"}}}}
 	sendReport(t, h, rep)
 	sendSchedules(t, h, sampleSchedules)
 	c := signInAs(t, h)
@@ -336,6 +340,11 @@ func TestSpawnFormsKnowEachProvidersModels(t *testing.T) {
 		}
 		if _, ok := cat["codex"]; !ok {
 			t.Errorf("%s: a provider with no catalog yet is left out: %v", path, cat)
+		}
+		if ag := cat["antigravity"]; len(ag.Models) != 4 || ag.Models[0].ID != "gemini-4-carbon-high" ||
+			ag.Models[0].Label != "Gemini 4 Carbon (High)" || ag.Models[1].ID != "gemini-4-carbon-medium" ||
+			ag.Models[2].ID != "gemini-4-carbon-low" || ag.Models[3].ID != "gemini-4-argon-high" || ag.DefaultMode != "full-access" {
+			t.Errorf("%s: antigravity = %+v", path, ag)
 		}
 		if _, ok := cat["copilot"]; ok {
 			t.Errorf("%s: an unavailable provider's catalog is offered", path)

@@ -6,6 +6,15 @@ import (
 	"testing"
 )
 
+func TestStartingWorkflowRecommendsCarbon(t *testing.T) {
+	p := OrchestratorPrompt("task", Starting, Vars{Run: "r"})
+	for _, want := range []string{"antigravity/gemini-4-carbon-high", "claude/claude-opus-5-5", "codex"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("frontier guidance missing %q", want)
+		}
+	}
+}
+
 func TestTheStartingWorkflowIsValidOnceItHasAHost(t *testing.T) {
 	if err := Starting.Validate(); err == nil || !strings.Contains(err.Error(), "host") {
 		t.Errorf("the starting workflow names no host: err = %v", err)

@@ -253,7 +253,7 @@ Start a sub-agent in this workspace with the paseo CLI, for example:
 
 Then paseo wait <id> until it is done, and paseo logs <id> to read what it did. paseo send <id> "<message>" gives a sub-agent more work and keeps its context: use it when work comes back to a sub-agent that did it. A checker must be a fresh sub-agent that did none of the work. Archive sub-agents you are done with (paseo archive <id>).
 
-Use frontier models, and spread the work across the plans: claude/claude-opus-5-5 and codex.`
+Use frontier models, and spread the work across the plans: claude/claude-opus-5-5, codex and antigravity/gemini-4-carbon-high (Gemini 4 Carbon).`
 
 // Starting is the workflow an account starts with (its Host set to one of the account's): a task from the Workflows page, its project
 // found, the work, three gates, Zach's sign-off for broader changes, and landing.
