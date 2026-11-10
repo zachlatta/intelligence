@@ -213,14 +213,8 @@ func (a *app) cancelRun(v viewer) http.HandlerFunc {
 // moveRun: POST /api/workflow-runs/{id}/moves, from a host's agent with the host's key
 // (`intelligence workflow`). It answers {"message"}: what the agent should read next.
 func (a *app) moveRun(w http.ResponseWriter, r *http.Request) {
-	key, _ := bearerOf(r)
-	host, err := a.store.HostOfKey(r.Context(), key)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if host == "" {
-		http.Error(w, "bad or missing host key", http.StatusUnauthorized)
+	_, host, ok := a.hostCaller(w, r)
+	if !ok {
 		return
 	}
 	var m workflow.Move

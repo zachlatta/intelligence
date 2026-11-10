@@ -58,7 +58,7 @@ func (a *app) revokeMCPToken(v viewer) http.HandlerFunc {
 }
 
 // mcp is stateless Streamable HTTP: each authenticated request is independent. Only
-// credential validation uses the account store; every tool reads through its account's pool.
+// read tools use the account's pool; proposal tools can queue/withdraw changes only.
 func (a *app) mcp(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if !mcpOrigin(a.cfg, r) {
@@ -71,7 +71,7 @@ func (a *app) mcp(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "MCP bearer token required", 401)
 		return
 	}
-	acct, err := a.store.MCPAccount(r.Context(), token)
+	acct, tokenID, err := a.store.MCPIdentity(r.Context(), token)
 	if errors.Is(err, accounts.ErrNoSession) {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="intelligence-mcp", error="invalid_token"`)
 		http.Error(w, "invalid or expired MCP token", 401)
@@ -145,6 +145,10 @@ func (a *app) mcp(w http.ResponseWriter, r *http.Request) {
 		}
 		if json.Unmarshal(msg.Params, &p) != nil || p.Name == "" {
 			mcpError(w, id, -32602, "tool name required")
+			return
+		}
+		if p.Name == "propose_mutation" || p.Name == "withdraw_mutation" || p.Name == "propose_mutation_help" {
+			a.mcpProposalCall(w, r, id, acct, "mcp:"+tokenID, p.Name, p.Arguments)
 			return
 		}
 		query, args, limit, err := mcpQuery(p.Name, p.Arguments)
@@ -252,12 +256,12 @@ func mcpTools() []mcpTool {
 		}
 		return mcpTool{name, desc, schema, map[string]any{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}}
 	}
-	return []mcpTool{
+	return append([]mcpTool{
 		tool("readme", "Start here: Intelligence SQL guide, relation map, and example queries for runs, events, agents and transcripts. All app state reads use query; mutations stay on the JSON API.", map[string]any{}),
 		tool("schema_overview", "Find public tables and views with descriptions. Call describe_table for exact columns before writing SQL. Returns columns, rows, rowCount and truncated.", map[string]any{}),
 		tool("describe_table", "Describe exact columns of one public table or view (unqualified name).", map[string]any{"table": str("Public relation name")}, "table"),
 		tool("query", "Run one read-only SQL query as this account. Default 1000, maximum 10000 rows; 5-second default timeout. No writes or multiple statements.", map[string]any{"query": str("SQL; discover schema and columns first")}, "query"),
-	}
+	}, proposalMCPTools()...)
 }
 
 func mcpQuery(name string, raw json.RawMessage) (string, []any, int, error) {

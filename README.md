@@ -172,16 +172,18 @@ and drift immediately. Both are account-isolated and readable through `/api/sql`
 
 Proposals expire after seven days. Approval locks and compares the complete prior state, including
 its version and default/deleted state; changed workflows return 409 and require a fresh proposal.
-Approval applies the reviewed snapshot and saves another immutable workflow version atomically.
-Undo restores the saved prior state as a **new version**, records `undo_state` and `undone_at`,
-and refuses if anything changed after approval. Undoing creation soft-deletes it. Deletion and
+Creates, updates and restores save a new immutable definition version atomically. Deletion preserves
+the definition version and records a tombstone, consistently with direct deletion.
+Undo restores saved prior content as a **new version**, records `undo_state` and `undone_at`,
+and refuses if anything changed after approval. Undoing creation soft-deletes it without adding a
+definition version. Deletion and
 undoing creation refuse while runs are active; restoring a deleted workflow rechecks host ownership,
 email-trigger overlap and default conflicts. Existing runs retain their original definition.
 
-Intelligence also serves a stateless Streamable HTTP MCP endpoint at `POST /mcp`, authenticated
-with a host's bearer key. Tools are `propose_mutation`, `withdraw_mutation`,
-`propose_mutation_help` (schema and a complete worked example), and `query` (the same bounded,
-account-scoped read-only SQL as `/api/sql`). There are no approval or direct workflow-write tools.
+The account-token MCP endpoint (below) also exposes `propose_mutation`, `withdraw_mutation`,
+and `propose_mutation_help` alongside its existing SQL and transcript tools. MCP proposals record
+`mcp:<token id>` as the authenticated proposer. A token can withdraw or replace only its own
+pending proposals. Neither MCP tokens nor host keys can approve, reject or undo.
 Configure `PUBLIC_URL` to the browser-facing origin so approval links use the correct external URL.
 
 On an enrolled host, the CLI reads the same host configuration as run moves:
@@ -195,27 +197,33 @@ intelligence workflow withdraw <proposal-id> --reason "Replaced by a better plan
 Step edits use a complete replacement definition; step-level patch operations and choosing the
 default workflow are not supported by proposals.
 
-To register the MCP in Claude Code and Codex, load the enrolled host's server and key into the
-shell that launches the client (keep the key out of project files):
+To register the MCP in Claude Code and Codex, create an account MCP token at **Account → MCP
+connections** and export it in the shell that launches the client (keep it out of project files).
+Use the MCP URL shown on that page, for example:
 
 ```sh
-set -a
-. "$HOME/.config/intelligence/host.env"
-set +a
-export INTELLIGENCE_HOST_KEY="$(cat "${HOST_KEY_FILE:-$HOME/.config/intelligence/host.key}")"
+export INTELLIGENCE_MCP_URL="https://intelligence.example.com/mcp"
+read -r -s INTELLIGENCE_MCP_TOKEN
+export INTELLIGENCE_MCP_TOKEN
 
-claude mcp add --transport http --scope user intelligence "${HOST_SERVER%/}/mcp" \
-  --header 'Authorization: Bearer ${INTELLIGENCE_HOST_KEY}'
+claude mcp add --transport http --scope user intelligence "$INTELLIGENCE_MCP_URL" \
+  --header 'Authorization: Bearer ${INTELLIGENCE_MCP_TOKEN}'
 
-codex mcp add intelligence --url "${HOST_SERVER%/}/mcp" \
-  --bearer-token-env-var INTELLIGENCE_HOST_KEY
+codex mcp add intelligence --url "$INTELLIGENCE_MCP_URL" \
+  --bearer-token-env-var INTELLIGENCE_MCP_TOKEN
 ```
 
-Claude expands the header's environment variable when connecting; Codex's bearer-token setting
-does the same. Both send `Authorization: Bearer <host key>` to the configured server's `/mcp` URL.
-Export `INTELLIGENCE_HOST_KEY` again in each client-launching shell. See the
+Paste the newly created MCP token at the hidden `read` prompt. Both clients send
+`Authorization: Bearer <MCP token>`; neither accepts a host key as an MCP credential. Export the
+MCP token in each client-launching shell. See the
 [Claude Code MCP guide](https://code.claude.com/docs/en/mcp) and
 [Codex MCP guide](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
+
+The CLI proposal routes deliberately keep the installed host key and record `host:<name>`:
+this authorizes queuing a review request, not applying a workflow edit or starting a run.
+This is consistent with the [workflow submission and trust design](docs/proposals/2026-11-10-workflow-submission-and-trust.md),
+which forbids treating a host key as permission to submit arbitrary runs. Proposal bodies are
+untrusted drafts until the owner approves the exact change in a signed-in browser.
 
 ### Accounts and host keys
 
@@ -238,7 +246,7 @@ A key is good for its own host name only. Removing a host from its account (`/ac
 key and everything it reported; the host's next dial is refused, so it forgets the key and asks to
 join again with a new code. A host that expires a code without its being entered asks for a new one.
 
-### Read-only MCP (PDW and other remote clients)
+### MCP reads and reviewed proposals (PDW and other remote clients)
 
 `POST /mcp` (also `/mcp/`) is a stateless [Streamable HTTP MCP endpoint](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports),
 supporting protocols `2025-06-18` (preferred) and `2025-03-26`. Initialization echoes a supported
@@ -252,8 +260,9 @@ No SDK or additional service is needed on the server.
 Authentication is `Authorization: Bearer <MCP token>` on every request. Browser cookies, browser
 session tokens and host keys are not accepted at `/mcp`. MCP tokens work only there; they cannot
 sign in to a browser or authorize a write API. Each reads through its account's own Postgres login
-role and the same read-only transaction, timeout and row limits as `/api/sql`. No tool uses the
-writer pool. Cross-origin requests are refused, with no CORS support. Set `PUBLIC_URL` to the
+role and the same read-only transaction, timeout and row limits as `/api/sql`. The two proposal
+write tools may create/withdraw proposal rows through the engine; only a browser-session approval
+can apply them. MCP tokens never authorize approval, rejection, undo or direct write APIs. Cross-origin requests are refused, with no CORS support. Set `PUBLIC_URL` to the
 external HTTPS origin when a proxy terminates TLS, so an Origin header can be checked against it;
 server-to-server clients normally send no Origin.
 
@@ -274,7 +283,7 @@ read-only SQL role and makes changes by calling these JSON APIs from the browser
 - Read credential IDs, creation and expiry through SQL:
   `SELECT id, created_at, expires_at FROM mcp_tokens ORDER BY created_at DESC`.
 
-Tools (all annotated read-only):
+Read tools (annotated read-only):
 
 | Tool | Inputs besides optional `limit` | Reads |
 | --- | --- | --- |
@@ -282,6 +291,10 @@ Tools (all annotated read-only):
 | `schema_overview` | none | Public relations and descriptions |
 | `describe_table` | `table` (unqualified public relation name) | Exact column names and types |
 | `query` | `query` | One read-only SQL statement, including arbitrary joins/views |
+
+The proposal tools are annotated as writes to review state: `propose_mutation` returns id and
+approvalURL, `withdraw_mutation` takes id and a required reason, and `propose_mutation_help`
+returns the schema and an example. They also return JSON text and `structuredContent`.
 
 The guide returns Markdown text. The three SQL tools return `columns`, `rows`, `rowCount`, `truncated`, as both JSON text and
 MCP `structuredContent`. The default is 1000 rows, maximum 10000, with the SQL timeout (5 seconds

@@ -78,31 +78,42 @@ func checkName(name string) (string, error) {
 	return name, nil
 }
 
+// WorkflowState is the complete editable state captured for review and undo.
+// Version is the monotonic definition revision; deletion preserves it, restores increment it.
+type WorkflowState struct {
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	Definition  Definition `json:"definition"`
+	Version     int        `json:"version"`
+	IsDefault   bool       `json:"isDefault"`
+	Deleted     bool       `json:"deleted"`
+}
+
+func workflowState(ctx context.Context, tx pgx.Tx, account int64, id string) (*WorkflowState, error) {
+	var s WorkflowState
+	var def []byte
+	err := tx.QueryRow(ctx, `SELECT w.name,w.description,w.version,w.is_default,w.deleted_at IS NOT NULL,v.definition
+ FROM workflows w JOIN workflow_versions v ON v.workflow_id=w.id AND v.version=w.version
+ WHERE w.id=$1 AND w.account_id=$2 FOR UPDATE OF w`, id, account).Scan(&s.Name, &s.Description, &s.Version, &s.IsDefault, &s.Deleted, &def)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	err = json.Unmarshal(def, &s.Definition)
+	return &s, err
+}
+
 // CreateWorkflow saves a new workflow for account, as version 1.
 func (e *Engine) CreateWorkflow(ctx context.Context, account int64, name, description string, d Definition) (string, error) {
-	name, err := checkName(name)
-	if err != nil {
-		return "", err
-	}
-	if err := d.Validate(); err != nil {
-		return "", bad("%s", err)
-	}
-	def, _ := json.Marshal(d)
-	at := e.Now()
 	var id string
-	err = pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
-		if err := ownsHost(ctx, tx, account, d.Host); err != nil {
+	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		if err := lockWorkflowAccount(ctx, tx, account); err != nil {
 			return err
 		}
-		if err := uniqueEmailTrigger(ctx, tx, account, "", d); err != nil {
-			return err
-		}
-		if err := tx.QueryRow(ctx, `INSERT INTO workflows (account_id, name, description, version, created_at, updated_at)
-			VALUES ($1, $2, $3, 1, $4, $4) RETURNING id::text`, account, name, strings.TrimSpace(description), at).Scan(&id); err != nil {
-			return err
-		}
-		_, err := tx.Exec(ctx, `INSERT INTO workflow_versions (workflow_id, version, account_id, definition, created_at)
-			VALUES ($1, 1, $2, $3, $4)`, id, account, def, at)
+		var err error
+		id, _, err = e.applyWorkflowState(ctx, tx, account, "", nil, &WorkflowState{Name: name, Description: description, Definition: d})
 		return err
 	})
 	return id, err
@@ -145,44 +156,26 @@ func (e *Engine) SetDefault(ctx context.Context, account int64, id string, chose
 // UpdateWorkflow saves d as the next version of account's workflow id, and returns that version.
 // Runs keep the version they started with.
 func (e *Engine) UpdateWorkflow(ctx context.Context, account int64, id, name, description string, d Definition) (int, error) {
-	name, err := checkName(name)
-	if err != nil {
-		return 0, err
-	}
-	if err := d.Validate(); err != nil {
-		return 0, bad("%s", err)
-	}
 	if !uuidRe.MatchString(id) {
 		return 0, ErrNotFound
 	}
-	def, _ := json.Marshal(d)
-	at := e.Now()
 	var version int
-	err = pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
-		var mine bool
-		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM workflows WHERE id = $1 AND account_id = $2 AND deleted_at IS NULL)", id, account).Scan(&mine); err != nil {
+	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		if err := lockWorkflowAccount(ctx, tx, account); err != nil {
 			return err
 		}
-		if !mine {
-			return ErrNotFound
-		}
-		if err := ownsHost(ctx, tx, account, d.Host); err != nil {
-			return err
-		}
-		if err := uniqueEmailTrigger(ctx, tx, account, id, d); err != nil {
-			return err
-		}
-		err := tx.QueryRow(ctx, `UPDATE workflows SET name = $3, description = $4, version = version + 1, updated_at = $5,
-			is_default = is_default AND $6
-			WHERE id = $1 AND account_id = $2 AND deleted_at IS NULL RETURNING version`, id, account, name, strings.TrimSpace(description), at, d.Trigger == TriggerTask).Scan(&version)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
+		current, err := workflowState(ctx, tx, account, id)
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO workflow_versions (workflow_id, version, account_id, definition, created_at)
-			VALUES ($1, $2, $3, $4, $5)`, id, version, account, def, at)
+		if current.Deleted {
+			return ErrNotFound
+		}
+		target := &WorkflowState{Name: name, Description: description, Definition: d, IsDefault: current.IsDefault && d.Trigger == TriggerTask}
+		_, applied, err := e.applyWorkflowState(ctx, tx, account, id, current, target)
+		if err == nil {
+			version = applied.Version
+		}
 		return err
 	})
 	return version, err
@@ -196,27 +189,95 @@ func (e *Engine) DeleteWorkflow(ctx context.Context, account int64, id string) e
 		return ErrNotFound
 	}
 	return pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
-		// the lock waits out a run being started, which holds the workflow FOR SHARE
-		var found bool
-		err := tx.QueryRow(ctx, "SELECT true FROM workflows WHERE id = $1 AND account_id = $2 AND deleted_at IS NULL FOR UPDATE",
-			id, account).Scan(&found)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
+		if err := lockWorkflowAccount(ctx, tx, account); err != nil {
+			return err
 		}
+		current, err := workflowState(ctx, tx, account, id)
 		if err != nil {
 			return err
 		}
-		var live int
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM workflow_runs WHERE workflow_id = $1 AND status NOT IN ($2, $3, $4)`,
-			id, Succeeded, Failed, Canceled).Scan(&live); err != nil {
-			return err
+		if current.Deleted {
+			return ErrNotFound
 		}
-		if live > 0 {
-			return conflict("this workflow has runs still going (%d): cancel them or let them finish first", live)
-		}
-		_, err = tx.Exec(ctx, "UPDATE workflows SET deleted_at = $3, is_default = false WHERE id = $1 AND account_id = $2", id, account, e.Now())
+		target := *current
+		target.Deleted = true
+		_, _, err = e.applyWorkflowState(ctx, tx, account, id, current, &target)
 		return err
 	})
+}
+
+// Lock the account before workflows/proposals, including email/default validation.
+func lockWorkflowAccount(ctx context.Context, tx pgx.Tx, account int64) error {
+	_, err := tx.Exec(ctx, "SELECT id FROM accounts WHERE id=$1 FOR NO KEY UPDATE", account)
+	return err
+}
+
+// applyWorkflowState is the sole workflow persistence path for direct writes and
+// reviewed approval/undo. The caller holds the account and current workflow locks.
+// Deletion preserves the definition version; creates, updates and restores save a
+// new immutable definition. All deletion paths use terminal status, not timestamps.
+func (e *Engine) applyWorkflowState(ctx context.Context, tx pgx.Tx, account int64, id string, current, target *WorkflowState) (string, *WorkflowState, error) {
+	s := *target
+	at := e.Now()
+	if s.Deleted {
+		if current == nil || current.Deleted {
+			return "", nil, ErrNotFound
+		}
+		var live int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM workflow_runs WHERE workflow_id=$1 AND status NOT IN ($2,$3,$4)`, id, Succeeded, Failed, Canceled).Scan(&live); err != nil {
+			return "", nil, err
+		}
+		if live > 0 {
+			return "", nil, conflict("this workflow has runs still going (%d): cancel them or let them finish first", live)
+		}
+		s = *current
+		s.Deleted = true
+		s.IsDefault = false
+		_, err := tx.Exec(ctx, "UPDATE workflows SET deleted_at=$2,is_default=false,updated_at=$2 WHERE id=$1", id, at)
+		return id, &s, err
+	}
+	name, err := checkName(s.Name)
+	if err != nil {
+		return "", nil, err
+	}
+	s.Name = name
+	s.Description = strings.TrimSpace(s.Description)
+	if err := s.Definition.Validate(); err != nil {
+		return "", nil, bad("%s", err)
+	}
+	if err := ownsHost(ctx, tx, account, s.Definition.Host); err != nil {
+		return "", nil, err
+	}
+	if err := uniqueEmailTrigger(ctx, tx, account, id, s.Definition); err != nil {
+		return "", nil, err
+	}
+	if s.IsDefault {
+		if s.Definition.Trigger != TriggerTask {
+			return "", nil, bad("only a task workflow can be the default")
+		}
+		var other bool
+		if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM workflows WHERE account_id=$1 AND is_default AND id::text<>$2)", account, id).Scan(&other); err != nil {
+			return "", nil, err
+		}
+		if other {
+			return "", nil, conflict("another workflow is now the default; cannot restore the previous default")
+		}
+	}
+	s.Version = 1
+	if current != nil {
+		s.Version = current.Version + 1
+	}
+	if current == nil {
+		err = tx.QueryRow(ctx, `INSERT INTO workflows(account_id,name,description,version,created_at,updated_at) VALUES($1,$2,$3,1,$4,$4) RETURNING id::text`, account, s.Name, s.Description, at).Scan(&id)
+	} else {
+		_, err = tx.Exec(ctx, `UPDATE workflows SET name=$2,description=$3,version=$4,is_default=$5,deleted_at=NULL,updated_at=$6 WHERE id=$1`, id, s.Name, s.Description, s.Version, s.IsDefault, at)
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	def, _ := json.Marshal(s.Definition)
+	_, err = tx.Exec(ctx, "INSERT INTO workflow_versions(workflow_id,version,account_id,definition,created_at) VALUES($1,$2,$3,$4,$5)", id, s.Version, account, def, at)
+	return id, &s, err
 }
 
 // uniqueEmailTrigger refuses an email trigger that another of account's workflows (not id) has

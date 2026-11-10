@@ -1,3 +1,7 @@
+-- MCP account tokens may now create and withdraw workflow proposals, never approve them.
+-- Read tools still use the read-only role. Only browser-session decisions apply changes.
+COMMENT ON TABLE mcp_tokens IS 'Account MCP credentials: read tools and workflow proposal creation/withdrawal; never approval';
+
 CREATE TABLE workflow_proposals (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     account_id bigint NOT NULL REFERENCES accounts ON DELETE CASCADE,
@@ -5,6 +9,10 @@ CREATE TABLE workflow_proposals (
     operation text NOT NULL CHECK (operation IN ('create', 'update', 'delete')),
     workflow_id uuid REFERENCES workflows,
     summary text NOT NULL,
+    proposed_by text NOT NULL DEFAULT '',
+    run_id text NOT NULL DEFAULT '',
+    withdraw_reason text NOT NULL DEFAULT '',
+    replaces_id uuid REFERENCES workflow_proposals,
     before_state jsonb,
     proposed_state jsonb,
     after_state jsonb,

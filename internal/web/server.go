@@ -179,15 +179,14 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /hosts/{host}/schedules/new", a.page(func(v viewer) http.HandlerFunc { return newSchedulePage(cfg, v.reg) }))
 	mux.HandleFunc("GET /hosts/{host}/schedules/{id}", a.page(func(v viewer) http.HandlerFunc { return schedulePage(cfg, v.reg) }))
 	// workflows: written through the API, read through the account's role; a host's agents move runs with its key
-	mux.HandleFunc("POST /api/workflow-proposals", a.proposeWorkflow)
-	mux.HandleFunc("POST /api/workflow-proposals/{id}/withdraw", a.withdrawProposal)
+	mux.HandleFunc("POST /api/workflow-proposals", a.hostWrite(a.proposeWorkflow))
+	mux.HandleFunc("POST /api/workflow-proposals/{id}/withdraw", a.hostWrite(a.withdrawProposal))
 	for _, action := range []string{"approve", "reject", "undo"} {
 		mux.HandleFunc("POST /api/workflow-proposals/{id}/"+action, a.write(a.decideProposal(action)))
 	}
 	mux.HandleFunc("GET /workflow-proposals", a.page(proposalsPage))
 	mux.HandleFunc("GET /workflow-proposals/{id}", a.page(proposalPage))
 	mux.HandleFunc("GET /workflows/{id}/versions/{version}", a.page(workflowVersionPage))
-	mux.HandleFunc("POST /mcp", a.workflowMCP)
 	mux.HandleFunc("POST /api/workflows", a.write(a.createWorkflow))
 	mux.HandleFunc("PUT /api/workflows/{id}", a.write(a.updateWorkflow))
 	mux.HandleFunc("PUT /api/workflows/{id}/default", a.write(a.setDefaultWorkflow))

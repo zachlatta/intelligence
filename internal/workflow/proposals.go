@@ -10,17 +10,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// WorkflowState is the complete editable state captured for review and undo.
-// Version is a monotonic revision, including deletions and restores.
-type WorkflowState struct {
-	Name        string     `json:"name"`
-	Description string     `json:"description"`
-	Definition  Definition `json:"definition"`
-	Version     int        `json:"version"`
-	IsDefault   bool       `json:"isDefault"`
-	Deleted     bool       `json:"deleted"`
-}
-
 type ProposalRequest struct {
 	Operation   string         `json:"operation"`
 	WorkflowID  string         `json:"workflowId,omitempty"`
@@ -32,20 +21,41 @@ type ProposalRequest struct {
 	RunID       string         `json:"runId,omitempty"`
 }
 
-func workflowState(ctx context.Context, tx pgx.Tx, account int64, id string) (*WorkflowState, error) {
-	var s WorkflowState
-	var def []byte
-	err := tx.QueryRow(ctx, `SELECT w.name,w.description,w.version,w.is_default,w.deleted_at IS NOT NULL,v.definition
- FROM workflows w JOIN workflow_versions v ON v.workflow_id=w.id AND v.version=w.version
- WHERE w.id=$1 AND w.account_id=$2 FOR UPDATE OF w`, id, account).Scan(&s.Name, &s.Description, &s.Version, &s.IsDefault, &s.Deleted, &def)
+// Withdraw only removes the caller's pending proposal; it never edits workflows.
+func (e *Engine) Withdraw(ctx context.Context, account int64, proposer, id, reason string) error {
+	if !uuidRe.MatchString(id) {
+		return ErrNotFound
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" || len(reason) > 2000 {
+		return bad("withdraw requires a reason (up to 2000 characters)")
+	}
+	return pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		if err := lockWorkflowAccount(ctx, tx, account); err != nil {
+			return err
+		}
+		return e.withdrawTx(ctx, tx, account, proposer, id, reason)
+	})
+}
+
+func (e *Engine) withdrawTx(ctx context.Context, tx pgx.Tx, account int64, proposer, id, reason string) error {
+	var by, status string
+	var expired bool
+	err := tx.QueryRow(ctx, "SELECT proposer,status,expires_at<=$3 FROM workflow_proposals WHERE id=$1 AND account_id=$2 FOR UPDATE", id, account, e.Now()).Scan(&by, &status, &expired)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
+		return ErrNotFound
 	}
 	if err != nil {
-		return nil, err
+		return err
 	}
-	err = json.Unmarshal(def, &s.Definition)
-	return &s, err
+	if by != proposer {
+		return ErrNotFound
+	}
+	if status != "pending" || expired {
+		return conflict("withdrawal or replacement requires your own pending, unexpired proposal")
+	}
+	_, err = tx.Exec(ctx, "UPDATE workflow_proposals SET status='withdrawn',withdraw_reason=$2,decided_at=$3 WHERE id=$1", id, reason, e.Now())
+	return err
 }
 
 // Propose records a single atomic create/update/delete without changing a workflow.
@@ -93,7 +103,7 @@ func (e *Engine) Propose(ctx context.Context, account int64, proposer string, r 
 	var id string
 	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
 		// Use the same lock order as decisions, including replacement withdrawal.
-		if _, err := tx.Exec(ctx, "SELECT id FROM accounts WHERE id=$1 FOR NO KEY UPDATE", account); err != nil {
+		if err := lockWorkflowAccount(ctx, tx, account); err != nil {
 			return err
 		}
 		var before *WorkflowState
@@ -124,6 +134,9 @@ func (e *Engine) Propose(ctx context.Context, account int64, proposer string, r 
 		r.Workflow.Version = 1
 		if before != nil {
 			r.Workflow.Version = before.Version + 1
+			if r.Operation == "delete" {
+				r.Workflow.Version = before.Version
+			}
 			if r.Operation == "update" {
 				r.Workflow.IsDefault = before.IsDefault && r.Workflow.Definition.Trigger == TriggerTask
 			}
@@ -131,13 +144,8 @@ func (e *Engine) Propose(ctx context.Context, account int64, proposer string, r 
 		b, _ := json.Marshal(before)
 		p, _ := json.Marshal(r.Workflow)
 		if r.ReplacesID != "" {
-			tag, err := tx.Exec(ctx, `UPDATE workflow_proposals SET status='withdrawn',withdraw_reason=$4,decided_at=$5
-			WHERE id=$1 AND account_id=$2 AND proposer=$3 AND status='pending' AND expires_at>$5`, r.ReplacesID, account, proposer, "Replaced: "+r.Summary, e.Now())
-			if err != nil {
+			if err := e.withdrawTx(ctx, tx, account, proposer, r.ReplacesID, "Replaced: "+r.Summary); err != nil {
 				return err
-			}
-			if tag.RowsAffected() != 1 {
-				return conflict("replacement requires your own pending, unexpired proposal")
 			}
 		}
 		return tx.QueryRow(ctx, `INSERT INTO workflow_proposals(account_id,proposer,operation,workflow_id,summary,before_state,proposed_state,created_at,expires_at,proposed_by,run_id,replaces_id)
@@ -148,29 +156,22 @@ func (e *Engine) Propose(ctx context.Context, account int64, proposer string, r 
 
 // Decide serializes on the proposal and workflow. The before/after comparison includes
 // metadata and default state as well as the definition, so undo cannot overwrite later work.
-func (e *Engine) Decide(ctx context.Context, account int64, proposer, id, action string, reasons ...string) error {
-	reason := ""
-	if len(reasons) > 0 {
-		reason = strings.TrimSpace(reasons[0])
-	}
-	if action == "withdraw" && (reason == "" || len(reason) > 2000) {
-		return bad("withdraw requires a reason (up to 2000 characters)")
-	}
+func (e *Engine) Decide(ctx context.Context, account int64, id, action string) error {
 	if !uuidRe.MatchString(id) {
 		return ErrNotFound
 	}
 	var refusal error
 	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
 		// Account lock serializes proposal creates/restores and default restoration.
-		if _, err := tx.Exec(ctx, "SELECT id FROM accounts WHERE id=$1 FOR NO KEY UPDATE", account); err != nil {
+		if err := lockWorkflowAccount(ctx, tx, account); err != nil {
 			return err
 		}
-		var status, by, op string
+		var status string
 		var wid *string
 		var before, proposed, after []byte
 		var expired bool
-		err := tx.QueryRow(ctx, `SELECT status,proposer,operation,workflow_id::text,before_state,proposed_state,after_state,expires_at <= $3
-   FROM workflow_proposals WHERE id=$1 AND account_id=$2 FOR UPDATE`, id, account, e.Now()).Scan(&status, &by, &op, &wid, &before, &proposed, &after, &expired)
+		err := tx.QueryRow(ctx, `SELECT status,workflow_id::text,before_state,proposed_state,after_state,expires_at <= $3
+   FROM workflow_proposals WHERE id=$1 AND account_id=$2 FOR UPDATE`, id, account, e.Now()).Scan(&status, &wid, &before, &proposed, &after, &expired)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -189,16 +190,9 @@ func (e *Engine) Decide(ctx context.Context, account int64, proposer, id, action
 			if status != "pending" {
 				return conflict("proposal is %s", status)
 			}
-			if action == "withdraw" && by != proposer {
-				return ErrNotFound
-			}
 			if expired {
 				refusal = conflict("proposal expired; propose again")
 				return set("expired")
-			}
-			if action == "withdraw" {
-				_, err := tx.Exec(ctx, "UPDATE workflow_proposals SET status='withdrawn',withdraw_reason=$2,decided_at=$3 WHERE id=$1", id, reason, e.Now())
-				return err
 			}
 			if action == "reject" {
 				return set("rejected")
@@ -242,56 +236,15 @@ func (e *Engine) Decide(ctx context.Context, account int64, proposer, id, action
 			target.Deleted = true
 			target.IsDefault = false
 		}
-		if target.Deleted {
-			var live bool
-			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM workflow_runs WHERE workflow_id=$1 AND finished_at IS NULL)`, *wid).Scan(&live); err != nil {
-				return err
-			}
-			if live {
-				return conflict("workflow has runs still going; finish or cancel them first")
-			}
-		} else {
-			if err := ownsHost(ctx, tx, account, target.Definition.Host); err != nil {
-				return err
-			}
-			workflowID := ""
-			if wid != nil {
-				workflowID = *wid
-			}
-			if err := uniqueEmailTrigger(ctx, tx, account, workflowID, target.Definition); err != nil {
-				return err
-			}
-			if target.IsDefault {
-				var other bool
-				if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM workflows WHERE account_id=$1 AND is_default AND id::text<>$2)", account, workflowID).Scan(&other); err != nil {
-					return err
-				}
-				if other {
-					return conflict("another workflow is now the default; cannot restore the previous default")
-				}
-			}
+		workflowID := ""
+		if wid != nil {
+			workflowID = *wid
 		}
-		target.Version = 1
-		if current != nil {
-			target.Version = current.Version + 1
-		}
-		if wid == nil {
-			var created string
-			err = tx.QueryRow(ctx, `INSERT INTO workflows(account_id,name,description,version,created_at,updated_at) VALUES($1,$2,$3,1,$4,$4) RETURNING id::text`, account, target.Name, target.Description, e.Now()).Scan(&created)
-			if err != nil {
-				return err
-			}
-			wid = &created
-		} else {
-			_, err = tx.Exec(ctx, `UPDATE workflows SET name=$2,description=$3,version=$4,is_default=$5,deleted_at=CASE WHEN $6 THEN $7::timestamptz ELSE NULL END,updated_at=$7 WHERE id=$1`, *wid, target.Name, target.Description, target.Version, target.IsDefault, target.Deleted, e.Now())
-			if err != nil {
-				return err
-			}
-		}
-		def, _ := json.Marshal(target.Definition)
-		if _, err = tx.Exec(ctx, "INSERT INTO workflow_versions(workflow_id,version,account_id,definition,created_at) VALUES($1,$2,$3,$4,$5)", *wid, target.Version, account, def, e.Now()); err != nil {
+		workflowID, target, err = e.applyWorkflowState(ctx, tx, account, workflowID, current, target)
+		if err != nil {
 			return err
 		}
+		wid = &workflowID
 		state, _ := json.Marshal(target)
 		if action == "undo" {
 			_, err = tx.Exec(ctx, "UPDATE workflow_proposals SET status='undone',undo_state=$2,undone_at=$3 WHERE id=$1", id, state, e.Now())

@@ -59,6 +59,43 @@ func TestProposalReviewAndUndo(t *testing.T) {
 	}
 }
 
+func TestDirectAndProposedDeletionUseTheSameVersionAndRunRules(t *testing.T) {
+	h, d := dbServer(t)
+	sendReport(t, h, wfReport())
+	key := keyOf(t, h, "host-1")
+	for _, viaProposal := range []bool{false, true} {
+		id := createWorkflow(t, h, workflow.Starting)
+		run := startRun(t, h, id, "Terminal status is authoritative")
+		if _, err := d.Owner.Exec(t.Context(), "UPDATE workflow_runs SET status='succeeded' WHERE id=$1", run); err != nil {
+			t.Fatal(err)
+		}
+		if viaProposal {
+			r := call(t, anon(h), "POST", "/api/workflow-proposals", `{"operation":"delete","summary":"Remove completed workflow","workflowId":"`+id+`","baseVersion":1}`, map[string]string{"Authorization": "Bearer " + key})
+			if r.Code != 201 {
+				t.Fatal(r.Body)
+			}
+			var p struct{ ID string }
+			json.Unmarshal(r.Body.Bytes(), &p)
+			r = call(t, h, "POST", "/api/workflow-proposals/"+p.ID+"/approve", `{}`, sameOriginFetch)
+			if r.Code != 200 {
+				t.Fatalf("proposal delete: %d %s", r.Code, r.Body)
+			}
+		} else {
+			r := call(t, h, "DELETE", "/api/workflows/"+id, "", sameOriginFetch)
+			if r.Code != 204 {
+				t.Fatal(r.Body)
+			}
+		}
+		var version, versions int
+		if err := d.Owner.QueryRow(t.Context(), "SELECT version,(SELECT count(*) FROM workflow_versions WHERE workflow_id=w.id) FROM workflows w WHERE id=$1", id).Scan(&version, &versions); err != nil {
+			t.Fatal(err)
+		}
+		if version != 1 || versions != 1 {
+			t.Fatalf("deletion added a definition version: proposal=%v version=%d count=%d", viaProposal, version, versions)
+		}
+	}
+}
+
 func TestProposalCreateDeleteExpiryAndIsolation(t *testing.T) {
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
@@ -128,7 +165,7 @@ func TestProposalCreateDeleteExpiryAndIsolation(t *testing.T) {
 		t.Fatal("undo did not restore")
 	}
 	decide(p, "undo", 409) // restoring deletion advanced the version
-	exp := propose(`{"operation":"delete","summary":"Expire this","workflowId":"` + wid + `","baseVersion":3}`)
+	exp := propose(`{"operation":"delete","summary":"Expire this","workflowId":"` + wid + `","baseVersion":2}`)
 	if _, err := d.Owner.Exec(t.Context(), "UPDATE workflow_proposals SET expires_at=$2 WHERE id=$1", exp, time.Now().Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
