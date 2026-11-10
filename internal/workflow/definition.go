@@ -158,7 +158,7 @@ func (v Vars) fill(s string) string {
 }
 
 // ProjectPrompt is what the project finder is told: its instructions, the input, the host's
-// repositories, and how to answer.
+// repositories, routing guidance (including for saved definitions), and how to answer.
 func ProjectPrompt(run string, d Definition, input string, repos []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n\nThe task:\n\n%s\n\n", strings.TrimSpace(d.Project.Instructions), strings.TrimSpace(input))
@@ -167,12 +167,41 @@ func ProjectPrompt(run string, d Definition, input string, repos []string) strin
 	} else {
 		fmt.Fprintf(&b, "The repositories on this host (their main checkouts):\n\n- %s\n\n", strings.Join(repos, "\n- "))
 	}
+	b.WriteString(projectRoutingGuidance + "\n\n" + ProjectRule + "\n\n")
 	fmt.Fprintf(&b, "Change nothing. When you have decided, run one of these, then stop:\n\n"+
 		"  intelligence workflow project --run %[1]s <directory>\n"+
 		"  intelligence workflow project --run %[1]s none\n\n"+
 		"none means the task belongs in no repository: the orchestrator then works in the home directory.", run)
 	return b.String()
 }
+
+const projectRoutingGuidance = `Choose by the requested work product, not by topic overlap or where source data lives.
+- Honor an explicit workspace choice in the task or workflow instructions. Mentioning a data source or a program name alone is not a workspace choice.
+- For one-off reports, analyses, decks, emails, research and similar deliverables, choose desk when it is among the candidates. desk is the general workspace for this work, even when it uses data or tools from another repository. Read desk's README before ruling it out.
+- Reading or querying a warehouse does not make its code repository the task's workspace. For example, a deck about program growth using warehouse data belongs in desk; a fix to the warehouse's pipeline or data models belongs in the warehouse repository.
+- Choose a code repository when the task calls for changes to a repository's code, tests, configuration or maintained documentation, or investigation of that repository's behavior. Do not turn a one-off deliverable into a code change merely because its subject appears in a README or recent commits.
+- If desk is absent, use another candidate only if the requested work belongs there; otherwise answer none. Do not invent a checkout path.`
+
+// ProjectRule is appended to every finder's prompt after the routing guidance, so saved workflows
+// get it too. A finder that picks the repository a report's data comes from publishes the report
+// when that repository is public.
+const ProjectRule = "Check a candidate's visibility before you pick it (gh repo view <owner/name> --json visibility, " +
+	"with owner/name from its git remote). Never pick a public repository for a result for Zach (a report, deck, analysis, " +
+	"metrics, a data pull or export, research, an email or an answer), even when its data comes from that repository: " +
+	"everything a run commits there is published. Such results go to a private repository."
+
+// PublicRepoRule is in every orchestrator's contract, so saved workflows get it too, and it is
+// passed to every worker: what a public repository must never get, whichever step adds it.
+const PublicRepoRule = "If this run's repository is public, everything committed to it is published. Commit only changes the repository " +
+	"keeps (code, configuration, documentation). Never commit a result for Zach there: reports, decks, analyses, metrics or counts " +
+	"about people, programs or money, data exports (CSV, JSON, spreadsheets), work/ or scratch folders, or donor, contact, " +
+	"financial or student data. Aggregate-only and no-secrets do not make internal data publishable, and a work/ folder already " +
+	"on main is not a convention to follow. Keep such output in .factory-scratch/ (git-ignored) and deliver it to Zach privately. " +
+	"Before any push, review every outgoing commit, merge commits included, not only the final diff (git log -m --stat origin/main..HEAD; " +
+	"-m shows what merge commits add): a file added and " +
+	"deleted in a later commit is still published with the push. If any commit adds such output, rewrite the commits to drop it first. " +
+	"If the task's deliverable is a result rather than a change to this repository, the run is in the wrong repository: " +
+	"ask Zach before proceeding."
 
 // Providers are the providers the workflow editor offers: those with a mode that never asks.
 func Providers() []string { return paseo.UnattendedProviders() }
@@ -223,7 +252,8 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 		"pass proposed edits and evidence to the landing step. " +
 		"The landing step also applies the run's approved external changes (skill edits, queued mutations). " +
 		"Preserve scratch needed by later steps. A worker reports back and ends its turn; the orchestrator owns reuse and archiving. " +
-		"After a successful ask, end your turn and wait for the reply message; do not poll or create a wakeup.\n\n")
+		"After a successful ask, end your turn and wait for the reply message; do not poll or create a wakeup.\n\n" +
+		PublicRepoRule + "\n\n")
 	b.WriteString(StepMessage(d, 0, v))
 	return b.String()
 }
@@ -231,8 +261,22 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 // StepMessage is step i's title and filled instructions, as the orchestrator gets them.
 func StepMessage(d Definition, i int, v Vars) string {
 	s := d.Steps[i]
-	return fmt.Sprintf("Step %d of %d: %s\n\n%s", i+1, len(d.Steps), s.Title, strings.TrimSpace(v.fill(s.Instructions))+"\n\n"+UnattendedShellRule+"\n\n"+FileDeliveryRule)
+	return fmt.Sprintf("Step %d of %d: %s\n\n%s", i+1, len(d.Steps), s.Title, strings.TrimSpace(v.fill(s.Instructions))+"\n\n"+UnattendedShellRule+"\n\n"+FileDeliveryRule+"\n\n"+DeliverableEmailRule)
 }
+
+// DeliverableEmailRule is appended at runtime, like FileDeliveryRule, so saved workflows get it
+// too. Without it a run whose result is a report finished with that report only on its run page
+// whenever its landing step's own wording did not cover the run's repository. The address is the
+// zrl-bot-email skill's: the repository is public and carries no personal address.
+const DeliverableEmailRule = "When the run's result is a deliverable for Zach rather than landed code or a change to hosts or services " +
+	"(a report, investigation, answer, proposal, plan, deck or analysis, or such a result alongside code), email it to him from the zrl-bot mailbox " +
+	"as the zrl-bot-email skill says: a reply in his request thread when the run started from his email, otherwise a new email to the address the skill names for new mail. " +
+	"This holds in any repository, and even when nothing lands. Put the full substance in the body (the answer first, then the findings, tables and decisions he must make), " +
+	"with files.zachlatta.com links to the full report and files under the file-delivery rule above; never only a link or a local path. " +
+	"Earlier steps draft the email (subject and HTML body) in the worktree and pass it on; only the last step sends it, or, when the run ends early (fail or skip to the end), a worker the orchestrator starts before it moves the run. " +
+	"Before sending, search zrl-bot's sent mail from the run's request date, not a recent-days window: by subject, by the report's URL, and in the request thread if there is one. " +
+	"Inspect every match, send only if none already delivered it, so it goes out once, and put the sent message's id (or the earlier delivery's) in the run's final summary. " +
+	"Pass this deliverable-email rule to every worker."
 
 // FileDeliveryRule is appended at runtime so saved workflows get it too. Uploading belongs
 // on the agent's host: the server cannot read its files or decide which artifacts to publish.
@@ -240,7 +284,7 @@ const FileDeliveryRule = `When showing Zach images or Markdown files in notes, a
 
 For public files, omit passwords and allowed_emails (or emails); omit namespace on the first upload so the service generates it. Do not invent a URL or reuse a predictable namespace. Check the returned SHA-256 against the local bytes and verify an anonymous GET returns 200 with the expected content type before linking it. Use ![description](https://...) for images and [report](https://...) for Markdown. Upload Markdown as text/plain; charset=utf-8 so browsers open it inline, and upload and rewrite any local image or Markdown references inside the report too.
 
-Files containing donor, contact, financial or student data must stay restricted to Zach's verified email address from the file-share skill unless Zach explicitly asks to publish that data. For these private files, set allowed_emails (or emails) to that address, verify the SHA-256 and that an anonymous GET returns 401, and link them as text rather than embedding images. This exception also applies to private files referenced inside a report; never publish private data through a public parent report.
+Files containing donor, contact, financial or student data must stay restricted to Zach's verified email address from the file-share skill unless Zach explicitly asks to publish that data. So must internal metrics: counts, rates or spend about people, programs or money, even when every number is an aggregate. So must every internal report, even with no metrics: audits, reviews, walkthroughs of Zach's runs, agents, workflows or incidents, and anything naming security weaknesses or credential names, even redacted. For these private files, set allowed_emails (or emails) to that address, verify the SHA-256 and that an anonymous GET returns 401, and link them as text rather than embedding images. This exception also applies to private files referenced inside a report; never publish private data through a public parent report.
 
 Never send local paths as deliverables. Pass this file-delivery rule to every worker. If the current step explicitly forbids uploads, preserve the files and pass their paths and this rule to an authorized step. If upload or access verification fails, report the failure and keep the files for retry; do not claim they were delivered.`
 
@@ -256,7 +300,7 @@ Then paseo wait <id> until it is done, and paseo logs <id> to read what it did. 
 Use frontier models, and spread the work across the plans: claude/claude-opus-5-5, codex and antigravity/gemini-4-carbon-high (Gemini 4 Carbon).`
 
 // Starting is the workflow an account starts with (its Host set to one of the account's): a task from the Workflows page, its project
-// found, the work, three gates, Zach's sign-off for broader changes, and landing.
+// found, the work, three gates, Zach's sign-off for broader changes, a public repository check, and landing.
 var Starting = Definition{
 	Trigger: TriggerTask,
 	Project: Project{Mode: ProjectMatch, Provider: "claude", Model: "claude-opus-5-5", Thinking: "medium",
@@ -277,6 +321,18 @@ var Starting = Definition{
 			"(new tables, dependencies, contracts or boundaries), skip this step.\n\nOtherwise write him a note in Markdown: the original task, " +
 			"the architecture change before and after, before and after screenshots, and anything he needs to decide, with your recommendation. " +
 			"Ask, then do what his reply says."},
+		{ID: "public", Kind: KindGate, Title: "Public repo check", Instructions: "Check the repository's visibility " +
+			"(gh repo view <owner/name> --json visibility). If it is private, skip this step.\n\n" +
+			"If it is public, have a fresh sub-agent review every outgoing commit, not only the final diff: list them with " +
+			"git log -m --stat origin/main..HEAD (-m includes merge commits, which git log otherwise leaves out) and read each file " +
+			"each commit adds or changes, including reports outside work/. " +
+			"A file deleted in a later commit is still published with the push. " +
+			"Send the work back to Do the work if any commit adds a result rather than a change the repository keeps: a report, deck, " +
+			"analysis, metrics or counts about people, programs or money, a data export (CSV, JSON, spreadsheet), a work/ or scratch " +
+			"folder, or donor, contact, financial or student data; Do the work must rewrite the commits to drop it. " +
+			"Aggregate-only and no-secrets do not make internal data publishable. " +
+			"It also checks for secrets, hostnames, private addresses, home-directory paths and personal emails, and fixes small ones here. " +
+			"Move on when no outgoing commit adds anything private."},
 		{ID: "land", Kind: KindStep, Title: "Land and deploy", Instructions: "Rebase on origin/main, land on main the way the repository's AGENTS.md says, " +
 			"and wait until the deploy reports the new version. " +
 			"The landing step also applies the run's approved external changes (skill edits, queued mutations). " +

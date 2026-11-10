@@ -109,6 +109,10 @@ type serverSettings struct {
 	Google    *email.Google
 	EmailKey  *email.Keyring
 	PublicURL string // PUBLIC_URL: the server's origin, for Google's redirect; default each request's
+	// WORKFLOW_QUEUE_CPU_PCT, WORKFLOW_QUEUE_MEM_PCT and WORKFLOW_QUEUE_LOAD_PER_CPU: when a host
+	// is near capacity, so a new workflow run queues; each defaults to workflow.DefaultLimits (85,
+	// 90 and 1.5), and 0 or "off" turns it off.
+	QueueLimits workflow.Limits
 }
 
 func serverConfig(getenv func(string) string) (serverSettings, error) {
@@ -134,6 +138,9 @@ func serverConfig(getenv func(string) string) (serverSettings, error) {
 		return c, errors.New("READONLY_DATABASE_URL needs a user and a password")
 	}
 	c.PublicURL = getenv("PUBLIC_URL")
+	if c.QueueLimits, err = queueLimits(getenv); err != nil {
+		return c, err
+	}
 	if raw := getenv("GOOGLE_OAUTH_CLIENT_JSON"); raw != "" {
 		if c.Google, err = email.ParseClient(raw); err != nil {
 			return c, err
@@ -143,6 +150,28 @@ func serverConfig(getenv func(string) string) (serverSettings, error) {
 		}
 	}
 	return c, nil
+}
+
+// queueLimits reads the workflow queue's limits over workflow.DefaultLimits.
+func queueLimits(getenv func(string) string) (workflow.Limits, error) {
+	l := workflow.DefaultLimits()
+	for _, f := range []struct {
+		name string
+		to   *float64
+	}{{"WORKFLOW_QUEUE_CPU_PCT", &l.CPUPct}, {"WORKFLOW_QUEUE_MEM_PCT", &l.MemPct}, {"WORKFLOW_QUEUE_LOAD_PER_CPU", &l.LoadPerCPU}} {
+		switch v := strings.TrimSpace(getenv(f.name)); v {
+		case "":
+		case "off":
+			*f.to = 0
+		default:
+			n, err := strconv.ParseFloat(v, 64)
+			if err != nil || n < 0 {
+				return l, fmt.Errorf("%s %q: want a number, 0 or off", f.name, v)
+			}
+			*f.to = n
+		}
+	}
+	return l, nil
 }
 
 func serve(ctx context.Context) error {
@@ -180,7 +209,7 @@ func serve(ctx context.Context) error {
 	srv := &http.Server{
 		Addr: addr(os.Getenv),
 		Handler: web.New(web.Config{Context: ctx, Version: v, DB: owner, Readonly: ro, BinDir: c.BinDir,
-			AssemblyAIKey: c.AssemblyAIKey, Google: c.Google, EmailKey: c.EmailKey, PublicURL: c.PublicURL}),
+			AssemblyAIKey: c.AssemblyAIKey, Google: c.Google, EmailKey: c.EmailKey, PublicURL: c.PublicURL, QueueLimits: &c.QueueLimits}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go pruneHosts(ctx, fleet.New(owner))

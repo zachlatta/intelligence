@@ -21,6 +21,66 @@ func mintMCP(t *testing.T, h http.Handler) (string, string) {
 	return tok.ID, tok.Token
 }
 
+func TestMCPProposalTokenIdentityAndApprovalBoundary(t *testing.T) {
+	h, d := dbServer(t)
+	sendReport(t, h, wfReport())
+	tokenID, token := mintMCP(t, h)
+	created := time.Date(2026, time.November, 1, 12, 30, 0, 0, time.UTC)
+	if _, err := d.Owner.Exec(t.Context(), "UPDATE mcp_tokens SET created_at=$2 WHERE id=$1", tokenID, created); err != nil {
+		t.Fatal(err)
+	}
+	_, otherToken := mintMCP(t, h)
+	def := workflow.Starting
+	def.Host = "host-1"
+	arguments, _ := json.Marshal(map[string]any{"operation": "create", "summary": "Token proposal", "workflow": map[string]any{"name": "Token workflow", "definition": def}})
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"propose_mutation","arguments":` + string(arguments) + `}}`
+	got := rpc(t, h, token, body)
+	var out struct {
+		Result struct {
+			StructuredContent struct{ ID, ApprovalURL string }
+		}
+	}
+	json.Unmarshal([]byte(got), &out)
+	id := out.Result.StructuredContent.ID
+	if id == "" || out.Result.StructuredContent.ApprovalURL == "" {
+		t.Fatalf("proposal: %s", got)
+	}
+	var proposer string
+	if err := d.Owner.QueryRow(t.Context(), "SELECT proposer FROM workflow_proposals WHERE id=$1", id).Scan(&proposer); err != nil || proposer != "mcp:"+tokenID {
+		t.Fatalf("identity: %q %v", proposer, err)
+	}
+	for _, path := range []string{"/workflow-proposals/" + id, "/workflow-proposals"} {
+		page := get(t, h, path, nil).Body.String()
+		if !strings.Contains(page, "mcp:"+tokenID) || !strings.Contains(page, "MCP token created Nov 1, 2026") {
+			t.Errorf("%s lacks readable token attribution: %s", path, page)
+		}
+	}
+	for _, action := range []string{"approve", "reject", "undo"} {
+		r := call(t, anon(h), "POST", "/api/workflow-proposals/"+id+"/"+action, `{}`, map[string]string{"Authorization": "Bearer " + token})
+		if r.Code != 401 {
+			t.Fatalf("token can %s: %d", action, r.Code)
+		}
+	}
+	withdraw := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"withdraw_mutation","arguments":{"id":"` + id + `","reason":"Changed plan"}}}`
+	if other := rpc(t, h, otherToken, withdraw); !strings.Contains(other, `"isError":true`) {
+		t.Fatal("other token withdrew proposal: " + other)
+	}
+	if own := rpc(t, h, token, withdraw); strings.Contains(own, `"isError":true`) {
+		t.Fatal(own)
+	}
+	r := call(t, h, "DELETE", "/api/mcp-tokens/"+tokenID, "", sameOriginFetch)
+	if r.Code != 204 {
+		t.Fatal(r.Body)
+	}
+	if page := get(t, h, "/workflow-proposals/"+id, nil); page.Code != 200 || !strings.Contains(page.Body.String(), "mcp:"+tokenID) {
+		t.Fatal("revocation lost proposal attribution")
+	}
+	r = call(t, anon(h), "POST", "/mcp", body, map[string]string{"Authorization": "Bearer " + token})
+	if r.Code != 401 {
+		t.Fatal("revoked token proposed")
+	}
+}
+
 func TestMCPProtocolErrorsAndOrigin(t *testing.T) {
 	h, _ := dbServer(t)
 	_, token := mintMCP(t, h)
@@ -29,7 +89,7 @@ func TestMCPProtocolErrorsAndOrigin(t *testing.T) {
 		{`{`, `-32700`}, {`{"jsonrpc":"1.0","id":1,"method":"ping"}`, `-32600`},
 		{`{"jsonrpc":"2.0","id":1,"method":"missing"}`, `-32601`},
 		{`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"query","arguments":{"query":""}}}`, `-32602`},
-		{`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_agents","arguments":{"Host":"ignored"}}}`, `-32602`},
+		{`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"describe_table","arguments":{"Table":"ignored"}}}`, `-32602`},
 		{`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"query","arguments":{"query":"SELECT 1","limit":10001}}}`, `-32602`},
 	} {
 		if got := rpc(t, h, token, tc.body); !strings.Contains(got, `"code":`+tc.code) {
@@ -64,15 +124,15 @@ func TestMCPPagingAndTimeout(t *testing.T) {
 	tool := func(name, args string) string {
 		return rpc(t, h, token, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"`+name+`","arguments":`+args+`}}`)
 	}
-	got := tool("read_transcript", `{"host":"host-1","agentId":"`+agentA1+`","limit":1}`)
+	got := tool("query", qlimit("SELECT t.epoch,t.synced_at,e.* FROM transcripts t JOIN transcript_entries e USING(host,agent_id) WHERE host='host-1' AND agent_id='"+agentA1+"' ORDER BY seq_start", 1))
 	if !strings.Contains(got, `"truncated":true`) || !strings.Contains(got, "first") || strings.Contains(got, "second") || !strings.Contains(got, "epoch-1") {
 		t.Fatal(got)
 	}
-	got = tool("read_transcript", `{"host":"host-1","agentId":"`+agentA1+`","afterSeq":0}`)
+	got = tool("query", q("SELECT * FROM transcript_entries WHERE host='host-1' AND agent_id='"+agentA1+"' AND seq_start>0 ORDER BY seq_start"))
 	if strings.Contains(got, "first") || !strings.Contains(got, "second") || !strings.Contains(got, `"truncated":false`) {
 		t.Fatal(got)
 	}
-	got = tool("list_agents", `{"host":"' OR true --"}`)
+	got = tool("describe_table", `{"table":"' OR true --"}`)
 	if !strings.Contains(got, `"rowCount":0`) {
 		t.Fatal(got)
 	}
@@ -116,9 +176,7 @@ func TestMCPTransportAndTools(t *testing.T) {
 		}
 	}
 	for name, args := range map[string]string{
-		"query": `{"query":"SELECT name FROM hosts"}`, "schema": `{}`, "describe_table": `{"table":"agents"}`,
-		"list_agents": `{}`, "read_transcript": `{"host":"host-1","agentId":"` + agentA1 + `"}`, "list_runs": `{}`,
-		"read_run": `{"runId":"00000000-0000-4000-8000-000000000001"}`,
+		"query": `{"query":"SELECT name FROM hosts"}`, "schema_overview": `{}`, "describe_table": `{"table":"agents"}`,
 	} {
 		got := rpc(t, h, token, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"`+name+`","arguments":`+args+`}}`)
 		if strings.Contains(got, `"isError":true`) || !strings.Contains(got, `"structuredContent"`) {
@@ -153,10 +211,14 @@ func TestMCPRunReadsAndAccountIsolation(t *testing.T) {
 	otherH := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { r.AddCookie(c); anon(h).ServeHTTP(w, r) })
 	_, otherToken := mintMCP(t, otherH)
 	sendBatch(t, h, batch(true, "epoch", tentry(1, `{"type":"user_message","text":"private message"}`)))
-	for name, args := range map[string]string{
-		"list_agents": `{}`, "list_runs": `{}`, "read_run": `{"runId":"` + run + `"}`, "read_transcript": `{"host":"host-1","agentId":"` + agentA1 + `"}`,
+	for _, query := range []string{
+		"SELECT * FROM recorded_agents",
+		"SELECT * FROM workflow_runs",
+		"SELECT * FROM workflow_run_events WHERE run_id='" + run + "'",
+		"SELECT * FROM transcript_entries WHERE host='host-1' AND agent_id='" + agentA1 + "'",
 	} {
-		body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"` + name + `","arguments":` + args + `}}`
+		name := query
+		body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"query","arguments":` + q(query) + `}}`
 		got := rpc(t, h, token, body)
 		if strings.Contains(got, `"rowCount":0`) || strings.Contains(got, `"isError":true`) {
 			t.Errorf("own %s: %s", name, got)
@@ -168,14 +230,14 @@ func TestMCPRunReadsAndAccountIsolation(t *testing.T) {
 	}
 }
 
-func TestMCPRunListOmitsTaskInput(t *testing.T) {
+func TestMCPSQLRunSummaryAndExplicitInput(t *testing.T) {
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	wf := createWorkflow(t, h, workflow.Starting)
 	input := "Summary title.\n\n" + strings.Repeat("long-task-payload ", 100)
 	run := startRun(t, h, wf, input)
 	_, token := mintMCP(t, h)
-	got := rpc(t, h, token, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_runs"}}`)
+	got := rpc(t, h, token, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"query","arguments":`+q("SELECT id,workflow_id,title,status,step,orchestrator_id,note,created_at,finished_at FROM workflow_runs ORDER BY created_at DESC,id DESC LIMIT 50")+`}}`)
 	var msg struct {
 		Result struct {
 			StructuredContent sqlResponse `json:"structuredContent"`
@@ -327,5 +389,53 @@ func TestMCPTokenIsolationAndRevocation(t *testing.T) {
 	}
 	if r := call(t, anon(h), "POST", "/mcp", `{}`, map[string]string{"Authorization": "Bearer " + token}); r.Code != 401 {
 		t.Fatal("expired token works")
+	}
+}
+
+func TestMCPWorkflowProposals(t *testing.T) {
+	h, _ := dbServer(t)
+	sendReport(t, h, wfReport())
+	_, key := mintMCP(t, h)
+	headers := map[string]string{"Authorization": "Bearer " + key}
+	rpc := func(method string, params any) map[string]any {
+		b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+		r := call(t, anon(h), "POST", "/mcp", string(b), headers)
+		if r.Code != 200 {
+			t.Fatalf("%s: %d %s", method, r.Code, r.Body)
+		}
+		var result map[string]any
+		if err := json.Unmarshal(r.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	r := rpc("initialize", map[string]any{"protocolVersion": "2025-03-26"})
+	if r["result"] == nil {
+		t.Fatal(r)
+	}
+	r = rpc("tools/list", nil)
+	b, _ := json.Marshal(r)
+	if !strings.Contains(string(b), "propose_mutation") || strings.Contains(string(b), `"name":"approve`) {
+		t.Fatal(string(b))
+	}
+	d := workflow.Starting
+	d.Host = "host-1"
+	r = rpc("tools/call", map[string]any{"name": "propose_mutation", "arguments": map[string]any{"operation": "create", "summary": "Add workflow", "workflow": map[string]any{"name": "Proposed", "definition": d}}})
+	b, _ = json.Marshal(r)
+	if !strings.Contains(string(b), "approvalURL") {
+		t.Fatal(string(b))
+	}
+	r = rpc("tools/call", map[string]any{"name": "query", "arguments": map[string]any{"query": "SELECT status FROM workflow_proposals"}})
+	b, _ = json.Marshal(r)
+	if !strings.Contains(string(b), "pending") {
+		t.Fatal(string(b))
+	}
+	r = rpc("tools/call", map[string]any{"name": "approve_mutation", "arguments": map[string]any{}})
+	if r["error"] == nil {
+		t.Fatal("approval tool accepted")
+	}
+	bad := call(t, anon(h), "POST", "/mcp", `{"jsonrpc":"2.0","id":1,"method":"ping"}`, map[string]string{"Authorization": "Bearer " + key, "MCP-Protocol-Version": "unsupported"})
+	if bad.Code != 400 {
+		t.Fatalf("invalid protocol accepted: %d", bad.Code)
 	}
 }
