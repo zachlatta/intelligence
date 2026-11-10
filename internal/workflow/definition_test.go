@@ -113,6 +113,17 @@ func TestSignoffPermitsFileDeliveryAndProtectsPrivateData(t *testing.T) {
 	}
 }
 
+// Aggregate metrics are not "student or financial data" on a literal reading, so the rule names
+// internal metrics too: they stay restricted, aggregate or not.
+func TestFileDeliveryKeepsInternalMetricsRestricted(t *testing.T) {
+	for _, want := range []string{"internal metrics", "counts, rates or spend about people, programs or money",
+		"aggregate"} {
+		if !strings.Contains(FileDeliveryRule, want) {
+			t.Errorf("file-delivery rule misses %q", want)
+		}
+	}
+}
+
 func TestTheProjectFinderIsToldTheRepositoriesAndHowToAnswer(t *testing.T) {
 	p := ProjectPrompt("run-1", Starting, "Show each agent's model", []string{"/srv/dev/app", "/srv/dev/site"})
 	for _, want := range []string{Starting.Project.Instructions, "Show each agent's model", "- /srv/dev/app\n- /srv/dev/site",
