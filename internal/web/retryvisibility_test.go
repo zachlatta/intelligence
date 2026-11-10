@@ -24,8 +24,7 @@ func TestRetryEventsReadNaturally(t *testing.T) {
 func TestRetryPageShowsProgressAndRecoveryWait(t *testing.T) {
 	h, db := dbServer(t)
 	rep := wfReport()
-	sendReport(t, h, rep)
-	b := openStream(t, h, "host-1")
+	b := sendReport(t, h, rep)
 	run := startRun(t, h, createWorkflow(t, h, workflow.Starting), "visible retry")
 	c := b.command()
 	if ack := b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{ID: c.ID, Status: hostclient.CommandFailed, Error: "daemon <unavailable>"}}); ack.Error != "" {
@@ -81,8 +80,7 @@ func TestRetryWaitExpiresAfter24Hours(t *testing.T) {
 		t.Run(map[bool]string{false: "daemon", true: "host upgrade"}[connected], func(t *testing.T) {
 			h, db := dbServer(t)
 			rep := wfReport()
-			sendReport(t, h, rep)
-			b := openStream(t, h, "host-1")
+			b := sendReport(t, h, rep)
 			run := startRun(t, h, createWorkflow(t, h, workflow.Starting), "wait deadline")
 			c := b.command()
 			if ack := b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{ID: c.ID, Status: hostclient.CommandFailed, Error: "last start error"}}); ack.Error != "" {
@@ -119,8 +117,7 @@ func TestRetryWaitExpiresAfter24Hours(t *testing.T) {
 
 func TestRetryReconciliationContinuesAfterBadRun(t *testing.T) {
 	h, db := dbServer(t)
-	sendReport(t, h, wfReport())
-	b := openStream(t, h, "host-1")
+	b := sendReport(t, h, wfReport())
 	wf := createWorkflow(t, h, workflow.Starting)
 	bad := startRun(t, h, wf, "bad run")
 	badCmd := b.command()

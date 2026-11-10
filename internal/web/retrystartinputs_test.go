@@ -26,8 +26,7 @@ func TestStartRetryRebuildsInputAndResolvesImages(t *testing.T) {
 			rep.Paseo.Connected = false
 			rep.Paseo.Workspaces = nil
 			rep.Paseo.Projects = nil
-			sendReport(t, h, rep)
-			b := openStream(t, h, "host-1")
+			b := sendReport(t, h, rep)
 			var img bytes.Buffer
 			if err := png.Encode(&img, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
 				t.Fatal(err)
@@ -108,8 +107,7 @@ func TestOfflineStartupCommandsExpireAndReachDeadline(t *testing.T) {
 	for _, status := range []string{"queued", "sent", "running"} {
 		t.Run(status, func(t *testing.T) {
 			h, db := dbServer(t)
-			sendReport(t, h, wfReport())
-			b := openStream(t, h, "host-1")
+			b := sendReport(t, h, wfReport())
 			run := startRun(t, h, createWorkflow(t, h, workflow.Starting), "offline start")
 			c := b.command()
 			if _, err := db.Owner.Exec(t.Context(), "UPDATE commands SET status=$2 WHERE id=$1", c.ID, status); err != nil {
@@ -147,8 +145,7 @@ func TestOfflineHostDoesNotConsumeRetryOrLookReady(t *testing.T) {
 	for _, stale := range []bool{false, true} {
 		t.Run(map[bool]string{false: "no stream", true: "stale heartbeat"}[stale], func(t *testing.T) {
 			h, db := dbServer(t)
-			sendReport(t, h, wfReport())
-			b := openStream(t, h, "host-1")
+			b := sendReport(t, h, wfReport())
 			run := startRun(t, h, createWorkflow(t, h, workflow.Starting), "offline retry")
 			c := b.command()
 			if ack := b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{ID: c.ID, Status: hostclient.CommandFailed, Error: "daemon unavailable"}}); ack.Error != "" {

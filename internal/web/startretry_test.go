@@ -18,8 +18,7 @@ func TestStartRetryWaitsForDaemonAndCanBeCanceledOrSucceed(t *testing.T) {
 			h, db := dbServer(t)
 			rep := wfReport()
 			rep.StartRetryKeys = true
-			sendReport(t, h, rep)
-			b := openStream(t, h, "host-1")
+			b := sendReport(t, h, rep)
 			def := workflow.Starting
 			def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
 			run := startRun(t, h, createWorkflow(t, h, def), "recover")
@@ -93,8 +92,7 @@ func TestWorkflowStartRetriesDurably(t *testing.T) {
 	for _, fixed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "finder", true: "orchestrator"}[fixed], func(t *testing.T) {
 			h, db := dbServer(t)
-			sendReport(t, h, wfReport())
-			b := openStream(t, h, "host-1")
+			b := sendReport(t, h, wfReport())
 			def := workflow.Starting
 			if fixed {
 				def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}

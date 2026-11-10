@@ -471,8 +471,9 @@ key as the host client does (`HOST_SERVER` from `~/.config/intelligence/host.env
 workspace) through their results. A failed or expired start queues up to three retries, after
 15, 30 and 60 seconds. The server checks every five seconds. A retry waits until the host is
 online and reports both a connected Paseo daemon and support for retry keys
-(`hosts.start_retry_keys`). It reuses the original Paseo creation key so a lost response
-does not create a second workspace or agent.
+(`hosts.start_retry_keys`). A replacement stream must report support again before it can
+receive queued or unfinished retries. Each retry reuses the original Paseo creation key so a
+lost response does not create a second workspace or agent.
 
 The existing durable `commands` queue handles host reconnects. `workflow_runs.start_retries`,
 `start_retry_at` and `error` expose the retry count, queued retry time and last failure through

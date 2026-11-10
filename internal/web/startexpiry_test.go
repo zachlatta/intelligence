@@ -9,8 +9,7 @@ import (
 
 func TestStartExpiryReconcilesWithoutAHostUpdate(t *testing.T) {
 	h, db := dbServer(t)
-	sendReport(t, h, wfReport())
-	b := openStream(t, h, "host-1")
+	b := sendReport(t, h, wfReport())
 	run := startRun(t, h, createWorkflow(t, h, workflow.Starting), "expired")
 	c := b.command()
 	// Fleet expiry has no host command_update frame. Reconciliation must find it.

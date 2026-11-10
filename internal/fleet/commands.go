@@ -136,25 +136,45 @@ func (r *Registry) Command(ctx context.Context, id string) (Command, error) {
 	return scanCommand(r.p.QueryRow(ctx, "SELECT "+commandColumns+" FROM commands WHERE id = $1", id))
 }
 
-// Claim marks host's commands sent and returns them, oldest first, to go down its stream at at.
-// Queued ones are claimed; with unfinished (a new stream), so are those sent before with no result
-// yet, as the host may never have received them. Commands past their expiry expire instead.
-func (r *Registry) Claim(ctx context.Context, host string, unfinished bool, at time.Time) ([]Command, error) {
-	if _, err := r.p.Exec(ctx, `WITH expired AS (UPDATE commands SET status = 'expired', finished_at = $2,
+// ExpireCommands expires overdue deliveries among ids, including those with no open stream.
+func (r *Registry) ExpireCommands(ctx context.Context, ids []string, at time.Time) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return r.expireCommands(ctx, at, "id = ANY($2::uuid[])", ids)
+}
+
+func (r *Registry) expireCommands(ctx context.Context, at time.Time, scope string, value any) error {
+	_, err := r.p.Exec(ctx, `WITH expired AS (UPDATE commands SET status = 'expired', finished_at = expires_at,
 		error = CASE status WHEN 'queued' THEN 'expired before the host was connected to receive it'
 		                    ELSE 'expired with no result from the host: it may or may not have run' END
-		WHERE host = $1 AND status IN ('queued', 'sent', 'running') AND expires_at <= $2 RETURNING id)
-		SELECT pg_notify('`+channel+`', 'command:' || id) FROM expired`, host, at); err != nil {
+		WHERE `+scope+` AND status IN ('queued', 'sent', 'running') AND expires_at <= $1 RETURNING id)
+		SELECT pg_notify('`+channel+`', 'command:' || id) FROM expired`, at, value)
+	return err
+}
+
+type ClaimOptions struct {
+	StreamID      string
+	Replay        bool // resend ordinary unfinished commands on connect
+	RetryReady    bool // the stream has acknowledged its report of retry key support
+	ReplayRetries bool // resend unfinished retries on the first claim after that report
+}
+
+// Claim marks eligible commands sent and returns them oldest first. Overdue
+// commands expire, and retry deliveries require support on the current stream.
+func (r *Registry) Claim(ctx context.Context, host string, options ClaimOptions, at time.Time) ([]Command, error) {
+	if err := r.expireCommands(ctx, at, "host = $2", host); err != nil {
 		return nil, err
-	}
-	statuses := []string{hostclient.CommandQueued}
-	if unfinished {
-		statuses = append(statuses, hostclient.CommandSent, hostclient.CommandRunning)
 	}
 	rows, err := r.p.Query(ctx, `UPDATE commands SET status = CASE WHEN status = 'queued' THEN 'sent' ELSE status END,
 		sent_at = coalesce(sent_at, $2), attempts = attempts + 1
-		WHERE id IN (SELECT id FROM commands WHERE host = $1 AND status = ANY($3) AND expires_at > $2 FOR UPDATE SKIP LOCKED)
-		RETURNING `+commandColumns, host, at, statuses)
+		WHERE id IN (SELECT id FROM commands WHERE host = $1 AND expires_at > $2
+			AND (status = 'queued' OR (status IN ('sent', 'running')
+				AND CASE WHEN idempotency_key = '' THEN $3::boolean ELSE $6::boolean END))
+			AND (idempotency_key = '' OR ($5 AND EXISTS (
+				SELECT 1 FROM hosts WHERE name = $1 AND stream_id = NULLIF($4, '')::uuid AND start_retry_keys)))
+			FOR UPDATE SKIP LOCKED)
+		RETURNING `+commandColumns, host, at, options.Replay, options.StreamID, options.RetryReady, options.ReplayRetries)
 	if err != nil {
 		return nil, err
 	}

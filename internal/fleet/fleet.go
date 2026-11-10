@@ -4,6 +4,7 @@ package fleet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -46,12 +47,31 @@ func New(p *pgxpool.Pool) *Registry { return &Registry{p: p} }
 // Record stores rep, received at at, as its host's latest state: it replaces the host's
 // workspaces and agents.
 func (r *Registry) Record(ctx context.Context, rep hostclient.Report, at time.Time) error {
+	return r.record(ctx, rep, at, "")
+}
+
+// RecordStream accepts reports only from the current stream. The host row lock
+// keeps a replacement from inheriting a report's retry capability.
+func (r *Registry) RecordStream(ctx context.Context, rep hostclient.Report, at time.Time, stream string) error {
+	return r.record(ctx, rep, at, stream)
+}
+
+func (r *Registry) record(ctx context.Context, rep hostclient.Report, at time.Time, stream string) error {
 	ps := rep.Paseo
 	providers, err := json.Marshal(nonNil(ps.Providers))
 	if err != nil {
 		return err
 	}
 	return pgx.BeginFunc(ctx, r.p, func(tx pgx.Tx) error {
+		if stream != "" {
+			tag, err := tx.Exec(ctx, "UPDATE hosts SET start_retry_keys = $3 WHERE name = $1 AND stream_id = $2", rep.Name, stream, rep.StartRetryKeys)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() == 0 {
+				return errors.New("host stream was replaced")
+			}
+		}
 		_, err := tx.Exec(ctx, `INSERT INTO hosts (name, client_version, collected_at, last_seen, connected, paseo_error,
 			status_error, paseo_version, hostname, listen, pid, started_at, providers, providers_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
@@ -72,7 +92,7 @@ func (r *Registry) Record(ctx context.Context, rep hostclient.Report, at time.Ti
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, "UPDATE hosts SET projects = $2, start_retry_keys = $3 WHERE name = $1", rep.Name, projects, rep.StartRetryKeys); err != nil {
+		if _, err := tx.Exec(ctx, "UPDATE hosts SET projects = $2 WHERE name = $1", rep.Name, projects); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, "DELETE FROM workspaces WHERE host = $1", rep.Name); err != nil { // and their agents
