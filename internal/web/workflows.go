@@ -252,16 +252,18 @@ func (a *app) moveRun(w http.ResponseWriter, r *http.Request) {
 // --- reads, through the account's role ---
 
 type workflowRow struct {
-	ID          string              `json:"id"`
-	Name        string              `json:"name"`
-	Description string              `json:"description"`
-	Version     int                 `json:"version"`
-	IsDefault   bool                `json:"isDefault"`
-	Definition  workflow.Definition `json:"definition"`
+	ID               string              `json:"id"`
+	Name             string              `json:"name"`
+	Description      string              `json:"description"`
+	Version          int                 `json:"version"`
+	IsDefault        bool                `json:"isDefault"`
+	Definition       workflow.Definition `json:"definition"`
+	PendingProposals int                 `json:"pendingProposals"`
 }
 
 func readWorkflows(ctx context.Context, p *pgxpool.Pool, id string) ([]workflowRow, error) {
-	rows, err := p.Query(ctx, `SELECT w.id::text, w.name, w.description, w.version, w.is_default, v.definition FROM workflows w
+	rows, err := p.Query(ctx, `SELECT w.id::text, w.name, w.description, w.version, w.is_default, v.definition,
+		(SELECT count(*) FROM workflow_proposal_status p WHERE p.workflow_id=w.id AND p.effective_status='pending') FROM workflows w
 		JOIN workflow_versions v ON v.workflow_id = w.id AND v.version = w.version
 		WHERE w.deleted_at IS NULL AND ($1 = '' OR w.id::text = $1) ORDER BY w.is_default DESC, w.created_at, w.id`, id)
 	if err != nil {
@@ -270,7 +272,7 @@ func readWorkflows(ctx context.Context, p *pgxpool.Pool, id string) ([]workflowR
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (workflowRow, error) {
 		var w workflowRow
 		var def []byte
-		err := row.Scan(&w.ID, &w.Name, &w.Description, &w.Version, &w.IsDefault, &def)
+		err := row.Scan(&w.ID, &w.Name, &w.Description, &w.Version, &w.IsDefault, &def, &w.PendingProposals)
 		if err == nil {
 			err = json.Unmarshal(def, &w.Definition)
 		}

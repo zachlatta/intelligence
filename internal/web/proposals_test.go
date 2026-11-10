@@ -96,7 +96,7 @@ func TestProposalCreateDeleteExpiryAndIsolation(t *testing.T) {
 	if r.Code != 404 {
 		t.Fatal("other account approved")
 	}
-	r = call(t, anon(h), "POST", "/api/workflow-proposals/"+p+"/withdraw", `{}`, map[string]string{"Authorization": "Bearer " + otherKey})
+	r = call(t, anon(h), "POST", "/api/workflow-proposals/"+p+"/withdraw", `{"reason":"No longer needed"}`, map[string]string{"Authorization": "Bearer " + otherKey})
 	if r.Code != 404 {
 		t.Fatal("other account withdrew")
 	}
@@ -110,7 +110,7 @@ func TestProposalCreateDeleteExpiryAndIsolation(t *testing.T) {
 	}
 	// Same account, another host still cannot withdraw the proposer's work.
 	second := keyOf(t, h, "host-2")
-	r = call(t, anon(h), "POST", "/api/workflow-proposals/"+p+"/withdraw", `{}`, map[string]string{"Authorization": "Bearer " + second})
+	r = call(t, anon(h), "POST", "/api/workflow-proposals/"+p+"/withdraw", `{"reason":"No longer needed"}`, map[string]string{"Authorization": "Bearer " + second})
 	if r.Code != 404 {
 		t.Fatal("another proposer withdrew")
 	}
@@ -245,7 +245,7 @@ func TestProposalStaleWithdrawReject(t *testing.T) {
 	withdrawn := propose()
 	rejected := propose()
 	stale := propose()
-	r := call(t, anon(h), "POST", "/api/workflow-proposals/"+withdrawn+"/withdraw", `{}`, map[string]string{"Authorization": "Bearer " + key})
+	r := call(t, anon(h), "POST", "/api/workflow-proposals/"+withdrawn+"/withdraw", `{"reason":"No longer needed"}`, map[string]string{"Authorization": "Bearer " + key})
 	if r.Code != 200 {
 		t.Fatalf("withdraw: %d %s", r.Code, r.Body)
 	}

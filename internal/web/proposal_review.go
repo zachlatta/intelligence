@@ -1,0 +1,226 @@
+package web
+
+import (
+	"bytes"
+	"context"
+	_ "embed"
+	"encoding/json"
+	"errors"
+	"html/template"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/zachlatta/intelligence/internal/workflow"
+)
+
+type proposalChange struct {
+	Label, Before, After string
+	Lines                []proposalDiffLine
+}
+
+func prettyProposal(v any) string {
+	var b bytes.Buffer
+	e := json.NewEncoder(&b)
+	e.SetEscapeHTML(false)
+	e.SetIndent("", "  ")
+	_ = e.Encode(v)
+	return b.String()
+}
+
+// Compare fields separately, matching steps by stable id. Revision numbers are
+// audit metadata, not changes for the reviewer to wade through.
+func proposalChanges(a, b *workflow.WorkflowState) []proposalChange {
+	out := []proposalChange{}
+	add := func(label, x, y string) {
+		if x != y {
+			out = append(out, proposalChange{label, x, y, proposalLineDiff(x, y)})
+		}
+	}
+	if a == nil {
+		a = &workflow.WorkflowState{}
+	}
+	if b == nil {
+		b = &workflow.WorkflowState{}
+	}
+	add("Workflow name", a.Name, b.Name)
+	add("Description", a.Description, b.Description)
+	if a.Deleted != b.Deleted {
+		add("Deleted", strconv.FormatBool(a.Deleted), strconv.FormatBool(b.Deleted))
+	}
+	if a.IsDefault != b.IsDefault {
+		add("Default", strconv.FormatBool(a.IsDefault), strconv.FormatBool(b.IsDefault))
+	}
+	x, y := a.Definition, b.Definition
+	add("Host", x.Host, y.Host)
+	add("Trigger", x.Trigger, y.Trigger)
+	add("Email filter", prettyProposal(x.Email), prettyProposal(y.Email))
+	add("Project mode", x.Project.Mode, y.Project.Mode)
+	add("Project directory", x.Project.Directory, y.Project.Directory)
+	add("Project provider", x.Project.Provider, y.Project.Provider)
+	add("Project model", x.Project.Model, y.Project.Model)
+	add("Project thinking", x.Project.Thinking, y.Project.Thinking)
+	add("Project instructions", x.Project.Instructions, y.Project.Instructions)
+	add("Orchestrator provider", x.Orchestrator.Provider, y.Orchestrator.Provider)
+	add("Orchestrator model", x.Orchestrator.Model, y.Orchestrator.Model)
+	add("Orchestrator thinking", x.Orchestrator.Thinking, y.Orchestrator.Thinking)
+	add("Orchestrator instructions", x.Orchestrator.Instructions, y.Orchestrator.Instructions)
+	old := map[string]workflow.Step{}
+	oldIndex := map[string]int{}
+	newIDs := map[string]bool{}
+	for i, s := range x.Steps {
+		old[s.ID] = s
+		oldIndex[s.ID] = i
+	}
+	for i, s := range y.Steps {
+		newIDs[s.ID] = true
+		prev, exists := old[s.ID]
+		label := "Step “" + s.Title + "”: "
+		if !exists {
+			add(label+"added", "", s.Kind+"\n"+s.Instructions)
+			continue
+		}
+		add(label+"title", prev.Title, s.Title)
+		add(label+"kind", prev.Kind, s.Kind)
+		add(label+"instructions", prev.Instructions, s.Instructions)
+		if oldIndex[s.ID] != i {
+			add(label+"position", strconv.Itoa(oldIndex[s.ID]+1), strconv.Itoa(i+1))
+		}
+	}
+	for _, s := range x.Steps {
+		if !newIDs[s.ID] {
+			add("Step “"+s.Title+"”: removed", s.Kind+"\n"+s.Instructions, "")
+		}
+	}
+	return out
+}
+
+type proposalView struct {
+	ID, WorkflowID, Summary, Operation, Proposer, ProposedBy, RunID, Status, Reason, ReplacesID string
+	Created, Expiry                                                                             time.Time
+	Decided, Undone                                                                             *time.Time
+	BeforeState, AfterState, AppliedState, UndoState                                            *workflow.WorkflowState
+	RawBefore, RawAfter                                                                         string
+	Target                                                                                      string
+	BaseVersion, ResultVersion                                                                  int
+	Pending, Applied                                                                            bool
+	Changes                                                                                     []proposalChange
+}
+
+func readProposalViews(ctx context.Context, v viewer, id, wid string) ([]proposalView, error) {
+	rows, err := v.pool.Query(ctx, `SELECT id::text,coalesce(workflow_id::text,''),summary,operation,proposer,proposed_by,run_id,effective_status,
+ withdraw_reason,coalesce(replaces_id::text,''),created_at,expires_at,decided_at,undone_at,before_state,proposed_state,after_state,undo_state
+ FROM workflow_proposal_status WHERE ($1='' OR id::text=$1) AND ($2='' OR workflow_id::text=$2)
+ ORDER BY (effective_status='pending') DESC,created_at DESC,id LIMIT 200`, id, wid)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (proposalView, error) {
+		var p proposalView
+		var before, after, applied, undo []byte
+		err := row.Scan(&p.ID, &p.WorkflowID, &p.Summary, &p.Operation, &p.Proposer, &p.ProposedBy, &p.RunID, &p.Status, &p.Reason, &p.ReplacesID, &p.Created, &p.Expiry, &p.Decided, &p.Undone, &before, &after, &applied, &undo)
+		if err != nil {
+			return p, err
+		}
+		for _, pair := range []struct {
+			data   []byte
+			target **workflow.WorkflowState
+		}{{before, &p.BeforeState}, {after, &p.AfterState}, {applied, &p.AppliedState}, {undo, &p.UndoState}} {
+			if len(pair.data) > 0 {
+				if err := json.Unmarshal(pair.data, pair.target); err != nil {
+					return p, err
+				}
+			}
+		}
+		p.RawBefore = prettyProposal(p.BeforeState)
+		p.RawAfter = prettyProposal(p.AfterState)
+		p.Pending = p.Status == "pending"
+		p.Applied = p.Status == "applied"
+		if p.BeforeState != nil {
+			p.Target = p.BeforeState.Name
+			p.BaseVersion = p.BeforeState.Version
+		} else if p.AfterState != nil {
+			p.Target = p.AfterState.Name
+		}
+		if p.AppliedState != nil {
+			p.ResultVersion = p.AppliedState.Version
+		}
+		if p.UndoState != nil {
+			p.ResultVersion = p.UndoState.Version
+		}
+		p.Changes = proposalChanges(p.BeforeState, p.AfterState)
+		return p, nil
+	})
+}
+
+func proposalPage(v viewer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if !workflowIDRe.MatchString(id) {
+			http.NotFound(w, r)
+			return
+		}
+		ps, err := readProposalViews(r.Context(), v, id, "")
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		if len(ps) == 0 {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_ = proposalTmpl.ExecuteTemplate(w, "proposal", ps[0])
+	}
+}
+
+func proposalsPage(v viewer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		wid := r.URL.Query().Get("workflow")
+		if wid != "" && !workflowIDRe.MatchString(wid) {
+			http.NotFound(w, r)
+			return
+		}
+		ps, err := readProposalViews(r.Context(), v, "", wid)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_ = proposalTmpl.ExecuteTemplate(w, "proposals", ps)
+	}
+}
+
+// Version links read the immutable saved definition, including soft-deleted workflows.
+func workflowVersionPage(v viewer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		n, err := strconv.Atoi(r.PathValue("version"))
+		if err != nil || n < 1 || !workflowIDRe.MatchString(id) {
+			http.NotFound(w, r)
+			return
+		}
+		var s workflow.WorkflowState
+		var def []byte
+		err = v.pool.QueryRow(r.Context(), `SELECT w.name,v.version,v.definition FROM workflows w JOIN workflow_versions v ON v.workflow_id=w.id WHERE w.id=$1 AND v.version=$2`, id, n).Scan(&s.Name, &s.Version, &def)
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.NotFound(w, r)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		if err = json.Unmarshal(def, &s.Definition); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_ = proposalTmpl.ExecuteTemplate(w, "workflow-version", s)
+	}
+}
+
+//go:embed proposals.html
+var proposalsHTML string
+var proposalTmpl = template.Must(template.New("proposals").Funcs(template.FuncMap{"stamp": func(t time.Time) string { return t.Format("Jan 2, 2006 · 15:04 MST") }}).Parse(proposalsHTML + layoutHTML))

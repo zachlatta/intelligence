@@ -159,7 +159,12 @@ do not intend to change. Proposals cannot choose a default workflow; an update p
 choice while its trigger remains `task`.
 
 The response is `201 {"id", "approvalURL"}`. `POST /api/workflow-proposals/{id}/withdraw` with
-`{}` and the same host's bearer key withdraws a pending proposal. Browser-only JSON writes are
+`{"reason":"Why this is no longer needed"}` and the same host's bearer key withdraws a pending
+proposal. The reason is required and remains visible on its review page. Optional `proposedBy`
+(Paseo agent id or label) and `runId` record agent/run context alongside the authenticated host.
+Optional `replacesId` atomically withdraws that host's earlier pending, unexpired proposal with
+the reason `Replaced: <new summary>` when the new proposal is created. If the earlier proposal
+has been decided, the entire replacement is refused. Browser-only JSON writes are
 `POST /api/workflow-proposals/{id}/approve`, `/reject` and `/undo`, each with `{}`.
 No read endpoints are needed: `workflow_proposals` contains the proposer, snapshots, decision,
 expiry and undo record; `workflow_proposal_status` adds `effective_status`, which shows expiry
@@ -178,6 +183,39 @@ with a host's bearer key. Tools are `propose_mutation`, `withdraw_mutation`,
 `propose_mutation_help` (schema and a complete worked example), and `query` (the same bounded,
 account-scoped read-only SQL as `/api/sql`). There are no approval or direct workflow-write tools.
 Configure `PUBLIC_URL` to the browser-facing origin so approval links use the correct external URL.
+
+On an enrolled host, the CLI reads the same host configuration as run moves:
+
+```sh
+intelligence workflow propose proposal.json
+intelligence workflow withdraw <proposal-id> --reason "Replaced by a better plan"
+```
+
+`propose -` reads JSON from standard input. The result includes the approval URL to share.
+Step edits use a complete replacement definition; step-level patch operations and choosing the
+default workflow are not supported by proposals.
+
+To register the MCP in Claude Code and Codex, load the enrolled host's server and key into the
+shell that launches the client (keep the key out of project files):
+
+```sh
+set -a
+. "$HOME/.config/intelligence/host.env"
+set +a
+export INTELLIGENCE_HOST_KEY="$(cat "${HOST_KEY_FILE:-$HOME/.config/intelligence/host.key}")"
+
+claude mcp add --transport http --scope user intelligence "${HOST_SERVER%/}/mcp" \
+  --header 'Authorization: Bearer ${INTELLIGENCE_HOST_KEY}'
+
+codex mcp add intelligence --url "${HOST_SERVER%/}/mcp" \
+  --bearer-token-env-var INTELLIGENCE_HOST_KEY
+```
+
+Claude expands the header's environment variable when connecting; Codex's bearer-token setting
+does the same. Both send `Authorization: Bearer <host key>` to the configured server's `/mcp` URL.
+Export `INTELLIGENCE_HOST_KEY` again in each client-launching shell. See the
+[Claude Code MCP guide](https://code.claude.com/docs/en/mcp) and
+[Codex MCP guide](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
 
 ### Accounts and host keys
 

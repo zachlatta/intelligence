@@ -1,0 +1,46 @@
+{{define "proposal-head"}}<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.}} · Intelligence</title>{{template "css"}}
+<style>
+.review-meta { display:flex; gap:.6rem 1.4rem; flex-wrap:wrap; color:var(--muted); margin:.75rem 0 1.25rem; }
+.review-text { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; margin:.3rem 0; }
+.review-pair { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem; }
+.review-pair > div { min-width:0; padding:.8rem; background:var(--bg-subtle); border-radius:var(--radius); }
+.review-change { margin:1.2rem 0; }
+.review-change h3 { margin-bottom:.5rem; font-size:15px; }
+.review-diff { padding:.7rem; border:1px solid var(--line); border-radius:var(--radius); margin:.7rem 0; font-family:var(--mono); font-size:12px; }
+.review-diff .same { color:var(--muted); }.review-diff .added { background:var(--green-bg);color:var(--green); }.review-diff .removed {background:var(--red-bg);color:var(--red);}
+.proposal-item { padding:1rem; border:1px solid var(--line);border-radius:var(--radius);margin:.7rem 0;background:var(--panel); }
+.proposal-item.pending { border-left:4px solid var(--accent); background:var(--accent-bg); }
+.proposal-item h2 {font-size:17px;margin:0 0 .5rem;}.proposal-item .review-meta{margin:.5rem 0 0;font-size:12px;}
+.review-actions {display:flex;gap:.6rem;margin:1rem 0;} details.review-full {margin:1rem 0;padding:1rem;border:1px solid var(--line);border-radius:var(--radius);}
+.review-step {border-top:1px solid var(--line);margin-top:1rem;padding-top:.6rem;} .review-step h4{margin:.3rem 0;}
+@media(max-width:650px){.review-pair{grid-template-columns:minmax(0,1fr);}}
+</style></head><body>{{template "top" "/workflow-proposals"}}{{end}}
+
+{{define "workflow-state"}}{{if .}}<h3>{{.Name}} <span class="badge">v{{.Version}}</span></h3><p>{{.Description}}</p>
+{{if .Deleted}}<p>Workflow deleted</p>{{end}}<p class="meta">Host: {{.Definition.Host}} · Trigger: {{.Definition.Trigger}} · Default: {{.IsDefault}}</p>
+<h4>Project</h4><p class="meta">{{.Definition.Project.Mode}} · {{.Definition.Project.Directory}} · {{.Definition.Project.Provider}} · {{.Definition.Project.Model}} · {{.Definition.Project.Thinking}}</p><pre class="review-text">{{.Definition.Project.Instructions}}</pre>
+<h4>Orchestrator</h4><p class="meta">{{.Definition.Orchestrator.Provider}} · {{.Definition.Orchestrator.Model}} · {{.Definition.Orchestrator.Thinking}}</p><pre class="review-text">{{.Definition.Orchestrator.Instructions}}</pre>
+{{range .Definition.Steps}}<section class="review-step"><h4>{{.Title}}</h4><p class="meta">{{.Kind}} · {{.ID}}</p><pre class="review-text">{{.Instructions}}</pre></section>{{end}}
+{{else}}<p>No workflow yet.</p>{{end}}{{end}}
+
+{{define "proposal"}}{{template "proposal-head" "Review workflow proposal"}}<main class="container">
+<p><a href="/workflow-proposals">All proposals</a></p><h1>{{.Summary}}</h1>
+<div class="review-meta"><strong>{{.Status}} · {{.Operation}}</strong><span>{{.Target}}{{if .BaseVersion}} · based on v{{.BaseVersion}}{{else}} · new workflow{{end}}</span><span>Created {{stamp .Created}}</span>{{if not .Decided}}<span>Expires {{stamp .Expiry}}</span>{{end}}
+{{with .Decided}}<span>Decided {{stamp .}}</span>{{end}}{{with .Undone}}<span>Undone {{stamp .}}</span>{{end}}</div>
+<p class="meta">Proposed from {{.Proposer}}{{with .ProposedBy}} · Agent: {{.}}{{end}}{{with .RunID}} · Run: {{.}}{{end}}</p>
+{{with .Reason}}<p class="request"><strong>Withdrawal reason:</strong> {{.}}</p>{{end}}{{with .ReplacesID}}<p>Replaces <a href="/workflow-proposals/{{.}}">an earlier proposal</a>, which was withdrawn.</p>{{end}}
+{{if .ResultVersion}}<p><a href="/workflows/{{.WorkflowID}}/versions/{{.ResultVersion}}">View resulting workflow version v{{.ResultVersion}}</a>{{if .UndoState}} · Undo restored the prior state as a new version.{{end}}</p>{{end}}
+<h2>Changed fields</h2><p class="meta">Review each change below. Unchanged fields and automatic version numbers are omitted. Setting the default workflow is not proposable.</p>
+{{range .Changes}}<section class="review-change"><h3>{{.Label}}</h3><div class="review-pair"><div><strong>Before</strong><pre class="review-text">{{.Before}}</pre></div><div><strong>After</strong><pre class="review-text">{{.After}}</pre></div></div>
+<details><summary>Line diff</summary><div class="review-diff">{{range .Lines}}<div class="review-text {{.Kind}}">{{if eq .Kind "added"}}+ {{else if eq .Kind "removed"}}− {{else}}  {{end}}{{.Text}}</div>{{end}}</div></details></section>{{else}}<p>No editable fields changed.</p>{{end}}
+<details class="review-full"><summary>Complete workflow before and after</summary><div class="review-pair"><div><h2>Before</h2>{{template "workflow-state" .BeforeState}}</div><div><h2>After</h2>{{template "workflow-state" .AfterState}}</div></div></details>
+<details class="review-full"><summary>Raw JSON</summary><div class="review-pair"><div><h3>Before</h3><pre class="review-text">{{.RawBefore}}</pre></div><div><h3>After</h3><pre class="review-text">{{.RawAfter}}</pre></div></div></details>
+<div class="review-actions">{{if .Pending}}<button class="btn primary" data-action="approve">Approve change</button><button class="btn" data-action="reject">Reject</button>{{end}}{{if .Applied}}<button class="btn" data-action="undo">Undo change</button>{{end}}</div><p id="error" role="alert"></p>
+<p class="meta">Approval applies the reviewed change. Undo restores the saved prior state as a new version. Later workflow edits prevent approval or undo.</p></main>
+<script>document.querySelectorAll('[data-action]').forEach(button=>button.onclick=async()=>{document.querySelectorAll('[data-action]').forEach(b=>b.disabled=true);try{const res=await fetch('/api/workflow-proposals/{{.ID}}/'+button.dataset.action,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!res.ok)throw new Error(await res.text());location.reload();}catch(e){document.querySelector('#error').textContent=e.message;document.querySelectorAll('[data-action]').forEach(b=>b.disabled=false);}});</script></body></html>{{end}}
+
+{{define "proposals"}}{{template "proposal-head" "Workflow proposals"}}<main class="container"><h1>Workflow proposals</h1><p class="meta">Pending proposals appear first. Each link opens a review; no change is applied by opening it.</p>
+{{range .}}<article class="proposal-item {{if .Pending}}pending{{end}}"><h2><a href="/workflow-proposals/{{.ID}}">{{.Summary}}</a></h2><p>{{.Status}} · {{.Operation}} · {{.Target}}{{if .BaseVersion}} · v{{.BaseVersion}}{{else}} · new workflow{{end}}{{if .ResultVersion}} → <a href="/workflows/{{.WorkflowID}}/versions/{{.ResultVersion}}">v{{.ResultVersion}}</a>{{end}}</p>
+<div class="review-meta"><span>Created {{stamp .Created}}</span>{{if not .Decided}}<span>Expires {{stamp .Expiry}}</span>{{else}}<span>Decided {{stamp .Decided}}</span>{{end}}{{with .Undone}}<span>Undone {{stamp .}}</span>{{end}}<span>{{.Proposer}}{{with .ProposedBy}} · {{.}}{{end}}{{with .RunID}} · {{.}}{{end}}</span></div></article>{{else}}<p>No proposals yet.</p>{{end}}</main></body></html>{{end}}
+
+{{define "workflow-version"}}{{template "proposal-head" "Workflow version"}}<main class="container"><p><a href="/workflows">Workflows</a> · <a href="/workflow-proposals">Proposals</a></p><h1>Saved workflow definition · v{{.Version}}</h1>{{template "workflow-state" .}}</main></body></html>{{end}}

@@ -186,6 +186,7 @@ func New(cfg Config) http.Handler {
 	}
 	mux.HandleFunc("GET /workflow-proposals", a.page(proposalsPage))
 	mux.HandleFunc("GET /workflow-proposals/{id}", a.page(proposalPage))
+	mux.HandleFunc("GET /workflows/{id}/versions/{version}", a.page(workflowVersionPage))
 	mux.HandleFunc("POST /mcp", a.workflowMCP)
 	mux.HandleFunc("POST /api/workflows", a.write(a.createWorkflow))
 	mux.HandleFunc("PUT /api/workflows/{id}", a.write(a.updateWorkflow))

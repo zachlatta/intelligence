@@ -27,6 +27,9 @@ type ProposalRequest struct {
 	BaseVersion int            `json:"baseVersion,omitempty"`
 	Summary     string         `json:"summary"`
 	Workflow    *WorkflowState `json:"workflow,omitempty"`
+	ReplacesID  string         `json:"replacesId,omitempty"`
+	ProposedBy  string         `json:"proposedBy,omitempty"`
+	RunID       string         `json:"runId,omitempty"`
 }
 
 func workflowState(ctx context.Context, tx pgx.Tx, account int64, id string) (*WorkflowState, error) {
@@ -47,6 +50,12 @@ func workflowState(ctx context.Context, tx pgx.Tx, account int64, id string) (*W
 
 // Propose records a single atomic create/update/delete without changing a workflow.
 func (e *Engine) Propose(ctx context.Context, account int64, proposer string, r ProposalRequest) (string, error) {
+	if r.ReplacesID != "" && !uuidRe.MatchString(r.ReplacesID) {
+		return "", bad("replacesId must be a proposal UUID")
+	}
+	if len(r.ProposedBy) > 500 || len(r.RunID) > 200 {
+		return "", bad("proposedBy or runId is too long")
+	}
 	if strings.TrimSpace(r.Summary) == "" || len(r.Summary) > 2000 {
 		return "", bad("summary is required (up to 2000 characters)")
 	}
@@ -83,6 +92,10 @@ func (e *Engine) Propose(ctx context.Context, account int64, proposer string, r 
 	}
 	var id string
 	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		// Use the same lock order as decisions, including replacement withdrawal.
+		if _, err := tx.Exec(ctx, "SELECT id FROM accounts WHERE id=$1 FOR NO KEY UPDATE", account); err != nil {
+			return err
+		}
 		var before *WorkflowState
 		if r.Operation != "create" {
 			var err error
@@ -117,15 +130,32 @@ func (e *Engine) Propose(ctx context.Context, account int64, proposer string, r 
 		}
 		b, _ := json.Marshal(before)
 		p, _ := json.Marshal(r.Workflow)
-		return tx.QueryRow(ctx, `INSERT INTO workflow_proposals(account_id,proposer,operation,workflow_id,summary,before_state,proposed_state,created_at,expires_at)
-   VALUES($1,$2,$3,NULLIF($4,'')::uuid,$5,$6,$7,$8::timestamptz,$8::timestamptz+interval '7 days') RETURNING id::text`, account, proposer, r.Operation, r.WorkflowID, r.Summary, b, p, e.Now()).Scan(&id)
+		if r.ReplacesID != "" {
+			tag, err := tx.Exec(ctx, `UPDATE workflow_proposals SET status='withdrawn',withdraw_reason=$4,decided_at=$5
+			WHERE id=$1 AND account_id=$2 AND proposer=$3 AND status='pending' AND expires_at>$5`, r.ReplacesID, account, proposer, "Replaced: "+r.Summary, e.Now())
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() != 1 {
+				return conflict("replacement requires your own pending, unexpired proposal")
+			}
+		}
+		return tx.QueryRow(ctx, `INSERT INTO workflow_proposals(account_id,proposer,operation,workflow_id,summary,before_state,proposed_state,created_at,expires_at,proposed_by,run_id,replaces_id)
+   VALUES($1,$2,$3,NULLIF($4,'')::uuid,$5,$6,$7,$8::timestamptz,$8::timestamptz+interval '7 days',$9,$10,NULLIF($11,'')::uuid) RETURNING id::text`, account, proposer, r.Operation, r.WorkflowID, r.Summary, b, p, e.Now(), r.ProposedBy, r.RunID, r.ReplacesID).Scan(&id)
 	})
 	return id, err
 }
 
 // Decide serializes on the proposal and workflow. The before/after comparison includes
 // metadata and default state as well as the definition, so undo cannot overwrite later work.
-func (e *Engine) Decide(ctx context.Context, account int64, proposer, id, action string) error {
+func (e *Engine) Decide(ctx context.Context, account int64, proposer, id, action string, reasons ...string) error {
+	reason := ""
+	if len(reasons) > 0 {
+		reason = strings.TrimSpace(reasons[0])
+	}
+	if action == "withdraw" && (reason == "" || len(reason) > 2000) {
+		return bad("withdraw requires a reason (up to 2000 characters)")
+	}
 	if !uuidRe.MatchString(id) {
 		return ErrNotFound
 	}
@@ -167,7 +197,8 @@ func (e *Engine) Decide(ctx context.Context, account int64, proposer, id, action
 				return set("expired")
 			}
 			if action == "withdraw" {
-				return set("withdrawn")
+				_, err := tx.Exec(ctx, "UPDATE workflow_proposals SET status='withdrawn',withdraw_reason=$2,decided_at=$3 WHERE id=$1", id, reason, e.Now())
+				return err
 			}
 			if action == "reject" {
 				return set("rejected")
