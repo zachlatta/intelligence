@@ -321,7 +321,7 @@ func TestSavedWorkflowsKeepResultsOutOfPublicRepositories(t *testing.T) {
 		t.Fatalf("the public repository rule occurs %d times, want once", n)
 	}
 	for _, want := range []string{"work/", "metrics", "CSV", "student", "Aggregate-only", ".factory-scratch/",
-		"git diff --stat origin/main...HEAD", "wrong repository"} {
+		"git log --stat origin/main..HEAD", "wrong repository"} {
 		if !strings.Contains(PublicRepoRule, want) {
 			t.Errorf("public repository rule misses %q", want)
 		}
@@ -339,5 +339,40 @@ func TestTheStartingWorkflowChecksPublicRepositoriesBeforeLanding(t *testing.T) 
 		if !strings.Contains(s, want) {
 			t.Errorf("public gate misses %q", want)
 		}
+	}
+}
+
+// Audits and walkthroughs can hold private operational details and no counts at all: a public
+// link to one publishes those details just the same.
+func TestFileDeliveryKeepsInternalReportsWithoutMetricsRestricted(t *testing.T) {
+	for _, want := range []string{"every internal report", "audits", "reviews", "walkthroughs",
+		"incidents", "security weaknesses", "credential names", "even redacted", "even with no metrics"} {
+		if !strings.Contains(FileDeliveryRule, want) {
+			t.Errorf("file-delivery rule misses %q", want)
+		}
+	}
+	// Public delivery stays the default for everything else.
+	if !strings.Contains(FileDeliveryRule, "public, unguessable URLs with no authentication") {
+		t.Error("file-delivery rule lost its public default")
+	}
+}
+
+// A report committed and deleted again before the push is still in the pushed history, so the
+// public repository checks read every outgoing commit, not the final diff.
+func TestPublicRepositoryChecksReadEveryOutgoingCommit(t *testing.T) {
+	gate := Starting.Steps[Starting.Index("public")].Instructions
+	for name, text := range map[string]string{"contract": PublicRepoRule, "gate": gate} {
+		for _, want := range []string{"git log --stat origin/main..HEAD", "every outgoing commit",
+			"deleted in a later commit", "rewrite"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s misses %q", name, want)
+			}
+		}
+		if strings.Contains(text, "git diff --stat origin/main...HEAD") {
+			t.Errorf("%s still reviews only the final diff", name)
+		}
+	}
+	if !strings.Contains(gate, "reports outside work/") {
+		t.Error("gate does not look for reports outside work/")
 	}
 }

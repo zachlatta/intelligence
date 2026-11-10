@@ -109,18 +109,37 @@ func TrackedOutput(root string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("git ls-files: %w", err)
 	}
+	return outputPaths(strings.Split(string(out), "\x00")), nil
+}
+
+// OutgoingOutput lists the agent output and data files that any commit in base..HEAD adds, sorted
+// and once each. A file added and deleted again before a push is still in the pushed history, so
+// the final tree alone (TrackedOutput) does not show it.
+func OutgoingOutput(root, base string) ([]string, error) {
+	out, err := exec.Command("git", "-C", root, "log", "--no-renames", "--diff-filter=A", "--name-only",
+		"--format=", "-z", base+"..HEAD").Output()
+	if err != nil {
+		return nil, fmt.Errorf("git log %s..HEAD: %w", base, err)
+	}
+	return outputPaths(strings.FieldsFunc(string(out), func(r rune) bool { return r == 0 || r == '\n' })), nil
+}
+
+// outputPaths keeps the paths that are agent output or data files, sorted and once each.
+func outputPaths(paths []string) []string {
+	seen := map[string]bool{}
 	var found []string
-	for _, p := range strings.Split(string(out), "\x00") {
-		if p == "" {
+	for _, p := range paths {
+		if p == "" || seen[p] {
 			continue
 		}
+		seen[p] = true
 		first, _, _ := strings.Cut(p, "/")
 		if (outputDirs[first] && first != p) || dataExt[strings.ToLower(path.Ext(p))] {
 			found = append(found, p)
 		}
 	}
 	sort.Strings(found)
-	return found, nil
+	return found
 }
 
 // skipped holds directories that are not part of the repository's contents: git's own, the

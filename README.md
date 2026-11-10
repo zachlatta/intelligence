@@ -454,9 +454,11 @@ version it started with. A run:
    The contract sets role and model handoffs, limits work to the assigned step, and assigns
    approved external changes to landing. It also carries `workflow.PublicRepoRule`: in a public
    repository, commit only what the repository keeps, never a report, metrics, a data export or a
-   `work/` folder (aggregate-only is not an exception); check what a push adds before pushing. The
-   starting workflow (`workflow.Starting`) also has a Public repo check gate before landing that
-   sends such files back to Do the work.
+   `work/` folder (aggregate-only is not an exception). Before pushing, review every outgoing commit
+   (`git log --stat origin/main..HEAD`), not only the final diff: a file added and deleted in a later
+   commit is still published, so such commits are rewritten. The starting workflow
+   (`workflow.Starting`) also has a Public repo check gate before landing that reads every outgoing
+   commit the same way and sends such files back to Do the work.
 3. **The orchestrator moves through the steps.** It never does the work itself: it starts
    sub-agents for it (`paseo run` in its workspace, so they are its sub-agents), and decides when a
    step is done. Every agent of a run works unattended, so each starts in its provider's mode that
@@ -702,7 +704,9 @@ This repository is public. Three gates keep private details out of it:
 - `internal/hygiene` also fails when Git tracks agent output or data: anything under `work/`,
   `scratch/`, `.factory-scratch/` or `.factory-evidence/`, or a CSV, TSV, spreadsheet, Parquet,
   DuckDB, SQLite or JSON Lines file. Reports and their data are delivered privately, never committed
-  here. It needs `.git`, so it runs in `make test` and CI, not the image build (which has no `.git`).
+  here. It also fails when a commit not yet on `origin/main` adds such a file, even if a later
+  commit deletes it, since the push would publish it. It needs `.git`, so it runs in `make test` and
+  CI, not the image build (which has no `.git`); the outgoing check needs an `origin/main` ref.
 - CI runs gitleaks over every commit on every push and pull request.
 
 On GitHub, `main` cannot be force-pushed or deleted, secret scanning with push protection is on,
@@ -897,7 +901,9 @@ as `text/plain; charset=utf-8` so they open in the browser. They also rewrite lo
 inside those reports. File delivery is allowed in any step, including sign-off, unless that step
 explicitly forbids uploads; it is an exception to the external changes deferred to landing.
 Donor, contact, financial and student data stay restricted to the recipient and are linked as text
-unless Zach explicitly asks to publish that data. Agents verify anonymous access returns 401 for
+unless Zach explicitly asks to publish that data. So do internal metrics (counts, rates or spend,
+even aggregate) and every internal report, even one with no metrics: audits, reviews, walkthroughs of
+runs, agents, workflows or incidents, and anything naming security weaknesses or credentials. Agents verify anonymous access returns 401 for
 these private files. A worker explicitly barred from uploading preserves artifacts for an authorized
 step. No upload credentials are held by the app.
 Notes, step reports and transcripts render file-share images inline; other image origins and local

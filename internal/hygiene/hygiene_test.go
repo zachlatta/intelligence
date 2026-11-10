@@ -149,3 +149,64 @@ func TestTrackedOutputFlagsWorkScratchAndDataFiles(t *testing.T) {
 		t.Errorf("TrackedOutput = %q, want %q", got, want)
 	}
 }
+
+// A file committed and deleted again before a push is still published with that push's history.
+func TestOutgoingOutputFindsFilesAddedThenDeleted(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	root := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", root, "-c", "user.name=someone", "-c", "user.email=someone@example.com"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	write := func(p string) {
+		os.MkdirAll(filepath.Join(root, filepath.Dir(p)), 0o755)
+		os.WriteFile(filepath.Join(root, p), []byte("x\n"), 0o644)
+	}
+	git("init", "-q", "-b", "main")
+	write("README.md")
+	git("add", ".")
+	git("commit", "-q", "-m", "base")
+	git("branch", "base")
+	write("work/2026-01-01-report/README.md")
+	write("internal/x/counts.csv")
+	write("internal/x/x.go")
+	git("add", "-f", ".")
+	git("commit", "-q", "-m", "add a report")
+	git("rm", "-q", "-r", "work", "internal/x/counts.csv")
+	git("commit", "-q", "-m", "remove it again")
+
+	if got, err := TrackedOutput(root); err != nil || len(got) != 0 {
+		t.Fatalf("TrackedOutput = %q, %v; want none (the final tree is clean)", got, err)
+	}
+	got, err := OutgoingOutput(root, "base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"internal/x/counts.csv", "work/2026-01-01-report/README.md"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("OutgoingOutput = %q, want %q", got, want)
+	}
+}
+
+// This branch's commits not yet on origin/main add no agent output, even ones deleted later.
+func TestOutgoingCommitsAddNoAgentOutput(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := exec.Command("git", "-C", root, "rev-parse", "--verify", "-q", "origin/main").Run(); err != nil {
+		t.Skip("no origin/main here (the image build, a shallow CI checkout)")
+	}
+	got, err := OutgoingOutput(root, "origin/main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range got {
+		t.Errorf("%s: added by a commit not yet on origin/main; rewrite that commit before pushing", p)
+	}
+}

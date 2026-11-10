@@ -197,7 +197,8 @@ const PublicRepoRule = "If this run's repository is public, everything committed
 	"about people, programs or money, data exports (CSV, JSON, spreadsheets), work/ or scratch folders, or donor, contact, " +
 	"financial or student data. Aggregate-only and no-secrets do not make internal data publishable, and a work/ folder already " +
 	"on main is not a convention to follow. Keep such output in .factory-scratch/ (git-ignored) and deliver it to Zach privately. " +
-	"Before any push, list what it adds (git diff --stat origin/main...HEAD) and take such output out of the commits first. " +
+	"Before any push, review every outgoing commit, not only the final diff (git log --stat origin/main..HEAD): a file added and " +
+	"deleted in a later commit is still published with the push. If any commit adds such output, rewrite the commits to drop it first. " +
 	"If the task's deliverable is a result rather than a change to this repository, the run is in the wrong repository: " +
 	"ask Zach before proceeding."
 
@@ -268,7 +269,7 @@ const FileDeliveryRule = `When showing Zach images or Markdown files in notes, a
 
 For public files, omit passwords and allowed_emails (or emails); omit namespace on the first upload so the service generates it. Do not invent a URL or reuse a predictable namespace. Check the returned SHA-256 against the local bytes and verify an anonymous GET returns 200 with the expected content type before linking it. Use ![description](https://...) for images and [report](https://...) for Markdown. Upload Markdown as text/plain; charset=utf-8 so browsers open it inline, and upload and rewrite any local image or Markdown references inside the report too.
 
-Files containing donor, contact, financial or student data must stay restricted to Zach's verified email address from the file-share skill unless Zach explicitly asks to publish that data. So must internal metrics: counts, rates or spend about people, programs or money, even when every number is an aggregate. For these private files, set allowed_emails (or emails) to that address, verify the SHA-256 and that an anonymous GET returns 401, and link them as text rather than embedding images. This exception also applies to private files referenced inside a report; never publish private data through a public parent report.
+Files containing donor, contact, financial or student data must stay restricted to Zach's verified email address from the file-share skill unless Zach explicitly asks to publish that data. So must internal metrics: counts, rates or spend about people, programs or money, even when every number is an aggregate. So must every internal report, even with no metrics: audits, reviews, walkthroughs of Zach's runs, agents, workflows or incidents, and anything naming security weaknesses or credential names, even redacted. For these private files, set allowed_emails (or emails) to that address, verify the SHA-256 and that an anonymous GET returns 401, and link them as text rather than embedding images. This exception also applies to private files referenced inside a report; never publish private data through a public parent report.
 
 Never send local paths as deliverables. Pass this file-delivery rule to every worker. If the current step explicitly forbids uploads, preserve the files and pass their paths and this rule to an authorized step. If upload or access verification fails, report the failure and keep the files for retry; do not claim they were delivered.`
 
@@ -307,12 +308,15 @@ var Starting = Definition{
 			"Ask, then do what his reply says."},
 		{ID: "public", Kind: KindGate, Title: "Public repo check", Instructions: "Check the repository's visibility " +
 			"(gh repo view <owner/name> --json visibility). If it is private, skip this step.\n\n" +
-			"If it is public, have a fresh sub-agent list every file the branch adds or changes against origin/main and read each one. " +
-			"Send the work back to Do the work if any of them is a result rather than a change the repository keeps: a report, deck, " +
+			"If it is public, have a fresh sub-agent review every outgoing commit, not only the final diff: list them with " +
+			"git log --stat origin/main..HEAD and read each file each commit adds or changes, including reports outside work/. " +
+			"A file deleted in a later commit is still published with the push. " +
+			"Send the work back to Do the work if any commit adds a result rather than a change the repository keeps: a report, deck, " +
 			"analysis, metrics or counts about people, programs or money, a data export (CSV, JSON, spreadsheet), a work/ or scratch " +
-			"folder, or donor, contact, financial or student data. Aggregate-only and no-secrets do not make internal data publishable. " +
+			"folder, or donor, contact, financial or student data; Do the work must rewrite the commits to drop it. " +
+			"Aggregate-only and no-secrets do not make internal data publishable. " +
 			"It also checks for secrets, hostnames, private addresses, home-directory paths and personal emails, and fixes small ones here. " +
-			"Move on when nothing in the diff is private."},
+			"Move on when no outgoing commit adds anything private."},
 		{ID: "land", Kind: KindStep, Title: "Land and deploy", Instructions: "Rebase on origin/main, land on main the way the repository's AGENTS.md says, " +
 			"and wait until the deploy reports the new version. " +
 			"The landing step also applies the run's approved external changes (skill edits, queued mutations). " +
