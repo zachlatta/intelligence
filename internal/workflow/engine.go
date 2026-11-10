@@ -386,14 +386,10 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		if r.Def.Project.Mode == ProjectFixed {
 			return e.startOrchestrator(ctx, tx, r, r.Def.Project.Directory)
 		}
-		repos, err := repositories(ctx, tx, host)
+		args, err := projectStartArgs(ctx, tx, r)
 		if err != nil {
 			return err
 		}
-		p := r.Def.Project
-		args, _ := json.Marshal(hostclient.CreateAgentArgs{Cwd: "~", Provider: p.Provider, Model: p.Model, Thinking: p.Thinking,
-			Mode: agentMode(p.Provider), Title: agentTitle("Find the project", r.Name, r.Title), Prompt: ProjectPrompt(id, r.Def, input, repos),
-			Labels: map[string]string{"intelligence.run": id, "intelligence.role": "project"}})
 		c, err := fleet.EnqueueTx(ctx, tx, host, hostclient.CreateAgentKind, args, commandTTL, at)
 		if err != nil {
 			return err
@@ -416,6 +412,32 @@ func repositories(ctx context.Context, tx pgx.Tx, host string) ([]string, error)
 	return pgx.CollectRows(rows, pgx.RowTo[string])
 }
 
+// Rebuild starts from the run's unresolved input. Reusing commands.args would both
+// replay a stale repository catalog and try to resolve already-delivered images twice.
+func projectStartArgs(ctx context.Context, tx pgx.Tx, r run) (json.RawMessage, error) {
+	repos, err := repositories(ctx, tx, r.Host)
+	if err != nil {
+		return nil, err
+	}
+	p := r.Def.Project
+	return json.Marshal(hostclient.CreateAgentArgs{Cwd: "~", Provider: p.Provider, Model: p.Model, Thinking: p.Thinking,
+		Mode: agentMode(p.Provider), Title: agentTitle("Find the project", r.Name, r.Title), Prompt: ProjectPrompt(r.ID, r.Def, r.Input, repos),
+		Labels: map[string]string{"intelligence.run": r.ID, "intelligence.role": "project"}})
+}
+
+func orchestratorStartArgs(r run) (json.RawMessage, error) {
+	wsTitle, _ := runNames(r.ID, r.Name, r.Title)
+	o := r.Def.Orchestrator
+	agent := &hostclient.CreateAgentArgs{Provider: o.Provider, Model: o.Model, Thinking: o.Thinking, Mode: agentMode(o.Provider),
+		Title: agentTitle("Orchestrator", r.Name, r.Title), Prompt: OrchestratorPrompt(r.Name, r.Def, r.vars()),
+		Labels: map[string]string{"intelligence.run": r.ID, "intelligence.role": "orchestrator"}}
+	ws := hostclient.CreateWorkspaceArgs{Cwd: "~", Title: wsTitle, Agent: agent}
+	if r.Repo != "" {
+		ws = hostclient.CreateWorkspaceArgs{Cwd: r.Repo, Worktree: true, Branch: r.Branch, Title: wsTitle, Agent: agent}
+	}
+	return json.Marshal(ws)
+}
+
 // startOrchestrator records r's project (repo, or "" for none) and queues the workspace with the
 // orchestrator in it: a worktree of repo on the run's branch, or the home directory.
 func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo string) error {
@@ -426,15 +448,10 @@ func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo s
 	if repo != "" {
 		r.Branch = branch
 	}
-	o := r.Def.Orchestrator
-	agent := &hostclient.CreateAgentArgs{Provider: o.Provider, Model: o.Model, Thinking: o.Thinking, Mode: agentMode(o.Provider),
-		Title: agentTitle("Orchestrator", r.Name, r.Title), Prompt: OrchestratorPrompt(r.Name, r.Def, r.vars()),
-		Labels: map[string]string{"intelligence.run": r.ID, "intelligence.role": "orchestrator"}}
-	ws := hostclient.CreateWorkspaceArgs{Cwd: "~", Title: wsTitle, Agent: agent}
-	if repo != "" {
-		ws = hostclient.CreateWorkspaceArgs{Cwd: repo, Worktree: true, Branch: r.Branch, Title: wsTitle, Agent: agent}
+	args, err := orchestratorStartArgs(r)
+	if err != nil {
+		return err
 	}
-	args, _ := json.Marshal(ws)
 	c, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.CreateWorkspaceKind, args, commandTTL, e.Now())
 	if err != nil {
 		return err
@@ -492,7 +509,13 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 				}
 				if retries < 3 {
 					if due == nil {
-						nextAt := at.Add(15 * time.Second * time.Duration(1<<retries))
+						failedAt := at
+						// An offline host cannot report expiry. Count the recovery wait from
+						// the command's actual expiry, even after a long server outage.
+						if c.Status == hostclient.CommandExpired && c.ExpiresAt.Before(at) {
+							failedAt = c.ExpiresAt
+						}
+						nextAt := failedAt.Add(15 * time.Second * time.Duration(1<<retries))
 						text := fmt.Sprintf("Retry %d of 3 at %s. %s", retries+1, nextAt.UTC().Format(time.RFC3339), msg)
 						if err := e.event(ctx, tx, r, "start_retry", nil, nil, text); err != nil {
 							return err
@@ -507,7 +530,8 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 						msg = "Start retry timed out after 24 hours waiting for the Paseo daemon to reconnect or the host to support retry keys. Last start error: " + msg
 					} else {
 						var connected bool
-						if err := tx.QueryRow(ctx, "SELECT connected AND start_retry_keys FROM hosts WHERE name=$1", r.Host).Scan(&connected); err != nil {
+						if err := tx.QueryRow(ctx, `SELECT s.online AND s.connected AND h.start_retry_keys
+							FROM host_status s JOIN hosts h USING (name) WHERE name=$1`, r.Host).Scan(&connected); err != nil {
 							return err
 						}
 						if !connected {
@@ -516,7 +540,17 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 						// Reuse Paseo's creation key, but give this delivery a new ID: the host
 						// caches completed deliveries, including failures. The run lock serializes
 						// concurrent workers and leaves old/late command updates detached.
-						next, err := fleet.EnqueueTx(ctx, tx, r.Host, c.Kind, c.Args, commandTTL, at)
+						var args json.RawMessage
+						var err error
+						if r.Status == FindingProject {
+							args, err = projectStartArgs(ctx, tx, r)
+						} else {
+							args, err = orchestratorStartArgs(r)
+						}
+						if err != nil {
+							return err
+						}
+						next, err := fleet.EnqueueTx(ctx, tx, r.Host, c.Kind, args, commandTTL, at)
 						if err != nil {
 							return err
 						}

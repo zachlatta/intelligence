@@ -17,6 +17,19 @@ const RetryWaitLimit = 24 * time.Hour
 // server restart and expiries with no host update. PostgreSQL holds all retry state.
 // Delivery goes through the existing fleet command queue and its host reconnect path.
 func (e *Engine) RetryStarts(ctx context.Context) error {
+	// Claim normally expires commands on an open host stream. Offline hosts have
+	// no Claim call, so reconcile overdue startup deliveries here as well. The
+	// predicate serializes with host results and Claim; successful results survive.
+	if _, err := e.p.Exec(ctx, `WITH expired AS (
+		UPDATE commands c SET status='expired', finished_at=c.expires_at,
+			error=CASE c.status WHEN 'queued' THEN 'expired before the host was connected to receive it'
+			ELSE 'expired with no result from the host: it may or may not have run' END
+		FROM workflow_runs r WHERE r.pending_command=c.id AND r.status IN ('finding_project','starting')
+			AND c.status IN ('queued','sent','running') AND c.expires_at <= $1
+		RETURNING c.id)
+		SELECT pg_notify('fleet','command:' || id) FROM expired`, e.Now()); err != nil {
+		return err
+	}
 	rows, err := e.p.Query(ctx, `SELECT r.pending_command::text FROM workflow_runs r JOIN commands c ON c.id=r.pending_command
  WHERE r.status IN ('finding_project','starting') AND c.status IN ('failed','expired','succeeded')
  ORDER BY r.created_at, r.id`)

@@ -289,13 +289,14 @@ type runRow struct {
 	FinishedAt                                                           *time.Time
 	StartRetries                                                         int
 	StartRetryAt                                                         *time.Time
-	DaemonConnected, RetryKeys                                           bool
+	HostOnline, DaemonConnected, RetryKeys                               bool
 }
 
 const runRowSelect = `SELECT r.id::text, r.title, r.input, r.status, r.host, r.repo, r.branch, w.name, r.workflow_id::text, r.workspace_id, r.workspace_title,
 	r.orchestrator_id, r.project_agent_id, r.note, r.error, r.step, r.version, v.definition -> 'steps', r.created_at, r.updated_at, r.finished_at,
 	w.deleted_at IS NOT NULL, r.start_retries, r.start_retry_at,
-	COALESCE((SELECT connected FROM hosts WHERE name=r.host),false),
+	COALESCE((SELECT online FROM host_status WHERE name=r.host),false),
+	COALESCE((SELECT online AND connected FROM host_status WHERE name=r.host),false),
 	COALESCE((SELECT start_retry_keys FROM hosts WHERE name=r.host),false)
 	FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id JOIN workflow_versions v ON v.workflow_id = r.workflow_id AND v.version = r.version `
 
@@ -304,7 +305,7 @@ func scanRunRow(row pgx.CollectableRow) (runRow, error) {
 	var steps []byte
 	err := row.Scan(&r.ID, &r.Title, &r.Input, &r.Status, &r.Host, &r.Repo, &r.Branch, &r.Workflow, &r.WorkflowID, &r.WorkspaceID, &r.WorkspaceTitle,
 		&r.Orchestrator, &r.ProjectAgent, &r.Note, &r.Error, &r.Step, &r.Version, &steps, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt, &r.WorkflowDeleted,
-		&r.StartRetries, &r.StartRetryAt, &r.DaemonConnected, &r.RetryKeys)
+		&r.StartRetries, &r.StartRetryAt, &r.HostOnline, &r.DaemonConnected, &r.RetryKeys)
 	if err == nil {
 		err = json.Unmarshal(steps, &r.Steps)
 	}
