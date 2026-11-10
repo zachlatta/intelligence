@@ -168,6 +168,45 @@ func TestMCPRunReadsAndAccountIsolation(t *testing.T) {
 	}
 }
 
+func TestMCPRunListOmitsTaskInput(t *testing.T) {
+	h, _ := dbServer(t)
+	sendReport(t, h, wfReport())
+	wf := createWorkflow(t, h, workflow.Starting)
+	input := "Summary title.\n\n" + strings.Repeat("long-task-payload ", 100)
+	run := startRun(t, h, wf, input)
+	_, token := mintMCP(t, h)
+	got := rpc(t, h, token, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_runs"}}`)
+	var msg struct {
+		Result struct {
+			StructuredContent sqlResponse `json:"structuredContent"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(got), &msg); err != nil {
+		t.Fatal(err)
+	}
+	res := msg.Result.StructuredContent
+	if res.RowCount != 1 || !strings.Contains(got, run) {
+		t.Fatalf("missing run summary: %s", got)
+	}
+	columns := map[string]bool{}
+	for _, col := range res.Columns {
+		columns[col.Name] = true
+	}
+	for _, name := range []string{"id", "workflow_id", "title", "status", "step", "orchestrator_id", "note", "created_at", "finished_at"} {
+		if !columns[name] {
+			t.Errorf("missing summary column %s", name)
+		}
+	}
+	if columns["input"] || strings.Contains(got, "long-task-payload") {
+		t.Fatal("run listing includes task input")
+	}
+	args, _ := json.Marshal(map[string]string{"query": "SELECT input FROM workflow_runs WHERE id='" + run + "'"})
+	got = rpc(t, h, token, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"query","arguments":`+string(args)+`}}`)
+	if !strings.Contains(got, "long-task-payload") {
+		t.Fatalf("explicit input query failed: %s", got)
+	}
+}
+
 func TestMCPConfiguredOrigin(t *testing.T) {
 	r := httptest.NewRequest("POST", "http://backend.example/mcp", nil)
 	r.Header.Set("Origin", "https://public.example")

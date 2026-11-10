@@ -333,7 +333,7 @@ func mcpQuery(name string, raw json.RawMessage) (string, []any, int, error) {
 		}
 		return `SELECT t.epoch,t.synced_at,e.seq_start,e.seq_end,e.at,e.kind,e.item FROM transcripts t JOIN transcript_entries e USING(host,agent_id) WHERE t.host=$1 AND t.agent_id=$2 AND e.seq_start>$3 ORDER BY e.seq_start`, []any{p.Host, p.AgentID, after}, p.Limit, nil
 	case "list_runs":
-		return `SELECT * FROM workflow_runs WHERE ($1='' OR status=$1) ORDER BY created_at DESC,id`, []any{p.Status}, p.Limit, nil
+		return `SELECT id,workflow_id,version,host,title,status,step,repo,branch,workspace_id,orchestrator_id,note,error,created_at,updated_at,finished_at FROM workflow_runs WHERE ($1='' OR status=$1) ORDER BY created_at DESC,id`, []any{p.Status}, p.Limit, nil
 	case "read_run":
 		return `SELECT r.id,r.status,r.step,r.note,r.error,r.orchestrator_id,r.host,e.id AS event_id,e.at,e.kind,e.step AS event_step,e.to_step,e.text FROM workflow_runs r JOIN workflow_run_events e ON e.run_id=r.id WHERE r.id::text=$1 AND e.id>$2 ORDER BY e.id`, []any{p.RunID, p.AfterEvent}, p.Limit, nil
 	}
