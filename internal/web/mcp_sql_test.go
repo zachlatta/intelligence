@@ -14,10 +14,15 @@ func qlimit(query string, limit int) string {
 }
 
 func TestMCPOnlySQLReadSurface(t *testing.T) {
-	want := map[string]bool{"readme": true, "schema_overview": true, "describe_table": true, "query": true}
+	want := map[string]bool{"readme": true, "schema_overview": true, "describe_table": true, "query": true,
+		"propose_mutation": true, "withdraw_mutation": true, "propose_mutation_help": true}
 	for _, tool := range mcpTools() {
 		if !want[tool.Name] {
 			t.Errorf("unexpected tool %s", tool.Name)
+		}
+		readOnly := tool.Name != "propose_mutation" && tool.Name != "withdraw_mutation"
+		if tool.Annotations["readOnlyHint"] != readOnly {
+			t.Errorf("wrong read-only annotation for %s", tool.Name)
 		}
 		delete(want, tool.Name)
 	}
@@ -39,6 +44,20 @@ func TestMCPReadmeGuidesSQL(t *testing.T) {
 		if !strings.Contains(got, term) {
 			t.Errorf("readme missing %s: %s", term, got)
 		}
+	}
+}
+
+func TestMCPProposalGuidance(t *testing.T) {
+	for _, term := range []string{"propose_mutation", "withdraw_mutation", "propose_mutation_help", "browser", "workflow_proposals"} {
+		if !strings.Contains(mcpReadme, term) {
+			t.Errorf("guide missing %s", term)
+		}
+	}
+	if !strings.Contains(mcpInstructions, "propose_mutation") || !strings.Contains(mcpInstructions, "browser") {
+		t.Fatal("initialization omits reviewed proposals")
+	}
+	if strings.Contains(mcpReadme, "MCP credentials cannot write") {
+		t.Fatal("guide denies supported proposal writes")
 	}
 }
 

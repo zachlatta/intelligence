@@ -19,7 +19,7 @@ const mcpVersion = "2025-06-18"
 //go:embed mcp_readme.md
 var mcpReadme string
 
-const mcpInstructions = "Read-only Intelligence data, scoped to the token's account. Call readme first for the SQL guide and examples. All state reads use query; use schema_overview to find relations and describe_table for exact columns. Writes stay on the JSON /api/ routes with browser authentication."
+const mcpInstructions = "Intelligence data, scoped to the token's account. Call readme first for the SQL guide and examples. All state reads use query; use schema_overview to find relations and describe_table for exact columns. propose_mutation and withdraw_mutation only queue or withdraw workflow proposals; call propose_mutation_help for their schema. Applying changes requires authenticated browser approval; there is no approval, undo or direct workflow-write tool."
 
 func supportedMCPVersion(v string) bool { return v == mcpVersion || v == "2025-03-26" }
 
@@ -257,7 +257,7 @@ func mcpTools() []mcpTool {
 		return mcpTool{name, desc, schema, map[string]any{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}}
 	}
 	return append([]mcpTool{
-		tool("readme", "Start here: Intelligence SQL guide, relation map, and example queries for runs, events, agents and transcripts. All app state reads use query; mutations stay on the JSON API.", map[string]any{}),
+		tool("readme", "Start here: Intelligence SQL guide, relation map, example queries for runs, events, agents and transcripts, and reviewed workflow proposals. All app state reads use query; proposals require browser approval to apply.", map[string]any{}),
 		tool("schema_overview", "Find public tables and views with descriptions. Call describe_table for exact columns before writing SQL. Returns columns, rows, rowCount and truncated.", map[string]any{}),
 		tool("describe_table", "Describe exact columns of one public table or view (unqualified name).", map[string]any{"table": str("Public relation name")}, "table"),
 		tool("query", "Run one read-only SQL query as this account. Default 1000, maximum 10000 rows; 5-second default timeout. No writes or multiple statements.", map[string]any{"query": str("SQL; discover schema and columns first")}, "query"),
