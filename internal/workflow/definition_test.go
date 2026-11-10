@@ -139,7 +139,7 @@ func TestProjectFinderRoutesDeliverablesByOutputRatherThanDataSource(t *testing.
 		d := Starting
 		d.Project.Instructions = instructions // Existing saved definitions get the policy too.
 		p := ProjectPrompt("run-1", d,
-			"Give me a report (deck) on growth of girls in Hack Club using warehouse data.",
+			"Give me a report (deck) on program growth using warehouse data.",
 			[]string{"/srv/dev/data-warehouse", "/srv/dev/desk"})
 		for _, want := range []string{
 			"Choose by the requested work product",
