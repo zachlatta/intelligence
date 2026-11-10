@@ -42,6 +42,11 @@ type Config struct {
 	EmailKey      *email.Keyring
 	EmailInterval time.Duration
 	PublicURL     string // PUBLIC_URL: the server's origin for Google's redirect; default the request's
+	// QueueLimits are when a host is too busy to start another workflow run, which then queues;
+	// default workflow.DefaultLimits. Queued runs are checked every QueueInterval (default
+	// workflow.QueueEvery), on every host minute and whenever a run ends.
+	QueueLimits   *workflow.Limits
+	QueueInterval time.Duration
 }
 
 // app is the server's shared parts.
@@ -92,6 +97,13 @@ func New(cfg Config) http.Handler {
 	context.AfterFunc(cfg.Context, roles.Close)
 	store := accounts.New(cfg.DB, roles)
 	a := &app{cfg: cfg, store: store, reg: reg, changes: changes, wf: workflow.NewEngine(cfg.DB, cfg.Now)}
+	if cfg.QueueLimits != nil {
+		a.wf.Limits = *cfg.QueueLimits
+	}
+	if cfg.QueueInterval == 0 {
+		cfg.QueueInterval = workflow.QueueEvery
+	}
+	go a.wf.RunQueue(cfg.Context, cfg.QueueInterval)
 	if cfg.Google != nil && cfg.EmailKey != nil {
 		a.mail = &email.Service{DB: cfg.DB, Engine: a.wf, Google: cfg.Google, Key: cfg.EmailKey, Now: cfg.Now}
 		interval := cfg.EmailInterval
@@ -194,6 +206,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("POST /api/workflow-runs", a.write(a.startRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/reply", a.write(a.replyToRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/cancel", a.write(a.cancelRun))
+	mux.HandleFunc("POST /api/workflow-runs/{id}/start", a.write(a.startQueuedRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/moves", a.moveRun)
 	mux.HandleFunc("GET /workflows", a.page(func(v viewer) http.HandlerFunc { return workflowsPage(cfg, v) }))
 	// email triggers: the account's Gmail mailbox, connected through Google's sign-in

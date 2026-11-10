@@ -496,6 +496,8 @@ A workflow is the host it runs on, a trigger, a way to find the project, an orch
 (`internal/workflow`). Every run of it happens on its host, which must be one of the account's. Each save is a new version (`workflow_versions.definition`); a run keeps the
 version it started with. A run:
 
+0. **Waits for room on its host.** A run started while its host is near capacity is `queued`
+   instead (below), and starts, oldest first, once the host has room.
 1. **Finds its project.** Before anything runs in a worktree, an agent (the definition's project
    finder, started in the host's home directory, `~`) is told the task and the host's repositories
    (its workspaces' `project_root`s) and answers with `intelligence workflow project --run <id>
@@ -639,6 +641,70 @@ The starting workflow spreads frontier work across Claude Opus 5.5, Codex and Ge
 with “other…” for an ID not yet listed. Argon remains usable for existing agents and explicit choices.
 Migration `0028_carbon_frontier` makes new versions of saved workflows that recommend Argon
 or use the old starting frontier list; existing runs keep their original versions.
+
+#### The run queue
+
+So that runs do not overwhelm a host, a new run is `queued` (`internal/workflow/queue.go`) when
+its host is near capacity; with room, it starts at once. There is no fixed count of runs: the
+host's measured load decides.
+
+The server projects the host's load from its newest minute of resources (Host resources, above):
+that minute's CPU, memory used (by the minute's least available) and 1-minute load per CPU, plus
+one run's footprint for each run still starting, whose load the minute cannot show yet, and one
+for the run about to start. A run is starting from its launch (`workflow_runs.launched_at`) until
+its orchestrator has started: for its whole start-up. A run that finds its project first is
+starting all the while it finds it (its orchestrator is still to come), and every run is starting
+until the host reports its workspace and orchestrator command (`launch_command`) done, failed or
+expired, and the newest minute began after that. Runs that succeeded, failed or were canceled no longer count.
+Once admitted, a run is never queued again. So a run whose
+command waits for a slow or absent host keeps its place in the projection however many minutes
+come in meanwhile. The run queues when
+the projection reaches a limit: `WORKFLOW_QUEUE_CPU_PCT` (default 85%), `WORKFLOW_QUEUE_MEM_PCT`
+(90%) or `WORKFLOW_QUEUE_LOAD_PER_CPU` (1.5). So an idle host starts runs back to back, and a burst
+starts as many as fit: at 10% CPU, 7 of 10 runs started at once (about 80%), and the rest queue
+until the host has made them and a newer minute shows their load. The reason says it in plain words: “host-1 is near
+capacity: CPU 70% now, about 90% with 1 run starting and this one (queues at 85%)”, or “over
+100%” when the projection is past all of it.
+
+A run's footprint is learned per host (`host_run_footprint`, readable with SQL): over the host's
+last 3 days, each minute's CPU, memory and load per CPU against how many runs were going then
+(launched, not finished), fitted with a straight line; its slope is what one run adds. Each metric
+is learned on its own (`cpu_learned`, `mem_learned`, `load_learned`) only when its fit can be
+trusted: 60 minutes or more, more than one count of runs among them, a slope above zero (history
+that says runs lighten the host is contradictory, not a footprint) and a fit explaining at least a
+fifth of the metric's variation (`regr_r2` at least 0.2). A learned footprint is kept between a
+quarter and three times the default. Otherwise the default stands, deliberately generous: 10% CPU,
+5% memory and 0.15 load per CPU a run. The view also has the raw fits (`cpu_pct_learned`,
+`mem_pct_learned`, `load_per_cpu_learned`) with their `*_r2`, the minutes and the run counts.
+
+Without fresh telemetry the server cannot know the host's capacity:
+
+- a newest minute 3 to 30 minutes old holds new and queued runs (“waiting for a fresh measurement
+  from host-1”), so a host whose monitoring stops does not release its queue on no evidence;
+- a host that has sent none for 30 minutes and is away (not connected: no stream seen in the last
+  minute, as `host_status.online`) keeps holding, however long it is gone (“waiting for host-1 to
+  report again (last measured 14:05 UTC)”): a host that went quiet because it was overloaded, or
+  rebooted, or lost its network, would otherwise get every queued run at once when it came back;
+- a host that never sent its resources, or one connected now that has sent none for 30 minutes
+  (its monitoring stopped), gives no sign of being near capacity, so its runs start.
+
+**Start now** is the way past a hold.
+
+A run also queues while earlier runs wait in its host's queue, so the queue keeps its order. The
+decision and the start are made in one transaction holding the host's queue lock (an advisory
+lock per host), so runs started at the same moment are judged one after another, each counting
+those just before it.
+
+A queued run has no agents and no commands yet; `workflow_runs.queue_reason` says why it waits
+(kept current while it waits, and kept after), its events say when it was `queued` and
+`dequeued`, and `workflow_run_queue` lists each host's queue in order (`position` 1 is next). The
+runs list and the run page show it queued, where in line (“2nd in line for host-1”) and why, and
+the run page says when it was queued, not started; the run page's **Start now** starts it at once,
+whatever the host's load (`POST /api/workflow-runs/{id}/start`), and **Cancel run** cancels it.
+
+The server starts queued runs on a host, oldest first, while the projection leaves room: every 15
+seconds, on each minute of resources the host sends, and when a run ends or fails to start. Runs
+already going are never stopped or paused. The queue is rows in Postgres, so it survives restarts.
 
 ### Attachments
 
@@ -971,7 +1037,10 @@ origin (another site's request is refused with 403), and those with a body must 
 - `POST /api/workflows` with `{"name", "description", "definition"}`: 201 `{"id", "version": 1}`;
   400 for a definition that cannot run. `PUT /api/workflows/{id}`, the same body: the next version.
 - `POST /api/workflow-runs` with `{"workflowId", "input"}`: starts a run on the workflow's host
-  (201, with its `Location`); 400 for a workflow saved without one.
+  (201, with its `Location`), or queues it while the host is near capacity; 400 for a workflow
+  saved without one.
+- `POST /api/workflow-runs/{id}/start` with `{}`: starts a queued run now, ahead of its queue and
+  whatever its host's load (204; 409 for a run that is not queued).
 - `POST /api/workflow-runs/{id}/reply` with `{"text"}`: answers the note the run waits on (204;
   409 when it waits on none). `POST /api/workflow-runs/{id}/cancel` with `{}`: ends the run and
   stops its orchestrator (204).
@@ -1041,6 +1110,9 @@ Server:
   random bytes in base64 (`openssl rand -base64 32`); it seals each mailbox's token, so changing
   it means connecting again.
 - `PUBLIC_URL`: optional; the server's origin, for Google's redirect. Default each request's.
+- `WORKFLOW_QUEUE_CPU_PCT`, `WORKFLOW_QUEUE_MEM_PCT`, `WORKFLOW_QUEUE_LOAD_PER_CPU`: optional;
+  when a host is near capacity, so a new workflow run queues (The run queue, above). Defaults 85,
+  90 and 1.5; `0` or `off` turns one off.
 
 The version is stamped at build (`-X main.buildCommit`, from Coolify's `SOURCE_COMMIT` build
 argument); else `SOURCE_COMMIT` at run time, else Go's VCS stamp, else `dev`.

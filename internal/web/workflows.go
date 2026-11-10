@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"log"
 	"net/http"
 	"regexp"
 	"slices"
@@ -206,7 +207,28 @@ func (a *app) cancelRun(v viewer) http.HandlerFunc {
 			workflowError(w, err)
 			return
 		}
+		a.startQueued(r.Context()) // a run that ended may make room for a queued one
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// startQueuedRun: POST /api/workflow-runs/{id}/start {}: a queued run starts now, ahead of its
+// queue, whatever its host's load.
+func (a *app) startQueuedRun(v viewer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := a.wf.StartNow(r.Context(), v.acct.ID, r.PathValue("id")); err != nil {
+			workflowError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// startQueued starts the queued runs whose hosts have room. It is best effort: what it misses,
+// the queue's own ticker picks up.
+func (a *app) startQueued(ctx context.Context) {
+	if err := a.wf.StartQueued(ctx); err != nil {
+		log.Printf("workflow queue: %v", err)
 	}
 }
 
@@ -240,6 +262,7 @@ func (a *app) moveRun(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"message": msg})
 		return
 	}
+	a.startQueued(r.Context()) // a run that ended may make room for a queued one
 	writeJSON(w, map[string]string{"message": msg})
 }
 
@@ -278,6 +301,8 @@ func readWorkflows(ctx context.Context, p *pgxpool.Pool, id string) ([]workflowR
 type runRow struct {
 	ID, Title, Input, Status, Host, Repo, Branch, Workflow, WorkflowID   string
 	WorkspaceID, WorkspaceTitle, Orchestrator, ProjectAgent, Note, Error string
+	QueueReason                                                          string
+	Position                                                             int // in its host's queue (workflow_run_queue), 1 next; 0 not queued
 	Step, Version                                                        int
 	WorkflowDeleted                                                      bool
 	Steps                                                                []workflow.Step
@@ -287,14 +312,15 @@ type runRow struct {
 
 const runRowSelect = `SELECT r.id::text, r.title, r.input, r.status, r.host, r.repo, r.branch, w.name, r.workflow_id::text, r.workspace_id, r.workspace_title,
 	r.orchestrator_id, r.project_agent_id, r.note, r.error, r.step, r.version, v.definition -> 'steps', r.created_at, r.updated_at, r.finished_at,
-	w.deleted_at IS NOT NULL
-	FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id JOIN workflow_versions v ON v.workflow_id = r.workflow_id AND v.version = r.version `
+	w.deleted_at IS NOT NULL, r.queue_reason, coalesce(q.position, 0)
+	FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id JOIN workflow_versions v ON v.workflow_id = r.workflow_id AND v.version = r.version
+	LEFT JOIN workflow_run_queue q ON q.run_id = r.id `
 
 func scanRunRow(row pgx.CollectableRow) (runRow, error) {
 	var r runRow
 	var steps []byte
 	err := row.Scan(&r.ID, &r.Title, &r.Input, &r.Status, &r.Host, &r.Repo, &r.Branch, &r.Workflow, &r.WorkflowID, &r.WorkspaceID, &r.WorkspaceTitle,
-		&r.Orchestrator, &r.ProjectAgent, &r.Note, &r.Error, &r.Step, &r.Version, &steps, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt, &r.WorkflowDeleted)
+		&r.Orchestrator, &r.ProjectAgent, &r.Note, &r.Error, &r.Step, &r.Version, &steps, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt, &r.WorkflowDeleted, &r.QueueReason, &r.Position)
 	if err == nil {
 		err = json.Unmarshal(steps, &r.Steps)
 	}
@@ -304,6 +330,8 @@ func scanRunRow(row pgx.CollectableRow) (runRow, error) {
 // Where reads as: what a run is doing now.
 func (r runRow) Where() string {
 	switch r.Status {
+	case workflow.Queued:
+		return r.InLine()
 	case workflow.FindingProject:
 		return "finding the project"
 	case workflow.StartingOrchestrator:
@@ -314,6 +342,28 @@ func (r runRow) Where() string {
 		}
 	}
 	return ""
+}
+
+// InLine says where a queued run is in its host's queue: "2nd in line for host-1".
+func (r runRow) InLine() string {
+	if r.Position < 1 {
+		return "queued for room on " + r.Host
+	}
+	return ordinal(r.Position) + " in line for " + r.Host
+}
+
+func ordinal(n int) string {
+	suffix := "th"
+	switch {
+	case n%100 >= 11 && n%100 <= 13:
+	case n%10 == 1:
+		suffix = "st"
+	case n%10 == 2:
+		suffix = "nd"
+	case n%10 == 3:
+		suffix = "rd"
+	}
+	return fmt.Sprintf("%d%s", n, suffix)
 }
 
 // StatusLabel and StatusClass show a run's status as the pages' badges do.
@@ -333,6 +383,8 @@ func (r runRow) StatusClass() string {
 		return "st-running"
 	case workflow.Waiting:
 		return "st-needs"
+	case workflow.Queued:
+		return "st-queued"
 	case workflow.Succeeded:
 		return "st-done"
 	case workflow.Failed:
@@ -693,6 +745,13 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		if run.QueueReason != "" { // it was queued: its first event submitted it, and it started later
+			for i := range events {
+				if events[i].Kind == "started" {
+					events[i].Kind = "submitted"
+				}
+			}
+		}
 		var before []runEvent // what happened before the steps: the start and the project
 		for _, e := range events {
 			if e.Step == nil && e.Kind != "cancel" {
@@ -715,6 +774,12 @@ func (e runEvent) Line() string {
 	switch e.Kind {
 	case "started":
 		return "Started"
+	case "submitted": // the start of a run that was queued
+		return "Submitted"
+	case "queued":
+		return "Queued: " + e.Text
+	case "dequeued":
+		return "Started: " + e.Text
 	case "project":
 		if e.Text == "none" {
 			return "Project: none (the home directory)"

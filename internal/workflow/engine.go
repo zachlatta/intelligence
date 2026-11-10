@@ -23,6 +23,8 @@ type Engine struct {
 	p   *pgxpool.Pool
 	reg *fleet.Registry
 	Now func() time.Time
+	// Limits are when a host is too busy to start another run: a new run queues (queue.go).
+	Limits Limits
 }
 
 // NewEngine keeps workflows in p's database.
@@ -30,7 +32,7 @@ func NewEngine(p *pgxpool.Pool, now func() time.Time) *Engine {
 	if now == nil {
 		now = time.Now
 	}
-	return &Engine{p: p, reg: fleet.New(p), Now: now}
+	return &Engine{p: p, reg: fleet.New(p), Now: now, Limits: DefaultLimits()}
 }
 
 // ErrNotFound: no such workflow or run in the account (or for the host).
@@ -52,6 +54,7 @@ func conflict(format string, a ...any) error {
 
 // Run statuses.
 const (
+	Queued               = "queued" // waits for its host to have room (queue_reason says why; queue.go)
 	FindingProject       = "finding_project"
 	StartingOrchestrator = "starting"
 	Running              = "running"
@@ -408,7 +411,6 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 	if !uuidRe.MatchString(workflowID) {
 		return "", ErrNotFound
 	}
-	at := e.Now()
 	var id, host string
 	err := func() error {
 		var version int
@@ -432,9 +434,20 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		if err := ownsHost(ctx, tx, account, host); err != nil {
 			return err
 		}
-		if err := tx.QueryRow(ctx, `INSERT INTO workflow_runs (account_id, workflow_id, version, host, title, input, status, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8) RETURNING id::text`, account, workflowID, version, host, taskName(input), input,
-			FindingProject, at).Scan(&id); err != nil {
+		if err := lockQueue(ctx, tx, host); err != nil {
+			return err
+		}
+		why, err := e.queueReason(ctx, tx, host)
+		if err != nil {
+			return err
+		}
+		status := FindingProject
+		if why != "" {
+			status = Queued
+		}
+		if err := tx.QueryRow(ctx, `INSERT INTO workflow_runs (account_id, workflow_id, version, host, title, input, status, queue_reason, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9) RETURNING id::text`, account, workflowID, version, host, taskName(input), input,
+			status, why, e.Now()).Scan(&id); err != nil { // now, holding the lock: the queue's order is the order decided
 			return err
 		}
 		r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id = $1", id))
@@ -444,28 +457,48 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		if err := e.event(ctx, tx, r, "started", nil, nil, input); err != nil {
 			return err
 		}
-		if r.Def.Project.Mode == ProjectFixed {
-			return e.startOrchestrator(ctx, tx, r, r.Def.Project.Directory)
+		if why != "" {
+			return e.event(ctx, tx, r, "queued", nil, nil, why)
 		}
-		repos, err := repositories(ctx, tx, host)
-		if err != nil {
-			return err
-		}
-		p := r.Def.Project
-		args, _ := json.Marshal(hostclient.CreateAgentArgs{Cwd: "~", Provider: p.Provider, Model: p.Model, Thinking: p.Thinking,
-			Mode: agentMode(p.Provider), Title: agentTitle("Find the project", r.Name, r.Title), Prompt: ProjectPrompt(id, r.Def, input, repos),
-			Labels: map[string]string{"intelligence.run": id, "intelligence.role": "project"}})
-		c, err := fleet.EnqueueTx(ctx, tx, host, hostclient.CreateAgentKind, args, commandTTL, at)
-		if err != nil {
-			return err
-		}
-		_, err = tx.Exec(ctx, "UPDATE workflow_runs SET pending_command = $2, project_command = $2 WHERE id = $1", id, c.ID)
-		return err
+		return e.launch(ctx, tx, r)
 	}()
 	if errors.Is(err, fleet.ErrUnknownHost) {
 		return "", bad("host %s has not reported yet", host)
 	}
 	return id, err
+}
+
+// launch starts run r: its project finder, or for a fixed project the orchestrator at once. It
+// records when (launched_at) and the command that starts it (launch_command), which reserve the
+// run's footprint in its host's projected load until the host has carried it out (queue.go).
+func (e *Engine) launch(ctx context.Context, tx pgx.Tx, r run) error {
+	if err := e.startFirst(ctx, tx, r); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, "UPDATE workflow_runs SET launched_at = $2, launch_command = pending_command WHERE id = $1", r.ID, e.Now())
+	return err
+}
+
+// startFirst queues the command that starts run r, its pending_command.
+func (e *Engine) startFirst(ctx context.Context, tx pgx.Tx, r run) error {
+	if r.Def.Project.Mode == ProjectFixed {
+		return e.startOrchestrator(ctx, tx, r, r.Def.Project.Directory)
+	}
+	repos, err := repositories(ctx, tx, r.Host)
+	if err != nil {
+		return err
+	}
+	p := r.Def.Project
+	args, _ := json.Marshal(hostclient.CreateAgentArgs{Cwd: "~", Provider: p.Provider, Model: p.Model, Thinking: p.Thinking,
+		Mode: agentMode(p.Provider), Title: agentTitle("Find the project", r.Name, r.Title), Prompt: ProjectPrompt(r.ID, r.Def, r.Input, repos),
+		Labels: map[string]string{"intelligence.run": r.ID, "intelligence.role": "project"}})
+	c, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.CreateAgentKind, args, commandTTL, e.Now())
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, "UPDATE workflow_runs SET status = $2, pending_command = $3, project_command = $3, updated_at = $4 WHERE id = $1",
+		r.ID, FindingProject, c.ID, e.Now())
+	return err
 }
 
 // repositories includes registered git projects without workspaces, with workspace roots as fallback.
@@ -507,7 +540,9 @@ func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo s
 	if err := e.event(ctx, tx, r, "project", nil, nil, text); err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, repo = $3, branch = $4, workspace_title = $5, pending_command = $6, updated_at = $7,
+	// the workspace becomes the command that starts the run (launch_command): a run whose finder ran
+	// keeps its place in its host's projected load until the host has made its orchestrator too
+	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, repo = $3, branch = $4, workspace_title = $5, pending_command = $6, launch_command = $6, updated_at = $7,
 		title = $8 WHERE id = $1`, r.ID, StartingOrchestrator, repo, r.Branch, wsTitle, c.ID, e.Now(), r.Title)
 	return err
 }
@@ -603,6 +638,8 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		return "", conflict("Zach canceled this run. Stop: do nothing more for it.")
 	case Succeeded, Failed:
 		return "", conflict("This run is over (%s). Do nothing more for it.", r.Status)
+	case Queued:
+		return "", conflict("This run is queued for room on its host: it has no agents yet. Do nothing for it.")
 	}
 	if m.Move == "project" {
 		if r.Status != FindingProject {
@@ -774,7 +811,7 @@ func (e *Engine) ReplyTx(ctx context.Context, tx pgx.Tx, account int64, runID, t
 }
 
 // MessageTx gives account's live run more to go on: what arrived later in the thread that started
-// it (an email). While its project is being found, it joins the run's input, which the orchestrator
+// it (an email). While it is queued or its project is being found, it joins the run's input, which the orchestrator
 // starts with; once the orchestrator runs, it goes to it as a message. It cannot reach an
 // orchestrator that is being started, and refuses a run that is over.
 func (e *Engine) MessageTx(ctx context.Context, tx pgx.Tx, account int64, runID, what, text string) error {
@@ -787,7 +824,7 @@ func (e *Engine) MessageTx(ctx context.Context, tx pgx.Tx, account int64, runID,
 		return conflict("the run is over (%s)", r.Status)
 	case StartingOrchestrator:
 		return conflict("the run's orchestrator was still starting")
-	case FindingProject:
+	case FindingProject, Queued:
 		if _, err := tx.Exec(ctx, "UPDATE workflow_runs SET input = input || $2, updated_at = $3 WHERE id = $1",
 			r.ID, "\n\n"+what+":\n\n"+text, e.Now()); err != nil {
 			return err

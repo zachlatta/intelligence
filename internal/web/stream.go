@@ -152,9 +152,15 @@ func receive(ctx context.Context, a *app, host string, f hostclient.Frame) hostc
 			err = nil // nothing to record, and nothing the host can do about it
 		} else if err == nil {
 			err = a.wf.CommandUpdated(ctx, f.Update.ID) // a workflow run waiting on it moves on
+			if err == nil {
+				a.startQueued(ctx) // a run that failed to start may make room
+			}
 		}
 	case f.Type == hostclient.HostFrame && f.Host != nil:
 		err = reg.RecordHost(ctx, host, *f.Host, cfg.Now())
+		if err == nil {
+			a.startQueued(ctx) // a fresh minute may show room for a queued run
+		}
 	case f.Type == hostclient.UsageFrame && f.Usage != nil:
 		err = reg.RecordUsage(ctx, host, *f.Usage, cfg.Now())
 	case f.Type == hostclient.SchedulesFrame && f.Schedules != nil:
