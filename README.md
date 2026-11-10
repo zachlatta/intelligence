@@ -151,8 +151,11 @@ join again with a new code. A host that expires a code without its being entered
 
 ### Read-only MCP (PDW and other remote clients)
 
-`POST /mcp` is a stateless [Streamable HTTP MCP endpoint](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports),
-protocol `2025-06-18`. It answers JSON-RPC requests with JSON, accepts initialized/cancellation
+`POST /mcp` (also `/mcp/`) is a stateless [Streamable HTTP MCP endpoint](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports),
+supporting protocols `2025-06-18` (preferred) and `2025-03-26`. Initialization echoes a supported
+requested version; for an unsupported requested version it offers `2025-06-18`. Subsequent requests
+accept either supported protocol header (or no header for older clients).
+It answers JSON-RPC requests with JSON, accepts initialized/cancellation
 notifications with an empty 202, and offers no standalone SSE stream (GET and DELETE return 405).
 Clients can reconnect between calls. It supports `initialize`, `ping`, `tools/list` and `tools/call`.
 No SDK or additional service is needed on the server.
@@ -165,7 +168,13 @@ writer pool. Cross-origin requests are refused, with no CORS support. Set `PUBLI
 external HTTPS origin when a proxy terminates TLS, so an Origin header can be checked against it;
 server-to-server clients normally send no Origin.
 
-Create a credential while signed in using the existing account session:
+Open **Account → MCP connections** (`/account#mcp`) while signed in. The page lists your token
+IDs, creation and expiry times, and active/expired status. Click **Create MCP token**, then copy
+the displayed MCP URL and the token into PDW's connection settings. The token is shown only once;
+**Done — hide token** clears it, and reloading the page cannot recover it. The **Revoke** button
+beside each token stops clients using that credential. Create a replacement before expiry,
+update PDW, verify it, then revoke the old token. The page reads its list through the account's
+read-only SQL role and makes changes by calling these JSON APIs from the browser:
 
 - `POST /api/mcp-tokens`, JSON `{}`: 201 `{"id", "token", "expiresAt"}`. The token is shown once,
   only its SHA-256 hash is stored, and it expires after 90 days. Keep it as a secret.
@@ -175,11 +184,6 @@ Create a credential while signed in using the existing account session:
   one browser leaves integrations running.
 - Read credential IDs, creation and expiry through SQL:
   `SELECT id, created_at, expires_at FROM mcp_tokens ORDER BY created_at DESC`.
-
-For example, in the signed-in Intelligence browser's developer console, create a token with
-`await (await fetch('/api/mcp-tokens', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'})).json()`.
-Save its ID for revocation and copy the token into the upstream connection's bearer field.
-Create a replacement before expiry, update the connection, verify it, then revoke the old ID.
 
 Tools (all annotated read-only):
 

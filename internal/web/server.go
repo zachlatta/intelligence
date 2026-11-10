@@ -120,6 +120,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("POST /api/mcp-tokens", a.write(a.createMCPToken))
 	mux.HandleFunc("DELETE /api/mcp-tokens/{id}", a.write(a.revokeMCPToken))
 	mux.HandleFunc("/mcp", a.mcp)
+	mux.HandleFunc("/mcp/{$}", a.mcp)
 	mux.HandleFunc("GET /login", loginPage(cfg))
 	mux.HandleFunc("GET /ui.css", stylesheet)
 	mux.HandleFunc("GET /dictation.js", dictationScript)

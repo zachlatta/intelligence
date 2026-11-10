@@ -25,6 +25,15 @@ type accountHost struct {
 const accountHostsSQL = `SELECT k.host, k.created_at, k.last_used_at, coalesce(s.online, false)
 	FROM host_keys k LEFT JOIN host_status s ON s.name = k.host ORDER BY k.host`
 
+type accountMCPToken struct {
+	ID               string
+	Created, Expires time.Time
+	Active           bool
+}
+
+const accountMCPTokensSQL = `SELECT id, created_at, expires_at, expires_at > now() AS active
+	FROM mcp_tokens ORDER BY created_at DESC, id`
+
 // accountPage shows the account's hosts, how to add one, and its password form.
 func accountPage(cfg Config, v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -41,7 +50,18 @@ func accountPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		render(w, "account", map[string]any{"Version": cfg.Version, "Username": v.acct.Username, "Hosts": hosts,
+		rows, err = v.pool.Query(r.Context(), accountMCPTokensSQL)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		tokens, err := pgx.CollectRows(rows, pgx.RowToStructByPos[accountMCPToken])
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		render(w, "account", map[string]any{"Version": cfg.Version, "Username": v.acct.Username, "Hosts": hosts, "MCPTokens": tokens, "MCPTokensSQL": accountMCPTokensSQL,
 			"Now": cfg.Now(), "Server": serverURL(r)})
 	}
 }

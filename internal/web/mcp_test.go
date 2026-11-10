@@ -180,6 +180,72 @@ func TestMCPConfiguredOrigin(t *testing.T) {
 	}
 }
 
+func TestMCPVersionsAndTrailingSlash(t *testing.T) {
+	h, _ := dbServer(t)
+	_, token := mintMCP(t, h)
+	for _, path := range []string{"/mcp", "/mcp/"} {
+		for _, version := range []string{"2025-03-26", "2025-06-18", "2099-01-01"} {
+			r := call(t, anon(h), "POST", path, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"`+version+`","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`, map[string]string{"Authorization": "Bearer " + token})
+			want := version
+			if version == "2099-01-01" {
+				want = "2025-06-18"
+			}
+			if r.Code != 200 || !strings.Contains(r.Body.String(), `"protocolVersion":"`+want+`"`) {
+				t.Errorf("%s %s: %d %s", path, version, r.Code, r.Body)
+			}
+		}
+		for _, version := range []string{"", "2025-03-26", "2025-06-18", "invalid"} {
+			headers := map[string]string{"Authorization": "Bearer " + token, "MCP-Protocol-Version": version}
+			r := call(t, anon(h), "POST", path, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"query","arguments":{"query":"SELECT 1"}}}`, headers)
+			want := 200
+			if version == "invalid" {
+				want = 400
+			}
+			if r.Code != want {
+				t.Errorf("%s header %s: %d %s", path, version, r.Code, r.Body)
+			}
+		}
+		if r := call(t, anon(h), "POST", path, `{}`, nil); r.Code != 401 {
+			t.Errorf("%s anonymous: %d", path, r.Code)
+		}
+	}
+}
+
+func TestAccountMCPTokenControls(t *testing.T) {
+	h, _ := dbServer(t)
+	id, secret := mintMCP(t, h)
+	ts := h.(*testServer)
+	other, err := ts.store.Create(t.Context(), "tokenowner", testPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := sessionFor(t, ts.store, other)
+	otherH := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { r.AddCookie(c); anon(h).ServeHTTP(w, r) })
+	otherID, _ := mintMCP(t, otherH)
+	page := get(t, h, "/account", nil)
+	if page.Code != 200 {
+		t.Fatalf("account: %d %s", page.Code, page.Body)
+	}
+	for _, want := range []string{"Create MCP token", `data-token-id="` + id + `"`, "Revoke", "Shown once", "/api/mcp-tokens", `id="mcp-token-value"`, `id="mcp-url"`} {
+		if !strings.Contains(page.Body.String(), want) {
+			t.Errorf("account missing %s", want)
+		}
+	}
+	if strings.Contains(page.Body.String(), secret) || strings.Contains(page.Body.String(), otherID) {
+		t.Fatal("account exposed a token secret or another account's ID")
+	}
+	otherPage := call(t, otherH, "GET", "/account", "", nil)
+	if strings.Contains(otherPage.Body.String(), id) || !strings.Contains(otherPage.Body.String(), otherID) {
+		t.Fatal("token list is not account scoped")
+	}
+	if r := call(t, h, "DELETE", "/api/mcp-tokens/"+id, "", nil); r.Code != 204 {
+		t.Fatal(r.Code)
+	}
+	if strings.Contains(get(t, h, "/account", nil).Body.String(), id) {
+		t.Fatal("revoked token still listed")
+	}
+}
+
 func TestMCPTokenIsolationAndRevocation(t *testing.T) {
 	h, d := dbServer(t)
 	sendReport(t, h, sampleReport)

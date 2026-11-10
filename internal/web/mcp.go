@@ -15,6 +15,8 @@ import (
 
 const mcpVersion = "2025-06-18"
 
+func supportedMCPVersion(v string) bool { return v == mcpVersion || v == "2025-03-26" }
+
 func (a *app) createMCPToken(v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct{}
@@ -78,7 +80,7 @@ func (a *app) mcp(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "only POST is supported (no SSE stream)", 405)
 		return
 	}
-	if v := r.Header.Get("MCP-Protocol-Version"); v != "" && v != mcpVersion {
+	if v := r.Header.Get("MCP-Protocol-Version"); v != "" && !supportedMCPVersion(v) {
 		http.Error(w, "unsupported MCP protocol version", 400)
 		return
 	}
@@ -121,7 +123,11 @@ func (a *app) mcp(w http.ResponseWriter, r *http.Request) {
 			mcpError(w, id, -32602, "protocolVersion required")
 			return
 		}
-		mcpResult(w, id, map[string]any{"protocolVersion": mcpVersion, "serverInfo": map[string]string{"name": "intelligence", "version": a.cfg.Version}, "capabilities": map[string]any{"tools": map[string]any{}}, "instructions": "Read-only Intelligence data, scoped to the token's account. Start with schema and describe_table before SQL. Transcripts are synced snapshots, not all historical sessions; check hosts.last_seen and transcripts.synced_at. Page transcript seq_start and run event IDs; a changed transcript epoch requires starting over."})
+		version := p.ProtocolVersion
+		if !supportedMCPVersion(version) {
+			version = mcpVersion
+		}
+		mcpResult(w, id, map[string]any{"protocolVersion": version, "serverInfo": map[string]string{"name": "intelligence", "version": a.cfg.Version}, "capabilities": map[string]any{"tools": map[string]any{}}, "instructions": "Read-only Intelligence data, scoped to the token's account. Start with schema and describe_table before SQL. Transcripts are synced snapshots, not all historical sessions; check hosts.last_seen and transcripts.synced_at. Page transcript seq_start and run event IDs; a changed transcript epoch requires starting over."})
 	case "ping":
 		mcpResult(w, id, map[string]any{})
 	case "tools/list":

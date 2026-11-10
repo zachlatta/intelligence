@@ -59,12 +59,35 @@ for (const [id, path] of [["login", "/api/session"], ["signup", "/api/accounts"]
   <p id="claim-progress" class="progress"></p>
 </form>
 
+<h2 class="section-title" id="mcp">MCP connections</h2>
+<div class="card form">
+  <p class="meta">Connect PDW or another MCP client to read this account's data. Tokens expire after 90 days. Changing your password revokes them all.</p>
+  <label for="mcp-url">MCP URL</label>
+  <input id="mcp-url" readonly>
+  <div class="form-actions"><button type="button" class="btn" id="mcp-create">Create MCP token</button></div>
+  <p id="mcp-progress" class="progress" role="status"></p>
+  <div id="mcp-secret" hidden>
+    <label for="mcp-token-value">Shown once — copy this token now</label>
+    <input id="mcp-token-value" readonly autocomplete="off" spellcheck="false">
+    <p class="meta">In PDW Connections, add the MCP URL above and use this token as the bearer credential. Choose which clients can use it, then Refresh tools.</p>
+    <button type="button" class="btn sm" id="mcp-dismiss">Done — hide token</button>
+  </div>
+</div>
+<div class="card"><table class="table">
+  <thead><tr><th>Token ID</th><th>Created</th><th>Expires</th><th>Status</th><th></th></tr></thead>
+  <tbody id="mcp-tokens">{{range .MCPTokens}}<tr data-token-id="{{.ID}}">
+    <td><code>{{.ID}}</code></td><td class="meta">{{.Created.Format "2006-01-02 15:04 UTC"}}</td>
+    <td class="meta">{{.Expires.Format "2006-01-02 15:04 UTC"}}</td><td>{{if .Active}}active{{else}}expired{{end}}</td>
+    <td><button type="button" class="btn ghost sm mcp-revoke" data-token-id="{{.ID}}">Revoke</button></td>
+  </tr>{{else}}<tr><td colspan="5" class="meta">No MCP tokens yet.</td></tr>{{end}}</tbody>
+</table></div>
+
 <h2 class="section-title">Password</h2>
 <form id="password" class="card form">
   <input type="text" name="username" value="{{.Username}}" autocomplete="username" hidden>
   <label for="current">Current password</label>
   <input id="current" name="current" type="password" autocomplete="current-password" required>
-  <label for="new">New password <span class="meta">(at least 12 characters; signs out every other browser)</span></label>
+  <label for="new">New password <span class="meta">(at least 12 characters; signs out every other browser and revokes all MCP tokens)</span></label>
   <input id="new" name="new" type="password" autocomplete="new-password" minlength="12" required>
   <div class="form-actions"><button class="btn">Change password</button></div>
   <p id="password-progress" class="progress"></p>
@@ -75,6 +98,68 @@ for (const [id, path] of [["login", "/api/session"], ["signup", "/api/accounts"]
 </style>
 <script>
 const json = { "Content-Type": "application/json" };
+const mcpCreate = document.getElementById("mcp-create"), mcpSecret = document.getElementById("mcp-secret"),
+  mcpValue = document.getElementById("mcp-token-value"), mcpOut = document.getElementById("mcp-progress"),
+  mcpTokens = document.getElementById("mcp-tokens");
+let shownTokenID = "";
+document.getElementById("mcp-url").value = location.origin + "/mcp";
+function hideMCPToken() {
+  mcpValue.value = "";
+  shownTokenID = "";
+  mcpSecret.hidden = true;
+  mcpCreate.disabled = false;
+}
+document.getElementById("mcp-dismiss").addEventListener("click", hideMCPToken);
+window.addEventListener("pagehide", hideMCPToken);
+function mcpWarning(err) { mcpOut.className = "progress warn"; mcpOut.textContent = err.message; }
+async function refreshMCPTokens() {
+  const res = await fetch("/api/sql", {method: "POST", headers: json,
+    body: JSON.stringify({query: {{.MCPTokensSQL}}, limit: 10000})});
+  if (!res.ok) throw new Error("Could not refresh tokens: " + await res.text());
+  const data = await res.json();
+  mcpTokens.replaceChildren();
+  for (const [id, created, expires, active] of data.rows) {
+    const row = document.createElement("tr"); row.dataset.tokenId = id;
+    for (const text of [id, new Date(created).toISOString().replace("T", " "), new Date(expires).toISOString().replace("T", " "), active ? "active" : "expired"]) {
+      const cell = document.createElement("td"); cell.textContent = text; row.append(cell);
+    }
+    const cell = document.createElement("td"), button = document.createElement("button");
+    button.type = "button"; button.className = "btn ghost sm mcp-revoke";
+    button.dataset.tokenId = id; button.textContent = "Revoke";
+    cell.append(button); row.append(cell); mcpTokens.append(row);
+  }
+  if (!data.rows.length) {
+    const row = document.createElement("tr"), cell = document.createElement("td");
+    cell.colSpan = 5; cell.textContent = "No MCP tokens yet."; row.append(cell); mcpTokens.append(row);
+  }
+  if (data.truncated) throw new Error("Token list limited to 10000. Revoke unused tokens and reload to see more.");
+}
+mcpCreate.addEventListener("click", async () => {
+  mcpCreate.disabled = true; mcpOut.textContent = "Creating token…"; mcpOut.className = "progress meta";
+  try {
+    const res = await fetch("/api/mcp-tokens", {method: "POST", headers: json, body: "{}"});
+    if (!res.ok) throw new Error(await res.text());
+    const token = await res.json();
+    shownTokenID = token.id; mcpValue.value = token.token; mcpSecret.hidden = false;
+    mcpOut.textContent = "Token created. Expires " + new Date(token.expiresAt).toLocaleString() + ".";
+    mcpValue.focus(); mcpValue.select();
+    await refreshMCPTokens();
+  } catch (err) { mcpWarning(err); }
+  finally { mcpCreate.disabled = !mcpSecret.hidden; }
+});
+mcpTokens.addEventListener("click", async (e) => {
+  const button = e.target.closest("button.mcp-revoke");
+  if (!button || button.disabled || !confirm("Revoke this MCP token? Clients using it will lose access.")) return;
+  button.disabled = true;
+  try {
+    const res = await fetch("/api/mcp-tokens/" + encodeURIComponent(button.dataset.tokenId), {method: "DELETE"});
+    if (!res.ok) throw new Error(await res.text());
+    if (shownTokenID === button.dataset.tokenId) hideMCPToken();
+    mcpOut.className = "progress meta"; mcpOut.textContent = "Token revoked.";
+    await refreshMCPTokens();
+  } catch (err) { mcpWarning(err); }
+  finally { button.disabled = false; }
+});
 async function send(method, path, body, out, done) {
   const res = await fetch(path, { method, headers: body ? json : {}, body: body ? JSON.stringify(body) : undefined });
   if (res.ok) { done(res); return; }
@@ -105,6 +190,8 @@ document.getElementById("password").addEventListener("submit", (e) => {
     e.target.reset();
     out.className = "progress meta";
     out.textContent = "Password changed.";
+    hideMCPToken();
+    refreshMCPTokens().catch(mcpWarning);
   });
 });
 </script>
