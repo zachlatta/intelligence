@@ -469,27 +469,30 @@ is a `POST /api/workflow-runs/{id}/moves` with the run's host's key; the CLI rea
 key as the host client does (`HOST_SERVER` from `~/.config/intelligence/host.env`, the key from
 `host.key`, or their `devbox` names). The run follows the commands it queued (the finder, the
 workspace) through their results. A failed or expired start queues up to three retries, after
-15, 30 and 60 seconds. Retries wait while the host is offline or reports its Paseo daemon disconnected;
-the server checks every five seconds and resumes after the host is online with a connected report. Each delivery uses
-the original Paseo creation key so an uncertain result cannot create a second workspace or agent.
-Retries also wait for `hosts.start_retry_keys`: an updated host's explicit support for that key,
-so an older host cannot ignore it during a rolling update.
+15, 30 and 60 seconds. The server checks every five seconds. A retry waits until the host is
+online and reports both a connected Paseo daemon and support for retry keys
+(`hosts.start_retry_keys`). It reuses the original Paseo creation key so a lost response
+does not create a second workspace or agent.
+
 The existing durable `commands` queue handles host reconnects. `workflow_runs.start_retries`,
 `start_retry_at` and `error` expose the retry count, queued retry time and last failure through
 SQL; `pending_command` links to the current delivery, whose `idempotency_key` names the original
 command. Each retry rebuilds its prompt from the run's current input and resolves image references
 again through the account's attachment checks. Finder retries use the host's current repository
-catalog, including repositories restored after a daemon reconnect. Finder success resets the retry budget before the orchestrator starts. Exhausting the
-retries fails the run with the last error, and archives any partial workspace. Cancellation
-removes the pending retry. A new manual run still starts with its own creation key and budget.
+catalog, including repositories restored after a daemon reconnect. A successful finder resets the
+retry budget before the orchestrator starts. Exhausting the retries fails the run with the last
+error and archives any partial workspace. Cancellation removes the scheduled retry. A new manual
+run starts with its own creation key and budget.
+
 The run page shows each queued or sent retry, its last error, its next scheduled time, and whether
 it is waiting for the daemon to reconnect or the host to support retry keys. Each queued retry
 has a deadline 24 hours after its scheduled time; at that deadline the run fails with the last
 start error and a timeout explanation. This allows a long outage or host update without leaving
 the run waiting forever. Queue and delivery events are recorded in the timeline. Reconciliation
 processes the other runs even when one run is broken, then logs all errors with their command IDs.
-Reconciliation also expires overdue startup commands when the host has no stream; an expired
-command's retry wait starts from its original expiry, so a long server outage cannot reset the deadline.
+Reconciliation also expires overdue startup commands when the host has no stream. An expired
+command's retry wait starts from its original expiry, so a long server outage cannot reset the
+deadline.
 
 A run is on a step from the move that hands it the step (the orchestrator starting, for the first;
 `next`, `skip` or `back`) to the move that leaves it (`next`, `skip`, `back`, `done`, `fail`, or a

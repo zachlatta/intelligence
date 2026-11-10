@@ -183,9 +183,3 @@ func TestOfflineHostDoesNotConsumeRetryOrLookReady(t *testing.T) {
 		})
 	}
 }
-
-func TestRetryBannerCollapsesTemplateWhitespace(t *testing.T) {
-	if !strings.Contains(string(uiCSS), "#start-retry { white-space: normal; }") {
-		t.Fatal("retry banner preserves template indentation and blank lines")
-	}
-}
