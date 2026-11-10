@@ -486,11 +486,17 @@ did, in the transaction that does it, so it does it once:
    its domain). Saving a filter that another workflow already has, sharing a sender with nothing to
    tell them apart, is refused.
 
-A sender counts only if Gmail verified it: the first `Authentication-Results` (Gmail's own) must
-say `dmarc=pass` for the From domain. Forged mail never starts or steers a run; nor does a mailing
-list or newsletter (`List-Id`, `List-Unsubscribe`, `Precedence: bulk`), nor the mailbox's own mail.
+Email authentication, trigger matching and permission to start work are separate concerns.
+The current email paths do not enforce a complete owner-only workflow-start policy. Do not
+use sender filters or prompt warnings as that security boundary. Review authorization across
+initial messages and replies before enabling intake for privileged workflows. The mailbox's
+own mail is excluded from intake.
 A run's input is the email (its subject is the run's title), marked, unless it is from the account
 holder, as information, not instructions. The mailbox is only read: nothing is labeled or sent.
+
+The [workflow submission and input trust proposal](docs/proposals/2026-11-10-workflow-submission-and-trust.md)
+documents the current submission API and these trust gaps, then proposes scoped credentials,
+input provenance, and bounded child runs. Those controls are not implemented.
 
 ### Transcripts
 
