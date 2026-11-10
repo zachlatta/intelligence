@@ -68,7 +68,7 @@ func sqlHandler(cfg Config, p *pgxpool.Pool) http.HandlerFunc {
 	}
 }
 
-func runReadonly(ctx context.Context, cfg Config, p *pgxpool.Pool, req sqlRequest) (sqlResponse, error) {
+func runReadonly(ctx context.Context, cfg Config, p *pgxpool.Pool, req sqlRequest, args ...any) (sqlResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, cfg.SQLTimeout+2e9)
 	defer cancel()
 	tx, err := p.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
@@ -79,7 +79,7 @@ func runReadonly(ctx context.Context, cfg Config, p *pgxpool.Pool, req sqlReques
 	if _, err := tx.Exec(ctx, fmt.Sprintf("SET LOCAL statement_timeout = %d", cfg.SQLTimeout.Milliseconds())); err != nil {
 		return sqlResponse{}, err
 	}
-	rows, err := tx.Query(ctx, req.Query)
+	rows, err := tx.Query(ctx, req.Query, args...)
 	if err != nil {
 		return sqlResponse{}, friendly(err)
 	}

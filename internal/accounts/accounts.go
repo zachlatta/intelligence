@@ -166,6 +166,9 @@ func (s *Store) ChangePassword(ctx context.Context, id int64, current, next stri
 		if _, err := tx.Exec(ctx, "UPDATE accounts SET password_hash = $2, password_changed_at = $3 WHERE id = $1", id, newHash, s.Now()); err != nil {
 			return err
 		}
+		if _, err := tx.Exec(ctx, "DELETE FROM mcp_tokens WHERE account_id = $1", id); err != nil {
+			return err
+		}
 		_, err := tx.Exec(ctx, "DELETE FROM sessions WHERE account_id = $1", id)
 		return err
 	})

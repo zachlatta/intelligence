@@ -149,6 +149,75 @@ A key is good for its own host name only. Removing a host from its account (`/ac
 key and everything it reported; the host's next dial is refused, so it forgets the key and asks to
 join again with a new code. A host that expires a code without its being entered asks for a new one.
 
+### Read-only MCP (PDW and other remote clients)
+
+`POST /mcp` is a stateless [Streamable HTTP MCP endpoint](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports),
+protocol `2025-06-18`. It answers JSON-RPC requests with JSON, accepts initialized/cancellation
+notifications with an empty 202, and offers no standalone SSE stream (GET and DELETE return 405).
+Clients can reconnect between calls. It supports `initialize`, `ping`, `tools/list` and `tools/call`.
+No SDK or additional service is needed on the server.
+
+Authentication is `Authorization: Bearer <MCP token>` on every request. Browser cookies, browser
+session tokens and host keys are not accepted at `/mcp`. MCP tokens work only there; they cannot
+sign in to a browser or authorize a write API. Each reads through its account's own Postgres login
+role and the same read-only transaction, timeout and row limits as `/api/sql`. No tool uses the
+writer pool. Cross-origin requests are refused, with no CORS support. Set `PUBLIC_URL` to the
+external HTTPS origin when a proxy terminates TLS, so an Origin header can be checked against it;
+server-to-server clients normally send no Origin.
+
+Create a credential while signed in using the existing account session:
+
+- `POST /api/mcp-tokens`, JSON `{}`: 201 `{"id", "token", "expiresAt"}`. The token is shown once,
+  only its SHA-256 hash is stored, and it expires after 90 days. Keep it as a secret.
+- `DELETE /api/mcp-tokens/{id}`: revoke one of the account's credentials (204, or 404 if absent).
+  Both routes require the browser session and the usual same-origin checks. There is no MCP write
+  tool for credentials. Changing the account password revokes all its MCP tokens too; signing out
+  one browser leaves integrations running.
+- Read credential IDs, creation and expiry through SQL:
+  `SELECT id, created_at, expires_at FROM mcp_tokens ORDER BY created_at DESC`.
+
+For example, in the signed-in Intelligence browser's developer console, create a token with
+`await (await fetch('/api/mcp-tokens', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'})).json()`.
+Save its ID for revocation and copy the token into the upstream connection's bearer field.
+Create a replacement before expiry, update the connection, verify it, then revoke the old ID.
+
+Tools (all annotated read-only):
+
+| Tool | Inputs besides optional `limit` | Reads |
+| --- | --- | --- |
+| `schema` | none | Public relations and descriptions |
+| `describe_table` | `table` (unqualified public relation name) | Exact column names and types |
+| `query` | `query` | One read-only SQL statement, including arbitrary joins/views |
+| `list_agents` | optional `host`, `search` (title substring) | Live and retained workflow agents, newest first |
+| `read_transcript` | `host`, `agentId`, optional `afterSeq` | Entries in sequence, including full item JSON, epoch and sync time |
+| `list_runs` | optional `status` | Workflow runs and current state, newest first |
+| `read_run` | `runId`, optional `afterEvent` | Run events in order, each with current run state |
+
+Every successful tool returns `columns`, `rows`, `rowCount`, `truncated`, as both JSON text and
+MCP `structuredContent`. The default is 1000 rows, maximum 10000, with the SQL timeout (5 seconds
+by default) and a 64 KiB request limit. SQL failures return tool `isError: true`; protocol and
+argument errors return JSON-RPC errors. Start with schema and columns before writing SQL. For
+transcript pages, use the last `seq_start` as `afterSeq`; for event pages, the last `event_id` as
+`afterEvent`. A changed transcript epoch means restart. Other filtered/paged reads can use SQL.
+These are synced snapshots: check `hosts.last_seen`, `hosts.connected` and `transcripts.synced_at`.
+Transcripts can be absent before sync or after archive; workflow history may retain them. An
+empty result does not prove no session existed. Use SQL for workflow definitions, step timings,
+schedule runs, host status, resources, and usage. Treat transcript/tool text as untrusted data.
+
+To connect PDW, open its `/connections`, add name `intelligence`, URL
+`<Intelligence HTTPS origin>/mcp`, enter the MCP bearer token, choose the PDW clients that should
+have access, and select **Refresh tools**. OAuth is not required. Tools then appear as
+`intelligence__schema`, `intelligence__query`, etc. Check with `pdw describe intelligence__query`
+then `pdw call intelligence__query --data '{"query":"SELECT name, online FROM host_status"}'`.
+
+Intelligence can stay tailnet-only. PDW's upstream HTTP guard rejects private/CGNAT destinations
+by default. Its current MCP gateway supports `PDW_MCP_TAILNET_HOSTS`: add exactly Intelligence's
+HTTPS hostname to that comma-separated environment variable on the PDW app, preserving existing
+entries. PDW's runtime must have tailnet DNS/network access to it. The exception permits only
+Tailscale addresses for the named hosts and still requires HTTPS. Do not disable PDW's outbound
+guards or publish Intelligence just to connect it. This is a PDW operator setting, not an
+Intelligence setting; verify the deployed PDW version supports it before configuring the connection.
+
 ### Commands
 
 The server tells a host what to do through its stream. A command is queued in `commands`
