@@ -274,7 +274,8 @@ const DeliverableEmailRule = "When the run's result is a deliverable for Zach ra
 	"This holds in any repository, and even when nothing lands. Put the full substance in the body (the answer first, then the findings, tables and decisions he must make), " +
 	"with files.zachlatta.com links to the full report and files under the file-delivery rule above; never only a link or a local path. " +
 	"Earlier steps draft the email (subject and HTML body) in the worktree and pass it on; only the last step sends it, or the orchestrator's final worker before `done` when the run ends early. " +
-	"Before sending, search zrl-bot's sent mail for it so it goes out once, and put the sent message's id in the run's final summary. " +
+	"Before sending, search zrl-bot's sent mail from the run's request date, not a recent-days window: by subject, by the report's URL, and in the request thread if there is one. " +
+	"Inspect every match, send only if none already delivered it, so it goes out once, and put the sent message's id (or the earlier delivery's) in the run's final summary. " +
 	"Pass this deliverable-email rule to every worker."
 
 // FileDeliveryRule is appended at runtime so saved workflows get it too. Uploading belongs

@@ -110,7 +110,9 @@ func TestSavedWorkflowStepsEmailDeliverablesWhenTheRunLands(t *testing.T) {
 				"in any repository", "even when nothing lands",
 				"zrl-bot", "zrl-bot-email skill", "full substance in the body",
 				"Earlier steps draft", "only the last step sends", "before `done`",
-				"zrl-bot's sent mail", "once", "Pass this deliverable-email rule to every worker",
+				"search zrl-bot's sent mail from the run's request date", "by subject", "by the report's URL",
+				"in the request thread", "Inspect every match", "a recent-days window",
+				"once", "Pass this deliverable-email rule to every worker",
 			} {
 				if !strings.Contains(prompt, want) {
 					t.Errorf("step %d misses deliverable-email instruction %q", i, want)

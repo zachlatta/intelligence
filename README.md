@@ -1014,8 +1014,9 @@ for Zach (a report, investigation, answer, proposal, plan, deck or analysis) rat
 or a change to hosts or services ends with that deliverable emailed to him from the zrl-bot mailbox,
 as the `zrl-bot-email` skill says, in any repository and even when nothing lands: the full
 substance in the body, with file links. Earlier steps draft it; only the last step (or the final
-worker before `done`) sends it, once, after checking zrl-bot's sent mail, and the run's final
-summary names the sent message. The app holds no mail credentials and never sends mail itself.
+worker before `done`) sends it, once: first it searches zrl-bot's sent mail from the run's request
+date (by subject, by the report's URL and in the request thread) and inspects every match. The
+run's final summary names the sent message, or the earlier one that already delivered it. The app holds no mail credentials and never sends mail itself.
 Notes, step reports and transcripts render file-share images inline; other image origins and local
 paths remain placeholders. Existing local-path notes must be republished by an agent on the host
 that still holds the files; the server cannot recover them from a path alone.
