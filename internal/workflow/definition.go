@@ -197,7 +197,8 @@ const PublicRepoRule = "If this run's repository is public, everything committed
 	"about people, programs or money, data exports (CSV, JSON, spreadsheets), work/ or scratch folders, or donor, contact, " +
 	"financial or student data. Aggregate-only and no-secrets do not make internal data publishable, and a work/ folder already " +
 	"on main is not a convention to follow. Keep such output in .factory-scratch/ (git-ignored) and deliver it to Zach privately. " +
-	"Before any push, review every outgoing commit, not only the final diff (git log --stat origin/main..HEAD): a file added and " +
+	"Before any push, review every outgoing commit, merge commits included, not only the final diff (git log -m --stat origin/main..HEAD; " +
+	"-m shows what merge commits add): a file added and " +
 	"deleted in a later commit is still published with the push. If any commit adds such output, rewrite the commits to drop it first. " +
 	"If the task's deliverable is a result rather than a change to this repository, the run is in the wrong repository: " +
 	"ask Zach before proceeding."
@@ -309,7 +310,8 @@ var Starting = Definition{
 		{ID: "public", Kind: KindGate, Title: "Public repo check", Instructions: "Check the repository's visibility " +
 			"(gh repo view <owner/name> --json visibility). If it is private, skip this step.\n\n" +
 			"If it is public, have a fresh sub-agent review every outgoing commit, not only the final diff: list them with " +
-			"git log --stat origin/main..HEAD and read each file each commit adds or changes, including reports outside work/. " +
+			"git log -m --stat origin/main..HEAD (-m includes merge commits, which git log otherwise leaves out) and read each file " +
+			"each commit adds or changes, including reports outside work/. " +
 			"A file deleted in a later commit is still published with the push. " +
 			"Send the work back to Do the work if any commit adds a result rather than a change the repository keeps: a report, deck, " +
 			"analysis, metrics or counts about people, programs or money, a data export (CSV, JSON, spreadsheet), a work/ or scratch " +

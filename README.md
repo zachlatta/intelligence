@@ -455,7 +455,7 @@ version it started with. A run:
    approved external changes to landing. It also carries `workflow.PublicRepoRule`: in a public
    repository, commit only what the repository keeps, never a report, metrics, a data export or a
    `work/` folder (aggregate-only is not an exception). Before pushing, review every outgoing commit
-   (`git log --stat origin/main..HEAD`), not only the final diff: a file added and deleted in a later
+   (`git log -m --stat origin/main..HEAD`, merge commits included), not only the final diff: a file added and deleted in a later
    commit is still published, so such commits are rewritten. The starting workflow
    (`workflow.Starting`) also has a Public repo check gate before landing that reads every outgoing
    commit the same way and sends such files back to Do the work.
@@ -704,7 +704,7 @@ This repository is public. Three gates keep private details out of it:
 - `internal/hygiene` also fails when Git tracks agent output or data: anything under `work/`,
   `scratch/`, `.factory-scratch/` or `.factory-evidence/`, or a CSV, TSV, spreadsheet, Parquet,
   DuckDB, SQLite or JSON Lines file. Reports and their data are delivered privately, never committed
-  here. It also fails when a commit not yet on `origin/main` adds such a file, even if a later
+  here. It also fails when a commit not yet on `origin/main`, a merge included, adds such a file, even if a later
   commit deletes it, since the push would publish it. It needs `.git`, so it runs in `make test` and
   CI, not the image build (which has no `.git`); the outgoing check needs an `origin/main` ref.
 - CI runs gitleaks over every commit on every push and pull request.

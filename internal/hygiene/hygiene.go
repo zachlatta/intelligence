@@ -112,11 +112,13 @@ func TrackedOutput(root string) ([]string, error) {
 	return outputPaths(strings.Split(string(out), "\x00")), nil
 }
 
-// OutgoingOutput lists the agent output and data files that any commit in base..HEAD adds, sorted
+// OutgoingOutput lists the agent output and data files that any commit in base..HEAD adds, merge
+// commits included, sorted
 // and once each. A file added and deleted again before a push is still in the pushed history, so
 // the final tree alone (TrackedOutput) does not show it.
 func OutgoingOutput(root, base string) ([]string, error) {
-	out, err := exec.Command("git", "-C", root, "log", "--no-renames", "--diff-filter=A", "--name-only",
+	// -m: merge commits' diffs too (against each parent); git log leaves them out by default.
+	out, err := exec.Command("git", "-C", root, "log", "-m", "--no-renames", "--diff-filter=A", "--name-only",
 		"--format=", "-z", base+"..HEAD").Output()
 	if err != nil {
 		return nil, fmt.Errorf("git log %s..HEAD: %w", base, err)

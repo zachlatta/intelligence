@@ -210,3 +210,50 @@ func TestOutgoingCommitsAddNoAgentOutput(t *testing.T) {
 		t.Errorf("%s: added by a commit not yet on origin/main; rewrite that commit before pushing", p)
 	}
 }
+
+// git log leaves merge commits' diffs out unless asked, so a report added while resolving a merge
+// and deleted afterwards would escape a check that reads only ordinary commits.
+func TestOutgoingOutputFindsFilesAddedInAMergeThenDeleted(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	root := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", root, "-c", "user.name=someone", "-c", "user.email=someone@example.com"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	write := func(p string) {
+		os.MkdirAll(filepath.Join(root, filepath.Dir(p)), 0o755)
+		os.WriteFile(filepath.Join(root, p), []byte("x\n"), 0o644)
+	}
+	git("init", "-q", "-b", "main")
+	write("README.md")
+	git("add", ".")
+	git("commit", "-q", "-m", "base")
+	git("branch", "base")
+	git("checkout", "-q", "-b", "side")
+	write("side.go")
+	git("add", ".")
+	git("commit", "-q", "-m", "side")
+	git("checkout", "-q", "main")
+	write("main.go")
+	git("add", ".")
+	git("commit", "-q", "-m", "main")
+	git("merge", "-q", "--no-ff", "--no-commit", "side")
+	write("work/internal-audit.md")
+	git("add", "-f", "work/internal-audit.md")
+	git("commit", "-q", "-m", "merge side")
+	git("rm", "-q", "-r", "work")
+	git("commit", "-q", "-m", "remove the report")
+
+	got, err := OutgoingOutput(root, "base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, "\n") != "work/internal-audit.md" {
+		t.Errorf("OutgoingOutput = %q, want the report added in the merge", got)
+	}
+}

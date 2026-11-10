@@ -42,5 +42,5 @@ Never commit agent output here: reports, audits, metrics, data exports or `work/
 skills that say to keep outputs in `work/YYYY-MM-DD-.../` mean a private repository; in this one,
 keep them in `.factory-scratch/` and deliver them privately. `internal/hygiene` fails when Git tracks
 `work/`, `scratch/`, `.factory-scratch/`, `.factory-evidence/` or a data file (CSV, spreadsheet,
-Parquet and similar), or when a commit not yet on `origin/main` adds one, even if a later commit
+Parquet and similar), or when a commit not yet on `origin/main` (a merge included) adds one, even if a later commit
 deletes it: rewrite that commit before pushing.

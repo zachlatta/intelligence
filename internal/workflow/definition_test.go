@@ -321,7 +321,7 @@ func TestSavedWorkflowsKeepResultsOutOfPublicRepositories(t *testing.T) {
 		t.Fatalf("the public repository rule occurs %d times, want once", n)
 	}
 	for _, want := range []string{"work/", "metrics", "CSV", "student", "Aggregate-only", ".factory-scratch/",
-		"git log --stat origin/main..HEAD", "wrong repository"} {
+		"git log -m --stat origin/main..HEAD", "wrong repository"} {
 		if !strings.Contains(PublicRepoRule, want) {
 			t.Errorf("public repository rule misses %q", want)
 		}
@@ -362,7 +362,7 @@ func TestFileDeliveryKeepsInternalReportsWithoutMetricsRestricted(t *testing.T) 
 func TestPublicRepositoryChecksReadEveryOutgoingCommit(t *testing.T) {
 	gate := Starting.Steps[Starting.Index("public")].Instructions
 	for name, text := range map[string]string{"contract": PublicRepoRule, "gate": gate} {
-		for _, want := range []string{"git log --stat origin/main..HEAD", "every outgoing commit",
+		for _, want := range []string{"git log -m --stat origin/main..HEAD", "merge commits", "every outgoing commit",
 			"deleted in a later commit", "rewrite"} {
 			if !strings.Contains(text, want) {
 				t.Errorf("%s misses %q", name, want)
