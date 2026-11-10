@@ -791,8 +791,12 @@ to `https://files.zachlatta.com` with public, unguessable links, using the `file
 the agent's host. This overrides the skill's restricted-delivery default. Agents verify the hash
 and anonymous access, embed images with Markdown image syntax, and link Markdown reports uploaded
 as `text/plain; charset=utf-8` so they open in the browser. They also rewrite local file references
-inside those reports. Uploads still respect each step's external-write limits: a worker that cannot
-upload passes artifacts to the authorized landing step. No upload credentials are held by the app.
+inside those reports. File delivery is allowed in any step, including sign-off, unless that step
+explicitly forbids uploads; it is an exception to the external changes deferred to landing.
+Donor, contact, financial and student data stay restricted to the recipient and are linked as text
+unless Zach explicitly asks to publish that data. Agents verify anonymous access returns 401 for
+these private files. A worker explicitly barred from uploading preserves artifacts for an authorized
+step. No upload credentials are held by the app.
 Notes, step reports and transcripts render file-share images inline; other image origins and local
 paths remain placeholders. Existing local-path notes must be republished by an agent on the host
 that still holds the files; the server cannot recover them from a path alone.

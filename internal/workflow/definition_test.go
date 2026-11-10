@@ -77,11 +77,29 @@ func TestSavedWorkflowStepsRequirePublicFileDelivery(t *testing.T) {
 	d.Orchestrator.Instructions = "Custom saved instructions"
 	for i := range d.Steps {
 		for _, prompt := range []string{OrchestratorPrompt("Saved", d, Vars{}), StepMessage(d, i, Vars{})} {
-			for _, want := range []string{"files.zachlatta.com", "public, unguessable", "no authentication", "file-share", "anonymous GET", "text/plain; charset=utf-8", "Pass this file-delivery rule to every worker", "Do not upload before"} {
+			for _, want := range []string{"files.zachlatta.com", "public, unguessable", "no authentication", "file-share", "anonymous GET", "text/plain; charset=utf-8", "Pass this file-delivery rule to every worker"} {
 				if !strings.Contains(prompt, want) {
 					t.Errorf("step %d misses file-delivery instruction %q", i, want)
 				}
 			}
+		}
+	}
+}
+
+func TestSignoffPermitsFileDeliveryAndProtectsPrivateData(t *testing.T) {
+	for _, prompt := range []string{OrchestratorPrompt("Tasks", Starting, Vars{}), StepMessage(Starting, 4, Vars{})} {
+		for _, want := range []string{
+			"allowed in any step, including sign-off", "not deferred to landing",
+			"unless a step explicitly forbids uploads", "donor, contact, financial or student data",
+			"unless Zach explicitly asks to publish that data", "restricted to Zach's verified email address from the file-share skill",
+			"link them as text", "anonymous GET returns 401",
+		} {
+			if !strings.Contains(prompt, want) {
+				t.Errorf("prompt misses %q", want)
+			}
+		}
+		if strings.Contains(prompt, "Do not upload before") {
+			t.Error("generic external-write ban still blocks sign-off delivery")
 		}
 	}
 }
