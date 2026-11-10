@@ -95,6 +95,31 @@ func TestSavedWorkflowStepsRequirePublicFileDelivery(t *testing.T) {
 	}
 }
 
+// A run whose result is a report, answer or plan for Zach, rather than code or a host change, must
+// end with that result in his inbox, whatever the repository and whether or not anything lands.
+// Saved workflows get the rule too: runs of the saved Factory Task in other repositories than the
+// one its landing step named finished with the result only on the run page.
+func TestSavedWorkflowStepsEmailDeliverablesWhenTheRunLands(t *testing.T) {
+	d := clone(Starting)
+	d.Orchestrator.Instructions = "Custom saved instructions"
+	d.Steps[len(d.Steps)-1].Instructions = "Land on main the way AGENTS.md says."
+	for i := range d.Steps {
+		for _, prompt := range []string{OrchestratorPrompt("Saved", d, Vars{}), StepMessage(d, i, Vars{})} {
+			for _, want := range []string{
+				"report, investigation, answer, proposal, plan, deck or analysis",
+				"in any repository", "even when nothing lands",
+				"zrl-bot", "zrl-bot-email skill", "full substance in the body",
+				"Earlier steps draft", "only the last step sends", "before `done`",
+				"zrl-bot's sent mail", "once", "Pass this deliverable-email rule to every worker",
+			} {
+				if !strings.Contains(prompt, want) {
+					t.Errorf("step %d misses deliverable-email instruction %q", i, want)
+				}
+			}
+		}
+	}
+}
+
 func TestSignoffPermitsFileDeliveryAndProtectsPrivateData(t *testing.T) {
 	for _, prompt := range []string{OrchestratorPrompt("Tasks", Starting, Vars{}), StepMessage(Starting, 4, Vars{})} {
 		for _, want := range []string{

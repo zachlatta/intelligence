@@ -261,8 +261,21 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 // StepMessage is step i's title and filled instructions, as the orchestrator gets them.
 func StepMessage(d Definition, i int, v Vars) string {
 	s := d.Steps[i]
-	return fmt.Sprintf("Step %d of %d: %s\n\n%s", i+1, len(d.Steps), s.Title, strings.TrimSpace(v.fill(s.Instructions))+"\n\n"+UnattendedShellRule+"\n\n"+FileDeliveryRule)
+	return fmt.Sprintf("Step %d of %d: %s\n\n%s", i+1, len(d.Steps), s.Title, strings.TrimSpace(v.fill(s.Instructions))+"\n\n"+UnattendedShellRule+"\n\n"+FileDeliveryRule+"\n\n"+DeliverableEmailRule)
 }
+
+// DeliverableEmailRule is appended at runtime, like FileDeliveryRule, so saved workflows get it
+// too. Without it a run whose result is a report finished with that report only on its run page
+// whenever its landing step's own wording did not cover the run's repository. The address is the
+// zrl-bot-email skill's: the repository is public and carries no personal address.
+const DeliverableEmailRule = "When the run's result is a deliverable for Zach rather than landed code or a change to hosts or services " +
+	"(a report, investigation, answer, proposal, plan, deck or analysis, or such a result alongside code), email it to him from the zrl-bot mailbox " +
+	"as the zrl-bot-email skill says: a reply in his request thread when the run started from his email, otherwise a new email to the address the skill names for new mail. " +
+	"This holds in any repository, and even when nothing lands. Put the full substance in the body (the answer first, then the findings, tables and decisions he must make), " +
+	"with files.zachlatta.com links to the full report and files under the file-delivery rule above; never only a link or a local path. " +
+	"Earlier steps draft the email (subject and HTML body) in the worktree and pass it on; only the last step sends it, or the orchestrator's final worker before `done` when the run ends early. " +
+	"Before sending, search zrl-bot's sent mail for it so it goes out once, and put the sent message's id in the run's final summary. " +
+	"Pass this deliverable-email rule to every worker."
 
 // FileDeliveryRule is appended at runtime so saved workflows get it too. Uploading belongs
 // on the agent's host: the server cannot read its files or decide which artifacts to publish.
