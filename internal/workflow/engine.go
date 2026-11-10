@@ -492,39 +492,48 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 				}
 				if retries < 3 {
 					if due == nil {
-						if err := e.event(ctx, tx, r, "start_retry", nil, nil, msg); err != nil {
+						nextAt := at.Add(15 * time.Second * time.Duration(1<<retries))
+						text := fmt.Sprintf("Retry %d of 3 at %s. %s", retries+1, nextAt.UTC().Format(time.RFC3339), msg)
+						if err := e.event(ctx, tx, r, "start_retry", nil, nil, text); err != nil {
 							return err
 						}
-						_, err := tx.Exec(ctx, "UPDATE workflow_runs SET error=$2, start_retry_at=$3, updated_at=$4, workspace_id=$5 WHERE id=$1", r.ID, msg, at.Add(15*time.Second*time.Duration(1<<retries)), at, res.WorkspaceID)
+						_, err := tx.Exec(ctx, "UPDATE workflow_runs SET error=$2, start_retry_at=$3, updated_at=$4, workspace_id=$5 WHERE id=$1", r.ID, msg, nextAt, at, res.WorkspaceID)
 						return err
 					}
 					if at.Before(*due) {
 						return nil
 					}
-					var connected bool
-					if err := tx.QueryRow(ctx, "SELECT connected AND start_retry_keys FROM hosts WHERE name=$1", r.Host).Scan(&connected); err != nil {
-						return err
-					}
-					if !connected {
-						return nil
-					}
-					// Reuse Paseo's creation key, but give this delivery a new ID: the host
-					// caches completed deliveries, including failures. The run lock serializes
-					// concurrent workers and leaves old/late command updates detached.
-					next, err := fleet.EnqueueTx(ctx, tx, r.Host, c.Kind, c.Args, commandTTL, at)
-					if err != nil {
-						return err
-					}
-					key := c.IdempotencyKey
-					if key == "" {
-						key = c.ID
-					}
-					if _, err := tx.Exec(ctx, "UPDATE commands SET idempotency_key=$2 WHERE id=$1", next.ID, key); err != nil {
-						return err
-					}
-					_, err = tx.Exec(ctx, `UPDATE workflow_runs SET pending_command=$2, start_retries=start_retries+1, start_retry_at=NULL,
+					if !at.Before(due.Add(RetryWaitLimit)) {
+						msg = "Start retry timed out after 24 hours waiting for the Paseo daemon to reconnect or the host to support retry keys. Last start error: " + msg
+					} else {
+						var connected bool
+						if err := tx.QueryRow(ctx, "SELECT connected AND start_retry_keys FROM hosts WHERE name=$1", r.Host).Scan(&connected); err != nil {
+							return err
+						}
+						if !connected {
+							return nil
+						}
+						// Reuse Paseo's creation key, but give this delivery a new ID: the host
+						// caches completed deliveries, including failures. The run lock serializes
+						// concurrent workers and leaves old/late command updates detached.
+						next, err := fleet.EnqueueTx(ctx, tx, r.Host, c.Kind, c.Args, commandTTL, at)
+						if err != nil {
+							return err
+						}
+						key := c.IdempotencyKey
+						if key == "" {
+							key = c.ID
+						}
+						if _, err := tx.Exec(ctx, "UPDATE commands SET idempotency_key=$2 WHERE id=$1", next.ID, key); err != nil {
+							return err
+						}
+						if err := e.event(ctx, tx, r, "start_retry_sent", nil, nil, fmt.Sprintf("Retry %d of 3", retries+1)); err != nil {
+							return err
+						}
+						_, err = tx.Exec(ctx, `UPDATE workflow_runs SET pending_command=$2, start_retries=start_retries+1, start_retry_at=NULL,
 						project_command=CASE WHEN status='finding_project' THEN $2 ELSE project_command END, updated_at=$3 WHERE id=$1`, r.ID, next.ID, at)
-					return err
+						return err
+					}
 				}
 			}
 			if err := e.event(ctx, tx, r, "error", nil, nil, msg); err != nil {

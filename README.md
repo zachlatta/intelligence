@@ -480,6 +480,12 @@ SQL; `pending_command` links to the current delivery, whose `idempotency_key` na
 command. Finder success resets the retry budget before the orchestrator starts. Exhausting the
 retries fails the run with the last error, and archives any partial workspace. Cancellation
 removes the pending retry. A new manual run still starts with its own creation key and budget.
+The run page shows each queued or sent retry, its last error, its next scheduled time, and whether
+it is waiting for the daemon to reconnect or the host to support retry keys. Each queued retry
+has a deadline 24 hours after its scheduled time; at that deadline the run fails with the last
+start error and a timeout explanation. This allows a long outage or host update without leaving
+the run waiting forever. Queue and delivery events are recorded in the timeline. Reconciliation
+processes the other runs even when one run is broken, then logs all errors with their command IDs.
 
 A run is on a step from the move that hands it the step (the orchestrator starting, for the first;
 `next`, `skip` or `back`) to the move that leaves it (`next`, `skip`, `back`, `done`, `fail`, or a

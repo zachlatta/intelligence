@@ -287,18 +287,24 @@ type runRow struct {
 	Steps                                                                []workflow.Step
 	CreatedAt, UpdatedAt                                                 time.Time
 	FinishedAt                                                           *time.Time
+	StartRetries                                                         int
+	StartRetryAt                                                         *time.Time
+	DaemonConnected, RetryKeys                                           bool
 }
 
 const runRowSelect = `SELECT r.id::text, r.title, r.input, r.status, r.host, r.repo, r.branch, w.name, r.workflow_id::text, r.workspace_id, r.workspace_title,
 	r.orchestrator_id, r.project_agent_id, r.note, r.error, r.step, r.version, v.definition -> 'steps', r.created_at, r.updated_at, r.finished_at,
-	w.deleted_at IS NOT NULL
+	w.deleted_at IS NOT NULL, r.start_retries, r.start_retry_at,
+	COALESCE((SELECT connected FROM hosts WHERE name=r.host),false),
+	COALESCE((SELECT start_retry_keys FROM hosts WHERE name=r.host),false)
 	FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id JOIN workflow_versions v ON v.workflow_id = r.workflow_id AND v.version = r.version `
 
 func scanRunRow(row pgx.CollectableRow) (runRow, error) {
 	var r runRow
 	var steps []byte
 	err := row.Scan(&r.ID, &r.Title, &r.Input, &r.Status, &r.Host, &r.Repo, &r.Branch, &r.Workflow, &r.WorkflowID, &r.WorkspaceID, &r.WorkspaceTitle,
-		&r.Orchestrator, &r.ProjectAgent, &r.Note, &r.Error, &r.Step, &r.Version, &steps, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt, &r.WorkflowDeleted)
+		&r.Orchestrator, &r.ProjectAgent, &r.Note, &r.Error, &r.Step, &r.Version, &steps, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt, &r.WorkflowDeleted,
+		&r.StartRetries, &r.StartRetryAt, &r.DaemonConnected, &r.RetryKeys)
 	if err == nil {
 		err = json.Unmarshal(steps, &r.Steps)
 	}
@@ -322,6 +328,12 @@ func (r runRow) Where() string {
 
 // StatusLabel and StatusClass show a run's status as the pages' badges do.
 func (r runRow) StatusLabel() string {
+	if r.RetryStatus() != "" {
+		if r.StartRetryAt != nil {
+			return "retry queued"
+		}
+		return "retrying"
+	}
 	switch r.Status {
 	case workflow.FindingProject, workflow.StartingOrchestrator, workflow.Running:
 		return "running"
@@ -329,6 +341,24 @@ func (r runRow) StatusLabel() string {
 		return "needs you"
 	}
 	return r.Status
+}
+
+// RetryStatus describes either the next queued retry or the delivery in progress.
+func (r runRow) RetryStatus() string {
+	if r.Error == "" || (r.Status != workflow.FindingProject && r.Status != workflow.StartingOrchestrator) {
+		return ""
+	}
+	if r.StartRetryAt != nil {
+		return fmt.Sprintf("Retry %d of 3 queued", r.StartRetries+1)
+	}
+	return fmt.Sprintf("Retry %d of 3 sent", r.StartRetries)
+}
+
+func (r runRow) RetryDeadline() time.Time {
+	if r.StartRetryAt == nil {
+		return time.Time{}
+	}
+	return r.StartRetryAt.Add(workflow.RetryWaitLimit)
 }
 
 func (r runRow) StatusClass() string {
@@ -746,6 +776,10 @@ func (e runEvent) Line() string {
 		return "Canceled"
 	case "error":
 		return e.Text
+	case "start_retry":
+		return "Start failed; retry queued: " + e.Text
+	case "start_retry_sent":
+		return "Retry sent: " + e.Text
 	}
 	return e.Kind + " " + e.Text
 }
