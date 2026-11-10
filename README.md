@@ -128,6 +128,57 @@ Server instances learn of each other's changes through Postgres `NOTIFY` on the 
 (`fleet.Changes`): a queued command, a command's update and a stream taking a host over. Nothing on
 the server polls.
 
+### Proposed workflow mutations
+
+Agents can propose a workflow creation, replacement or deletion without applying it. A proposal
+returns an `approvalURL`: the account owner signs in there, reviews complete before/after snapshots
+and a line diff, then approves or rejects. The Proposals tab lists the latest 200 proposals.
+Opening a link never applies it. Approval, rejection and undo require a same-origin browser-session
+JSON request; a host key cannot make these decisions.
+
+`POST /api/workflow-proposals` accepts a host's bearer key and JSON:
+
+```json
+{
+  "operation": "update",
+  "workflowId": "<workflow UUID>",
+  "baseVersion": 3,
+  "summary": "Explain the change for the reviewer",
+  "workflow": {
+    "name": "Task workflow",
+    "description": "Updated description",
+    "definition": { "...": "the complete workflow definition" }
+  }
+}
+```
+
+Use `create` without `workflowId` or `baseVersion`; use `delete` with those fields and without
+`workflow`. Updates replace the complete definition, including steps, prompts, models, host and
+trigger. Read the current `workflows` and `workflow_versions` rows first and preserve fields you
+do not intend to change. Proposals cannot choose a default workflow; an update preserves that
+choice while its trigger remains `task`.
+
+The response is `201 {"id", "approvalURL"}`. `POST /api/workflow-proposals/{id}/withdraw` with
+`{}` and the same host's bearer key withdraws a pending proposal. Browser-only JSON writes are
+`POST /api/workflow-proposals/{id}/approve`, `/reject` and `/undo`, each with `{}`.
+No read endpoints are needed: `workflow_proposals` contains the proposer, snapshots, decision,
+expiry and undo record; `workflow_proposal_status` adds `effective_status`, which shows expiry
+and drift immediately. Both are account-isolated and readable through `/api/sql`.
+
+Proposals expire after seven days. Approval locks and compares the complete prior state, including
+its version and default/deleted state; changed workflows return 409 and require a fresh proposal.
+Approval applies the reviewed snapshot and saves another immutable workflow version atomically.
+Undo restores the saved prior state as a **new version**, records `undo_state` and `undone_at`,
+and refuses if anything changed after approval. Undoing creation soft-deletes it. Deletion and
+undoing creation refuse while runs are active; restoring a deleted workflow rechecks host ownership,
+email-trigger overlap and default conflicts. Existing runs retain their original definition.
+
+Intelligence also serves a stateless Streamable HTTP MCP endpoint at `POST /mcp`, authenticated
+with a host's bearer key. Tools are `propose_mutation`, `withdraw_mutation`,
+`propose_mutation_help` (schema and a complete worked example), and `query` (the same bounded,
+account-scoped read-only SQL as `/api/sql`). There are no approval or direct workflow-write tools.
+Configure `PUBLIC_URL` to the browser-facing origin so approval links use the correct external URL.
+
 ### Accounts and host keys
 
 An account is a username (lowercase letters, digits, `-` and `_`) and a password of at least 12
