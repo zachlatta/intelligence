@@ -27,9 +27,10 @@
 <p><a href="/workflow-proposals">All proposals</a></p><h1>{{.Summary}}</h1>
 <div class="review-meta"><strong>{{.Status}} · {{.Operation}}</strong><span>{{.Target}}{{if .BaseVersion}} · based on v{{.BaseVersion}}{{else}} · new workflow{{end}}</span><span>Created {{stamp .Created}}</span>{{if not .Decided}}<span>Expires {{stamp .Expiry}}</span>{{end}}
 {{with .Decided}}<span>Decided {{stamp .}}</span>{{end}}{{with .Undone}}<span>Undone {{stamp .}}</span>{{end}}</div>
-<p class="meta">Proposed from {{.Proposer}}{{with .ProposedBy}} · Agent: {{.}}{{end}}{{with .RunID}} · Run: {{.}}{{end}}</p>
+<p class="meta">Proposed from {{.Proposer}}{{with .TokenCreated}} · MCP token created {{stamp .}}{{end}}{{with .ProposedBy}} · Agent: {{.}}{{end}}{{with .RunID}} · Run: {{.}}{{end}}</p>
 {{with .Reason}}<p class="request"><strong>Withdrawal reason:</strong> {{.}}</p>{{end}}{{with .ReplacesID}}<p>Replaces <a href="/workflow-proposals/{{.}}">an earlier proposal</a>, which was withdrawn.</p>{{end}}
 {{if .ResultVersion}}<p><a href="/workflows/{{.WorkflowID}}/versions/{{.ResultVersion}}">View resulting workflow version v{{.ResultVersion}}</a>{{if .UndoState}} · Undo restored the prior workflow state.{{end}}</p>{{end}}
+{{if eq .Status "stale"}}<p class="request">The workflow changed after this was proposed. Read its latest state and propose again.</p>{{end}}
 <h2>Changed fields</h2><p class="meta">Review each change below. Unchanged fields and automatic version numbers are omitted. Setting the default workflow is not proposable.</p>
 {{range .Changes}}<section class="review-change"><h3>{{.Label}}</h3><div class="review-pair"><div><strong>Before</strong><pre class="review-text">{{.Before}}</pre></div><div><strong>After</strong><pre class="review-text">{{.After}}</pre></div></div>
 <details><summary>Line diff</summary><div class="review-diff">{{range .Lines}}<div class="review-text {{.Kind}}">{{if eq .Kind "added"}}+ {{else if eq .Kind "removed"}}− {{else}}  {{end}}{{.Text}}</div>{{end}}</div></details></section>{{else}}<p>No editable fields changed.</p>{{end}}
@@ -41,6 +42,6 @@
 
 {{define "proposals"}}{{template "proposal-head" "Workflow proposals"}}<main class="container"><h1>Workflow proposals</h1><p class="meta">Pending proposals appear first. Each link opens a review; no change is applied by opening it.</p>
 {{range .}}<article class="proposal-item {{if .Pending}}pending{{end}}"><h2><a href="/workflow-proposals/{{.ID}}">{{.Summary}}</a></h2><p>{{.Status}} · {{.Operation}} · {{.Target}}{{if .BaseVersion}} · v{{.BaseVersion}}{{else}} · new workflow{{end}}{{if .ResultVersion}} → <a href="/workflows/{{.WorkflowID}}/versions/{{.ResultVersion}}">v{{.ResultVersion}}</a>{{end}}</p>
-<div class="review-meta"><span>Created {{stamp .Created}}</span>{{if not .Decided}}<span>Expires {{stamp .Expiry}}</span>{{else}}<span>Decided {{stamp .Decided}}</span>{{end}}{{with .Undone}}<span>Undone {{stamp .}}</span>{{end}}<span>{{.Proposer}}{{with .ProposedBy}} · {{.}}{{end}}{{with .RunID}} · {{.}}{{end}}</span></div></article>{{else}}<p>No proposals yet.</p>{{end}}</main></body></html>{{end}}
+<div class="review-meta"><span>Created {{stamp .Created}}</span>{{if not .Decided}}<span>Expires {{stamp .Expiry}}</span>{{else}}<span>Decided {{stamp .Decided}}</span>{{end}}{{with .Undone}}<span>Undone {{stamp .}}</span>{{end}}<span>{{.Proposer}}{{with .TokenCreated}} · MCP token created {{stamp .}}{{end}}{{with .ProposedBy}} · {{.}}{{end}}{{with .RunID}} · {{.}}{{end}}</span></div></article>{{else}}<p>No proposals yet.</p>{{end}}</main></body></html>{{end}}
 
 {{define "workflow-version"}}{{template "proposal-head" "Workflow version"}}<main class="container"><p><a href="/workflows">Workflows</a> · <a href="/workflow-proposals">Proposals</a></p><h1>Saved workflow definition · v{{.Version}}</h1>{{template "workflow-state" .}}</main></body></html>{{end}}

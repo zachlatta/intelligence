@@ -294,6 +294,10 @@ func TestProposalStaleWithdrawReject(t *testing.T) {
 	if r.Code != 200 {
 		t.Fatal(r.Body)
 	}
+	page := get(t, h, "/workflow-proposals/"+stale, nil).Body.String()
+	if !strings.Contains(page, "The workflow changed after this was proposed. Read its latest state and propose again.") || strings.Contains(page, "Approve change") {
+		t.Fatalf("stale proposal lacks guidance or still offers approval: %s", page)
+	}
 	for _, p := range []string{withdrawn, rejected, stale} {
 		r = call(t, h, "POST", "/api/workflow-proposals/"+p+"/approve", `{}`, sameOriginFetch)
 		if r.Code != 409 {

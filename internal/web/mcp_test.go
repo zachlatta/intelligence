@@ -25,6 +25,10 @@ func TestMCPProposalTokenIdentityAndApprovalBoundary(t *testing.T) {
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	tokenID, token := mintMCP(t, h)
+	created := time.Date(2026, time.November, 1, 12, 30, 0, 0, time.UTC)
+	if _, err := d.Owner.Exec(t.Context(), "UPDATE mcp_tokens SET created_at=$2 WHERE id=$1", tokenID, created); err != nil {
+		t.Fatal(err)
+	}
 	_, otherToken := mintMCP(t, h)
 	def := workflow.Starting
 	def.Host = "host-1"
@@ -45,6 +49,12 @@ func TestMCPProposalTokenIdentityAndApprovalBoundary(t *testing.T) {
 	if err := d.Owner.QueryRow(t.Context(), "SELECT proposer FROM workflow_proposals WHERE id=$1", id).Scan(&proposer); err != nil || proposer != "mcp:"+tokenID {
 		t.Fatalf("identity: %q %v", proposer, err)
 	}
+	for _, path := range []string{"/workflow-proposals/" + id, "/workflow-proposals"} {
+		page := get(t, h, path, nil).Body.String()
+		if !strings.Contains(page, "mcp:"+tokenID) || !strings.Contains(page, "MCP token created Nov 1, 2026") {
+			t.Errorf("%s lacks readable token attribution: %s", path, page)
+		}
+	}
 	for _, action := range []string{"approve", "reject", "undo"} {
 		r := call(t, anon(h), "POST", "/api/workflow-proposals/"+id+"/"+action, `{}`, map[string]string{"Authorization": "Bearer " + token})
 		if r.Code != 401 {
@@ -61,6 +71,9 @@ func TestMCPProposalTokenIdentityAndApprovalBoundary(t *testing.T) {
 	r := call(t, h, "DELETE", "/api/mcp-tokens/"+tokenID, "", sameOriginFetch)
 	if r.Code != 204 {
 		t.Fatal(r.Body)
+	}
+	if page := get(t, h, "/workflow-proposals/"+id, nil); page.Code != 200 || !strings.Contains(page.Body.String(), "mcp:"+tokenID) {
+		t.Fatal("revocation lost proposal attribution")
 	}
 	r = call(t, anon(h), "POST", "/mcp", body, map[string]string{"Authorization": "Bearer " + token})
 	if r.Code != 401 {
