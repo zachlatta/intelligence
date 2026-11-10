@@ -37,3 +37,9 @@ All app state is readable with a read-only SQL query (`/api/sql`). So:
 The repository is public. Never commit secrets, hostnames, tailnet names, IP addresses or
 home-directory paths; `internal/hygiene` and the CI gitleaks job check for them.
 Configuration comes from environment variables set in Coolify.
+
+Never commit agent output here: reports, audits, metrics, data exports or `work/` folders. Shared
+skills that say to keep outputs in `work/YYYY-MM-DD-.../` mean a private repository; in this one,
+keep them in `.factory-scratch/` and deliver them privately. `internal/hygiene` fails when Git tracks
+`work/`, `scratch/`, `.factory-scratch/`, `.factory-evidence/` or a data file (CSV, spreadsheet,
+Parquet and similar).

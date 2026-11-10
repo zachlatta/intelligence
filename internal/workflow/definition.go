@@ -167,7 +167,7 @@ func ProjectPrompt(run string, d Definition, input string, repos []string) strin
 	} else {
 		fmt.Fprintf(&b, "The repositories on this host (their main checkouts):\n\n- %s\n\n", strings.Join(repos, "\n- "))
 	}
-	b.WriteString(projectRoutingGuidance + "\n\n")
+	b.WriteString(projectRoutingGuidance + "\n\n" + ProjectRule + "\n\n")
 	fmt.Fprintf(&b, "Change nothing. When you have decided, run one of these, then stop:\n\n"+
 		"  intelligence workflow project --run %[1]s <directory>\n"+
 		"  intelligence workflow project --run %[1]s none\n\n"+
@@ -181,6 +181,25 @@ const projectRoutingGuidance = `Choose by the requested work product, not by top
 - Reading or querying a warehouse does not make its code repository the task's workspace. For example, a deck about program growth using warehouse data belongs in desk; a fix to the warehouse's pipeline or data models belongs in the warehouse repository.
 - Choose a code repository when the task calls for changes to a repository's code, tests, configuration or maintained documentation, or investigation of that repository's behavior. Do not turn a one-off deliverable into a code change merely because its subject appears in a README or recent commits.
 - If desk is absent, use another candidate only if the requested work belongs there; otherwise answer none. Do not invent a checkout path.`
+
+// ProjectRule is appended to every finder's prompt after the routing guidance, so saved workflows
+// get it too. A finder that picks the repository a report's data comes from publishes the report
+// when that repository is public.
+const ProjectRule = "Check a candidate's visibility before you pick it (gh repo view <owner/name> --json visibility, " +
+	"with owner/name from its git remote). Never pick a public repository for a result for Zach (a report, deck, analysis, " +
+	"metrics, a data pull or export, research, an email or an answer), even when its data comes from that repository: " +
+	"everything a run commits there is published. Such results go to a private repository."
+
+// PublicRepoRule is in every orchestrator's contract, so saved workflows get it too, and it is
+// passed to every worker: what a public repository must never get, whichever step adds it.
+const PublicRepoRule = "If this run's repository is public, everything committed to it is published. Commit only changes the repository " +
+	"keeps (code, configuration, documentation). Never commit a result for Zach there: reports, decks, analyses, metrics or counts " +
+	"about people, programs or money, data exports (CSV, JSON, spreadsheets), work/ or scratch folders, or donor, contact, " +
+	"financial or student data. Aggregate-only and no-secrets do not make internal data publishable, and a work/ folder already " +
+	"on main is not a convention to follow. Keep such output in .factory-scratch/ (git-ignored) and deliver it to Zach privately. " +
+	"Before any push, list what it adds (git diff --stat origin/main...HEAD) and take such output out of the commits first. " +
+	"If the task's deliverable is a result rather than a change to this repository, the run is in the wrong repository: " +
+	"ask Zach before proceeding."
 
 // Providers are the providers the workflow editor offers: those with a mode that never asks.
 func Providers() []string { return paseo.UnattendedProviders() }
@@ -231,7 +250,8 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 		"pass proposed edits and evidence to the landing step. " +
 		"The landing step also applies the run's approved external changes (skill edits, queued mutations). " +
 		"Preserve scratch needed by later steps. A worker reports back and ends its turn; the orchestrator owns reuse and archiving. " +
-		"After a successful ask, end your turn and wait for the reply message; do not poll or create a wakeup.\n\n")
+		"After a successful ask, end your turn and wait for the reply message; do not poll or create a wakeup.\n\n" +
+		PublicRepoRule + "\n\n")
 	b.WriteString(StepMessage(d, 0, v))
 	return b.String()
 }
@@ -264,7 +284,7 @@ Then paseo wait <id> until it is done, and paseo logs <id> to read what it did. 
 Use frontier models, and spread the work across the plans: claude/claude-opus-5-5, codex and antigravity/gemini-4-carbon-high (Gemini 4 Carbon).`
 
 // Starting is the workflow an account starts with (its Host set to one of the account's): a task from the Workflows page, its project
-// found, the work, three gates, Zach's sign-off for broader changes, and landing.
+// found, the work, three gates, Zach's sign-off for broader changes, a public repository check, and landing.
 var Starting = Definition{
 	Trigger: TriggerTask,
 	Project: Project{Mode: ProjectMatch, Provider: "claude", Model: "claude-opus-5-5", Thinking: "medium",
@@ -285,6 +305,14 @@ var Starting = Definition{
 			"(new tables, dependencies, contracts or boundaries), skip this step.\n\nOtherwise write him a note in Markdown: the original task, " +
 			"the architecture change before and after, before and after screenshots, and anything he needs to decide, with your recommendation. " +
 			"Ask, then do what his reply says."},
+		{ID: "public", Kind: KindGate, Title: "Public repo check", Instructions: "Check the repository's visibility " +
+			"(gh repo view <owner/name> --json visibility). If it is private, skip this step.\n\n" +
+			"If it is public, have a fresh sub-agent list every file the branch adds or changes against origin/main and read each one. " +
+			"Send the work back to Do the work if any of them is a result rather than a change the repository keeps: a report, deck, " +
+			"analysis, metrics or counts about people, programs or money, a data export (CSV, JSON, spreadsheet), a work/ or scratch " +
+			"folder, or donor, contact, financial or student data. Aggregate-only and no-secrets do not make internal data publishable. " +
+			"It also checks for secrets, hostnames, private addresses, home-directory paths and personal emails, and fixes small ones here. " +
+			"Move on when nothing in the diff is private."},
 		{ID: "land", Kind: KindStep, Title: "Land and deploy", Instructions: "Rebase on origin/main, land on main the way the repository's AGENTS.md says, " +
 			"and wait until the deploy reports the new version. " +
 			"The landing step also applies the run's approved external changes (skill edits, queued mutations). " +

@@ -9,8 +9,11 @@ import (
 	"io/fs"
 	"net/netip"
 	"os"
+	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -90,8 +93,38 @@ func Scan(path string, data []byte) []Finding {
 
 func isDigit(b byte) bool { return '0' <= b && b <= '9' }
 
+// outputDirs are top-level folders agents keep their output in; dataExt are data files. Neither
+// belongs in a public repository: reports, metrics and exports would be published.
+var (
+	outputDirs = map[string]bool{"work": true, "scratch": true, ".factory-scratch": true, ".factory-evidence": true}
+	dataExt    = map[string]bool{".csv": true, ".tsv": true, ".xlsx": true, ".xls": true, ".parquet": true,
+		".duckdb": true, ".sqlite": true, ".sqlite3": true, ".jsonl": true, ".ndjson": true}
+)
+
+// TrackedOutput lists the files git tracks under root that are agent output (work/, scratch/,
+// .factory-scratch/, .factory-evidence/) or data files (CSV, spreadsheets, Parquet, DuckDB,
+// SQLite, JSON Lines), sorted. Ignored, untracked files there are fine: they are never pushed.
+func TrackedOutput(root string) ([]string, error) {
+	out, err := exec.Command("git", "-C", root, "ls-files", "-z").Output()
+	if err != nil {
+		return nil, fmt.Errorf("git ls-files: %w", err)
+	}
+	var found []string
+	for _, p := range strings.Split(string(out), "\x00") {
+		if p == "" {
+			continue
+		}
+		first, _, _ := strings.Cut(p, "/")
+		if (outputDirs[first] && first != p) || dataExt[strings.ToLower(path.Ext(p))] {
+			found = append(found, p)
+		}
+	}
+	sort.Strings(found)
+	return found, nil
+}
+
 // skipped holds directories that are not part of the repository's contents: git's own, the
-// git-ignored scratch and work directories.
+// git-ignored scratch and work directories (TrackedOutput checks nothing in them is tracked).
 var skipped = map[string]bool{".git": true, ".factory-scratch": true, "work": true}
 
 // ScanTree scans every text file under root, except skipped directories and the built binary.

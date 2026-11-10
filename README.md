@@ -404,6 +404,8 @@ version it started with. A run:
    workspace choice takes precedence. The server adds this guidance to every match prompt,
    including saved definitions; without `desk` or another suitable candidate, the finder answers
    `none`.
+   It then checks each candidate's visibility and never picks a public repository for a result
+   (`workflow.ProjectRule`): everything a run commits there is published.
 2. **Starts the orchestrator in the worktree.** The server archives the finder and queues
    `create_workspace`: a git worktree of the repository (or the home directory, for none) with the
    orchestrator in it. Its names say which workflow runs, what for and which run: the workspace is
@@ -450,7 +452,11 @@ version it started with. A run:
    `branch`) and its page. The orchestrator's first message is its standing instructions, the input,
    the list of steps, the commands below, the workflow contract and the first step.
    The contract sets role and model handoffs, limits work to the assigned step, and assigns
-   approved external changes to landing.
+   approved external changes to landing. It also carries `workflow.PublicRepoRule`: in a public
+   repository, commit only what the repository keeps, never a report, metrics, a data export or a
+   `work/` folder (aggregate-only is not an exception); check what a push adds before pushing. The
+   starting workflow (`workflow.Starting`) also has a Public repo check gate before landing that
+   sends such files back to Do the work.
 3. **The orchestrator moves through the steps.** It never does the work itself: it starts
    sub-agents for it (`paseo run` in its workspace, so they are its sub-agents), and decides when a
    step is done. Every agent of a run works unattended, so each starts in its provider's mode that
@@ -688,11 +694,15 @@ database and read-only role (`internal/dbtest`) on the server in `TEST_DATABASE_
 
 ### Public repository
 
-This repository is public. Two gates keep private details out of it:
+This repository is public. Three gates keep private details out of it:
 
 - `internal/hygiene` (in `make test`, so in CI and the image build) fails on any file that holds a
   private or tailnet address, a tailnet name, a home-directory path, an email outside `example.com`,
   a private key or a token. Tests use `192.0.2.0/24`, `/home/someone` and `someone@example.com`.
+- `internal/hygiene` also fails when Git tracks agent output or data: anything under `work/`,
+  `scratch/`, `.factory-scratch/` or `.factory-evidence/`, or a CSV, TSV, spreadsheet, Parquet,
+  DuckDB, SQLite or JSON Lines file. Reports and their data are delivered privately, never committed
+  here. It needs `.git`, so it runs in `make test` and CI, not the image build (which has no `.git`).
 - CI runs gitleaks over every commit on every push and pull request.
 
 On GitHub, `main` cannot be force-pushed or deleted, secret scanning with push protection is on,

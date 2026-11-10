@@ -153,7 +153,7 @@ func TestTheOrchestratorGetsTheRunTheStepsAndTheFirstStep(t *testing.T) {
 	for _, want := range []string{Starting.Orchestrator.Instructions, "run run-1 of the workflow “Task from Intelligence”",
 		"Show each agent's model", "1. Do the work (step, id build)", "5. Zach's sign-off (signoff, id signoff)",
 		"intelligence workflow next --run run-1", "intelligence workflow back --run run-1 <step id>",
-		"intelligence workflow ask --run run-1 --note", "Step 1 of 6: Do the work"} {
+		"intelligence workflow ask --run run-1 --note", "Step 1 of 7: Do the work"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("orchestrator prompt misses %q:\n%s", want, p)
 		}
@@ -167,7 +167,7 @@ func TestAStepsInstructionsFillItsVariables(t *testing.T) {
 	d := clone(Starting)
 	d.Steps[0].Instructions = "Do {{input}} in {{repo}} on {{branch}} for run {{run}}; leave {{unknown}}."
 	got := StepMessage(d, 0, Vars{Run: "r", Input: "it", Repo: "/a", Branch: "b"})
-	if !strings.Contains(got, "Step 1 of 6: Do the work") || !strings.Contains(got, "Do it in /a on b for run r; leave {{unknown}}.") {
+	if !strings.Contains(got, "Step 1 of 7: Do the work") || !strings.Contains(got, "Do it in /a on b for run r; leave {{unknown}}.") {
 		t.Errorf("message = %q", got)
 	}
 }
@@ -280,5 +280,53 @@ func TestUnattendedModeGuidanceIsNotDuplicated(t *testing.T) {
 	}
 	if strings.Contains(UnattendedShellRule, "--mode ") {
 		t.Fatal("shell guidance duplicates the shared mode guidance")
+	}
+}
+
+// Reports and data pulls are results, not changes to a repository. A finder that picks the
+// repository the data comes from publishes them when that repository is public.
+func TestTheProjectFinderKeepsResultsOutOfPublicRepositories(t *testing.T) {
+	d := clone(Starting)
+	d.Project.Instructions = "Pick the repository this task belongs in."
+	p := ProjectPrompt("run-1", d, "Give me a report on growth", []string{"/srv/dev/warehouse", "/srv/dev/notes"})
+	if n := strings.Count(p, ProjectRule); n != 1 {
+		t.Fatalf("the finder's standing rule occurs %d times, want once:\n%s", n, p)
+	}
+	for _, want := range []string{"report", "metrics", "private repository", "even when its data comes from",
+		"gh repo view", "Never pick a public repository for a result"} {
+		if !strings.Contains(ProjectRule, want) {
+			t.Errorf("finder rule misses %q", want)
+		}
+	}
+}
+
+// Every run, saved definitions included, is told what a public repository must never get.
+func TestSavedWorkflowsKeepResultsOutOfPublicRepositories(t *testing.T) {
+	d := clone(Starting)
+	d.Orchestrator.Instructions = "Coordinate this task."
+	d.Steps = d.Steps[:1]
+	p := OrchestratorPrompt("Saved workflow", d, Vars{Run: "run-1", Repo: "/srv/dev/warehouse"})
+	if n := strings.Count(p, PublicRepoRule); n != 1 {
+		t.Fatalf("the public repository rule occurs %d times, want once", n)
+	}
+	for _, want := range []string{"work/", "metrics", "CSV", "student", "Aggregate-only", ".factory-scratch/",
+		"git diff --stat origin/main...HEAD", "wrong repository"} {
+		if !strings.Contains(PublicRepoRule, want) {
+			t.Errorf("public repository rule misses %q", want)
+		}
+	}
+}
+
+func TestTheStartingWorkflowChecksPublicRepositoriesBeforeLanding(t *testing.T) {
+	i := Starting.Index("public")
+	if i < 0 || Starting.Steps[i].Kind != KindGate || i != Starting.Index("land")-1 {
+		t.Fatalf("want a public gate just before landing, got index %d", i)
+	}
+	s := Starting.Steps[i].Instructions
+	for _, want := range []string{"gh repo view", "skip this step", "fresh sub-agent", "origin/main", "work/",
+		"metrics", "Aggregate-only", "back to Do the work"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("public gate misses %q", want)
+		}
 	}
 }

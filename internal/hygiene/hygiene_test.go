@@ -2,6 +2,7 @@ package hygiene
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -91,5 +92,60 @@ func TestScanTreeSkipsIgnoredAndBinary(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Path != "leak.md" {
 		t.Fatalf("got %v, want only leak.md", got)
+	}
+}
+
+// Agent output is not the repository's to publish: a tracked work/ or scratch folder, or a data
+// file, would put reports, metrics or exports on a public GitHub. The image build
+// has no .git (.dockerignore), so this check runs in make test and CI.
+func TestRepositoryTracksNoAgentOutput(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".git")); err != nil {
+		t.Skip("no .git here (the image build): CI and make test run this check")
+	}
+	tracked, err := TrackedOutput(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range tracked {
+		t.Errorf("%s: agent output or data file tracked in a public repository; keep it in .factory-scratch/ and deliver it privately", p)
+	}
+}
+
+func TestTrackedOutputFlagsWorkScratchAndDataFiles(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	root := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	files := []string{
+		"work/2026-01-01-report/README.md", "scratch/q.sql", ".factory-scratch/x.md", ".factory-evidence/a.webp",
+		"internal/report/metrics.csv", "exports/people.xlsx", "data.parquet",
+		"README.md", "internal/x/x.go", "docs/workflows.md", "internal/web/app.js",
+	}
+	for _, p := range files {
+		os.MkdirAll(filepath.Join(root, filepath.Dir(p)), 0o755)
+		os.WriteFile(filepath.Join(root, p), []byte("x\n"), 0o644)
+	}
+	os.WriteFile(filepath.Join(root, "ignored.csv"), []byte("x\n"), 0o644) // untracked: not published
+	git(append([]string{"add", "-f", "--"}, files...)...)
+	got, err := TrackedOutput(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{".factory-evidence/a.webp", ".factory-scratch/x.md", "data.parquet", "exports/people.xlsx",
+		"internal/report/metrics.csv", "scratch/q.sql", "work/2026-01-01-report/README.md"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("TrackedOutput = %q, want %q", got, want)
 	}
 }
