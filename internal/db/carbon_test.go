@@ -13,11 +13,13 @@ func TestCarbonMigrationVersionsSavedWorkflows(t *testing.T) {
 	_, ann, _ := twoAccounts(t, d)
 	const original = `{"project":{"directory":"/srv/gemini-4-argon-high"},"orchestrator":{"provider":"antigravity","model":"gemini-4-argon-high","instructions":"Use Gemini 4 Argon and antigravity/gemini-4-argon-medium."},"steps":[{"instructions":"Review with gemini-4-argon-low."}]}`
 	const oldDefault = `{"orchestrator":{"instructions":"Use frontier models, and spread the work across the plans: claude/claude-opus-5-5 and codex."}}`
+	const production = `{"steps":[{"instructions":"Review with Gemini Argon 4 (Medium)."}]}`
 	for _, tc := range []struct {
 		name, definition string
 		deleted          bool
 	}{
 		{"argon", original, false}, {"default", oldDefault, false},
+		{"production", production, false},
 		{"custom", `{"orchestrator":{"instructions":"Use my chosen model."}}`, false},
 		{"deleted", original, true},
 	} {
@@ -41,7 +43,7 @@ func TestCarbonMigrationVersionsSavedWorkflows(t *testing.T) {
 	if err := db.Migrate(ctx, d.Owner); err != nil {
 		t.Fatal(err)
 	}
-	for name, want := range map[string]int{"argon": 2, "default": 2, "custom": 1, "deleted": 1} {
+	for name, want := range map[string]int{"argon": 2, "production": 2, "default": 2, "custom": 1, "deleted": 1} {
 		var version int
 		if err := d.Owner.QueryRow(ctx, `SELECT version FROM workflows WHERE name=$1`, name).Scan(&version); err != nil || version != want {
 			t.Fatalf("%s version=%d, want %d: %v", name, version, want, err)
@@ -56,6 +58,12 @@ func TestCarbonMigrationVersionsSavedWorkflows(t *testing.T) {
 		var equal bool
 		if err := ann.QueryRow(ctx, `SELECT definition=$2::jsonb FROM workflow_versions v JOIN workflows w ON w.id=v.workflow_id WHERE w.name='argon' AND v.version=$1`, version, expected).Scan(&equal); err != nil || !equal {
 			t.Fatalf("argon version %d differs: %v", version, err)
+		}
+	}
+	for version, expected := range map[int]string{1: production, 2: `{"steps":[{"instructions":"Review with Gemini 4 Carbon (Medium)."}]}`} {
+		var equal bool
+		if err := ann.QueryRow(ctx, `SELECT definition=$2::jsonb FROM workflow_versions v JOIN workflows w ON w.id=v.workflow_id WHERE w.name='production' AND v.version=$1`, version, expected).Scan(&equal); err != nil || !equal {
+			t.Fatalf("production version %d differs: %v", version, err)
 		}
 	}
 	var definition []byte
@@ -75,7 +83,7 @@ func TestCarbonMigrationVersionsSavedWorkflows(t *testing.T) {
 		t.Fatal(err)
 	}
 	var count int
-	if err := d.Owner.QueryRow(ctx, `SELECT count(*) FROM workflow_versions`).Scan(&count); err != nil || count != 6 {
+	if err := d.Owner.QueryRow(ctx, `SELECT count(*) FROM workflow_versions`).Scan(&count); err != nil || count != 8 {
 		t.Fatalf("migration repeated: versions=%d: %v", count, err)
 	}
 }
