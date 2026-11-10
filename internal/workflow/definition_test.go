@@ -123,6 +123,30 @@ func TestTheProjectFinderIsToldTheRepositoriesAndHowToAnswer(t *testing.T) {
 	}
 }
 
+func TestProjectFinderRoutesDeliverablesByOutputRatherThanDataSource(t *testing.T) {
+	for _, instructions := range []string{Starting.Project.Instructions, "Pick the repository this task belongs in."} {
+		d := Starting
+		d.Project.Instructions = instructions // Existing saved definitions get the policy too.
+		p := ProjectPrompt("run-1", d,
+			"Give me a report (deck) on growth of girls in Hack Club using warehouse data.",
+			[]string{"/srv/dev/data-warehouse", "/srv/dev/desk"})
+		for _, want := range []string{
+			"Choose by the requested work product",
+			"reports, analyses, decks, emails, research",
+			"choose desk when it is among the candidates",
+			"Reading or querying a warehouse does not make its code repository the task's workspace",
+			"changes to a repository's code, tests, configuration or maintained documentation",
+			"Honor an explicit workspace choice",
+			"If desk is absent",
+			"Do not invent a checkout path",
+		} {
+			if !strings.Contains(p, want) {
+				t.Errorf("project prompt lacks routing guidance %q (instructions %q)", want, instructions)
+			}
+		}
+	}
+}
+
 func TestTheOrchestratorGetsTheRunTheStepsAndTheFirstStep(t *testing.T) {
 	vars := Vars{Run: "run-1", Input: "Show each agent's model", Repo: "/srv/dev/app", Branch: "wf-run1"}
 	p := OrchestratorPrompt("Task from Intelligence", Starting, vars)

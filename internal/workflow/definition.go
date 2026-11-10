@@ -158,7 +158,7 @@ func (v Vars) fill(s string) string {
 }
 
 // ProjectPrompt is what the project finder is told: its instructions, the input, the host's
-// repositories, and how to answer.
+// repositories, routing guidance (including for saved definitions), and how to answer.
 func ProjectPrompt(run string, d Definition, input string, repos []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n\nThe task:\n\n%s\n\n", strings.TrimSpace(d.Project.Instructions), strings.TrimSpace(input))
@@ -167,12 +167,20 @@ func ProjectPrompt(run string, d Definition, input string, repos []string) strin
 	} else {
 		fmt.Fprintf(&b, "The repositories on this host (their main checkouts):\n\n- %s\n\n", strings.Join(repos, "\n- "))
 	}
+	b.WriteString(projectRoutingGuidance + "\n\n")
 	fmt.Fprintf(&b, "Change nothing. When you have decided, run one of these, then stop:\n\n"+
 		"  intelligence workflow project --run %[1]s <directory>\n"+
 		"  intelligence workflow project --run %[1]s none\n\n"+
 		"none means the task belongs in no repository: the orchestrator then works in the home directory.", run)
 	return b.String()
 }
+
+const projectRoutingGuidance = `Choose by the requested work product, not by topic overlap or where source data lives.
+- Honor an explicit workspace choice in the task or workflow instructions. Mentioning a data source or a program name alone is not a workspace choice.
+- For one-off reports, analyses, decks, emails, research and similar deliverables, choose desk when it is among the candidates. desk is the general workspace for this work, even when it uses data or tools from another repository. Read desk's README before ruling it out.
+- Reading or querying a warehouse does not make its code repository the task's workspace. For example, a deck about program growth using warehouse data belongs in desk; a fix to the warehouse's pipeline or data models belongs in the warehouse repository.
+- Choose a code repository when the task calls for changes to a repository's code, tests, configuration or maintained documentation, or investigation of that repository's behavior. Do not turn a one-off deliverable into a code change merely because its subject appears in a README or recent commits.
+- If desk is absent, use another candidate only if the requested work belongs there; otherwise answer none. Do not invent a checkout path.`
 
 // Providers are the providers the workflow editor offers: those with a mode that never asks.
 func Providers() []string { return paseo.UnattendedProviders() }

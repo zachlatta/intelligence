@@ -397,6 +397,12 @@ version it started with. A run:
    finder, started in the host's home directory, `~`) is told the task and the host's repositories
    (its workspaces' `project_root`s) and answers with `intelligence workflow project --run <id>
    <directory>|none`. A definition can name its repository instead (`"mode": "fixed"`).
+   Matching chooses by the requested work product: one-off reports, analyses, decks, emails and
+   research go to `desk` when it is available, even when their data comes from a warehouse.
+   Code changes and investigations of a repository's behavior go to that repository. An explicit
+   workspace choice takes precedence. The server adds this guidance to every match prompt,
+   including saved definitions; without `desk` or another suitable candidate, the finder answers
+   `none`.
 2. **Starts the orchestrator in the worktree.** The server archives the finder and queues
    `create_workspace`: a git worktree of the repository (or the home directory, for none) with the
    orchestrator in it. Its names say which workflow runs, what for and which run: the workspace is
