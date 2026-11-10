@@ -29,7 +29,7 @@ func TestMCPProtocolErrorsAndOrigin(t *testing.T) {
 		{`{`, `-32700`}, {`{"jsonrpc":"1.0","id":1,"method":"ping"}`, `-32600`},
 		{`{"jsonrpc":"2.0","id":1,"method":"missing"}`, `-32601`},
 		{`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"query","arguments":{"query":""}}}`, `-32602`},
-		{`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_agents","arguments":{"Host":"ignored"}}}`, `-32602`},
+		{`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"describe_table","arguments":{"Table":"ignored"}}}`, `-32602`},
 		{`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"query","arguments":{"query":"SELECT 1","limit":10001}}}`, `-32602`},
 	} {
 		if got := rpc(t, h, token, tc.body); !strings.Contains(got, `"code":`+tc.code) {
@@ -64,15 +64,15 @@ func TestMCPPagingAndTimeout(t *testing.T) {
 	tool := func(name, args string) string {
 		return rpc(t, h, token, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"`+name+`","arguments":`+args+`}}`)
 	}
-	got := tool("read_transcript", `{"host":"host-1","agentId":"`+agentA1+`","limit":1}`)
+	got := tool("query", qlimit("SELECT t.epoch,t.synced_at,e.* FROM transcripts t JOIN transcript_entries e USING(host,agent_id) WHERE host='host-1' AND agent_id='"+agentA1+"' ORDER BY seq_start", 1))
 	if !strings.Contains(got, `"truncated":true`) || !strings.Contains(got, "first") || strings.Contains(got, "second") || !strings.Contains(got, "epoch-1") {
 		t.Fatal(got)
 	}
-	got = tool("read_transcript", `{"host":"host-1","agentId":"`+agentA1+`","afterSeq":0}`)
+	got = tool("query", q("SELECT * FROM transcript_entries WHERE host='host-1' AND agent_id='"+agentA1+"' AND seq_start>0 ORDER BY seq_start"))
 	if strings.Contains(got, "first") || !strings.Contains(got, "second") || !strings.Contains(got, `"truncated":false`) {
 		t.Fatal(got)
 	}
-	got = tool("list_agents", `{"host":"' OR true --"}`)
+	got = tool("describe_table", `{"table":"' OR true --"}`)
 	if !strings.Contains(got, `"rowCount":0`) {
 		t.Fatal(got)
 	}
@@ -116,9 +116,7 @@ func TestMCPTransportAndTools(t *testing.T) {
 		}
 	}
 	for name, args := range map[string]string{
-		"query": `{"query":"SELECT name FROM hosts"}`, "schema": `{}`, "describe_table": `{"table":"agents"}`,
-		"list_agents": `{}`, "read_transcript": `{"host":"host-1","agentId":"` + agentA1 + `"}`, "list_runs": `{}`,
-		"read_run": `{"runId":"00000000-0000-4000-8000-000000000001"}`,
+		"query": `{"query":"SELECT name FROM hosts"}`, "schema_overview": `{}`, "describe_table": `{"table":"agents"}`,
 	} {
 		got := rpc(t, h, token, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"`+name+`","arguments":`+args+`}}`)
 		if strings.Contains(got, `"isError":true`) || !strings.Contains(got, `"structuredContent"`) {
@@ -153,10 +151,14 @@ func TestMCPRunReadsAndAccountIsolation(t *testing.T) {
 	otherH := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { r.AddCookie(c); anon(h).ServeHTTP(w, r) })
 	_, otherToken := mintMCP(t, otherH)
 	sendBatch(t, h, batch(true, "epoch", tentry(1, `{"type":"user_message","text":"private message"}`)))
-	for name, args := range map[string]string{
-		"list_agents": `{}`, "list_runs": `{}`, "read_run": `{"runId":"` + run + `"}`, "read_transcript": `{"host":"host-1","agentId":"` + agentA1 + `"}`,
+	for _, query := range []string{
+		"SELECT * FROM recorded_agents",
+		"SELECT * FROM workflow_runs",
+		"SELECT * FROM workflow_run_events WHERE run_id='" + run + "'",
+		"SELECT * FROM transcript_entries WHERE host='host-1' AND agent_id='" + agentA1 + "'",
 	} {
-		body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"` + name + `","arguments":` + args + `}}`
+		name := query
+		body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"query","arguments":` + q(query) + `}}`
 		got := rpc(t, h, token, body)
 		if strings.Contains(got, `"rowCount":0`) || strings.Contains(got, `"isError":true`) {
 			t.Errorf("own %s: %s", name, got)
@@ -168,14 +170,14 @@ func TestMCPRunReadsAndAccountIsolation(t *testing.T) {
 	}
 }
 
-func TestMCPRunListOmitsTaskInput(t *testing.T) {
+func TestMCPSQLRunSummaryAndExplicitInput(t *testing.T) {
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	wf := createWorkflow(t, h, workflow.Starting)
 	input := "Summary title.\n\n" + strings.Repeat("long-task-payload ", 100)
 	run := startRun(t, h, wf, input)
 	_, token := mintMCP(t, h)
-	got := rpc(t, h, token, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_runs"}}`)
+	got := rpc(t, h, token, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"query","arguments":`+q("SELECT id,workflow_id,title,status,step,orchestrator_id,note,created_at,finished_at FROM workflow_runs ORDER BY created_at DESC,id DESC LIMIT 50")+`}}`)
 	var msg struct {
 		Result struct {
 			StructuredContent sqlResponse `json:"structuredContent"`

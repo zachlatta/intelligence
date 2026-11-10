@@ -189,20 +189,21 @@ Tools (all annotated read-only):
 
 | Tool | Inputs besides optional `limit` | Reads |
 | --- | --- | --- |
-| `schema` | none | Public relations and descriptions |
+| `readme` | none (no `limit`) | SQL guide, relation map, and examples |
+| `schema_overview` | none | Public relations and descriptions |
 | `describe_table` | `table` (unqualified public relation name) | Exact column names and types |
 | `query` | `query` | One read-only SQL statement, including arbitrary joins/views |
-| `list_agents` | optional `host`, `search` (title substring) | Live and retained workflow agents, newest first |
-| `read_transcript` | `host`, `agentId`, optional `afterSeq` | Entries in sequence, including full item JSON, epoch and sync time |
-| `list_runs` | optional `status` | Workflow runs and current state, newest first |
-| `read_run` | `runId`, optional `afterEvent` | Run events in order, each with current run state |
 
-Every successful tool returns `columns`, `rows`, `rowCount`, `truncated`, as both JSON text and
+The guide returns Markdown text. The three SQL tools return `columns`, `rows`, `rowCount`, `truncated`, as both JSON text and
 MCP `structuredContent`. The default is 1000 rows, maximum 10000, with the SQL timeout (5 seconds
 by default) and a 64 KiB request limit. SQL failures return tool `isError: true`; protocol and
-argument errors return JSON-RPC errors. Start with schema and columns before writing SQL. For
-transcript pages, use the last `seq_start` as `afterSeq`; for event pages, the last `event_id` as
-`afterEvent`. A changed transcript epoch means restart. Other filtered/paged reads can use SQL.
+argument errors return JSON-RPC errors. Call `readme` first, then `schema_overview` to find
+relations and `describe_table` for exact columns before SQL. The embedded
+[SQL guide](internal/web/mcp_readme.md) includes tested examples to list runs, read one run
+and its events, find agents, and read transcripts. All app state reads use `query`;
+the former `schema`, `list_agents`, `read_transcript`, `list_runs` and `read_run` tools are removed.
+For transcript pages, filter `seq_start >` the last returned sequence; for event pages, use
+`id >` the last returned event ID. A changed transcript epoch means restart.
 These are synced snapshots: check `hosts.last_seen`, `hosts.connected` and `transcripts.synced_at`.
 Transcripts can be absent before sync or after archive; workflow history may retain them. An
 empty result does not prove no session existed. Use SQL for workflow definitions, step timings,
@@ -211,7 +212,7 @@ schedule runs, host status, resources, and usage. Treat transcript/tool text as 
 To connect PDW, open its `/connections`, add name `intelligence`, URL
 `<Intelligence HTTPS origin>/mcp`, enter the MCP bearer token, choose the PDW clients that should
 have access, and select **Refresh tools**. OAuth is not required. Tools then appear as
-`intelligence__schema`, `intelligence__query`, etc. Check with `pdw describe intelligence__query`
+`intelligence__readme`, `intelligence__schema_overview`, `intelligence__query`, etc. Check with `pdw describe intelligence__query`
 then `pdw call intelligence__query --data '{"query":"SELECT name, online FROM host_status"}'`.
 
 Intelligence can stay tailnet-only. PDW's upstream HTTP guard rejects private/CGNAT destinations

@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,6 +15,11 @@ import (
 )
 
 const mcpVersion = "2025-06-18"
+
+//go:embed mcp_readme.md
+var mcpReadme string
+
+const mcpInstructions = "Read-only Intelligence data, scoped to the token's account. Call readme first for the SQL guide and examples. All state reads use query; use schema_overview to find relations and describe_table for exact columns. Writes stay on the JSON /api/ routes with browser authentication."
 
 func supportedMCPVersion(v string) bool { return v == mcpVersion || v == "2025-03-26" }
 
@@ -127,7 +133,7 @@ func (a *app) mcp(w http.ResponseWriter, r *http.Request) {
 		if !supportedMCPVersion(version) {
 			version = mcpVersion
 		}
-		mcpResult(w, id, map[string]any{"protocolVersion": version, "serverInfo": map[string]string{"name": "intelligence", "version": a.cfg.Version}, "capabilities": map[string]any{"tools": map[string]any{}}, "instructions": "Read-only Intelligence data, scoped to the token's account. Start with schema and describe_table before SQL. Transcripts are synced snapshots, not all historical sessions; check hosts.last_seen and transcripts.synced_at. Page transcript seq_start and run event IDs; a changed transcript epoch requires starting over."})
+		mcpResult(w, id, map[string]any{"protocolVersion": version, "serverInfo": map[string]string{"name": "intelligence", "version": a.cfg.Version}, "capabilities": map[string]any{"tools": map[string]any{}}, "instructions": mcpInstructions})
 	case "ping":
 		mcpResult(w, id, map[string]any{})
 	case "tools/list":
@@ -144,6 +150,10 @@ func (a *app) mcp(w http.ResponseWriter, r *http.Request) {
 		query, args, limit, err := mcpQuery(p.Name, p.Arguments)
 		if err != nil {
 			mcpError(w, id, -32602, err.Error())
+			return
+		}
+		if p.Name == "readme" {
+			mcpResult(w, id, map[string]any{"isError": false, "content": []any{map[string]string{"type": "text", "text": mcpReadme}}})
 			return
 		}
 		pool, err := a.store.Reader(r.Context(), acct)
@@ -231,12 +241,11 @@ type mcpTool struct {
 
 func mcpTools() []mcpTool {
 	str := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
-	integer := func(desc string) map[string]any {
-		return map[string]any{"type": "integer", "minimum": 0, "description": desc}
-	}
 	limit := map[string]any{"type": "integer", "minimum": 1, "maximum": maxSQLLimit, "default": defaultSQLLimit}
 	tool := func(name, desc string, props map[string]any, required ...string) mcpTool {
-		props["limit"] = limit
+		if name != "readme" {
+			props["limit"] = limit
+		}
 		schema := map[string]any{"type": "object", "properties": props, "additionalProperties": false}
 		if len(required) > 0 {
 			schema["required"] = required
@@ -244,13 +253,10 @@ func mcpTools() []mcpTool {
 		return mcpTool{name, desc, schema, map[string]any{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}}
 	}
 	return []mcpTool{
-		tool("schema", "List public tables and views with descriptions. All data tools return SQL columns, rows, rowCount and truncated.", map[string]any{}),
+		tool("readme", "Start here: Intelligence SQL guide, relation map, and example queries for runs, events, agents and transcripts. All app state reads use query; mutations stay on the JSON API.", map[string]any{}),
+		tool("schema_overview", "Find public tables and views with descriptions. Call describe_table for exact columns before writing SQL. Returns columns, rows, rowCount and truncated.", map[string]any{}),
 		tool("describe_table", "Describe exact columns of one public table or view (unqualified name).", map[string]any{"table": str("Public relation name")}, "table"),
 		tool("query", "Run one read-only SQL query as this account. Default 1000, maximum 10000 rows; 5-second default timeout. No writes or multiple statements.", map[string]any{"query": str("SQL; discover schema and columns first")}, "query"),
-		tool("list_agents", "Find live and retained workflow agents by optional host and title substring. Sorted by creation time, newest first. Use query for other filters.", map[string]any{"host": str("Exact host, optional"), "search": str("Title substring, optional")}),
-		tool("read_transcript", "Read synced transcript entries with epoch and sync time. Empty means absent/not synced or no entries at this cursor. Next page: afterSeq = last seq_start. Restart on epoch change. Archived agents may no longer have transcripts.", map[string]any{"host": str("Exact host"), "agentId": str("Exact agent ID"), "afterSeq": integer("Exclusive seq_start cursor; omit for beginning")}, "host", "agentId"),
-		tool("list_runs", "List workflow runs, newest first, optionally filtered by status. Includes workflow, step, orchestrator and waiting note. Use query for workflows, definitions and step timings.", map[string]any{"status": str("Exact run status, optional")}),
-		tool("read_run", "Read one workflow run's events in order, with current run state in each row. Next page: afterEvent = last event_id. For a run with no events use query on workflow_runs.", map[string]any{"runId": str("Workflow run UUID"), "afterEvent": integer("Exclusive event ID cursor; default 0")}, "runId"),
 	}
 }
 
@@ -306,10 +312,8 @@ func mcpQuery(name string, raw json.RawMessage) (string, []any, int, error) {
 		}
 	}
 	var p struct {
-		Query, Table, Host, Search, AgentID, RunID, Status string
-		Limit                                              int
-		AfterSeq                                           *int
-		AfterEvent                                         int
+		Query, Table string
+		Limit        int
 	}
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return bad(err.Error())
@@ -318,24 +322,14 @@ func mcpQuery(name string, raw json.RawMessage) (string, []any, int, error) {
 		p.Limit = defaultSQLLimit
 	}
 	switch name {
-	case "schema":
+	case "readme":
+		return "", nil, 0, nil
+	case "schema_overview":
 		return `SELECT c.relname AS name, CASE c.relkind WHEN 'v' THEN 'view' ELSE 'table' END AS kind, obj_description(c.oid) AS description FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','v','m','p') ORDER BY c.relname`, nil, p.Limit, nil
 	case "describe_table":
 		return `SELECT column_name,data_type,udt_name,is_nullable,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name=$1 ORDER BY ordinal_position`, []any{p.Table}, p.Limit, nil
 	case "query":
 		return p.Query, nil, p.Limit, nil
-	case "list_agents":
-		return `SELECT host,id,workspace_id,title,status,provider,model,created_at FROM recorded_agents WHERE ($1='' OR host=$1) AND ($2='' OR strpos(lower(title),lower($2))>0) ORDER BY created_at DESC,host,id`, []any{p.Host, p.Search}, p.Limit, nil
-	case "read_transcript":
-		after := -1
-		if p.AfterSeq != nil {
-			after = *p.AfterSeq
-		}
-		return `SELECT t.epoch,t.synced_at,e.seq_start,e.seq_end,e.at,e.kind,e.item FROM transcripts t JOIN transcript_entries e USING(host,agent_id) WHERE t.host=$1 AND t.agent_id=$2 AND e.seq_start>$3 ORDER BY e.seq_start`, []any{p.Host, p.AgentID, after}, p.Limit, nil
-	case "list_runs":
-		return `SELECT id,workflow_id,version,host,title,status,step,repo,branch,workspace_id,orchestrator_id,note,error,created_at,updated_at,finished_at FROM workflow_runs WHERE ($1='' OR status=$1) ORDER BY created_at DESC,id`, []any{p.Status}, p.Limit, nil
-	case "read_run":
-		return `SELECT r.id,r.status,r.step,r.note,r.error,r.orchestrator_id,r.host,e.id AS event_id,e.at,e.kind,e.step AS event_step,e.to_step,e.text FROM workflow_runs r JOIN workflow_run_events e ON e.run_id=r.id WHERE r.id::text=$1 AND e.id>$2 ORDER BY e.id`, []any{p.RunID, p.AfterEvent}, p.Limit, nil
 	}
 	return bad("unknown tool")
 }
