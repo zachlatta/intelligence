@@ -16,11 +16,14 @@ CREATE TABLE voice_memos (
  preview text NOT NULL CHECK (char_length(preview) <= 1000),
  transcript_length integer NOT NULL,
  decision text NOT NULL CHECK (decision IN ('started','ignored')),
+ reason text NOT NULL,
+ recorded_at timestamptz,
  workflow_id uuid REFERENCES workflows,
  run_id uuid REFERENCES workflow_runs,
  decided_at timestamptz NOT NULL DEFAULT now(),
  PRIMARY KEY (account_id,source,pdw_account,recording_id)
 );
+CREATE INDEX voice_memos_recent ON voice_memos (account_id, decided_at DESC);
 ALTER TABLE voice_memo_polling ENABLE ROW LEVEL SECURITY;
 CREATE POLICY own_rows ON voice_memo_polling FOR SELECT USING (account_id = current_account_id());
 ALTER TABLE voice_memos ENABLE ROW LEVEL SECURITY;

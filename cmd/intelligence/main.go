@@ -98,13 +98,15 @@ func withDevboxNames(getenv func(string) string) func(string) string {
 
 // serverSettings configure `intelligence server`, from the environment.
 type serverSettings struct {
+	DatabaseURL      string // DATABASE_URL: the app's database, as a role that owns its tables and can create roles
+	ReadonlyURL      string // READONLY_DATABASE_URL: the same database as the read-only role the SQL API uses
+	ReadonlyRole     string // the user in ReadonlyURL; the server creates or updates it
+	ReadonlyPassword string
+	BinDir           string // HOST_BINARIES: host binaries to serve; default /usr/local/share/intelligence/host
+	AssemblyAIKey    string // ASSEMBLYAI_API_KEY: for the chat box's dictation; unset turns it off
+	// PDW_URL (an HTTPS origin), PDW_API_KEY (a feed:voice-memos key) and PDW_INTELLIGENCE_ACCOUNT
+	// (the username whose workflows its voice memos start) turn voice memo triggers on; unset, they are off.
 	PDWURL, PDWKey, PDWAccount string
-	DatabaseURL                string // DATABASE_URL: the app's database, as a role that owns its tables and can create roles
-	ReadonlyURL                string // READONLY_DATABASE_URL: the same database as the read-only role the SQL API uses
-	ReadonlyRole               string // the user in ReadonlyURL; the server creates or updates it
-	ReadonlyPassword           string
-	BinDir                     string // HOST_BINARIES: host binaries to serve; default /usr/local/share/intelligence/host
-	AssemblyAIKey              string // ASSEMBLYAI_API_KEY: for the chat box's dictation; unset turns it off
 	// GOOGLE_OAUTH_CLIENT_JSON (a Google OAuth client, raw or base64) and CONNECTIONS_KEY (32
 	// random bytes, base64: seals each mailbox's token) turn email triggers on; unset, they are off.
 	Google    *email.Google

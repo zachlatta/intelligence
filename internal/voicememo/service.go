@@ -115,7 +115,7 @@ func (s *Service) poll(ctx context.Context, account int64, cursor *string, initi
 			return err
 		}
 		for _, m := range p.Rows {
-			if m.ID == "" || m.Source == "" || strings.TrimSpace(m.Transcript) == "" {
+			if m.ID == "" || m.Source == "" {
 				return errors.New("PDW returned an invalid recording")
 			}
 			m.TranscriptLength = len([]rune(m.Transcript))
@@ -138,6 +138,10 @@ func (s *Service) keep(ctx context.Context, account int64, m workflow.VoiceMemo,
 		reason := "No workflow matched"
 		if !start {
 			reason = "Baseline backlog skipped"
+		}
+		// A recording with no transcript can start nothing; its receipt keeps it from being retried.
+		if strings.TrimSpace(m.Transcript) == "" {
+			start, reason = false, "No transcript"
 		}
 		tag, err := tx.Exec(ctx, `INSERT INTO voice_memos(account_id,source,pdw_account,recording_id,title,preview,transcript_length,decision,recorded_at,reason)
  VALUES($1,$2,$3,$4,$5,$6,$7,'ignored',nullif($8,'')::timestamptz,$9) ON CONFLICT DO NOTHING`, account, m.Source, m.Account, m.ID, m.Title, string([]rune(m.Transcript)[:min(1000, len([]rune(m.Transcript)))]), m.TranscriptLength, m.RecordedAt, reason)

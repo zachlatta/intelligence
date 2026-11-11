@@ -23,10 +23,10 @@ import (
 // Definition is one version of a workflow: the host it runs on, what starts it, how its project
 // is found, its orchestrator, and its steps, in order.
 type Definition struct {
-	Host         string           `json:"host"`    // the account's host every run happens on
-	Trigger      string           `json:"trigger"` // task (submitted on the Workflows page), manual or email
-	VoiceMemo    *VoiceMemoFilter `json:"voiceMemo,omitempty"`
-	Email        *EmailFilter     `json:"email,omitempty"` // email: which email starts a run
+	Host         string           `json:"host"`                // the account's host every run happens on
+	Trigger      string           `json:"trigger"`             // task (submitted on the Workflows page), manual, email or voice_memo
+	Email        *EmailFilter     `json:"email,omitempty"`     // email: which email starts a run
+	VoiceMemo    *VoiceMemoFilter `json:"voiceMemo,omitempty"` // voice_memo: which new PDW recording starts a run
 	Project      Project          `json:"project"`
 	Orchestrator Orchestrator     `json:"orchestrator"`
 	Steps        []Step           `json:"steps"`
@@ -64,8 +64,8 @@ type Step struct {
 const (
 	TriggerTask      = "task"
 	TriggerManual    = "manual"
-	TriggerVoiceMemo = "voice_memo"
-	TriggerEmail     = "email" // an email to the account's connected Gmail matches Email
+	TriggerEmail     = "email"      // an email to the account's connected Gmail matches Email
+	TriggerVoiceMemo = "voice_memo" // a new PDW voice memo recording matches VoiceMemo
 	ProjectMatch     = "match"
 	ProjectFixed     = "fixed"
 	KindStep         = "step"

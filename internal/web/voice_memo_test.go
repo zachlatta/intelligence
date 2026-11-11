@@ -211,6 +211,45 @@ func TestVoiceMemoRefusalDoesNotBlockLaterRecordings(t *testing.T) {
 
 type voiceMemoFailTransport struct{}
 
+// A recording PDW sends with no transcript yet must not wedge the feed: it gets an ignored
+// receipt, and the recordings after it are still read.
+func TestVoiceMemoEmptyTranscriptIsIgnoredNotRetried(t *testing.T) {
+	d := dbtest.New(t)
+	h := newServer(t, d, d.Owner, "v")
+	sendReport(t, h, wfReport())
+	def := workflow.Starting
+	def.Trigger = workflow.TriggerVoiceMemo
+	def.VoiceMemo = &workflow.VoiceMemoFilter{}
+	wf := createWorkflow(t, h, def)
+	memos := []workflow.VoiceMemo{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next := "MA"
+		if len(memos) > 0 {
+			next = "MQ"
+		}
+		json.NewEncoder(w).Encode(map[string]any{"feed": "feed:voice-memos", "next_cursor": next, "recordings": memos, "has_more": false})
+	}))
+	defer srv.Close()
+	s := voicememo.Service{DB: d.Owner, Engine: workflow.NewEngine(d.Owner, nil), URL: srv.URL, Key: "test", Username: h.acct.Username}
+	if err := s.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	memos = []workflow.VoiceMemo{{Source: "apple_voice_memos", Account: "owner", ID: "blank", Title: "Blank", Transcript: " \n "},
+		{Source: "apple_voice_memos", Account: "owner", ID: "spoken", Title: "Spoken", Transcript: "hello"}}
+	if err := s.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	_, state := sqlPost(t, h, q("SELECT cursor,error FROM voice_memo_polling"))
+	if state.Rows[0][0] != "MQ" || state.Rows[0][1] != "" {
+		t.Fatalf("poll wedged: %+v", state)
+	}
+	_, receipts := sqlPost(t, h, q("SELECT recording_id,decision,reason,coalesce(workflow_id::text,'') FROM voice_memos ORDER BY recording_id"))
+	if len(receipts.Rows) != 2 || receipts.Rows[0][1] != "ignored" || receipts.Rows[0][2] != "No transcript" || receipts.Rows[0][3] != "" ||
+		receipts.Rows[1][1] != "started" || receipts.Rows[1][3] != wf {
+		t.Fatalf("receipts: %+v", receipts)
+	}
+}
+
 func TestVoiceMemoUnexpectedStartFailureRemainsRetryable(t *testing.T) {
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v")

@@ -26,6 +26,7 @@ import (
 // Config is what the server needs. All app state is in DB; each account reads it through its own
 // role, made with Readonly's settings (db.AccountRoles).
 type Config struct {
+	// PDWURL, PDWKey and PDWAccount turn voice memo triggers on for the account named PDWAccount.
 	PDWURL, PDWKey, PDWAccount string
 	// Context is the server's lifetime: its listener for fleet changes stops when it ends. Default: never.
 	Context    context.Context

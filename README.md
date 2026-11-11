@@ -926,12 +926,12 @@ poll error. Read `voice_memos` for previews, lengths, decisions and linked workf
 Both tables are restricted to their owning Intelligence account.
 The workflow editor shows whether PDW is configured for the signed-in account, the last check
 and the last poll error. `/workflows/voice-memos` shows the latest 200 receipts with their
-recording time and reason: baseline backlog skipped, no workflow matched, or the run started.
+recording time and reason: baseline backlog skipped, no transcript, no workflow matched, or the
+run started. A recording that arrives with an empty transcript is kept as ignored and never retried.
 If a matching workflow refuses to start (for example, its host was removed or has not reported),
 its memo is kept as ignored with the matched workflow and refusal reason. Later memos still run.
 Unexpected database or infrastructure failures leave the memo and cursor retryable instead.
-The run page links back to its triggering memo. Receipts made before migration 0030 retain
-their links but may have an unknown recording time or legacy reason.
+The run page links back to its triggering memo.
 If `PDW_INTELLIGENCE_ACCOUNT` names no existing account, the server log names the missing
 username and setting to correct; no account-owned polling row can be stored until it exists.
 
