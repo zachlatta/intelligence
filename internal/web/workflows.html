@@ -6,6 +6,7 @@
 <title>{{.}} · Intelligence</title>
 <script src="/attachments.js"></script>
 {{template "css"}}
+<script src="/model-groups.js" defer></script>
 <style>
   .status { display: inline-flex; align-items: center; justify-content: center; gap: .3rem; height: 1.3rem; min-width: 4.6rem; padding: 0 .45rem;
     border-radius: 4px; border: 1px solid var(--line-strong); background: var(--bg-subtle); color: var(--fg-2); font-size: 12px; font-weight: 500;
@@ -514,7 +515,7 @@ function inspector() {
   return panel(`${KIND[s.kind]} ${i + 1}`, KIND_DESC[s.kind], `<label>Title</label><input data-s="title" value="${esc(s.title)}">
     <p class="hint mono">id: ${esc(s.id)} · <code>intelligence workflow back ${esc(s.id)}</code> returns here</p>
     <label>Kind</label><select data-s="kind">${opts(Object.entries(KIND), s.kind)}</select>
-    <label>Instructions to the orchestrator</label><textarea data-s="instructions" class="prompt">${esc(s.instructions)}</textarea>${chips}
+    <label>Instructions to the orchestrator</label><textarea data-s="instructions" class="prompt">${esc(s.instructions)}</textarea>${chips}<div data-model-token-chips></div>
     <p class="hint">${s.kind === "gate" ? "Say what to check and which step to send work back to." : s.kind === "signoff" ? "Say when to skip it, and what the note should hold. Zach replies on the run's page; his reply goes to the orchestrator." : "Say when the step is done."}</p>`);
 }
 

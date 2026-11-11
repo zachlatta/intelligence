@@ -180,6 +180,14 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /hosts/{host}/schedules/{id}", a.page(func(v viewer) http.HandlerFunc { return schedulePage(cfg, v.reg) }))
 	// workflows: written through the API, read through the account's role; a host's agents move runs with its key
 	mux.HandleFunc("POST /api/workflows", a.write(a.createWorkflow))
+	mux.HandleFunc("POST /api/model-groups", a.write(a.saveModelGroup))
+	mux.HandleFunc("PUT /api/model-groups/{id}", a.write(a.saveModelGroup))
+	mux.HandleFunc("DELETE /api/model-groups/{id}", a.write(a.deleteModelGroup))
+	mux.HandleFunc("POST /api/workflow-runs/{id}/suggestions", a.suggestModel)
+	mux.HandleFunc("GET /model-groups.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		_, _ = w.Write([]byte(modelGroupsJS))
+	})
 	mux.HandleFunc("PUT /api/workflows/{id}", a.write(a.updateWorkflow))
 	mux.HandleFunc("PUT /api/workflows/{id}/default", a.write(a.setDefaultWorkflow))
 	mux.HandleFunc("DELETE /api/workflows/{id}", a.write(a.deleteWorkflow))

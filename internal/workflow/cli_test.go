@@ -11,6 +11,28 @@ import (
 	"testing"
 )
 
+func TestCLISuggestDoesNotAdvanceRun(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/workflow-runs/run-1/suggestions" {
+			t.Errorf("path: %s", r.URL.Path)
+		}
+		var body struct {
+			Token   string
+			Exclude []string
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		if body.Token != "frontier_model" || len(body.Exclude) != 1 || body.Exclude[0] != "claude/opus" {
+			t.Errorf("request: %+v", body)
+		}
+		json.NewEncoder(w).Encode(map[string]string{"message": "use codex"})
+	}))
+	defer s.Close()
+	code, out, err := runCLI(t, boxHome(t, s.URL), "", "suggest", "--run", "run-1", "frontier_model", "--exclude", "claude/opus")
+	if code != 0 || !strings.Contains(out, "use codex") {
+		t.Fatalf("suggest: %d %s %s", code, out, err)
+	}
+}
+
 // fakeServer answers moves with what it was sent, and records each request.
 func fakeServer(t *testing.T, code int) (*httptest.Server, *[]*http.Request, *[]Move) {
 	t.Helper()

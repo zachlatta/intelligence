@@ -28,6 +28,7 @@ The agents of a workflow run move it with these, on the run's host:
   ask     --run <id> --note <file>|-      ask Zach (Markdown); his reply comes as your next message
   done    --run <id> [--summary <text>]  finish the run now
   fail    --run <id> --why <text>
+  suggest --run <id> <group_token> [--exclude <provider/model>]  record a fresh model suggestion without moving
 
 It reaches the server with this host's key (HOST_SERVER and the key, as the host client has them).`
 
@@ -44,9 +45,17 @@ func CLI(ctx context.Context, args []string, getenv func(string) string, stdin i
 		return 1
 	}
 	body, _ := json.Marshal(m)
+	endpoint := "moves"
+	if m.Move == "suggest" {
+		endpoint = "suggestions"
+		body, _ = json.Marshal(struct {
+			Token   string   `json:"token"`
+			Exclude []string `json:"exclude"`
+		}{m.Token, strings.FieldsFunc(m.Exclude, func(r rune) bool { return r == ',' })})
+	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(server, "/")+"/api/workflow-runs/"+run+"/moves", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(server, "/")+"/api/workflow-runs/"+run+"/"+endpoint, bytes.NewReader(body))
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -85,6 +94,7 @@ func parseCLI(args []string, stdin io.Reader) (Move, string, error) {
 	run := fs.String("run", "", "the run's id")
 	fs.StringVar(&m.Summary, "summary", "", "")
 	fs.StringVar(&m.Why, "why", "", "")
+	fs.StringVar(&m.Exclude, "exclude", "", "comma-separated provider/model routes to skip")
 	note := fs.String("note", "", "")
 	var pos []string
 	rest := args[1:]
@@ -113,6 +123,8 @@ func parseCLI(args []string, stdin io.Reader) (Move, string, error) {
 		m.Directory, err = one("a directory, or none")
 	case "back":
 		m.Step, err = one("the step's id")
+	case "suggest":
+		m.Token, err = one("a model group's token key, without braces")
 	case "ask":
 		switch *note {
 		case "":
@@ -128,7 +140,7 @@ func parseCLI(args []string, stdin io.Reader) (Move, string, error) {
 	default:
 		err = fmt.Errorf("unknown move %q", m.Move)
 	}
-	if err == nil && len(pos) > 0 && m.Move != "project" && m.Move != "back" {
+	if err == nil && len(pos) > 0 && m.Move != "project" && m.Move != "back" && m.Move != "suggest" {
 		err = fmt.Errorf("%s takes no argument %q", m.Move, pos[0])
 	}
 	return m, *run, err

@@ -1,0 +1,209 @@
+package web
+
+import (
+	"encoding/json"
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/zachlatta/intelligence/internal/hostclient"
+	"github.com/zachlatta/intelligence/internal/workflow"
+)
+
+func TestModelGroupsStableTokensAndIsolation(t *testing.T) {
+	h, _ := dbServer(t)
+	rec := call(t, h, http.MethodPost, "/api/model-groups", `{"name":"Frontier Models","members":[]}`, sameOriginFetch)
+	if rec.Code != 201 {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	var g struct {
+		ID       string
+		Token    string
+		Revision int
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &g); err != nil {
+		t.Fatal(err)
+	}
+	if g.Token != "frontier_models_model" {
+		t.Fatalf("token: %+v", g)
+	}
+	rec = call(t, h, http.MethodPut, "/api/model-groups/"+g.ID, `{"name":"Best","revision":1,"members":[]}`, sameOriginFetch)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), g.Token) {
+		t.Fatalf("rename: %d %s", rec.Code, rec.Body)
+	}
+	rec = call(t, h, http.MethodPut, "/api/model-groups/"+g.ID, `{"name":"Stale","revision":1,"members":[]}`, sameOriginFetch)
+	if rec.Code != 409 {
+		t.Fatalf("stale edit: %d %s", rec.Code, rec.Body)
+	}
+	code, r := sqlPost(t, h, q(`SELECT token, name FROM model_groups`))
+	if code != 200 || len(r.Rows) != 1 || r.Rows[0][1] != "Best" {
+		t.Fatalf("SQL: %d %+v", code, r)
+	}
+	rec = call(t, anon(h), http.MethodPost, "/api/model-groups", `{"name":"Other"}`, sameOriginFetch)
+	if rec.Code != 401 {
+		t.Fatalf("anonymous: %d", rec.Code)
+	}
+	for _, path := range []string{"/usage", "/workflows"} {
+		page := get(t, h, path, nil)
+		if !strings.Contains(page.Body.String(), "/model-groups.js") {
+			t.Fatalf("missing editor on %s", path)
+		}
+	}
+	rec = call(t, h, "POST", "/api/model-groups", `{"name":"Frontier Models","members":[]}`, sameOriginFetch)
+	if rec.Code != 201 || !strings.Contains(rec.Body.String(), "frontier_models_2_model") {
+		t.Fatalf("token collision: %d %s", rec.Code, rec.Body)
+	}
+	code, _ = sqlPost(t, h, q(`UPDATE model_groups SET name='write'`))
+	if code != 400 {
+		t.Fatalf("SQL could write groups: %d", code)
+	}
+}
+
+func TestModelGroupCanConfigureUnknownMeters(t *testing.T) {
+	h, d := dbServer(t)
+	rep := wfReport()
+	rep.Paseo.Providers = []hostclient.Provider{{Name: "muse", Available: true, Models: []hostclient.Model{{ID: "wonder", Thinking: []string{"high"}}}}}
+	sendReport(t, h, rep)
+	for _, q := range []string{
+		`INSERT INTO usage_accounts(provider,account,first_seen,last_seen) VALUES('muse','default',now(),now())`,
+		`INSERT INTO usage_sources(host,provider,account,ok,received_at) VALUES('host-1','muse','default',true,now())`,
+		`INSERT INTO usage_active(host,provider,account,since,until) VALUES('host-1','muse','default',now(),now())`,
+	} {
+		if _, err := d.Owner.Exec(t.Context(), q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec := call(t, h, "POST", "/api/model-groups", `{"name":"Unknown capacity","members":[{"provider":"muse","model":"wonder","thinking":"high","login":"default","longWindow":"7d","gateWindows":["5h"],"enabled":true}]}`, sameOriginFetch)
+	if rec.Code != 201 {
+		t.Fatalf("configure unknown meter: %d %s", rec.Code, rec.Body)
+	}
+	code, r := sqlPost(t, h, q(`SELECT eligible,reason FROM model_group_candidates`))
+	if code != 200 || len(r.Rows) != 1 || r.Rows[0][0] != false || r.Rows[0][1] != "Meter unknown or stale" {
+		t.Fatalf("unknown was capacity: %+v", r)
+	}
+	rec = call(t, h, "POST", "/api/model-groups", `{"name":"Missing effort","members":[{"provider":"muse","model":"wonder","thinking":"","login":"default","longWindow":"7d","gateWindows":[],"enabled":true}]}`, sameOriginFetch)
+	if rec.Code != 400 {
+		t.Fatalf("implicit thinking default accepted: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestModelGroupRankingAndWorkflowExpansion(t *testing.T) {
+	h, d := dbServer(t)
+	rep := wfReport()
+	rep.Paseo.Providers = []hostclient.Provider{
+		{Name: "claude", Available: true, Models: []hostclient.Model{{ID: "opus", Thinking: []string{"medium"}}}},
+		{Name: "codex", Available: true, Models: []hostclient.Model{{ID: "sol", Thinking: []string{"high"}}}},
+	}
+	sendReport(t, h, rep)
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := d.Owner.Exec(t.Context(), q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, p := range []string{"claude", "codex"} {
+		for _, login := range []string{"one", "two"} {
+			exec(`INSERT INTO usage_accounts(provider,account,first_seen,last_seen) VALUES($1,$2,now(),now())`, p, login)
+			exec(`INSERT INTO usage_sources(host,provider,account,ok,received_at) VALUES('host-1',$1,$2,true,now())`, p, login)
+			exec(`INSERT INTO usage_readings(provider,account,window_id,window_seconds,used_pct,resets_at,first_observed,last_observed) VALUES($1,$2,'7d',604800,30,now()+interval '1 day',now(),now())`, p, login)
+		}
+		exec(`INSERT INTO usage_active(host,provider,account,since,until) VALUES('host-1',$1,'one',now(),now())`, p)
+	}
+	member := func(p, model, think, login string) map[string]any {
+		return map[string]any{"provider": p, "model": model, "thinking": think, "login": login, "longWindow": "7d", "gateWindows": []string{}, "enabled": true}
+	}
+	body, _ := json.Marshal(map[string]any{"name": "Frontier", "members": []any{member("claude", "opus", "medium", "one"), member("claude", "opus", "medium", "two"), member("codex", "sol", "high", "one")}})
+	rec := call(t, h, "POST", "/api/model-groups", string(body), sameOriginFetch)
+	if rec.Code != 201 {
+		t.Fatalf("create %d %s", rec.Code, rec.Body)
+	}
+	var g workflow.ModelGroup
+	json.Unmarshal(rec.Body.Bytes(), &g)
+	code, r := sqlPost(t, h, q(`SELECT login,reason FROM model_group_candidates WHERE provider='claude' ORDER BY login`))
+	if code != 200 || len(r.Rows) != 2 || r.Rows[1][1] != "Inactive login" {
+		t.Fatalf("separate logins: %d %+v", code, r)
+	}
+	def := workflow.Starting
+	def.Steps = append([]workflow.Step(nil), def.Steps...)
+	def.Project = workflow.Project{Mode: "fixed", Directory: "/w/app"}
+	def.Steps[0].Instructions = "Use {{frontier_model}} twice: {{frontier_model}}. Task: {{input}}"
+	def.Steps[1].Instructions = "Check using {{frontier_model}}."
+	wf := createWorkflow(t, h, def)
+	stream := openStream(t, h, "host-1")
+	run := startRun(t, h, wf, "Literal {{frontier_model}}")
+	cmd := stream.command()
+	var ws hostclient.CreateWorkspaceArgs
+	json.Unmarshal(cmd.Args, &ws)
+	if !strings.Contains(ws.Agent.Prompt, "--provider claude/opus --mode bypassPermissions --thinking medium") || !strings.Contains(ws.Agent.Prompt, "Literal {{frontier_model}}") {
+		t.Fatalf("prompt: %s", ws.Agent.Prompt)
+	}
+	code, r = sqlPost(t, h, q(`SELECT count(*) FROM workflow_model_suggestions`))
+	if code != 200 || r.Rows[0][0] != float64(1) {
+		t.Fatalf("duplicate token allocations: %+v", r)
+	}
+	// The first allocation lowers the shared Claude pool score, so the next goes to Codex.
+	succeed(t, stream, cmd, `{"workspaceId":"work","agentId":"orch"}`)
+	key := keyOf(t, h, "host-1")
+	status, msg := move(t, h, key, run, map[string]string{"move": "next", "summary": "built"})
+	if status != 200 || !strings.Contains(msg, "--provider codex/sol --mode full-access --thinking high") {
+		t.Fatalf("next: %d %s", status, msg)
+	}
+	rec = call(t, h, "DELETE", "/api/model-groups/"+g.ID, "", sameOriginFetch)
+	if rec.Code != 409 {
+		t.Fatalf("delete referenced group: %d %s", rec.Code, rec.Body)
+	}
+	// Every model in the same quota pool sees the allocation, across groups too.
+	body, _ = json.Marshal(map[string]any{"name": "Other", "members": []any{member("claude", "opus", "medium", "one")}})
+	rec = call(t, h, "POST", "/api/model-groups", string(body), sameOriginFetch)
+	if rec.Code != 201 {
+		t.Fatal(rec.Body)
+	}
+	code, r = sqlPost(t, h, q(`SELECT count(DISTINCT score) FROM model_group_candidates WHERE provider='claude' AND login='one'`))
+	if code != 200 || r.Rows[0][0] != float64(1) {
+		t.Fatalf("pool duplication: %+v", r)
+	}
+	// A shared short window is mandatory even if the editor omitted it.
+	exec(`INSERT INTO usage_readings(provider,account,window_id,window_seconds,used_pct,resets_at,first_observed,last_observed)
+	 VALUES('claude','one','5h',18000,100,now()+interval '1 hour',now(),now())`)
+	code, r = sqlPost(t, h, q(`SELECT count(*) FROM model_group_candidates WHERE provider='claude' AND login='one' AND eligible`))
+	if code != 200 || r.Rows[0][0] != float64(0) {
+		t.Fatalf("short window bypassed: %+v", r)
+	}
+	// All capacity unknown: reset without another reading does not imply a full plan.
+	exec(`UPDATE usage_readings SET resets_at=now()-interval '1 minute'`)
+	code, r = sqlPost(t, h, q(`SELECT count(*) FROM model_group_candidates WHERE eligible`))
+	if code != 200 || r.Rows[0][0] != float64(0) {
+		t.Fatalf("expired windows eligible: %+v", r)
+	}
+	rec = call(t, anon(h), "POST", "/api/workflow-runs/"+run+"/suggestions", `{"token":"frontier_model"}`, map[string]string{"Authorization": "Bearer " + key})
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "No eligible model") {
+		t.Fatalf("wait: %d %s", rec.Code, rec.Body)
+	}
+	// Another account cannot read or mutate group state or use its token.
+	ts := h.(*testServer)
+	bob, err := ts.store.Create(t.Context(), "group-reader", testPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := sessionFor(t, ts.store, bob)
+	rec = call(t, h, "GET", "/api/sql?q=SELECT+token+FROM+model_groups", "", nil, cookie)
+	if rec.Code != 200 || strings.Contains(rec.Body.String(), "frontier_model") {
+		t.Fatalf("group leak: %d %s", rec.Code, rec.Body)
+	}
+	rec = call(t, h, "PUT", "/api/model-groups/"+g.ID, `{"name":"Stolen","revision":1,"members":[]}`, sameOriginFetch, cookie)
+	if rec.Code != 404 {
+		t.Fatalf("cross-account write: %d %s", rec.Code, rec.Body)
+	}
+	for _, tc := range []struct{ change, reason string }{
+		{`UPDATE usage_readings SET resets_at=now()+interval '1 day',last_observed=now()-interval '16 minutes'`, "Meter unknown or stale"},
+		{`UPDATE usage_readings SET last_observed=now(),used_pct=100`, "Quota reserve"},
+		{`UPDATE model_group_members SET eligible_until=now()-interval '1 minute'`, "Plan ended"},
+		{`UPDATE model_group_members SET enabled=false`, "Disabled"},
+	} {
+		exec(tc.change)
+		code, r = sqlPost(t, h, q(`SELECT eligible,reason FROM model_group_candidates WHERE provider='codex'`))
+		if code != 200 || len(r.Rows) != 1 || r.Rows[0][0] != false || r.Rows[0][1] != tc.reason {
+			t.Fatalf("eligibility %s: %+v", tc.reason, r)
+		}
+	}
+}

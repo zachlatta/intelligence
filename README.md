@@ -523,6 +523,59 @@ either is deleted.
 
 Variables in instructions: `{{input}}`, `{{repo}}`, `{{branch}}` and `{{run}}`.
 
+#### Model groups
+
+Create as many **Model groups** as needed from Plans or Workflows. Each group generates a
+template token: **Frontier** becomes `{{frontier_model}}`, **Fast checks** becomes
+`{{fast_checks_model}}`. Names use lowercase ASCII words separated by underscores; collisions
+get a numeric suffix. The token is shown and copyable in the group editor, and each group has
+an insertion chip under a workflow step's instructions. Renaming a group keeps its token.
+There is no per-workflow group selector: use different tokens in different steps, or several
+tokens in one step. Model-group tokens are for step instructions, not finder or orchestrator
+standing instructions. Their explicit model settings stay unchanged.
+
+Each member names a catalog model, thinking level, and observed plan login. Select the long
+quota window and any additional gates; all observed shorter windows in the same pool also gate
+eligibility. Antigravity's Gemini and Claude/GPT pools are separate. Plan options can disable
+an entry or give its eligibility end time. Groups are shared: edits affect future suggestions,
+including later steps of active runs, and never rewrite a delivered suggestion. Concurrent edits
+require reloading rather than overwriting another editor's save. Deleting a group is refused
+while its token is referenced by a current workflow or an unfinished run.
+
+Tokens expand on first-step entry and `next`, `skip`, or `back`, before task input is filled.
+Each expansion supplies exact provider/model, thinking and unattended mode settings, or says
+there is no eligible model. Repeated uses of one token in a step share one suggestion. The
+preview on Plans reads SQL without allocating capacity; select the host to see its candidates,
+meter age and exclusion reasons. Existing workflows opt in by inserting tokens; their static
+instructions are not rewritten automatically. Explicit task model requirements take precedence.
+
+The ranking favors remaining quota likely to be left at reset (or a configured earlier plan
+end), rather than equal worker counts. It requires supported model settings, a reachable active
+login, fresh meters (15 minutes), and more than 5% remaining in the long and applicable short
+windows. Unknown or reset-without-reading meters never imply free capacity. Each suggestion
+subtracts a conservative 2 percentage points from its quota pool's score for 60 minutes,
+serialized per account. That penalty is shared across all models, groups and hosts spending the
+same provider/login/long-window pool. It is an estimate; meters lag and worker costs differ.
+Each Claude login is counted separately, but inactive logins are shown as **Inactive login** and
+cannot be selected on that host. This feature does not switch shared credentials or change cswap.
+
+Before another worker launch within a step, record a fresh suggestion without advancing:
+`intelligence workflow suggest --run <id> frontier_model`. After a launch or quota failure,
+add `--exclude <provider/model>` (comma-separated for several routes). Exclusions apply to that
+request; repeat them on later requests while the route remains unusable. There is no automatic
+worker launch, credential switch, paid-overage fallback, or inference of builder/checker roles.
+
+JSON writes: `POST /api/model-groups` with `{"name", "members"}`;
+`PUT /api/model-groups/{id}` with `{"name", "revision", "members"}`; and
+`DELETE /api/model-groups/{id}`. A member has `provider`, `model`, `thinking`, `login`,
+`longWindow`, `gateWindows` (array), optional `eligibleUntil` (RFC3339), and `enabled`.
+`POST /api/workflow-runs/{id}/suggestions` with `{"token", "exclude": []}` is a host-key
+write that records and returns a suggestion for a running run on that host.
+All reads use SQL: `model_groups`, `model_group_members`, `model_group_candidates` (the live
+ranking view), and `workflow_model_suggestions` (immutable inputs, group revision and result).
+The run's events also show each recorded suggestion. Ownership and the read-only contract
+apply to all of these relations.
+
 The starting workflow spreads frontier work across Claude Opus 5.5, Codex and Gemini 4 Carbon
 (`antigravity/gemini-4-carbon-high`). Antigravity encodes effort in the model ID; Carbon also has
 `gemini-4-carbon-medium` and `gemini-4-carbon-low`. Models are read from the host's Paseo catalog,

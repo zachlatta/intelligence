@@ -91,6 +91,9 @@ func (e *Engine) CreateWorkflow(ctx context.Context, account int64, name, descri
 	at := e.Now()
 	var id string
 	err = pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		if err := validateModelTokens(ctx, tx, account, d); err != nil {
+			return err
+		}
 		if err := ownsHost(ctx, tx, account, d.Host); err != nil {
 			return err
 		}
@@ -159,6 +162,9 @@ func (e *Engine) UpdateWorkflow(ctx context.Context, account int64, id, name, de
 	at := e.Now()
 	var version int
 	err = pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		if err := validateModelTokens(ctx, tx, account, d); err != nil {
+			return err
+		}
 		var mine bool
 		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM workflows WHERE id = $1 AND account_id = $2 AND deleted_at IS NULL)", id, account).Scan(&mine); err != nil {
 			return err
@@ -347,6 +353,10 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 	if !uuidRe.MatchString(workflowID) {
 		return "", ErrNotFound
 	}
+	// Group edits and workflow saves take this lock before workflow row locks too.
+	if err := lockModels(ctx, tx, account); err != nil {
+		return "", err
+	}
 	at := e.Now()
 	var id, host string
 	err := func() error {
@@ -427,8 +437,12 @@ func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo s
 		r.Branch = branch
 	}
 	o := r.Def.Orchestrator
+	d, err := e.fillModels(ctx, tx, r, 0)
+	if err != nil {
+		return err
+	}
 	agent := &hostclient.CreateAgentArgs{Provider: o.Provider, Model: o.Model, Thinking: o.Thinking, Mode: agentMode(o.Provider),
-		Title: agentTitle("Orchestrator", r.Name, r.Title), Prompt: OrchestratorPrompt(r.Name, r.Def, r.vars()),
+		Title: agentTitle("Orchestrator", r.Name, r.Title), Prompt: OrchestratorPrompt(r.Name, d, r.vars()),
 		Labels: map[string]string{"intelligence.run": r.ID, "intelligence.role": "orchestrator"}}
 	ws := hostclient.CreateWorkspaceArgs{Cwd: "~", Title: wsTitle, Agent: agent}
 	if repo != "" {
@@ -512,7 +526,9 @@ type Move struct {
 	Step      string `json:"step,omitempty"`      // back: the step's id
 	Summary   string `json:"summary,omitempty"`
 	Why       string `json:"why,omitempty"`
-	Note      string `json:"note,omitempty"` // ask: Markdown, for Zach
+	Note      string `json:"note,omitempty"`    // ask: Markdown, for Zach
+	Token     string `json:"token,omitempty"`   // suggest: a model group's stable token
+	Exclude   string `json:"exclude,omitempty"` // suggest: comma-separated provider/model routes to skip
 }
 
 // MoveRun makes m on run, for host (whose key the caller checked): the run must be on host. It
@@ -613,7 +629,11 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		if err := e.event(ctx, tx, r, m.Move, ptr(r.Step), ptr(r.Step+1), text); err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Step %d is done.\n\n%s", r.Step+1, StepMessage(r.Def, r.Step+1, r.vars())), set(Running, r.Step+1, "")
+		d, err := e.fillModels(ctx, tx, r, r.Step+1)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Step %d is done.\n\n%s", r.Step+1, StepMessage(d, r.Step+1, r.vars())), set(Running, r.Step+1, "")
 	case "back":
 		to := r.Def.Index(m.Step)
 		if to < 0 || to >= r.Step {
@@ -625,7 +645,11 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		if err := e.event(ctx, tx, r, "back", ptr(r.Step), ptr(to), m.Why); err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Back to step %d. What is missing, as you said: %s\n\n%s", to+1, m.Why, StepMessage(r.Def, to, r.vars())), set(Running, to, "")
+		d, err := e.fillModels(ctx, tx, r, to)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Back to step %d. What is missing, as you said: %s\n\n%s", to+1, m.Why, StepMessage(d, to, r.vars())), set(Running, to, "")
 	case "ask":
 		if strings.TrimSpace(m.Note) == "" {
 			return "", bad("ask needs a note for Zach: --note <file>, in Markdown.")

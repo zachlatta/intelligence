@@ -1,0 +1,320 @@
+package workflow
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+)
+
+// ModelGroup is a shared allowlist. Token is immutable, including after a rename.
+type ModelGroup struct {
+	ID       string        `json:"id"`
+	Name     string        `json:"name"`
+	Token    string        `json:"token"`
+	Revision int           `json:"revision"`
+	Members  []ModelMember `json:"members"`
+}
+
+type ModelMember struct {
+	Provider      string     `json:"provider"`
+	Model         string     `json:"model"`
+	Thinking      string     `json:"thinking"`
+	Login         string     `json:"login"`
+	LongWindow    string     `json:"longWindow"`
+	GateWindows   []string   `json:"gateWindows"`
+	EligibleUntil *time.Time `json:"eligibleUntil"`
+	Enabled       bool       `json:"enabled"`
+}
+
+var tokenWords = regexp.MustCompile(`[^a-z0-9]+`)
+var modelSetting = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,159}$`)
+var groupToken = regexp.MustCompile(`\{\{([a-z][a-z0-9_]*_model)\}\}`)
+
+func tokenBase(name string) string {
+	s := strings.Trim(tokenWords.ReplaceAllString(strings.ToLower(name), "_"), "_")
+	if len(s) > 48 {
+		s = strings.TrimRight(s[:48], "_")
+	}
+	if s == "" || s[0] < 'a' || s[0] > 'z' {
+		s = "group_" + s
+	}
+	return strings.TrimRight(s, "_")
+}
+
+// SaveModelGroup creates or replaces a group. Account locking serializes edits, workflow
+// reference checks and allocations; an editor's revision prevents overwriting another draft.
+func (e *Engine) SaveModelGroup(ctx context.Context, account int64, id string, g ModelGroup) (ModelGroup, error) {
+	name, err := checkName(g.Name)
+	if err != nil {
+		return g, err
+	}
+	g.Name = name
+	if len(g.Members) > 100 {
+		return g, bad("at most 100 members per group")
+	}
+	if id != "" && !uuidRe.MatchString(id) {
+		return g, ErrNotFound
+	}
+	err = pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		if err := lockModels(ctx, tx, account); err != nil {
+			return err
+		}
+		if id == "" {
+			base := tokenBase(g.Name)
+			for n := 1; ; n++ {
+				g.Token = base + "_model"
+				if n > 1 {
+					g.Token = fmt.Sprintf("%s_%d_model", base, n)
+				}
+				var taken bool
+				if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_groups WHERE account_id=$1 AND token=$2)", account, g.Token).Scan(&taken); err != nil {
+					return err
+				}
+				if !taken {
+					break
+				}
+			}
+			if err := tx.QueryRow(ctx, `INSERT INTO model_groups(account_id,name,token) VALUES($1,$2,$3) RETURNING id::text,revision`, account, g.Name, g.Token).Scan(&g.ID, &g.Revision); err != nil {
+				return err
+			}
+		} else {
+			var revision int
+			if err := tx.QueryRow(ctx, `SELECT token,revision FROM model_groups WHERE id=$1 AND account_id=$2 AND deleted_at IS NULL`, id, account).Scan(&g.Token, &revision); errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			} else if err != nil {
+				return err
+			}
+			if revision != g.Revision {
+				return conflict("group changed; reload before saving")
+			}
+			g.ID = id
+			g.Revision++
+			if _, err := tx.Exec(ctx, "UPDATE model_groups SET name=$3,revision=$4 WHERE id=$1 AND account_id=$2", id, account, g.Name, g.Revision); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, "DELETE FROM model_group_members WHERE group_id=$1", id); err != nil {
+				return err
+			}
+		}
+		for i, m := range g.Members {
+			if !modelSetting.MatchString(m.Provider) || !modelSetting.MatchString(m.Model) || (m.Thinking != "" && !modelSetting.MatchString(m.Thinking)) {
+				return bad("invalid model launch settings")
+			}
+			var valid bool
+			err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM provider_models p JOIN host_keys k ON k.host=p.host
+     WHERE k.account_id=$1 AND p.provider=$2 AND p.id=$3 AND ((cardinality(p.thinking)=0 AND $4='') OR $4=ANY(p.thinking)))`, account, m.Provider, m.Model, m.Thinking).Scan(&valid)
+			if err != nil {
+				return err
+			}
+			if !valid {
+				return bad("model or thinking level is not in an owned host's catalog")
+			}
+			err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM usage_sources s JOIN host_keys k ON k.host=s.host
+      WHERE k.account_id=$1 AND s.provider=$2 AND s.account=$3)`, account, m.Provider, m.Login).Scan(&valid)
+			if err != nil {
+				return err
+			}
+			if !valid {
+				return bad("plan login is not one of this account's observed logins")
+			}
+			if m.LongWindow != "7d" && !strings.HasSuffix(m.LongWindow, "/7d") {
+				return bad("choose a weekly quota pool")
+			}
+			if m.GateWindows == nil {
+				m.GateWindows = []string{}
+			}
+			g.Members[i] = m
+			windows := append([]string{m.LongWindow}, m.GateWindows...)
+			for _, window := range windows {
+				err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM usage_readings WHERE provider=$1 AND account=$2 AND window_id=$3)", m.Provider, m.Login, window).Scan(&valid)
+				if err != nil {
+					return err
+				}
+				if !valid && window != "7d" && window != "5h" && window != "gemini/7d" && window != "gemini/5h" && window != "claude-gpt/7d" && window != "claude-gpt/5h" {
+					return bad("choose an observed quota window")
+				}
+				if m.Provider == "antigravity" {
+					prefix := "claude-gpt/"
+					if strings.HasPrefix(m.Model, "gemini-") {
+						prefix = "gemini/"
+					}
+					if !strings.HasPrefix(window, prefix) {
+						return bad("quota pool does not match this model family")
+					}
+				}
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO model_group_members(account_id,group_id,position,provider,model,thinking,usage_provider,login,long_window,gate_windows,eligible_until,enabled)
+     VALUES($1,$2,$3,$4,$5,$6,$4,$7,$8,$9,$10,$11)`, account, g.ID, i, m.Provider, m.Model, m.Thinking, m.Login, m.LongWindow, m.GateWindows, m.EligibleUntil, m.Enabled); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return g, err
+}
+
+func lockModels(ctx context.Context, tx pgx.Tx, account int64) error {
+	_, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", account)
+	return err
+}
+
+func (e *Engine) DeleteModelGroup(ctx context.Context, account int64, id string) error {
+	if !uuidRe.MatchString(id) {
+		return ErrNotFound
+	}
+	return pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		if err := lockModels(ctx, tx, account); err != nil {
+			return err
+		}
+		var token string
+		if err := tx.QueryRow(ctx, "SELECT token FROM model_groups WHERE id=$1 AND account_id=$2 AND deleted_at IS NULL", id, account).Scan(&token); errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		} else if err != nil {
+			return err
+		}
+		var used bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM workflow_versions v WHERE v.account_id=$1 AND position($2 in v.definition::text)>0
+    AND (EXISTS(SELECT 1 FROM workflows w WHERE w.id=v.workflow_id AND w.version=v.version AND w.deleted_at IS NULL)
+      OR EXISTS(SELECT 1 FROM workflow_runs r WHERE r.workflow_id=v.workflow_id AND r.version=v.version AND r.finished_at IS NULL)))`, account, "{{"+token+"}}").Scan(&used); err != nil {
+			return err
+		}
+		if used {
+			return conflict("group token is used by a workflow or active run; remove those references first")
+		}
+		_, err := tx.Exec(ctx, "UPDATE model_groups SET deleted_at=now() WHERE id=$1", id)
+		return err
+	})
+}
+
+func validateModelTokens(ctx context.Context, tx pgx.Tx, account int64, d Definition) error {
+	if err := lockModels(ctx, tx, account); err != nil {
+		return err
+	}
+	for _, s := range d.Steps {
+		for _, m := range groupToken.FindAllStringSubmatch(s.Instructions, -1) {
+			var exists bool
+			if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_groups WHERE account_id=$1 AND token=$2 AND deleted_at IS NULL)", account, m[1]).Scan(&exists); err != nil {
+				return err
+			}
+			if !exists {
+				return bad("unknown model token %s in step %s", m[0], s.Title)
+			}
+		}
+	}
+	return nil
+}
+
+// fillModels operates on saved instructions before user input is interpolated. A token
+// in task text is literal; repeated tokens in one delivery share a single allocation.
+func (e *Engine) fillModels(ctx context.Context, tx pgx.Tx, r run, step int) (Definition, error) {
+	d := r.Def
+	d.Steps = append([]Step(nil), d.Steps...)
+	text := d.Steps[step].Instructions
+	seen := map[string]bool{}
+	for _, m := range groupToken.FindAllStringSubmatch(text, -1) {
+		if seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		msg, err := e.suggestModel(ctx, tx, r, step, m[1], nil)
+		if err != nil {
+			return d, err
+		}
+		text = strings.ReplaceAll(text, m[0], msg)
+	}
+	d.Steps[step].Instructions = text
+	return d, nil
+}
+
+func (e *Engine) suggestModel(ctx context.Context, tx pgx.Tx, r run, step int, token string, exclude []string) (string, error) {
+	if err := lockModels(ctx, tx, r.Account); err != nil {
+		return "", err
+	}
+	var group string
+	var revision int
+	if err := tx.QueryRow(ctx, "SELECT id::text,revision FROM model_groups WHERE account_id=$1 AND token=$2 AND deleted_at IS NULL", r.Account, token).Scan(&group, &revision); errors.Is(err, pgx.ErrNoRows) {
+		return "", bad("unknown model token %s", token)
+	} else if err != nil {
+		return "", err
+	}
+	rows, err := tx.Query(ctx, `SELECT to_jsonb(c) FROM model_group_candidates c WHERE account_id=$1 AND group_id=$2 AND host=$3 ORDER BY eligible DESC,score DESC NULLS LAST,position,id`, r.Account, group, r.Host)
+	if err != nil {
+		return "", err
+	}
+	candidates, err := pgx.CollectRows(rows, pgx.RowTo[json.RawMessage])
+	if err != nil {
+		return "", err
+	}
+	var chosen map[string]any
+	for _, raw := range candidates {
+		var c map[string]any
+		if err := json.Unmarshal(raw, &c); err != nil {
+			return "", err
+		}
+		skip := false
+		for _, x := range exclude {
+			if c["provider"].(string)+"/"+c["model"].(string) == x {
+				skip = true
+			}
+		}
+		if c["eligible"] == true && !skip {
+			chosen = c
+			break
+		}
+	}
+	msg := "No eligible model in " + token + ". Wait for a fresh meter or reset, or ask for an explicit model. Do not launch a worker on this suggestion."
+	var provider, login, window any
+	if chosen != nil {
+		p := chosen["provider"].(string)
+		model := chosen["model"].(string)
+		thinking := chosen["thinking"].(string)
+		msg = fmt.Sprintf("%s/%s", p, model)
+		if thinking != "" {
+			msg += " (" + thinking + ")"
+		}
+		msg += ". Launch settings: --provider " + p + "/" + model + " --mode " + agentMode(p)
+		if thinking != "" {
+			msg += " --thinking " + thinking
+		}
+		msg += ". More quota likely to remain at reset; plan " + chosen["login"].(string) + "; meter read " + chosen["last_observed"].(string) + ". Use these settings over generic model lists unless the task explicitly names another model."
+		provider = p
+		login = chosen["login"]
+		window = chosen["long_window"]
+	}
+	snapshot, _ := json.Marshal(map[string]any{"candidates": candidates, "selected": chosen, "excluded": exclude})
+	var id string
+	if err := tx.QueryRow(ctx, `INSERT INTO workflow_model_suggestions(account_id,run_id,step,group_id,token,revision,usage_provider,login,long_window,snapshot,message)
+   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id::text`, r.Account, r.ID, step, group, token, revision, provider, login, window, snapshot, msg).Scan(&id); err != nil {
+		return "", err
+	}
+	if err := e.event(ctx, tx, r, "model_suggestion", ptr(step), nil, msg+" Suggestion "+id); err != nil {
+		return "", err
+	}
+	return msg + " Suggestion " + id + ". Before another worker, refresh with intelligence workflow suggest --run " + r.ID + " " + token + ".", nil
+}
+
+// SuggestModel records a new allocation without advancing the step.
+func (e *Engine) SuggestModel(ctx context.Context, host, id, token string, exclude []string) (string, error) {
+	if !uuidRe.MatchString(id) {
+		return "", ErrNotFound
+	}
+	var msg string
+	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id=$1 AND r.host=$2 FOR UPDATE OF r", id, host))
+		if err != nil {
+			return err
+		}
+		if r.Status != Running {
+			return conflict("run is not running")
+		}
+		msg, err = e.suggestModel(ctx, tx, r, r.Step, token, exclude)
+		return err
+	})
+	return msg, err
+}
