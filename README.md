@@ -470,6 +470,19 @@ version it started with. A run:
      His reply (typed or dictated there) goes to the orchestrator as a message, which decides what
      it means and moves on.
 
+The runs list's **What** and the run page's heading show a short task summary. As its first
+action, the orchestrator summarizes the whole request in 3–8 words (at most 80 characters) and
+saves it with `intelligence workflow summarize --run <id> --summary "..."`. This uses the existing
+host-authenticated JSON moves API (`{"move":"summarize","summary":"..."}`), without advancing
+the run. The summary is stored in `workflow_runs.task_summary`, readable through `/api/sql` with
+the run's usual account isolation. It does not rename the workspace or branch.
+
+Summary generation uses the workflow's existing orchestrator model and requires no extra API key.
+It happens asynchronously after the orchestrator starts; until then, or if the agent cannot save
+it, the pages fall back to `workflow_runs.title` (the cleaned, shortened prompt). The task proceeds
+even if summarization fails. Existing runs keep that fallback; there is no backfill. The prompt
+instruction applies to new runs of saved workflow versions too.
+
 The server only records each move (`workflow_run_events`), checks it can happen (a run waiting for
 a reply cannot move, a canceled one says so), and answers with what the agent reads next. A move
 is a `POST /api/workflow-runs/{id}/moves` with the run's host's key; the CLI reads the server and

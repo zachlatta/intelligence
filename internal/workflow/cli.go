@@ -22,6 +22,7 @@ const CLIUsage = `usage: intelligence workflow <move> --run <id> [...]
 The agents of a workflow run move it with these, on the run's host:
 
   project --run <id> <directory>|none    the project finder's answer
+  summarize --run <id> --summary <text> save a short task summary without moving the run
   next    --run <id> [--summary <text>]  this step is done; prints the next step (after the last, finishes the run)
   back    --run <id> <step id> --why <text>
   skip    --run <id> --why <text>
@@ -113,6 +114,10 @@ func parseCLI(args []string, stdin io.Reader) (Move, string, error) {
 		m.Directory, err = one("a directory, or none")
 	case "back":
 		m.Step, err = one("the step's id")
+	case "summarize":
+		if strings.TrimSpace(m.Summary) == "" {
+			err = errors.New("summarize needs --summary <text>")
+		}
 	case "ask":
 		switch *note {
 		case "":

@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -507,7 +509,7 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 
 // Move is what `intelligence workflow` asks of a run.
 type Move struct {
-	Move      string `json:"move"`                // project, next, skip, back, ask, done, fail
+	Move      string `json:"move"`                // summarize, project, next, skip, back, ask, done, fail
 	Directory string `json:"directory,omitempty"` // project: a repository, or "none"
 	Step      string `json:"step,omitempty"`      // back: the step's id
 	Summary   string `json:"summary,omitempty"`
@@ -542,6 +544,14 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		return "", conflict("Zach canceled this run. Stop: do nothing more for it.")
 	case Succeeded, Failed:
 		return "", conflict("This run is over (%s). Do nothing more for it.", r.Status)
+	}
+	if m.Move == "summarize" {
+		summary := strings.TrimSpace(m.Summary)
+		if summary == "" || utf8.RuneCountInString(summary) > 80 || strings.ContainsFunc(summary, unicode.IsControl) {
+			return "", bad("a task summary must be one line of 1–80 characters")
+		}
+		_, err := tx.Exec(ctx, "UPDATE workflow_runs SET task_summary = $2, updated_at = $3 WHERE id = $1", r.ID, summary, e.Now())
+		return "Task summary saved. Continue with your current instructions; the run's step has not changed.", err
 	}
 	if m.Move == "project" {
 		if r.Status != FindingProject {
