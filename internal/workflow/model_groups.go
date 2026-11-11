@@ -46,8 +46,8 @@ func tokenBase(name string) string {
 	return strings.TrimRight(s, "_")
 }
 
-// SaveModelGroup creates or replaces a group. Account locking serializes edits, workflow
-// reference checks and allocations; an editor's revision prevents overwriting another draft.
+// SaveModelGroup creates or replaces a group. The account row serializes workflow references;
+// the model lock serializes edits and allocations. An editor's revision protects its draft.
 func (e *Engine) SaveModelGroup(ctx context.Context, account int64, id string, g ModelGroup) (ModelGroup, error) {
 	g.Name = strings.TrimSpace(g.Name)
 	if g.Name == "" || len(g.Name) > 100 {
@@ -60,6 +60,9 @@ func (e *Engine) SaveModelGroup(ctx context.Context, account int64, id string, g
 		return g, ErrNotFound
 	}
 	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		if err := lockWorkflowAccount(ctx, tx, account); err != nil {
+			return err
+		}
 		if err := lockModels(ctx, tx, account); err != nil {
 			return err
 		}
@@ -201,6 +204,9 @@ func (e *Engine) DeleteModelGroup(ctx context.Context, account int64, id string)
 		return ErrNotFound
 	}
 	return pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		if err := lockWorkflowAccount(ctx, tx, account); err != nil {
+			return err
+		}
 		if err := lockModels(ctx, tx, account); err != nil {
 			return err
 		}
@@ -224,10 +230,9 @@ func (e *Engine) DeleteModelGroup(ctx context.Context, account int64, id string)
 	})
 }
 
+// The caller holds the account row, as do group deletion and all workflow persistence paths.
+// Run delivery only takes the model lock, so it can expand while holding a host's queue lock.
 func validateModelTokens(ctx context.Context, tx pgx.Tx, account int64, d Definition) error {
-	if err := lockModels(ctx, tx, account); err != nil {
-		return err
-	}
 	for _, s := range d.Steps {
 		for _, m := range groupToken.FindAllStringSubmatch(s.Instructions, -1) {
 			var exists bool

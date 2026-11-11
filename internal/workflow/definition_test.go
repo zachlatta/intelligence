@@ -6,6 +6,15 @@ import (
 	"testing"
 )
 
+func TestOrchestratorSummarizesTheTaskBeforeStartingWork(t *testing.T) {
+	p := OrchestratorPrompt("Saved workflow", Starting, Vars{Run: "run-1", Input: "a long task"})
+	for _, want := range []string{"intelligence workflow summarize --run run-1 --summary", "3–8 words", "whole task", "If saving the summary fails, continue"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("missing summary instruction %q", want)
+		}
+	}
+}
+
 func TestStartingWorkflowRecommendsCarbon(t *testing.T) {
 	p := OrchestratorPrompt("task", Starting, Vars{Run: "r"})
 	for _, want := range []string{"antigravity/gemini-4-carbon-high", "claude/claude-opus-5-5", "codex"} {
@@ -95,6 +104,33 @@ func TestSavedWorkflowStepsRequirePublicFileDelivery(t *testing.T) {
 	}
 }
 
+// A run whose result is a report, answer or plan for Zach, rather than code or a host change, must
+// end with that result in his inbox, whatever the repository and whether or not anything lands.
+// Saved workflows get the rule too: runs of the saved Factory Task in other repositories than the
+// one its landing step named finished with the result only on the run page.
+func TestSavedWorkflowStepsEmailDeliverablesEvenWhenNothingLands(t *testing.T) {
+	d := clone(Starting)
+	d.Orchestrator.Instructions = "Custom saved instructions"
+	d.Steps[len(d.Steps)-1].Instructions = "Land on main the way AGENTS.md says."
+	for i := range d.Steps {
+		for _, prompt := range []string{OrchestratorPrompt("Saved", d, Vars{}), StepMessage(d, i, Vars{})} {
+			for _, want := range []string{
+				"report, investigation, answer, proposal, plan, deck or analysis",
+				"in any repository", "even when nothing lands",
+				"zrl-bot", "zrl-bot-email skill", "full substance in the body",
+				"Earlier steps draft", "only the last step sends", "when the run ends early (fail or skip to the end)",
+				"search zrl-bot's sent mail from the run's request date", "by subject", "by the report's URL",
+				"in the request thread", "Inspect every match", "a recent-days window",
+				"once", "Pass this deliverable-email rule to every worker",
+			} {
+				if !strings.Contains(prompt, want) {
+					t.Errorf("step %d misses deliverable-email instruction %q", i, want)
+				}
+			}
+		}
+	}
+}
+
 func TestSignoffPermitsFileDeliveryAndProtectsPrivateData(t *testing.T) {
 	for _, prompt := range []string{OrchestratorPrompt("Tasks", Starting, Vars{}), StepMessage(Starting, 4, Vars{})} {
 		for _, want := range []string{
@@ -109,6 +145,17 @@ func TestSignoffPermitsFileDeliveryAndProtectsPrivateData(t *testing.T) {
 		}
 		if strings.Contains(prompt, "Do not upload before") {
 			t.Error("generic external-write ban still blocks sign-off delivery")
+		}
+	}
+}
+
+// Aggregate metrics are not "student or financial data" on a literal reading, so the rule names
+// internal metrics too: they stay restricted, aggregate or not.
+func TestFileDeliveryKeepsInternalMetricsRestricted(t *testing.T) {
+	for _, want := range []string{"internal metrics", "counts, rates or spend about people, programs or money",
+		"aggregate"} {
+		if !strings.Contains(FileDeliveryRule, want) {
+			t.Errorf("file-delivery rule misses %q", want)
 		}
 	}
 }
@@ -128,7 +175,7 @@ func TestProjectFinderRoutesDeliverablesByOutputRatherThanDataSource(t *testing.
 		d := Starting
 		d.Project.Instructions = instructions // Existing saved definitions get the policy too.
 		p := ProjectPrompt("run-1", d,
-			"Give me a report (deck) on growth of girls in Hack Club using warehouse data.",
+			"Give me a report (deck) on program growth using warehouse data.",
 			[]string{"/srv/dev/data-warehouse", "/srv/dev/desk"})
 		for _, want := range []string{
 			"Choose by the requested work product",
@@ -153,7 +200,7 @@ func TestTheOrchestratorGetsTheRunTheStepsAndTheFirstStep(t *testing.T) {
 	for _, want := range []string{Starting.Orchestrator.Instructions, "run run-1 of the workflow “Task from Intelligence”",
 		"Show each agent's model", "1. Do the work (step, id build)", "5. Zach's sign-off (signoff, id signoff)",
 		"intelligence workflow next --run run-1", "intelligence workflow back --run run-1 <step id>",
-		"intelligence workflow ask --run run-1 --note", "Step 1 of 6: Do the work"} {
+		"intelligence workflow ask --run run-1 --note", "Step 1 of 7: Do the work"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("orchestrator prompt misses %q:\n%s", want, p)
 		}
@@ -167,7 +214,7 @@ func TestAStepsInstructionsFillItsVariables(t *testing.T) {
 	d := clone(Starting)
 	d.Steps[0].Instructions = "Do {{input}} in {{repo}} on {{branch}} for run {{run}}; leave {{unknown}}."
 	got := StepMessage(d, 0, Vars{Run: "r", Input: "it", Repo: "/a", Branch: "b"})
-	if !strings.Contains(got, "Step 1 of 6: Do the work") || !strings.Contains(got, "Do it in /a on b for run r; leave {{unknown}}.") {
+	if !strings.Contains(got, "Step 1 of 7: Do the work") || !strings.Contains(got, "Do it in /a on b for run r; leave {{unknown}}.") {
 		t.Errorf("message = %q", got)
 	}
 }
@@ -280,5 +327,88 @@ func TestUnattendedModeGuidanceIsNotDuplicated(t *testing.T) {
 	}
 	if strings.Contains(UnattendedShellRule, "--mode ") {
 		t.Fatal("shell guidance duplicates the shared mode guidance")
+	}
+}
+
+// Reports and data pulls are results, not changes to a repository. A finder that picks the
+// repository the data comes from publishes them when that repository is public.
+func TestTheProjectFinderKeepsResultsOutOfPublicRepositories(t *testing.T) {
+	d := clone(Starting)
+	d.Project.Instructions = "Pick the repository this task belongs in."
+	p := ProjectPrompt("run-1", d, "Give me a report on growth", []string{"/srv/dev/warehouse", "/srv/dev/notes"})
+	if n := strings.Count(p, ProjectRule); n != 1 {
+		t.Fatalf("the finder's standing rule occurs %d times, want once:\n%s", n, p)
+	}
+	for _, want := range []string{"report", "metrics", "private repository", "even when its data comes from",
+		"gh repo view", "Never pick a public repository for a result"} {
+		if !strings.Contains(ProjectRule, want) {
+			t.Errorf("finder rule misses %q", want)
+		}
+	}
+}
+
+// Every run, saved definitions included, is told what a public repository must never get.
+func TestSavedWorkflowsKeepResultsOutOfPublicRepositories(t *testing.T) {
+	d := clone(Starting)
+	d.Orchestrator.Instructions = "Coordinate this task."
+	d.Steps = d.Steps[:1]
+	p := OrchestratorPrompt("Saved workflow", d, Vars{Run: "run-1", Repo: "/srv/dev/warehouse"})
+	if n := strings.Count(p, PublicRepoRule); n != 1 {
+		t.Fatalf("the public repository rule occurs %d times, want once", n)
+	}
+	for _, want := range []string{"work/", "metrics", "CSV", "student", "Aggregate-only", ".factory-scratch/",
+		"git log -m --stat origin/main..HEAD", "wrong repository"} {
+		if !strings.Contains(PublicRepoRule, want) {
+			t.Errorf("public repository rule misses %q", want)
+		}
+	}
+}
+
+func TestTheStartingWorkflowChecksPublicRepositoriesBeforeLanding(t *testing.T) {
+	i := Starting.Index("public")
+	if i < 0 || Starting.Steps[i].Kind != KindGate || i != Starting.Index("land")-1 {
+		t.Fatalf("want a public gate just before landing, got index %d", i)
+	}
+	s := Starting.Steps[i].Instructions
+	for _, want := range []string{"gh repo view", "skip this step", "fresh sub-agent", "origin/main", "work/",
+		"metrics", "Aggregate-only", "back to Do the work"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("public gate misses %q", want)
+		}
+	}
+}
+
+// Audits and walkthroughs can hold private operational details and no counts at all: a public
+// link to one publishes those details just the same.
+func TestFileDeliveryKeepsInternalReportsWithoutMetricsRestricted(t *testing.T) {
+	for _, want := range []string{"every internal report", "audits", "reviews", "walkthroughs",
+		"incidents", "security weaknesses", "credential names", "even redacted", "even with no metrics"} {
+		if !strings.Contains(FileDeliveryRule, want) {
+			t.Errorf("file-delivery rule misses %q", want)
+		}
+	}
+	// Public delivery stays the default for everything else.
+	if !strings.Contains(FileDeliveryRule, "public, unguessable URLs with no authentication") {
+		t.Error("file-delivery rule lost its public default")
+	}
+}
+
+// A report committed and deleted again before the push is still in the pushed history, so the
+// public repository checks read every outgoing commit, not the final diff.
+func TestPublicRepositoryChecksReadEveryOutgoingCommit(t *testing.T) {
+	gate := Starting.Steps[Starting.Index("public")].Instructions
+	for name, text := range map[string]string{"contract": PublicRepoRule, "gate": gate} {
+		for _, want := range []string{"git log -m --stat origin/main..HEAD", "merge commits", "every outgoing commit",
+			"deleted in a later commit", "rewrite"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s misses %q", name, want)
+			}
+		}
+		if strings.Contains(text, "git diff --stat origin/main...HEAD") {
+			t.Errorf("%s still reviews only the final diff", name)
+		}
+	}
+	if !strings.Contains(gate, "reports outside work/") {
+		t.Error("gate does not look for reports outside work/")
 	}
 }

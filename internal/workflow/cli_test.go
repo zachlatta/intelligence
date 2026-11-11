@@ -11,6 +11,58 @@ import (
 	"testing"
 )
 
+func TestProposalAnswerCLIValidation(t *testing.T) {
+	id := "11111111-1111-4111-8111-111111111111"
+	path, body, err := parseAnswerProposalCLI([]string{"--proposal", id, "--question", "42", "--note", "-"}, strings.NewReader("## Answer\nBecause."))
+	if err != nil || path != "/api/workflow-proposals/"+id+"/comments/agent" {
+		t.Fatalf("path: %s %v", path, err)
+	}
+	var got struct {
+		Text       string
+		QuestionID int64
+	}
+	if err = json.Unmarshal(body, &got); err != nil || got.QuestionID != 42 || got.Text != "## Answer\nBecause." {
+		t.Fatalf("body: %s %v", body, err)
+	}
+	for _, args := range [][]string{{"--proposal", id, "--question", "0", "--note", "-"}, {"--proposal", "../other", "--question", "1", "--note", "-"}, {"--proposal", id, "--question", "1"}} {
+		if _, _, err := parseAnswerProposalCLI(args, strings.NewReader("text")); err == nil {
+			t.Fatalf("accepted %v", args)
+		}
+	}
+	if _, _, err := parseAnswerProposalCLI([]string{"--proposal", id, "--question", "42", "--note", "-"}, strings.NewReader(strings.Repeat("a", 20001))); err == nil {
+		t.Fatal("accepted oversized answer")
+	}
+}
+
+func TestProposalCLIUsesHostConfiguration(t *testing.T) {
+	var paths []string
+	var bodies []map[string]any
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer host-key" {
+			t.Error("missing host key")
+		}
+		var b map[string]any
+		json.NewDecoder(r.Body).Decode(&b)
+		paths = append(paths, r.URL.Path)
+		bodies = append(bodies, b)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"demo","approvalURL":"https://example.com/review/demo"}`))
+	}))
+	defer s.Close()
+	home := boxHome(t, s.URL)
+	file := filepath.Join(t.TempDir(), "proposal.json")
+	os.WriteFile(file, []byte(`{"operation":"delete","summary":"Remove unused","workflowId":"demo","baseVersion":1}`), 0600)
+	for _, args := range [][]string{{"propose", file}, {"withdraw", "demo", "--reason", "Replaced by a better plan"}} {
+		code, out, errOut := runCLI(t, home, "", args...)
+		if code != 0 || !strings.Contains(out, "demo") {
+			t.Fatalf("%v: %d %s %s", args, code, out, errOut)
+		}
+	}
+	if paths[0] != "/api/workflow-proposals" || paths[1] != "/api/workflow-proposals/demo/withdraw" || bodies[1]["reason"] != "Replaced by a better plan" {
+		t.Fatalf("requests: %v %+v", paths, bodies)
+	}
+}
+
 func TestCLISuggestDoesNotAdvanceRun(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/workflow-runs/run-1/suggestions" {
@@ -80,6 +132,7 @@ func TestTheCLISendsEachMoveWithTheBoxsKey(t *testing.T) {
 		{[]string{"project", "--run", "r1", "/srv/dev/app"}, Move{Move: "project", Directory: "/srv/dev/app"}},
 		{[]string{"project", "--run", "r1", "none"}, Move{Move: "project", Directory: "none"}},
 		{[]string{"next", "--run", "r1", "--summary", "built it"}, Move{Move: "next", Summary: "built it"}},
+		{[]string{"summarize", "--run", "r1", "--summary", "Summarize workflow run titles"}, Move{Move: "summarize", Summary: "Summarize workflow run titles"}},
 		{[]string{"back", "--run", "r1", "build", "--why", "no test"}, Move{Move: "back", Step: "build", Why: "no test"}},
 		{[]string{"back", "--why", "no test", "--run", "r1", "build"}, Move{Move: "back", Step: "build", Why: "no test"}},
 		{[]string{"skip", "--run", "r1", "--why", "only what he asked"}, Move{Move: "skip", Why: "only what he asked"}},

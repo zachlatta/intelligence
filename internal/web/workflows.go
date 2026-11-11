@@ -29,7 +29,7 @@ import (
 var workflowsHTML string
 
 var workflowsTmpl = template.Must(template.New("workflows").Funcs(template.FuncMap{
-	"short": short, "ago": ago, "markdown": markdown, "plural": plural, "emailSummary": emailSummary,
+	"short": short, "ago": ago, "markdown": markdown, "plural": plural, "emailSummary": emailSummary, "voiceMemoSummary": voiceMemoSummary,
 	"json": func(v any) (template.JS, error) {
 		b, err := json.Marshal(v)
 		return template.JS(b), err //nolint:gosec // JSON from the server's own values, in a script
@@ -207,14 +207,35 @@ func (a *app) cancelRun(v viewer) http.HandlerFunc {
 			workflowError(w, err)
 			return
 		}
+		a.startQueued(r.Context()) // a run that ended may make room for a queued one
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// startQueuedRun: POST /api/workflow-runs/{id}/start {}: a queued run starts now, ahead of its
+// queue, whatever its host's load.
+func (a *app) startQueuedRun(v viewer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := a.wf.StartNow(r.Context(), v.acct.ID, r.PathValue("id")); err != nil {
+			workflowError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// startQueued starts the queued runs whose hosts have room. It is best effort: what it misses,
+// the queue's own ticker picks up.
+func (a *app) startQueued(ctx context.Context) {
+	if err := a.wf.StartQueued(ctx); err != nil {
+		log.Printf("workflow queue: %v", err)
 	}
 }
 
 // moveRun: POST /api/workflow-runs/{id}/moves, from a host's agent with the host's key
 // (`intelligence workflow`). It answers {"message"}: what the agent should read next.
 func (a *app) moveRun(w http.ResponseWriter, r *http.Request) {
-	host, ok := a.workflowHost(w, r)
+	_, host, ok := a.hostCaller(w, r)
 	if !ok {
 		return
 	}
@@ -223,22 +244,10 @@ func (a *app) moveRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	msg, err := a.wf.MoveRun(r.Context(), host, r.PathValue("id"), m)
+	if err == nil && m.Move != "summarize" { // labeling a run must not start it or another queued run
+		a.startQueued(r.Context()) // a run that ended may make room for a queued one
+	}
 	workflowResult(w, msg, err)
-}
-
-// workflowHost is the shared host-key boundary for moves and recorded suggestions.
-func (a *app) workflowHost(w http.ResponseWriter, r *http.Request) (string, bool) {
-	key, _ := bearerOf(r)
-	host, err := a.store.HostOfKey(r.Context(), key)
-	if err != nil {
-		workflowResult(w, "", err)
-		return "", false
-	}
-	if host == "" {
-		workflowMessage(w, http.StatusUnauthorized, "bad or missing host key")
-		return "", false
-	}
-	return host, true
 }
 
 func decodeWorkflowJSON(w http.ResponseWriter, r *http.Request, v any) bool {
@@ -281,16 +290,18 @@ func workflowResult(w http.ResponseWriter, msg string, err error) {
 // --- reads, through the account's role ---
 
 type workflowRow struct {
-	ID          string              `json:"id"`
-	Name        string              `json:"name"`
-	Description string              `json:"description"`
-	Version     int                 `json:"version"`
-	IsDefault   bool                `json:"isDefault"`
-	Definition  workflow.Definition `json:"definition"`
+	ID               string              `json:"id"`
+	Name             string              `json:"name"`
+	Description      string              `json:"description"`
+	Version          int                 `json:"version"`
+	IsDefault        bool                `json:"isDefault"`
+	Definition       workflow.Definition `json:"definition"`
+	PendingProposals int                 `json:"pendingProposals"`
 }
 
 func readWorkflows(ctx context.Context, p *pgxpool.Pool, id string) ([]workflowRow, error) {
-	rows, err := p.Query(ctx, `SELECT w.id::text, w.name, w.description, w.version, w.is_default, v.definition FROM workflows w
+	rows, err := p.Query(ctx, `SELECT w.id::text, w.name, w.description, w.version, w.is_default, v.definition,
+		(SELECT count(*) FROM workflow_proposal_status p WHERE p.workflow_id=w.id AND p.effective_status='pending') FROM workflows w
 		JOIN workflow_versions v ON v.workflow_id = w.id AND v.version = w.version
 		WHERE w.deleted_at IS NULL AND ($1 = '' OR w.id::text = $1) ORDER BY w.is_default DESC, w.created_at, w.id`, id)
 	if err != nil {
@@ -299,7 +310,7 @@ func readWorkflows(ctx context.Context, p *pgxpool.Pool, id string) ([]workflowR
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (workflowRow, error) {
 		var w workflowRow
 		var def []byte
-		err := row.Scan(&w.ID, &w.Name, &w.Description, &w.Version, &w.IsDefault, &def)
+		err := row.Scan(&w.ID, &w.Name, &w.Description, &w.Version, &w.IsDefault, &def, &w.PendingProposals)
 		if err == nil {
 			err = json.Unmarshal(def, &w.Definition)
 		}
@@ -311,23 +322,33 @@ func readWorkflows(ctx context.Context, p *pgxpool.Pool, id string) ([]workflowR
 type runRow struct {
 	ID, Title, Input, Status, Host, Repo, Branch, Workflow, WorkflowID   string
 	WorkspaceID, WorkspaceTitle, Orchestrator, ProjectAgent, Note, Error string
+	QueueReason                                                          string
+	Position                                                             int // in its host's queue (workflow_run_queue), 1 next; 0 not queued
 	Step, Version                                                        int
 	WorkflowDeleted                                                      bool
 	Steps                                                                []workflow.Step
 	CreatedAt, UpdatedAt                                                 time.Time
 	FinishedAt                                                           *time.Time
+	StartRetries                                                         int
+	StartRetryAt                                                         *time.Time
+	HostOnline, DaemonConnected, RetryKeys                               bool
 }
 
-const runRowSelect = `SELECT r.id::text, r.title, r.input, r.status, r.host, r.repo, r.branch, w.name, r.workflow_id::text, r.workspace_id, r.workspace_title,
+const runRowSelect = `SELECT r.id::text, coalesce(nullif(r.task_summary, ''), r.title), r.input, r.status, r.host, r.repo, r.branch, w.name, r.workflow_id::text, r.workspace_id, r.workspace_title,
 	r.orchestrator_id, r.project_agent_id, r.note, r.error, r.step, r.version, v.definition -> 'steps', r.created_at, r.updated_at, r.finished_at,
-	w.deleted_at IS NOT NULL
-	FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id JOIN workflow_versions v ON v.workflow_id = r.workflow_id AND v.version = r.version `
+	w.deleted_at IS NOT NULL, r.start_retries, r.start_retry_at,
+	COALESCE((SELECT online FROM host_status WHERE name=r.host),false),
+	COALESCE((SELECT online AND connected FROM host_status WHERE name=r.host),false),
+	COALESCE((SELECT start_retry_keys FROM hosts WHERE name=r.host),false), r.queue_reason, coalesce(q.position, 0)
+	FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id JOIN workflow_versions v ON v.workflow_id = r.workflow_id AND v.version = r.version
+	LEFT JOIN workflow_run_queue q ON q.run_id = r.id `
 
 func scanRunRow(row pgx.CollectableRow) (runRow, error) {
 	var r runRow
 	var steps []byte
 	err := row.Scan(&r.ID, &r.Title, &r.Input, &r.Status, &r.Host, &r.Repo, &r.Branch, &r.Workflow, &r.WorkflowID, &r.WorkspaceID, &r.WorkspaceTitle,
-		&r.Orchestrator, &r.ProjectAgent, &r.Note, &r.Error, &r.Step, &r.Version, &steps, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt, &r.WorkflowDeleted)
+		&r.Orchestrator, &r.ProjectAgent, &r.Note, &r.Error, &r.Step, &r.Version, &steps, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt, &r.WorkflowDeleted,
+		&r.StartRetries, &r.StartRetryAt, &r.HostOnline, &r.DaemonConnected, &r.RetryKeys, &r.QueueReason, &r.Position)
 	if err == nil {
 		err = json.Unmarshal(steps, &r.Steps)
 	}
@@ -336,7 +357,12 @@ func scanRunRow(row pgx.CollectableRow) (runRow, error) {
 
 // Where reads as: what a run is doing now.
 func (r runRow) Where() string {
+	if r.Position > 0 {
+		return r.InLine()
+	}
 	switch r.Status {
+	case workflow.Queued:
+		return r.InLine()
 	case workflow.FindingProject:
 		return "finding the project"
 	case workflow.StartingOrchestrator:
@@ -349,8 +375,36 @@ func (r runRow) Where() string {
 	return ""
 }
 
+// InLine says where a queued run is in its host's queue: "2nd in line for host-1".
+func (r runRow) InLine() string {
+	if r.Position < 1 {
+		return "queued for room on " + r.Host
+	}
+	return ordinal(r.Position) + " in line for " + r.Host
+}
+
+func ordinal(n int) string {
+	suffix := "th"
+	switch {
+	case n%100 >= 11 && n%100 <= 13:
+	case n%10 == 1:
+		suffix = "st"
+	case n%10 == 2:
+		suffix = "nd"
+	case n%10 == 3:
+		suffix = "rd"
+	}
+	return fmt.Sprintf("%d%s", n, suffix)
+}
+
 // StatusLabel and StatusClass show a run's status as the pages' badges do.
 func (r runRow) StatusLabel() string {
+	if r.RetryStatus() != "" {
+		if r.StartRetryAt != nil {
+			return "retry queued"
+		}
+		return "retrying"
+	}
 	switch r.Status {
 	case workflow.FindingProject, workflow.StartingOrchestrator, workflow.Running:
 		return "running"
@@ -360,12 +414,32 @@ func (r runRow) StatusLabel() string {
 	return r.Status
 }
 
+// RetryStatus describes either the next queued retry or the delivery in progress.
+func (r runRow) RetryStatus() string {
+	if r.Error == "" || (r.Status != workflow.FindingProject && r.Status != workflow.StartingOrchestrator) {
+		return ""
+	}
+	if r.StartRetryAt != nil {
+		return fmt.Sprintf("Retry %d of %d queued", r.StartRetries+1, workflow.StartRetryLimit)
+	}
+	return fmt.Sprintf("Retry %d of %d sent", r.StartRetries, workflow.StartRetryLimit)
+}
+
+func (r runRow) RetryDeadline() time.Time {
+	if r.StartRetryAt == nil {
+		return time.Time{}
+	}
+	return r.StartRetryAt.Add(workflow.RetryWaitLimit)
+}
+
 func (r runRow) StatusClass() string {
 	switch r.Status {
 	case workflow.FindingProject, workflow.StartingOrchestrator, workflow.Running:
 		return "st-running"
 	case workflow.Waiting:
 		return "st-needs"
+	case workflow.Queued:
+		return "st-queued"
 	case workflow.Succeeded:
 		return "st-done"
 	case workflow.Failed:
@@ -656,8 +730,13 @@ func workflowPage(cfg Config, a *app, v viewer) http.HandlerFunc {
 				others = append(others, o)
 			}
 		}
+		voiceStatus, err := readVoiceMemoStatus(r.Context(), cfg, v)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
 		renderWorkflows(w, "editor", map[string]any{"Version": cfg.Version, "Workflow": wfs[0], "Hosts": hosts, "Repos": repos,
-			"EmailOn": a.mail != nil, "Mailbox": mb.Address, "Emails": previews(emails), "Others": others,
+			"VoiceStatus": voiceStatus, "EmailOn": a.mail != nil, "Mailbox": mb.Address, "Emails": previews(emails), "Others": others,
 			"Dictation": dictationPath(cfg), "Providers": workflow.Providers()})
 	}
 }
@@ -734,9 +813,16 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		if run.QueueReason != "" { // it was queued: its first event submitted it, and it started later
+			for i := range events {
+				if events[i].Kind == "started" {
+					events[i].Kind = "submitted"
+				}
+			}
+		}
 		var before []runEvent // what happened before the steps: the start and the project
 		for _, e := range events {
-			if e.Step == nil && e.Kind != "cancel" {
+			if e.Step == nil && e.Kind != "cancel" && e.Kind != "summarize" {
 				before = append(before, e)
 			}
 		}
@@ -745,9 +831,14 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		voiceMemos, err := readVoiceMemos(ctx, v.pool, id)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
 		slices.Reverse(emails) // oldest first, as a thread reads
 		renderWorkflows(w, "run", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Run": run, "Steps": stepViews(run, events, visits, cfg.Now()),
-			"Agents": agents, "Before": before, "Events": events, "Emails": emails, "ArchiveStatus": archiveStatus, "ArchiveError": archiveError, "Dictation": dictationPath(cfg)})
+			"Agents": agents, "Before": before, "Events": events, "Emails": emails, "VoiceMemos": voiceMemos, "ArchiveStatus": archiveStatus, "ArchiveError": archiveError, "Dictation": dictationPath(cfg)})
 	}
 }
 
@@ -785,6 +876,14 @@ func (e runEvent) Line() string {
 		return e.Text
 	case "started":
 		return "Started"
+	case "summarize":
+		return "Task summary: " + e.Text
+	case "submitted": // the start of a run that was queued
+		return "Submitted"
+	case "queued":
+		return "Queued: " + e.Text
+	case "dequeued":
+		return "Started: " + e.Text
 	case "project":
 		if e.Text == "none" {
 			return "Project: none (the home directory)"
@@ -812,6 +911,10 @@ func (e runEvent) Line() string {
 		return "Canceled"
 	case "error":
 		return e.Text
+	case "start_retry":
+		return "Start failed; retry queued: " + e.Text
+	case "start_retry_sent":
+		return "Retry sent: " + e.Text
 	}
 	return e.Kind + " " + e.Text
 }

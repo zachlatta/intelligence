@@ -48,7 +48,7 @@ func (a *app) deleteModelGroup(v viewer) http.HandlerFunc {
 }
 
 func (a *app) suggestModel(w http.ResponseWriter, r *http.Request) {
-	host, ok := a.workflowHost(w, r)
+	_, host, ok := a.hostCaller(w, r)
 	if !ok {
 		return
 	}

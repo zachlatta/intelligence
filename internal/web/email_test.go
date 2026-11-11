@@ -158,6 +158,16 @@ func TestEmailStartsTheWorkflowThatMatchesItAndRepliesGoToItsRun(t *testing.T) {
 		t.Fatalf("command = %s %s", ws.Kind, ws.Args)
 	}
 	succeed(t, b, ws, `{"workspaceId":"w-run","agentId":"orch-1"}`)
+	// Email links use the same task label as the runs list, with the legacy title as fallback.
+	if page := get(t, h, "/workflows/email", nil).Body.String(); !strings.Contains(page, "Q4 board deck</a>") {
+		t.Fatal("email page missing fallback title")
+	}
+	if code, msg := move(t, h, key, run, map[string]string{"move": "summarize", "summary": "Prepare quarterly board presentation"}); code != http.StatusOK {
+		t.Fatalf("summary: %d %s", code, msg)
+	}
+	if page := get(t, h, "/workflows/email", nil).Body.String(); !strings.Contains(page, "Prepare quarterly board presentation</a>") {
+		t.Fatal("email page missing task summary")
+	}
 
 	// her reply in the thread goes to the run's orchestrator, without its quoted history
 	fake.Add(mailMsg("m2", "t1", "christina@example.com", "Re: Q4 board deck",

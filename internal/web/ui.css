@@ -50,6 +50,22 @@ h1, h2, h3 { color: var(--fg); letter-spacing: -.01em; }
   white-space: nowrap; margin-bottom: -1px; }
 .topnav a:hover { color: var(--fg); text-decoration: none; }
 .topnav a[aria-current=page] { color: var(--fg); border-bottom-color: var(--fg); }
+/* how many What's New entries are unseen (whatsnew.js): a number, so it does not rest on colour */
+.topnav .unseen-count { display: inline-flex; align-items: center; justify-content: center; min-width: 1.15rem; height: 1.15rem;
+  margin-left: .35rem; padding: 0 .3rem; border-radius: 999px; background: var(--accent); color: #fff; font-size: 11px;
+  font-weight: 600; line-height: 1; vertical-align: .1rem; }
+.topnav .unseen-count[hidden] { display: none; }
+/* the note under the top bar that something new shipped (whatsnew.js) */
+.whatsnew-note { display: flex; align-items: center; gap: .6rem; margin-top: 1rem; padding: .5rem .8rem; border-radius: var(--radius);
+  border: 1px solid var(--accent-line); background: var(--accent-bg); color: var(--fg-2); font-size: 13px; }
+.whatsnew-note .what { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.whatsnew-note .what b { color: var(--fg); font-weight: 600; }
+@media (max-width: 40rem) {
+  /* every tab stays in sight on a phone (with What's New's count), on two rows if need be */
+  .topnav { flex-wrap: wrap; gap: 0 1.1rem; overflow-x: visible; }
+  .whatsnew-note { flex-wrap: wrap; }
+  .whatsnew-note .what { flex-basis: 100%; }
+}
 
 /* page structure */
 .page { padding-top: 2rem; padding-bottom: 4rem; }
@@ -137,6 +153,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--line);
   border: 1px solid var(--red-line); background: var(--red-bg); color: var(--red); white-space: pre-wrap; overflow-wrap: anywhere; }
 .banner[hidden] { display: none; }
 .banner.note { border-color: var(--line); background: var(--bg-subtle); color: var(--fg-2); }
+#start-retry { white-space: normal; }
 .warn { color: var(--red); }
 .empty-state { padding: 3rem 1rem; text-align: center; color: var(--muted); border: 1px dashed var(--line-strong);
   border-radius: var(--radius); }

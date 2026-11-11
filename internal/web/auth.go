@@ -26,6 +26,39 @@ type viewer struct {
 	reg  *fleet.Registry // reads through pool
 }
 
+// hostCaller is shared by run moves and proposal-only CLI writes. A host key
+// identifies its account but never authorizes approval or workflow submission.
+func (a *app) hostCaller(w http.ResponseWriter, r *http.Request) (accounts.Account, string, bool) {
+	key, _ := bearerOf(r)
+	host, acct, err := a.store.HostIdentity(r.Context(), key)
+	if err != nil {
+		workflowResult(w, "", err)
+		return accounts.Account{}, "", false
+	}
+	if host == "" {
+		workflowMessage(w, http.StatusUnauthorized, "bad or missing host key")
+		return accounts.Account{}, "", false
+	}
+	return acct, host, true
+}
+
+func (a *app) hostWrite(h func(accounts.Account, string) http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !sameOrigin(r) {
+			http.Error(w, "cross-site request refused", http.StatusForbidden)
+			return
+		}
+		if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/json" {
+			http.Error(w, "send JSON", http.StatusUnsupportedMediaType)
+			return
+		}
+		acct, host, ok := a.hostCaller(w, r)
+		if ok {
+			h(acct, host)(w, r)
+		}
+	}
+}
+
 // viewerOf is the account r is signed in as, or accounts.ErrNoSession.
 func (a *app) viewerOf(r *http.Request) (viewer, error) {
 	c, err := r.Cookie(sessionCookie)
