@@ -386,7 +386,7 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		if r.Def.Project.Mode == ProjectFixed {
 			return e.startOrchestrator(ctx, tx, r, r.Def.Project.Directory)
 		}
-		repos, err := repositories(ctx, tx, host)
+		repos, err := Repositories(ctx, tx, host)
 		if err != nil {
 			return err
 		}
@@ -407,9 +407,11 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 	return id, err
 }
 
-// repositories includes registered git projects without workspaces, with workspace roots as fallback.
-func repositories(ctx context.Context, tx pgx.Tx, host string) ([]string, error) {
-	rows, err := tx.Query(ctx, "SELECT DISTINCT directory FROM host_repositories WHERE host = $1 ORDER BY 1", host)
+// Repositories lists host's git repositories, including registered projects without workspaces and workspace roots as fallback.
+func Repositories(ctx context.Context, q interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}, host string) ([]string, error) {
+	rows, err := q.Query(ctx, "SELECT DISTINCT directory FROM host_repositories WHERE host = $1 ORDER BY 1", host)
 	if err != nil {
 		return nil, err
 	}
@@ -551,7 +553,7 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		if repo == "none" {
 			repo = ""
 		} else {
-			repos, err := repositories(ctx, tx, r.Host)
+			repos, err := Repositories(ctx, tx, r.Host)
 			if err != nil {
 				return "", err
 			}

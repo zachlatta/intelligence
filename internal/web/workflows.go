@@ -579,21 +579,29 @@ func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 	}
 }
 
+func readWorkflow(w http.ResponseWriter, r *http.Request, p *pgxpool.Pool) (workflowRow, bool) {
+	id := r.PathValue("id")
+	if !workflowIDRe.MatchString(id) {
+		http.NotFound(w, r)
+		return workflowRow{}, false
+	}
+	wfs, err := readWorkflows(r.Context(), p, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return workflowRow{}, false
+	}
+	if len(wfs) == 0 {
+		http.NotFound(w, r)
+		return workflowRow{}, false
+	}
+	return wfs[0], true
+}
+
 // workflowPage: GET /workflows/{id}: the editor.
 func workflowPage(cfg Config, a *app, v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		if !workflowIDRe.MatchString(id) {
-			http.NotFound(w, r)
-			return
-		}
-		wfs, err := readWorkflows(r.Context(), v.pool, id)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if len(wfs) == 0 {
-			http.NotFound(w, r)
+		wf, ok := readWorkflow(w, r, v.pool)
+		if !ok {
 			return
 		}
 		hosts, err := readHosts(r.Context(), v.pool)
@@ -623,11 +631,11 @@ func workflowPage(cfg Config, a *app, v viewer) http.HandlerFunc {
 		}
 		others := []workflowRow{} // the other workflows email starts: the preview says which email they would take
 		for _, o := range all {
-			if o.ID != id && o.Definition.Trigger == workflow.TriggerEmail && o.Definition.Email != nil {
+			if o.ID != wf.ID && o.Definition.Trigger == workflow.TriggerEmail && o.Definition.Email != nil {
 				others = append(others, o)
 			}
 		}
-		renderWorkflows(w, "editor", map[string]any{"Version": cfg.Version, "Workflow": wfs[0], "Hosts": hosts, "Repos": repos,
+		renderWorkflows(w, "editor", map[string]any{"Version": cfg.Version, "Workflow": wf, "Hosts": hosts, "Repos": repos,
 			"EmailOn": a.mail != nil, "Mailbox": mb.Address, "Emails": previews(emails), "Others": others,
 			"Dictation": dictationPath(cfg), "Providers": workflow.Providers()})
 	}
@@ -638,21 +646,10 @@ func workflowPage(cfg Config, a *app, v viewer) http.HandlerFunc {
 // remain visible placeholders; this preview neither starts a run nor persists new state.
 func workflowPromptsPage(cfg Config, v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		if !workflowIDRe.MatchString(id) {
-			http.NotFound(w, r)
+		wf, ok := readWorkflow(w, r, v.pool)
+		if !ok {
 			return
 		}
-		wfs, err := readWorkflows(r.Context(), v.pool, id)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if len(wfs) == 0 {
-			http.NotFound(w, r)
-			return
-		}
-		wf := wfs[0]
 		d := wf.Definition
 		vars := workflow.Vars{Run: "{{run}}", Input: "{{input}}", Repo: "{{repo}}", Branch: "{{branch}}"}
 		if d.Project.Mode == workflow.ProjectFixed {
@@ -660,12 +657,7 @@ func workflowPromptsPage(cfg Config, v viewer) http.HandlerFunc {
 		}
 		var project string
 		if d.Project.Mode == workflow.ProjectMatch {
-			rows, err := v.pool.Query(r.Context(), "SELECT DISTINCT directory FROM host_repositories WHERE host = $1 ORDER BY 1", d.Host)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			repos, err := pgx.CollectRows(rows, pgx.RowTo[string])
+			repos, err := workflow.Repositories(r.Context(), v.pool, d.Host)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
