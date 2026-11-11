@@ -44,6 +44,9 @@ func (s *Service) Run(ctx context.Context) {
 func (s *Service) Poll(ctx context.Context) error {
 	var account int64
 	if err := s.DB.QueryRow(ctx, "SELECT id FROM accounts WHERE username = $1", s.Username).Scan(&account); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("PDW_INTELLIGENCE_ACCOUNT %q does not exist; set it to an existing Intelligence username", s.Username)
+		}
 		return err
 	}
 	if _, err := s.DB.Exec(ctx, "INSERT INTO voice_memo_polling (account_id) VALUES ($1) ON CONFLICT DO NOTHING", account); err != nil {
@@ -131,8 +134,12 @@ func (s *Service) poll(ctx context.Context, account int64, cursor *string, initi
 // keep commits the receipt and run together; a failure leaves both retryable.
 func (s *Service) keep(ctx context.Context, account int64, m workflow.VoiceMemo, start bool) error {
 	return pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `INSERT INTO voice_memos(account_id,source,pdw_account,recording_id,title,preview,transcript_length,decision)
- VALUES($1,$2,$3,$4,$5,$6,$7,'ignored') ON CONFLICT DO NOTHING`, account, m.Source, m.Account, m.ID, m.Title, string([]rune(m.Transcript)[:min(1000, len([]rune(m.Transcript)))]), m.TranscriptLength)
+		reason := "No workflow matched"
+		if !start {
+			reason = "Baseline backlog skipped"
+		}
+		tag, err := tx.Exec(ctx, `INSERT INTO voice_memos(account_id,source,pdw_account,recording_id,title,preview,transcript_length,decision,recorded_at,reason)
+ VALUES($1,$2,$3,$4,$5,$6,$7,'ignored',nullif($8,'')::timestamptz,$9) ON CONFLICT DO NOTHING`, account, m.Source, m.Account, m.ID, m.Title, string([]rune(m.Transcript)[:min(1000, len([]rune(m.Transcript)))]), m.TranscriptLength, m.RecordedAt, reason)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
@@ -175,7 +182,7 @@ func (s *Service) keep(ctx context.Context, account int64, m workflow.VoiceMemo,
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `UPDATE voice_memos SET decision='started',workflow_id=$5,run_id=$6 WHERE account_id=$1 AND source=$2 AND pdw_account=$3 AND recording_id=$4`, account, m.Source, m.Account, m.ID, best, run)
+		_, err = tx.Exec(ctx, `UPDATE voice_memos SET decision='started',workflow_id=$5,run_id=$6::uuid,reason='Started run ' || $6::uuid::text WHERE account_id=$1 AND source=$2 AND pdw_account=$3 AND recording_id=$4`, account, m.Source, m.Account, m.ID, best, run)
 		return err
 	})
 }

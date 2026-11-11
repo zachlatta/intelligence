@@ -200,6 +200,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("PUT /api/gmail/owners", a.write(a.gmailOwners))
 	mux.HandleFunc("DELETE /api/gmail", a.write(a.gmailDisconnect))
 	mux.HandleFunc("GET /gmail/callback", gmailCallback)
+	mux.HandleFunc("GET /workflows/voice-memos", a.page(func(v viewer) http.HandlerFunc { return voiceMemosPage(cfg, v) }))
 	mux.HandleFunc("GET /workflows/email", a.page(func(v viewer) http.HandlerFunc { return emailPage(cfg, a, v) }))
 	mux.HandleFunc("GET /workflows/{id}", a.page(func(v viewer) http.HandlerFunc { return workflowPage(cfg, a, v) }))
 	mux.HandleFunc("GET /workflow-runs/{id}", a.page(func(v viewer) http.HandlerFunc { return runPage(cfg, v) }))

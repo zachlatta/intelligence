@@ -142,13 +142,13 @@
 </html>
 {{end}}
 
-{{define "chips"}}<span class="chip"{{if eq .Trigger "email"}} title="{{emailSummary .Email}}"{{end}}>{{if eq .Trigger "task"}}Task{{else if eq .Trigger "email"}}Email{{else}}By hand{{end}}</span><span class="arrow">→</span><span class="chip">Find the project</span><span class="arrow">→</span><span class="chip">Orchestrator</span>{{range .Steps}}<span class="arrow">→</span><span class="chip k-{{.Kind}}">{{.Title}}</span>{{end}}{{end}}
+{{define "chips"}}<span class="chip"{{if eq .Trigger "email"}} title="{{emailSummary .Email}}"{{else if eq .Trigger "voice_memo"}} title="{{voiceMemoSummary .VoiceMemo}}"{{end}}>{{if eq .Trigger "task"}}Task{{else if eq .Trigger "email"}}Email{{else if eq .Trigger "voice_memo"}}Voice memo{{else}}By hand{{end}}</span><span class="arrow">→</span><span class="chip">Find the project</span><span class="arrow">→</span><span class="chip">Orchestrator</span>{{range .Steps}}<span class="arrow">→</span><span class="chip k-{{.Kind}}">{{.Title}}</span>{{end}}{{end}}
 
 {{define "list"}}{{template "wfhead" "Workflows"}}
 <main class="container page">
 <div class="page-head">
   <div><h1>Workflows</h1><p class="sub">Each run finds its project, starts an orchestrator in the worktree, and hands it the steps one at a time.</p></div>
-  <div class="actions"><a class="btn sm" href="/workflows/email">Email</a>{{if .Workflows}}<button class="btn sm" id="new-workflow">New workflow</button>{{end}}</div>
+  <div class="actions"><a class="btn sm" href="/workflows/email">Email</a><a class="btn sm" href="/workflows/voice-memos">Voice memos</a>{{if .Workflows}}<button class="btn sm" id="new-workflow">New workflow</button>{{end}}</div>
 </div>
 <p class="banner" id="error" hidden></p>
 {{if not .Workflows}}
@@ -180,7 +180,7 @@
 <section class="card wf-card">
   <div class="card-head"><h2><a href="/workflows/{{.ID}}">{{.Name}}</a></h2><span class="badge">v{{.Version}}</span>{{if .IsDefault}}<span class="badge">Default</span>{{end}}</div>
   <div class="card-body">{{with .Description}}<div class="meta">{{.}}</div>{{end}}<div class="strip">{{template "chips" .Definition}}</div>
-    {{if eq .Definition.Trigger "email"}}<p class="hint">✉ {{emailSummary .Definition.Email}}</p>{{end}}</div>
+    {{if eq .Definition.Trigger "email"}}<p class="hint">✉ {{emailSummary .Definition.Email}}</p>{{end}}{{if eq .Definition.Trigger "voice_memo"}}<p class="hint">{{voiceMemoSummary .Definition.VoiceMemo}}</p>{{end}}</div>
   <div class="card-foot">{{if eq .Definition.Trigger "task"}}
     <button class="btn sm" data-default-workflow="{{.ID}}" data-default="{{if .IsDefault}}false{{else}}true{{end}}">{{if .IsDefault}}Clear default{{else}}Make default{{end}}</button>{{end}}
     <span class="grow"></span><button class="btn sm ghost" data-delete-workflow="{{.ID}}" data-name="{{.Name}}">Delete</button><a class="btn sm" href="/workflows/{{.ID}}">Edit</a></div>
@@ -308,6 +308,7 @@ setInterval(async () => {
   </div>
 </div>
 <p class="banner" id="error" hidden></p>
+<template id="voice-poll-status">{{template "voice-status" .VoiceStatus}}</template>
 <div id="editor"></div>
 <div id="menu" class="menu" hidden></div>
 <dialog id="start">
@@ -461,7 +462,7 @@ function previewHTML(f) {
     <p class="hint">Recent email to ${esc(mailbox)}, matched as you type. Replies in a run's thread go to that run instead.</p>`;
 }
 function voiceMemoPanel(f = {}) {
-  return `<p class="hint">Requires the server PDW connection bound to this account. Matches every field, ignoring case. Leave all fields empty for every new recording. Most filled fields wins; ties use the oldest workflow. Only the first 1000 transcript characters enter a run.</p>${[["title","Title contains"],["words","Title or transcript contains"],["without","Does not contain"]].map(([k,l]) => `<label>${l}</label><input data-vm="${k}" value="${esc(f[k] || "")}">`).join("")}`;
+  return `${$("#voice-poll-status").innerHTML}<p class="hint">Matches every field, ignoring case. Leave all fields empty for every new recording. Most filled fields wins; ties use the oldest workflow. Only the first 1000 transcript characters enter a run.</p>${[["title","Title contains"],["words","Title or transcript contains"],["without","Does not contain"]].map(([k,l]) => `<label>${l}</label><input data-vm="${k}" value="${esc(f[k] || "")}">`).join("")}`;
 }
 function emailPanel(f) {
   return `${mailbox ? `<p class="hint">Email to <b>${esc(mailbox)}</b> that matches every field you fill in starts a run.</p>` : ""}
@@ -687,6 +688,7 @@ render();
   <div class="actions">{{if .Run.Live}}<button class="btn sm" id="cancel">Cancel run</button>{{end}}</div>
 </div>
 <div class="request">{{.Run.Input}}</div>
+{{if .VoiceMemos}}<section class="card"><div class="card-head"><h2>Voice memo that started this run</h2><a href="/workflows/voice-memos">All voice memos</a></div><div class="card-body">{{template "voice-memo-rows" .VoiceMemos}}</div></section>{{end}}
 {{if .Emails}}<section class="card"><div class="card-head"><h2>Email thread</h2><span class="meta grow">what each email in it did</span><a class="btn sm ghost" href="/workflows/email">All email</a></div>
   <div class="card-body"><ul class="events">{{range .Emails}}<li><span class="t">{{.ReceivedAt.Format "Jan 2 15:04"}}</span><b>{{.Who}}</b> · {{or .Subject "(no subject)"}} · <span class="badge {{.Badge}}">{{.Label}}</span>{{with .Reason}} <span class="meta">{{.}}</span>{{end}}</li>{{end}}</ul></div></section>{{end}}
 {{if eq .Run.Status "failed"}}<p class="banner">{{or .Run.Error "The orchestrator marked the run failed."}}</p>{{end}}
@@ -771,4 +773,26 @@ async function refresh(all) {
 bind();
 setInterval(refresh, 4000);
 </script>
+{{template "wffoot" .}}{{end}}
+
+{{define "voice-status"}}
+<p role="status">{{.Message}}</p>
+<p class="hint">Last check: {{with .CheckedAt}}{{.Format "Jan 2, 2006 15:04:05 MST"}}{{else}}not checked yet{{end}} · {{if .Initialized}}Baseline complete{{else}}Waiting for the first complete scan{{end}}</p>
+{{with .Error}}<p class="banner" role="alert">Last poll error: {{.}}</p>{{end}}
+<p class="hint"><a href="/workflows/voice-memos">Recent voice memos and polling status</a></p>
+{{end}}
+
+{{define "voice-memo-rows"}}
+<ul class="events">{{range .}}<li><b>{{or .Title "Untitled voice memo"}}</b>
+<div class="meta">Recorded: {{with .RecordedAt}}{{.Format "Jan 2, 2006 15:04:05 MST"}}{{else}}unknown{{end}} · ID: {{.ID}} · {{.Source}} / {{.Account}}</div>
+<div><span class="badge">{{.Decision}}</span> · {{.Reason}}{{with .Run}} · <a href="/workflow-runs/{{.}}">Open run</a>{{end}}</div>
+<details><summary>Transcript preview</summary><p style="white-space:pre-wrap">{{.Preview}}</p></details>
+</li>{{else}}<li>No voice memos received yet.</li>{{end}}</ul>
+{{end}}
+
+{{define "voice-memos"}}{{template "wfhead" "Voice memos"}}
+<main class="container page"><div class="crumbs"><a href="/workflows">Workflows</a> / Voice memos</div>
+<h1>Voice memos</h1><section class="card"><div class="card-body">{{template "voice-status" .VoiceStatus}}
+<p class="hint">The most recent 200 receipts. The first scan skips the existing backlog. Later recordings start one matching workflow; updates do not start another run. PDW retains a 48-hour feed window.</p></div></section>
+<section class="card"><div class="card-head"><h2>Recent voice memos</h2></div><div class="card-body">{{template "voice-memo-rows" .VoiceMemos}}</div></section>
 {{template "wffoot" .}}{{end}}

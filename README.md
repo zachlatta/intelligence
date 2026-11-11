@@ -915,7 +915,8 @@ restarts. An outage longer than the feed's 48-hour window can lose recordings.
 
 Run input contains the title, recording time, duration, PDW identity, at most the first 1000
 Unicode characters of transcript, its total character count, and a truncation notice when
-needed. It includes exact SQL and a shell-quoted `pdw sql` command to fetch the full transcript
+needed. PDW's summary is included when available, also capped at 1000 Unicode characters.
+It includes exact SQL and a shell-quoted `pdw sql` command to fetch the full transcript
 by source, account and recording ID. Agents use their own normal PDW access for that command;
 the server's feed key cannot run SQL. Full transcripts are used for matching but never stored
 in Intelligence or embedded in run input.
@@ -923,6 +924,13 @@ in Intelligence or embedded in run input.
 Read `voice_memo_polling` through `/api/sql` for the cursor, initialization, last check and
 poll error. Read `voice_memos` for previews, lengths, decisions and linked workflow/run IDs.
 Both tables are restricted to their owning Intelligence account.
+The workflow editor shows whether PDW is configured for the signed-in account, the last check
+and the last poll error. `/workflows/voice-memos` shows the latest 200 receipts with their
+recording time and reason: baseline backlog skipped, no workflow matched, or the run started.
+The run page links back to its triggering memo. Receipts made before migration 0030 retain
+their links but may have an unknown recording time or legacy reason.
+If `PDW_INTELLIGENCE_ACCOUNT` names no existing account, the server log names the missing
+username and setting to correct; no account-owned polling row can be stored until it exists.
 
 Set all three server variables to enable polling:
 

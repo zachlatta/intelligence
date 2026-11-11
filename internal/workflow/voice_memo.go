@@ -19,6 +19,7 @@ type VoiceMemo struct {
 	Account          string      `json:"account"`
 	ID               string      `json:"recording_id"`
 	Title            string      `json:"title"`
+	Summary          string      `json:"summary"`
 	RecordedAt       string      `json:"recorded_at"`
 	Duration         json.Number `json:"duration_seconds"`
 	Transcript       string      `json:"transcript"`
@@ -54,5 +55,13 @@ func (m VoiceMemo) Input() string {
 	sql := "SELECT transcript FROM marts_voice_memos.recordings WHERE source = " + quote(m.Source) + " AND account = " + quote(m.Account) + " AND recording_id = " + quote(m.ID) + " LIMIT 1"
 	// POSIX shell quoting also handles quotes in source identifiers.
 	command := "pdw sql '" + strings.ReplaceAll(sql, "'", "'\"'\"'") + "'"
-	return fmt.Sprintf("Voice memo: %s\nRecorded: %s\nDuration (seconds): %s\nPDW source: %s; account: %s; recording ID: %s\n\nTranscript preview (%s):\n%s\n\nFetch the full transcript from PDW before acting on details beyond this preview. Exact SQL:\n%s\nCommand:\n%s\n", m.Title, m.RecordedAt, m.Duration, m.Source, m.Account, m.ID, note, string(r[:min(len(r), 1000)]), sql, command)
+	summary := ""
+	if text := []rune(strings.TrimSpace(m.Summary)); len(text) > 0 {
+		label := "PDW summary"
+		if len(text) > 1000 {
+			label += " (truncated to first 1000 characters)"
+		}
+		summary = label + ":\n" + string(text[:min(1000, len(text))]) + "\n\n"
+	}
+	return fmt.Sprintf("Voice memo: %s\nRecorded: %s\nDuration (seconds): %s\nPDW source: %s; account: %s; recording ID: %s\n\n%sTranscript preview (%s):\n%s\n\nFetch the full transcript from PDW before acting on details beyond this preview. Exact SQL:\n%s\nCommand:\n%s\n", m.Title, m.RecordedAt, m.Duration, m.Source, m.Account, m.ID, summary, note, string(r[:min(len(r), 1000)]), sql, command)
 }

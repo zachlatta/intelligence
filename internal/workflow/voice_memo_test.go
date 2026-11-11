@@ -47,3 +47,11 @@ func TestVoiceMemoPreviewBoundary(t *testing.T) {
 		}
 	}
 }
+
+func TestVoiceMemoIncludesBoundedPDWSummary(t *testing.T) {
+	m := VoiceMemo{Summary: strings.Repeat("界", 1000) + "summary-tail", Transcript: "hello"}
+	input := m.Input()
+	if !strings.Contains(input, "PDW summary") || !strings.Contains(input, strings.Repeat("界", 1000)) || strings.Contains(input, "summary-tail") {
+		t.Fatal("missing or unbounded summary")
+	}
+}
