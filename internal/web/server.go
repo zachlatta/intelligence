@@ -19,12 +19,14 @@ import (
 	"github.com/zachlatta/intelligence/internal/email"
 	"github.com/zachlatta/intelligence/internal/fleet"
 	"github.com/zachlatta/intelligence/internal/hostclient"
+	"github.com/zachlatta/intelligence/internal/voicememo"
 	"github.com/zachlatta/intelligence/internal/workflow"
 )
 
 // Config is what the server needs. All app state is in DB; each account reads it through its own
 // role, made with Readonly's settings (db.AccountRoles).
 type Config struct {
+	PDWURL, PDWKey, PDWAccount string
 	// Context is the server's lifetime: its listener for fleet changes stops when it ends. Default: never.
 	Context    context.Context
 	Version    string        // the deployed commit, shown on every page and by /healthz
@@ -92,6 +94,10 @@ func New(cfg Config) http.Handler {
 	context.AfterFunc(cfg.Context, roles.Close)
 	store := accounts.New(cfg.DB, roles)
 	a := &app{cfg: cfg, store: store, reg: reg, changes: changes, wf: workflow.NewEngine(cfg.DB, cfg.Now)}
+	if cfg.PDWURL != "" && cfg.PDWKey != "" && cfg.PDWAccount != "" {
+		voice := &voicememo.Service{DB: cfg.DB, Engine: a.wf, URL: cfg.PDWURL, Key: cfg.PDWKey, Username: cfg.PDWAccount}
+		go voice.Run(cfg.Context)
+	}
 	if cfg.Google != nil && cfg.EmailKey != nil {
 		a.mail = &email.Service{DB: cfg.DB, Engine: a.wf, Google: cfg.Google, Key: cfg.EmailKey, Now: cfg.Now}
 		interval := cfg.EmailInterval

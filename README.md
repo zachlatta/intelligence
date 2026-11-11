@@ -896,6 +896,44 @@ that still holds the files; the server cannot recover them from a path alone.
 
 ## Configuration
 
+### Voice memo workflow triggers
+
+Choose “A voice memo is transcribed in PDW” in the workflow editor, or save a definition
+through `POST /api/workflows` or `PUT /api/workflows/{id}` with `"trigger": "voice_memo"`
+and `"voiceMemo": {"title": "ideas", "words": "build", "without": "private"}`.
+Each optional field is a case-insensitive substring; all filled fields must match.
+`words` and `without` search the title and full transcript. An empty filter `{}` accepts all.
+One memo starts one run: the matching workflow with the most filled fields wins, with the
+oldest workflow winning ties. Deleted workflows do not match.
+
+The server reads PDW's scoped `GET /api/external-feeds/voice-memos` feed every 30 seconds.
+PDW supplies transcribed, enriched recordings from the last 48 hours (including separate
+parts of stopped and restarted recordings). The first scan establishes a baseline and does
+not start runs for existing recordings. Later arrivals start runs; feed updates and retries
+cannot start the same source/account/recording ID twice. The arrival cursor survives server
+restarts. An outage longer than the feed's 48-hour window can lose recordings.
+
+Run input contains the title, recording time, duration, PDW identity, at most the first 1000
+Unicode characters of transcript, its total character count, and a truncation notice when
+needed. It includes exact SQL and a shell-quoted `pdw sql` command to fetch the full transcript
+by source, account and recording ID. Agents use their own normal PDW access for that command;
+the server's feed key cannot run SQL. Full transcripts are used for matching but never stored
+in Intelligence or embedded in run input.
+
+Read `voice_memo_polling` through `/api/sql` for the cursor, initialization, last check and
+poll error. Read `voice_memos` for previews, lengths, decisions and linked workflow/run IDs.
+Both tables are restricted to their owning Intelligence account.
+
+Set all three server variables to enable polling:
+
+- `PDW_URL`: PDW's HTTPS origin, without a path.
+- `PDW_API_KEY`: a PDW external-feed key with the `feed:voice-memos` scope. The server sends
+  `Authorization: Bearer intelligence:<key>`; it does not need general SQL access.
+- `PDW_INTELLIGENCE_ACCOUNT`: the existing Intelligence username that owns this PDW connection.
+  Only this account's workflows can receive its memos; other accounts never receive this data.
+
+Unset all three to disable polling. Removing configuration preserves cursors and receipts.
+
 Server:
 
 - `DATABASE_URL`: the app's database, as a role that owns its tables and can create roles.

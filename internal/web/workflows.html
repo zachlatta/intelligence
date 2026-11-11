@@ -361,10 +361,10 @@ function head() {
 function fixedCards() {
   const d = def(), p = d.project, o = d.orchestrator;
   const card = (id, kind, ttl, body) => `<div class="node fixed click${sel === id ? " sel" : ""}" data-id="${id}"><div class="nh"><div><div class="kind">${kind}</div><div class="ttl">${ttl}</div></div></div><div class="nb">${body}</div></div>`;
-  return card("__trigger", "Trigger", d.trigger === "task" ? "Task in Intelligence" : d.trigger === "email" ? "Email" : "By hand",
+  return card("__trigger", "Trigger", d.trigger === "task" ? "Task in Intelligence" : d.trigger === "email" ? "Email" : d.trigger === "voice_memo" ? "Voice memo" : "By hand",
       (d.trigger === "task" ? "A task submitted on the Workflows page. It becomes " + V("input") + "." :
         d.trigger === "email" ? esc(emailSummary(d.email)) + (mailbox ? ` to <b>${esc(mailbox)}</b>` : "") + ". The email becomes " + V("input") + "." :
-        "Someone presses Run and types what it should do.") +
+        d.trigger === "voice_memo" ? "A new PDW recording matching the filter. The first 1000 transcript characters become " + V("input") + " with instructions for fetching the full transcript." : "Someone presses Run and types what it should do.") +
       ` Runs on <b class="mono">${esc(d.host || "no host yet")}</b>.`) +
     `<div class="link"></div>` +
     card("__project", "Before the orchestrator", "Find the project", p.mode === "fixed" ? `Always ${esc(allRepos.find((r) => r.directory === p.directory)?.project || "")} <span class="mono">${esc(p.directory)}</span>.` :
@@ -460,6 +460,9 @@ function previewHTML(f) {
     <ul>${list || `<li class="no"><span></span><span class="meta">None of the recent email matches.</span></li>`}</ul></div>
     <p class="hint">Recent email to ${esc(mailbox)}, matched as you type. Replies in a run's thread go to that run instead.</p>`;
 }
+function voiceMemoPanel(f = {}) {
+  return `<p class="hint">Requires the server PDW connection bound to this account. Matches every field, ignoring case. Leave all fields empty for every new recording. Most filled fields wins; ties use the oldest workflow. Only the first 1000 transcript characters enter a run.</p>${[["title","Title contains"],["words","Title or transcript contains"],["without","Does not contain"]].map(([k,l]) => `<label>${l}</label><input data-vm="${k}" value="${esc(f[k] || "")}">`).join("")}`;
+}
 function emailPanel(f) {
   return `${mailbox ? `<p class="hint">Email to <b>${esc(mailbox)}</b> that matches every field you fill in starts a run.</p>` : ""}
     <label>From</label><input data-e="from" value="${esc((f.from || []).join(", "))}" placeholder="christina@example.com, @example.org">
@@ -488,8 +491,8 @@ function inspector() {
   if (sel === "__trigger") {
     const hostOpts = hosts.map((h) => [h, h]);
     if (d.host && !hosts.includes(d.host)) hostOpts.push([d.host, d.host + " (not in this account)"]);
-    return panel("Trigger", "", `<label>Starts when</label><select data-d="trigger">${opts([["task", "A task is submitted on the Workflows page"], ["manual", "Someone presses Run"], ["email", "An email arrives"]], d.trigger)}</select>
-    ${d.trigger === "email" ? emailPanel(d.email) : `<p class="hint">What was submitted is ${V("input")} in the instructions.</p>`}
+    return panel("Trigger", "", `<label>Starts when</label><select data-d="trigger">${opts([["task", "A task is submitted on the Workflows page"], ["manual", "Someone presses Run"], ["email", "An email arrives"], ["voice_memo", "A voice memo is transcribed in PDW"]], d.trigger)}</select>
+    ${d.trigger === "email" ? emailPanel(d.email) : d.trigger === "voice_memo" ? voiceMemoPanel(d.voiceMemo) : `<p class="hint">What was submitted is ${V("input")} in the instructions.</p>`}
     <label>Runs on</label><select data-d="host">${d.host ? "" : `<option value="" selected disabled>Pick a host</option>`}${opts(hostOpts, d.host || "")}</select>
     <p class="hint">Every run of this workflow happens on this host: its project is found among the host's repositories, and its worktree and agents are made there.</p>`);
   }
@@ -522,6 +525,8 @@ function render() {
   const d = def();
   if (d.trigger === "email" && !d.email) d.email = { from: [], replies: "run" };
   if (d.trigger !== "email") delete d.email;
+  if (d.trigger === "voice_memo" && !d.voiceMemo) d.voiceMemo = {};
+  if (d.trigger !== "voice_memo") delete d.voiceMemo;
   head();
   if (json) {
     $("#editor").innerHTML = `<div class="card" data-submit="#json-apply"><div class="card-head"><h2>As JSON</h2><span class="meta grow">What <code>PUT /api/workflows/{id}</code> takes as <code>definition</code>.</span><button class="btn sm" id="json-apply" title="⌘/Ctrl Enter">Apply</button></div>
@@ -593,6 +598,7 @@ function bind() {
     const card = $(`#pipe .node[data-id="__trigger"] .nb`);
     if (card) card.firstChild.textContent = emailSummary(f);
   }));
+  $$("#inspector [data-vm]").forEach((el) => el.oninput = () => { def().voiceMemo[el.dataset.vm] = el.value; markDirty(false); });
   bindPreview();
   on("d", def); on("p", () => def().project); on("o", () => def().orchestrator); on("s", () => def().steps.find((x) => x.id === sel));
   $$("#inspector [data-var]").forEach((b) => b.onclick = () => {
