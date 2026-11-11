@@ -261,7 +261,7 @@ func (r *Registry) list(ctx context.Context, history bool) ([]Host, error) {
 		if len(w.Tags) == 0 {
 			w.Tags = nil
 		}
-		w.Agents = agents[key{host, w.ID}]
+		w.Agents = treeOrder(agents[key{host, w.ID}])
 		if i, ok := index[host]; ok {
 			hosts[i].Workspaces = append(hosts[i].Workspaces, w)
 		}
@@ -292,4 +292,42 @@ func deref(t *time.Time) time.Time {
 		return time.Time{}
 	}
 	return t.UTC()
+}
+
+// treeOrder puts each sub-agent right after its parent, keeping the given order among siblings
+// and among top-level agents. A sub-agent whose parent is not in the list counts as top-level.
+func treeOrder(agents []AgentView) []AgentView {
+	in := make(map[string]bool, len(agents))
+	for _, a := range agents {
+		in[a.ID] = true
+	}
+	children := map[string][]int{}
+	var roots []int
+	for i, a := range agents {
+		if a.ParentID != "" && a.ParentID != a.ID && in[a.ParentID] {
+			children[a.ParentID] = append(children[a.ParentID], i)
+		} else {
+			roots = append(roots, i)
+		}
+	}
+	out := make([]AgentView, 0, len(agents))
+	done := make([]bool, len(agents))
+	var walk func(i int)
+	walk = func(i int) {
+		if done[i] {
+			return
+		}
+		done[i] = true
+		out = append(out, agents[i])
+		for _, c := range children[agents[i].ID] {
+			walk(c)
+		}
+	}
+	for _, i := range roots {
+		walk(i)
+	}
+	for i := range agents { // a parent loop has no root: keep its agents rather than drop them
+		walk(i)
+	}
+	return out
 }

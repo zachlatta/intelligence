@@ -137,8 +137,17 @@ type panels struct {
 func panelsFor(host string, ws *fleet.WorkspaceAgents) panels {
 	h, id := sqlString(host), sqlString(ws.ID)
 	return panels{
-		AgentsSQL: `SELECT id, title, status, requires_attention, parent_id, provider, created_at FROM recorded_agents WHERE host = ` + h +
-			` AND workspace_id = ` + id + ` ORDER BY (status IN ('running', 'initializing')) DESC, created_at DESC, id`,
+		// running first, then newest, with each sub-agent right under its parent (as on Hosts)
+		AgentsSQL: `WITH RECURSIVE a AS (
+			SELECT id, title, status, requires_attention, parent_id, provider, created_at,
+			       row_number() OVER (ORDER BY (status IN ('running', 'initializing')) DESC, created_at DESC, id) AS n
+			FROM recorded_agents WHERE host = ` + h + ` AND workspace_id = ` + id + `),
+		tree AS (
+			SELECT a.*, ARRAY[a.n] AS path FROM a
+			WHERE coalesce(a.parent_id, '') = '' OR NOT EXISTS (SELECT 1 FROM a p WHERE p.id = a.parent_id)
+			UNION ALL
+			SELECT a.*, tree.path || a.n FROM a JOIN tree ON a.parent_id = tree.id WHERE cardinality(tree.path) < 8)
+		SELECT id, title, status, requires_attention, parent_id, provider, created_at FROM tree ORDER BY path`,
 		HasDiff: ws.Branch != "",
 		DiffSQL: `SELECT error, too_large, file_count, additions, deletions, files, collected_at FROM workspace_diffs WHERE host = ` +
 			h + ` AND workspace_id = ` + id,

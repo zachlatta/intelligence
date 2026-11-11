@@ -115,6 +115,46 @@ func TestAgentsAreRunningFirstThenNewest(t *testing.T) {
 	}
 }
 
+// Sub-agents follow their parent, so an indented row always sits under the agent that started it.
+func TestSubAgentsFollowTheirParent(t *testing.T) {
+	r := New(dbtest.New(t).Owner)
+	rep := full()
+	rep.Paseo.Agents = []hostclient.Agent{
+		{ID: "old", WorkspaceID: "w1", Status: "idle", CreatedAt: t1.Add(-5 * time.Hour)},
+		{ID: "old-sub", WorkspaceID: "w1", ParentID: "old", Status: "running", CreatedAt: t1.Add(-time.Hour)},
+		{ID: "new", WorkspaceID: "w1", Status: "idle", CreatedAt: t1.Add(-2 * time.Hour)},
+		{ID: "new-sub1", WorkspaceID: "w1", ParentID: "new", Status: "idle", CreatedAt: t1.Add(-90 * time.Minute)},
+		{ID: "new-sub2", WorkspaceID: "w1", ParentID: "new", Status: "idle", CreatedAt: t1.Add(-30 * time.Minute)},
+		{ID: "grandchild", WorkspaceID: "w1", ParentID: "new-sub1", Status: "idle", CreatedAt: t1.Add(-20 * time.Minute)},
+		{ID: "orphan", WorkspaceID: "w1", ParentID: "gone", Status: "idle", CreatedAt: t1.Add(-3 * time.Hour)},
+	}
+	record(t, r, rep, time.Now())
+	var order []string
+	for _, a := range list(t, r)[0].Workspaces[0].Agents {
+		order = append(order, a.ID)
+	}
+	// parents keep running-first-then-newest; each is followed by its sub-agents in the same order;
+	// a sub-agent whose parent is not in the workspace stays where it sorts
+	if got, want := strings.Join(order, ","), "new,new-sub2,new-sub1,grandchild,orphan,old,old-sub"; got != want {
+		t.Errorf("order = %v, want %v", got, want)
+	}
+}
+
+// A parent loop, which a host should never report, still lists every agent once.
+func TestTreeOrderKeepsAgentsInAParentLoop(t *testing.T) {
+	var agents []AgentView
+	for _, a := range []hostclient.Agent{{ID: "x", ParentID: "y"}, {ID: "y", ParentID: "x"}, {ID: "z"}} {
+		agents = append(agents, AgentView{Agent: a})
+	}
+	var order []string
+	for _, a := range treeOrder(agents) {
+		order = append(order, a.ID)
+	}
+	if got := strings.Join(order, ","); got != "z,x,y" {
+		t.Errorf("order = %v, want z,x,y", got)
+	}
+}
+
 func TestAnAgentInAnUnlistedWorkspaceIsKept(t *testing.T) {
 	d := dbtest.New(t)
 	r := New(d.Owner)

@@ -338,6 +338,25 @@ func TestHomePageShowsWorkspaceTags(t *testing.T) {
 	}
 }
 
+func TestHomePageSurfacesBranchDiffAndSubAgents(t *testing.T) {
+	h, _ := dbServer(t)
+	rep := sampleReport
+	rep.Paseo.Agents = slices.Clone(sampleReport.Paseo.Agents)
+	rep.Paseo.Agents[2].ParentID = agentA1 // Audit is a sub-agent of a1
+	sendReport(t, h, rep)
+	page := get(t, h, "/", nil).Body.String()
+	app := page[strings.Index(page, `id="ws-host-1-w-app"`):]
+	summary := app[:strings.Index(app, "</summary>")]
+	for _, want := range []string{`<code class="branch">fix-login</code>`, `+12`, `−3`} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("workspace summary misses %q:\n%s", want, summary)
+		}
+	}
+	if !strings.Contains(app, `<li class="sub">`) {
+		t.Errorf("sub-agent row should carry class=\"sub\":\n%s", app)
+	}
+}
+
 // TestDurationsReadAlike: a step's time, a schedule run's and an agent's CPU read the same way.
 func TestDurationsReadAlike(t *testing.T) {
 	for d, want := range map[time.Duration]string{

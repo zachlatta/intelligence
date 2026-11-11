@@ -1,5 +1,13 @@
 [
   {
+    "id": "hosts-workspace-details",
+    "released": "2026-11-12",
+    "title": "Branches, diff sizes and sub-agents on Hosts",
+    "summary": "On Hosts, each workspace now shows its Git branch and the size of its uncommitted changes (lines added and removed), and each agent's sub-agents sit directly under it, marked with ↳. The agent page's Agents sidebar lists them the same way.",
+    "media": "hosts-workspace-details.png",
+    "mediaAlt": "A host on Hosts: a workspace with its branch feat/rate-limit and +84 −19, and a running sub-agent indented under its parent agent"
+  },
+  {
     "id": "workflow-queue-head",
     "released": "2026-11-12",
     "title": "See what holds a host's run queue",

@@ -1347,7 +1347,8 @@ Every page and read route needs a signed-in account and shows only its own hosts
 browser that is not signed in to `/login`, and an API route answers 401. Only `/healthz`, `/login`,
 the account and enrollment routes, the host binaries and the streams (with a host key) are open.
 
-- `GET /`: a collapsible tree of hosts > workspaces (with their project) > agents (with their status),
+- `GET /`: a collapsible tree of hosts > workspaces (with their project, branch and diff stat) >
+  agents (with their status; sub-agents indented),
   with links to make a workspace on each host and start an agent in each workspace, and an Archive
   button on each workspace (with its agents) and each agent, through the commands API. Archiving
   that would stop a running agent, or remove a worktree with uncommitted changes, asks again: the
