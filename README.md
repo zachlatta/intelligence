@@ -585,6 +585,20 @@ The [workflow submission and input trust proposal](docs/proposals/2026-11-10-wor
 documents the current submission API and these trust gaps, then proposes scoped credentials,
 input provenance, and bounded child runs. Those controls are not implemented.
 
+When an inbound email successfully starts or resumes processing (`started`, `follow_up`, `added`,
+or `answered`), the server opens up to five distinct tracking images after committing that decision.
+Only inline HTML images with both dimensions 0–1 pixels or explicit hidden markup qualify;
+ordinary images and tracker hostnames alone do not. Fetches run asynchronously, with public-address
+checks on DNS and redirects, two-second request timeouts, a 16 KiB response cap, and no cookies or
+credentials. Failures do not affect the run. Backfill, ignored mail, sent mail, drafts, spam and
+trash do not open pixels. HTML attachments and HTML bodies over 1 MiB are skipped.
+
+`email_pixel_opens` records the email, account, candidate count, start/finish times, attempts and
+successful responses for read-only SQL. A unique email marker makes this best effort, at most once:
+busy workers (`status = 'busy'`) and interrupted attempts are not retried after a restart. A
+successful response indicates an HTTP success, not confirmation that the sender's tracker recorded
+an open. The server admits at most eight concurrent email pixel jobs.
+
 ### Transcripts
 
 After each report, and every 2 seconds while an agent is running, the host syncs the transcripts of

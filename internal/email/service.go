@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"net/mail"
 	"slices"
 	"strings"
@@ -22,11 +23,12 @@ import (
 // account's email triggers say: start a run, add to the run of the email's thread, or answer the
 // question that run waits on. Each email is kept in the emails table with what it did and why.
 type Service struct {
-	DB     *pgxpool.Pool // as the owner
-	Engine *workflow.Engine
-	Google *Google
-	Key    *Keyring
-	Now    func() time.Time
+	DB        *pgxpool.Pool // as the owner
+	Engine    *workflow.Engine
+	Google    *Google
+	Key       *Keyring
+	Now       func() time.Time
+	pixelHTTP *http.Client // nil uses the isolated public-address-only client
 
 	mu        sync.Mutex
 	mailboxes map[int64]*Mailbox // each account's, so its access token is reused
@@ -292,7 +294,9 @@ func (s *Service) keep(ctx context.Context, account int64, g GmailMessage, decid
 	if received.IsZero() {
 		received = s.now()
 	}
-	return pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
+	var pixelID int64
+	var pixels []string
+	err := pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
 		var id int64
 		err := tx.QueryRow(ctx, `INSERT INTO emails (account_id, gmail_id, thread_id, received_at, from_name, from_address, to_addresses,
 			subject, body, attachments, verified, auth, bulk, decision, decided_at)
@@ -312,8 +316,23 @@ func (s *Service) keep(ctx context.Context, account int64, g GmailMessage, decid
 		}
 		_, err = tx.Exec(ctx, `UPDATE emails SET decision = $2, reason = $3, workflow_id = nullif($4, '')::uuid, run_id = nullif($5, '')::uuid
 			WHERE id = $1`, id, d.Decision, d.Reason, d.Workflow, d.Run)
+		if err != nil {
+			return err
+		}
+		switch d.Decision {
+		case "started", "follow_up", "added", "answered":
+			pixels = g.pixels()
+			if len(pixels) > 0 {
+				_, err = tx.Exec(ctx, `INSERT INTO email_pixel_opens(email_id,account_id,pixels) VALUES ($1,$2,$3)`, id, account, len(pixels))
+				pixelID = id
+			}
+		}
 		return err
 	})
+	if err == nil && pixelID != 0 {
+		s.openPixels(pixelID, pixels)
+	}
+	return err
 }
 
 func orEmpty(s []string) []string {
