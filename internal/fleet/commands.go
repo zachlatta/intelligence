@@ -31,19 +31,20 @@ func (e *BadCommandError) Unwrap() error { return e.Err }
 
 // Command is a command and how far it got (the commands table).
 type Command struct {
-	ID         string          `json:"id"`
-	Host       string          `json:"host"`
-	Kind       string          `json:"kind"`
-	Args       json.RawMessage `json:"args"`
-	Status     string          `json:"status"`
-	Result     json.RawMessage `json:"result,omitempty"`
-	Error      string          `json:"error,omitempty"`
-	Attempts   int             `json:"attempts"`
-	CreatedAt  time.Time       `json:"createdAt"`
-	ExpiresAt  time.Time       `json:"expiresAt"`
-	SentAt     time.Time       `json:"sentAt,omitzero"`
-	StartedAt  time.Time       `json:"startedAt,omitzero"`
-	FinishedAt time.Time       `json:"finishedAt,omitzero"`
+	ID             string          `json:"id"`
+	Host           string          `json:"host"`
+	Kind           string          `json:"kind"`
+	Args           json.RawMessage `json:"args"`
+	Status         string          `json:"status"`
+	Result         json.RawMessage `json:"result,omitempty"`
+	Error          string          `json:"error,omitempty"`
+	Attempts       int             `json:"attempts"`
+	CreatedAt      time.Time       `json:"createdAt"`
+	ExpiresAt      time.Time       `json:"expiresAt"`
+	SentAt         time.Time       `json:"sentAt,omitzero"`
+	StartedAt      time.Time       `json:"startedAt,omitzero"`
+	FinishedAt     time.Time       `json:"finishedAt,omitzero"`
+	IdempotencyKey string          `json:"idempotencyKey,omitempty"`
 }
 
 // Finished reports whether c will not change again (expired can, if a late result arrives).
@@ -53,17 +54,17 @@ func (c Command) Finished() bool {
 
 // Wire is the command as a host receives it.
 func (c Command) Wire() hostclient.Command {
-	return hostclient.Command{ID: c.ID, Kind: c.Kind, Args: c.Args, CreatedAt: c.CreatedAt, ExpiresAt: c.ExpiresAt}
+	return hostclient.Command{ID: c.ID, Kind: c.Kind, Args: c.Args, CreatedAt: c.CreatedAt, ExpiresAt: c.ExpiresAt, IdempotencyKey: c.IdempotencyKey}
 }
 
-const commandColumns = `id::text, host, kind, args, status, result, error, attempts, created_at, expires_at, sent_at, started_at, finished_at`
+const commandColumns = `id::text, host, kind, args, status, result, error, attempts, created_at, expires_at, sent_at, started_at, finished_at, idempotency_key`
 
 func scanCommand(row pgx.Row) (Command, error) {
 	var c Command
 	var result []byte
 	var sent, started, finished *time.Time
 	err := row.Scan(&c.ID, &c.Host, &c.Kind, &c.Args, &c.Status, &result, &c.Error, &c.Attempts, &c.CreatedAt, &c.ExpiresAt,
-		&sent, &started, &finished)
+		&sent, &started, &finished, &c.IdempotencyKey)
 	if result != nil {
 		c.Result = result
 	}
@@ -135,25 +136,45 @@ func (r *Registry) Command(ctx context.Context, id string) (Command, error) {
 	return scanCommand(r.p.QueryRow(ctx, "SELECT "+commandColumns+" FROM commands WHERE id = $1", id))
 }
 
-// Claim marks host's commands sent and returns them, oldest first, to go down its stream at at.
-// Queued ones are claimed; with unfinished (a new stream), so are those sent before with no result
-// yet, as the host may never have received them. Commands past their expiry expire instead.
-func (r *Registry) Claim(ctx context.Context, host string, unfinished bool, at time.Time) ([]Command, error) {
-	if _, err := r.p.Exec(ctx, `WITH expired AS (UPDATE commands SET status = 'expired', finished_at = $2,
+// ExpireCommands expires overdue deliveries among ids, including those with no open stream.
+func (r *Registry) ExpireCommands(ctx context.Context, ids []string, at time.Time) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return r.expireCommands(ctx, at, "id = ANY($2::uuid[])", ids)
+}
+
+func (r *Registry) expireCommands(ctx context.Context, at time.Time, scope string, value any) error {
+	_, err := r.p.Exec(ctx, `WITH expired AS (UPDATE commands SET status = 'expired', finished_at = expires_at,
 		error = CASE status WHEN 'queued' THEN 'expired before the host was connected to receive it'
 		                    ELSE 'expired with no result from the host: it may or may not have run' END
-		WHERE host = $1 AND status IN ('queued', 'sent', 'running') AND expires_at <= $2 RETURNING id)
-		SELECT pg_notify('`+channel+`', 'command:' || id) FROM expired`, host, at); err != nil {
+		WHERE `+scope+` AND status IN ('queued', 'sent', 'running') AND expires_at <= $1 RETURNING id)
+		SELECT pg_notify('`+channel+`', 'command:' || id) FROM expired`, at, value)
+	return err
+}
+
+type ClaimOptions struct {
+	StreamID      string
+	Replay        bool // resend ordinary unfinished commands on connect
+	RetryReady    bool // the stream has acknowledged its report of retry key support
+	ReplayRetries bool // resend unfinished retries on the first claim after that report
+}
+
+// Claim marks eligible commands sent and returns them oldest first. Overdue
+// commands expire, and retry deliveries require support on the current stream.
+func (r *Registry) Claim(ctx context.Context, host string, options ClaimOptions, at time.Time) ([]Command, error) {
+	if err := r.expireCommands(ctx, at, "host = $2", host); err != nil {
 		return nil, err
-	}
-	statuses := []string{hostclient.CommandQueued}
-	if unfinished {
-		statuses = append(statuses, hostclient.CommandSent, hostclient.CommandRunning)
 	}
 	rows, err := r.p.Query(ctx, `UPDATE commands SET status = CASE WHEN status = 'queued' THEN 'sent' ELSE status END,
 		sent_at = coalesce(sent_at, $2), attempts = attempts + 1
-		WHERE id IN (SELECT id FROM commands WHERE host = $1 AND status = ANY($3) AND expires_at > $2 FOR UPDATE SKIP LOCKED)
-		RETURNING `+commandColumns, host, at, statuses)
+		WHERE id IN (SELECT id FROM commands WHERE host = $1 AND expires_at > $2
+			AND (status = 'queued' OR (status IN ('sent', 'running')
+				AND CASE WHEN idempotency_key = '' THEN $3::boolean ELSE $6::boolean END))
+			AND (idempotency_key = '' OR ($5 AND EXISTS (
+				SELECT 1 FROM hosts WHERE name = $1 AND stream_id = NULLIF($4, '')::uuid AND start_retry_keys)))
+			FOR UPDATE SKIP LOCKED)
+		RETURNING `+commandColumns, host, at, options.Replay, options.StreamID, options.RetryReady, options.ReplayRetries)
 	if err != nil {
 		return nil, err
 	}

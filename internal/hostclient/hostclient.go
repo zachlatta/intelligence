@@ -12,10 +12,11 @@ import (
 
 // Report is one host's state at one moment.
 type Report struct {
-	Name        string      `json:"name"`        // the host's name, unique in the fleet (ValidName)
-	CollectedAt time.Time   `json:"collectedAt"` // when the host read it
-	Version     string      `json:"version"`     // the client binary's commit
-	Paseo       PaseoStatus `json:"paseo"`
+	Name           string      `json:"name"`        // the host's name, unique in the fleet (ValidName)
+	CollectedAt    time.Time   `json:"collectedAt"` // when the host read it
+	Version        string      `json:"version"`     // the client binary's commit
+	Paseo          PaseoStatus `json:"paseo"`
+	StartRetryKeys bool        `json:"startRetryKeys"` // understands stable creation keys on retry deliveries
 }
 
 // PaseoStatus is the host's Paseo daemon: its status, workspaces and agents.

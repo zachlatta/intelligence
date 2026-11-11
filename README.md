@@ -125,8 +125,105 @@ host as seen. A newer stream for the same host takes it over and ends the older 
 server instance holds it.
 
 Server instances learn of each other's changes through Postgres `NOTIFY` on the `fleet` channel
-(`fleet.Changes`): a queued command, a command's update and a stream taking a host over. Nothing on
-the server polls.
+(`fleet.Changes`): a queued command, a command's update and a stream taking a host over.
+Workflow start retries additionally reconcile finished startup commands every five seconds.
+
+### Proposed workflow mutations
+
+Agents can propose a workflow creation, replacement or deletion without applying it. A proposal
+returns an `approvalURL`: the account owner signs in there, reviews complete before/after snapshots
+and a line diff, then approves or rejects. The Proposals tab lists the latest 200 proposals.
+Opening a link never applies it. Approval, rejection and undo require a same-origin browser-session
+JSON request; a host key cannot make these decisions.
+
+`POST /api/workflow-proposals` accepts a host's bearer key and JSON:
+
+```json
+{
+  "operation": "update",
+  "workflowId": "<workflow UUID>",
+  "baseVersion": 3,
+  "summary": "Explain the change for the reviewer",
+  "workflow": {
+    "name": "Task workflow",
+    "description": "Updated description",
+    "definition": { "...": "the complete workflow definition" }
+  }
+}
+```
+
+Use `create` without `workflowId` or `baseVersion`; use `delete` with those fields and without
+`workflow`. Updates replace the complete definition, including steps, prompts, models, host and
+trigger. Read the current `workflows` and `workflow_versions` rows first and preserve fields you
+do not intend to change. Proposals cannot choose a default workflow; an update preserves that
+choice while its trigger remains `task`.
+
+The response is `201 {"id", "approvalURL"}`. `POST /api/workflow-proposals/{id}/withdraw` with
+`{"reason":"Why this is no longer needed"}` and the same host's bearer key withdraws a pending
+proposal. The reason is required and remains visible on its review page. Optional `proposedBy`
+(Paseo agent id or label) and `runId` record agent/run context alongside the authenticated host.
+Optional `replacesId` atomically withdraws that host's earlier pending, unexpired proposal with
+the reason `Replaced: <new summary>` when the new proposal is created. If the earlier proposal
+has been decided, the entire replacement is refused. Browser-only JSON writes are
+`POST /api/workflow-proposals/{id}/approve`, `/reject` and `/undo`, each with `{}`.
+No read endpoints are needed: `workflow_proposals` contains the proposer, snapshots, decision,
+expiry and undo record; `workflow_proposal_status` adds `effective_status`, which shows expiry
+and drift immediately. Both are account-isolated and readable through `/api/sql`.
+
+Proposals expire after seven days. Approval locks and compares the complete prior state, including
+its version and default/deleted state; changed workflows return 409 and require a fresh proposal.
+Creates, updates and restores save a new immutable definition version atomically. Deletion preserves
+the definition version and records a tombstone, consistently with direct deletion.
+Undo restores saved prior content as a **new version**, records `undo_state` and `undone_at`,
+and refuses if anything changed after approval. Undoing creation soft-deletes it without adding a
+definition version. Deletion and
+undoing creation refuse while runs are active; restoring a deleted workflow rechecks host ownership,
+email-trigger overlap and default conflicts. Existing runs retain their original definition.
+
+The account-token MCP endpoint (below) also exposes `propose_mutation`, `withdraw_mutation`,
+and `propose_mutation_help` alongside its existing SQL and transcript tools. MCP proposals record
+`mcp:<token id>` as the authenticated proposer. A token can withdraw or replace only its own
+pending proposals. Neither MCP tokens nor host keys can approve, reject or undo.
+Configure `PUBLIC_URL` to the browser-facing origin so approval links use the correct external URL.
+
+On an enrolled host, the CLI reads the same host configuration as run moves:
+
+```sh
+intelligence workflow propose proposal.json
+intelligence workflow withdraw <proposal-id> --reason "Replaced by a better plan"
+```
+
+`propose -` reads JSON from standard input. The result includes the approval URL to share.
+Step edits use a complete replacement definition; step-level patch operations and choosing the
+default workflow are not supported by proposals.
+
+To register the MCP in Claude Code and Codex, create an account MCP token at **Account → MCP
+connections** and export it in the shell that launches the client (keep it out of project files).
+Use the MCP URL shown on that page, for example:
+
+```sh
+export INTELLIGENCE_MCP_URL="https://intelligence.example.com/mcp"
+read -r -s INTELLIGENCE_MCP_TOKEN
+export INTELLIGENCE_MCP_TOKEN
+
+claude mcp add --transport http --scope user intelligence "$INTELLIGENCE_MCP_URL" \
+  --header 'Authorization: Bearer ${INTELLIGENCE_MCP_TOKEN}'
+
+codex mcp add intelligence --url "$INTELLIGENCE_MCP_URL" \
+  --bearer-token-env-var INTELLIGENCE_MCP_TOKEN
+```
+
+Paste the newly created MCP token at the hidden `read` prompt. Both clients send
+`Authorization: Bearer <MCP token>`; neither accepts a host key as an MCP credential. Export the
+MCP token in each client-launching shell. See the
+[Claude Code MCP guide](https://code.claude.com/docs/en/mcp) and
+[Codex MCP guide](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
+
+The CLI proposal routes deliberately keep the installed host key and record `host:<name>`:
+this authorizes queuing a review request, not applying a workflow edit or starting a run.
+This is consistent with the [workflow submission and trust design](docs/proposals/2026-11-10-workflow-submission-and-trust.md),
+which forbids treating a host key as permission to submit arbitrary runs. Proposal bodies are
+untrusted drafts until the owner approves the exact change in a signed-in browser.
 
 ### Accounts and host keys
 
@@ -149,7 +246,7 @@ A key is good for its own host name only. Removing a host from its account (`/ac
 key and everything it reported; the host's next dial is refused, so it forgets the key and asks to
 join again with a new code. A host that expires a code without its being entered asks for a new one.
 
-### Read-only MCP (PDW and other remote clients)
+### MCP reads and reviewed proposals (PDW and other remote clients)
 
 `POST /mcp` (also `/mcp/`) is a stateless [Streamable HTTP MCP endpoint](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports),
 supporting protocols `2025-06-18` (preferred) and `2025-03-26`. Initialization echoes a supported
@@ -163,8 +260,9 @@ No SDK or additional service is needed on the server.
 Authentication is `Authorization: Bearer <MCP token>` on every request. Browser cookies, browser
 session tokens and host keys are not accepted at `/mcp`. MCP tokens work only there; they cannot
 sign in to a browser or authorize a write API. Each reads through its account's own Postgres login
-role and the same read-only transaction, timeout and row limits as `/api/sql`. No tool uses the
-writer pool. Cross-origin requests are refused, with no CORS support. Set `PUBLIC_URL` to the
+role and the same read-only transaction, timeout and row limits as `/api/sql`. The two proposal
+write tools may create/withdraw proposal rows through the engine; only a browser-session approval
+can apply them. MCP tokens never authorize approval, rejection, undo or direct write APIs. Cross-origin requests are refused, with no CORS support. Set `PUBLIC_URL` to the
 external HTTPS origin when a proxy terminates TLS, so an Origin header can be checked against it;
 server-to-server clients normally send no Origin.
 
@@ -185,7 +283,7 @@ read-only SQL role and makes changes by calling these JSON APIs from the browser
 - Read credential IDs, creation and expiry through SQL:
   `SELECT id, created_at, expires_at FROM mcp_tokens ORDER BY created_at DESC`.
 
-Tools (all annotated read-only):
+Read tools (annotated read-only):
 
 | Tool | Inputs besides optional `limit` | Reads |
 | --- | --- | --- |
@@ -193,6 +291,10 @@ Tools (all annotated read-only):
 | `schema_overview` | none | Public relations and descriptions |
 | `describe_table` | `table` (unqualified public relation name) | Exact column names and types |
 | `query` | `query` | One read-only SQL statement, including arbitrary joins/views |
+
+The proposal tools are annotated as writes to review state: `propose_mutation` returns id and
+approvalURL, `withdraw_mutation` takes id and a required reason, and `propose_mutation_help`
+returns the schema and an example. They also return JSON text and `structuredContent`.
 
 The guide returns Markdown text. The three SQL tools return `columns`, `rows`, `rowCount`, `truncated`, as both JSON text and
 MCP `structuredContent`. The default is 1000 rows, maximum 10000, with the SQL timeout (5 seconds
@@ -394,6 +496,8 @@ A workflow is the host it runs on, a trigger, a way to find the project, an orch
 (`internal/workflow`). Every run of it happens on its host, which must be one of the account's. Each save is a new version (`workflow_versions.definition`); a run keeps the
 version it started with. A run:
 
+0. **Waits for room on its host.** A run started while its host is near capacity is `queued`
+   instead (below), and starts, oldest first, once the host has room.
 1. **Finds its project.** Before anything runs in a worktree, an agent (the definition's project
    finder, started in the host's home directory, `~`) is told the task and the host's repositories
    (its workspaces' `project_root`s) and answers with `intelligence workflow project --run <id>
@@ -404,6 +508,8 @@ version it started with. A run:
    workspace choice takes precedence. The server adds this guidance to every match prompt,
    including saved definitions; without `desk` or another suitable candidate, the finder answers
    `none`.
+   It then checks each candidate's visibility and never picks a public repository for a result
+   (`workflow.ProjectRule`): everything a run commits there is published.
 2. **Starts the orchestrator in the worktree.** The server archives the finder and queues
    `create_workspace`: a git worktree of the repository (or the home directory, for none) with the
    orchestrator in it. Its names say which workflow runs, what for and which run: the workspace is
@@ -450,7 +556,13 @@ version it started with. A run:
    `branch`) and its page. The orchestrator's first message is its standing instructions, the input,
    the list of steps, the commands below, the workflow contract and the first step.
    The contract sets role and model handoffs, limits work to the assigned step, and assigns
-   approved external changes to landing.
+   approved external changes to landing. It also carries `workflow.PublicRepoRule`: in a public
+   repository, commit only what the repository keeps, never a report, metrics, a data export or a
+   `work/` folder (aggregate-only is not an exception). Before pushing, review every outgoing commit
+   (`git log -m --stat origin/main..HEAD`, merge commits included), not only the final diff: a file added and deleted in a later
+   commit is still published, so such commits are rewritten. The starting workflow
+   (`workflow.Starting`) also has a Public repo check gate before landing that reads every outgoing
+   commit the same way and sends such files back to Do the work.
 3. **The orchestrator moves through the steps.** It never does the work itself: it starts
    sub-agents for it (`paseo run` in its workspace, so they are its sub-agents), and decides when a
    step is done. Every agent of a run works unattended, so each starts in its provider's mode that
@@ -475,7 +587,33 @@ a reply cannot move, a canceled one says so), and answers with what the agent re
 is a `POST /api/workflow-runs/{id}/moves` with the run's host's key; the CLI reads the server and
 key as the host client does (`HOST_SERVER` from `~/.config/intelligence/host.env`, the key from
 `host.key`, or their `devbox` names). The run follows the commands it queued (the finder, the
-workspace) through their results: a failed one fails the run.
+workspace) through their results. A failed or expired start queues up to three retries, after
+15, 30 and 60 seconds. The server checks every five seconds. A retry waits until the host is
+online and reports both a connected Paseo daemon and support for retry keys
+(`hosts.start_retry_keys`). Once ready, it joins the same capacity queue as new runs in
+original run creation order. A replacement stream must report support again before it can
+receive queued or unfinished retries. Each retry reuses the original Paseo creation key so a
+lost response does not create a second workspace or agent.
+
+The existing durable `commands` queue handles host reconnects. `workflow_runs.start_retries`,
+`start_retry_at` and `error` expose the retry count, queued retry time and last failure through
+SQL; `pending_command` links to the current delivery, whose `idempotency_key` names the original
+command. Each retry rebuilds its prompt from the run's current input and resolves image references
+again through the account's attachment checks. Finder retries use the host's current repository
+catalog, including repositories restored after a daemon reconnect. A successful finder resets the
+retry budget before the orchestrator starts. Exhausting the retries fails the run with the last
+error and archives any partial workspace. Cancellation removes the scheduled retry. A new manual
+run starts with its own creation key and budget.
+
+The run page shows each queued or sent retry, its last error, its next scheduled time, and whether
+it is waiting for host recovery or capacity. Each queued retry
+has a deadline 24 hours after its scheduled time; at that deadline the run fails with the last
+start error and a timeout explanation. This allows a long outage or host update without leaving
+the run waiting forever. Queue and delivery events are recorded in the timeline. Reconciliation
+processes the other runs even when one run is broken, then logs all errors with their command IDs.
+Reconciliation also expires overdue startup commands when the host has no stream. An expired
+command's retry wait starts from its original expiry, so a long server outage cannot reset the
+deadline.
 
 A run is on a step from the move that hands it the step (the orchestrator starting, for the first;
 `next`, `skip` or `back`) to the move that leaves it (`next`, `skip`, `back`, `done`, `fail`, or a
@@ -529,6 +667,72 @@ The starting workflow spreads frontier work across Claude Opus 5.5, Codex and Ge
 with “other…” for an ID not yet listed. Argon remains usable for existing agents and explicit choices.
 Migration `0028_carbon_frontier` makes new versions of saved workflows that recommend Argon
 or use the old starting frontier list; existing runs keep their original versions.
+
+#### The run queue
+
+So that runs do not overwhelm a host, a new run is `queued` (`internal/workflow/queue.go`) when
+its host is near capacity; with room, it starts at once. There is no fixed count of runs: the
+host's measured load decides.
+
+The server projects the host's load from its newest minute of resources (Host resources, above):
+that minute's CPU, memory used (by the minute's least available) and 1-minute load per CPU, plus
+one run's footprint for each run still starting, whose load the minute cannot show yet, and one
+for the run about to start. A run is starting from its launch (`workflow_runs.launched_at`) until
+its orchestrator has started: for its whole start-up. A run that finds its project first is
+starting all the while it finds it (its orchestrator is still to come), and every run is starting
+until the host reports its workspace and orchestrator command (`launch_command`) done and the
+newest minute began after that. A failed or expired launch releases its reservation. A retry
+reserves capacity when admitted, updating `launched_at` and `launch_command` with the new attempt
+in the same transaction. An admitted command waiting for a slow or absent host holds capacity
+until it finishes or expires. Runs that succeeded, failed or were canceled no longer count.
+The run queues when
+the projection reaches a limit: `WORKFLOW_QUEUE_CPU_PCT` (default 85%), `WORKFLOW_QUEUE_MEM_PCT`
+(90%) or `WORKFLOW_QUEUE_LOAD_PER_CPU` (1.5). So an idle host starts runs back to back, and a burst
+starts as many as fit: at 10% CPU, 7 of 10 runs started at once (about 80%), and the rest queue
+until the host has made them and a newer minute shows their load. The reason says it in plain words: “host-1 is near
+capacity: CPU 70% now, about 90% with 1 run starting and this one (queues at 85%)”, or “over
+100%” when the projection is past all of it.
+
+A run's footprint is learned per host (`host_run_footprint`, readable with SQL): over the host's
+last 3 days, each minute's CPU, memory and load per CPU against how many runs were going then
+(launched, not finished), fitted with a straight line; its slope is what one run adds. Each metric
+is learned on its own (`cpu_learned`, `mem_learned`, `load_learned`) only when its fit can be
+trusted: 60 minutes or more, more than one count of runs among them, a slope above zero (history
+that says runs lighten the host is contradictory, not a footprint) and a fit explaining at least a
+fifth of the metric's variation (`regr_r2` at least 0.2). A learned footprint is kept between a
+quarter and three times the default. Otherwise the default stands, deliberately generous: 10% CPU,
+5% memory and 0.15 load per CPU a run. The view also has the raw fits (`cpu_pct_learned`,
+`mem_pct_learned`, `load_per_cpu_learned`) with their `*_r2`, the minutes and the run counts.
+
+Without fresh telemetry the server cannot know the host's capacity:
+
+- a newest minute 3 to 30 minutes old holds new and queued runs (“waiting for a fresh measurement
+  from host-1”), so a host whose monitoring stops does not release its queue on no evidence;
+- a host that has sent none for 30 minutes and is away (not connected: no stream seen in the last
+  minute, as `host_status.online`) keeps holding, however long it is gone (“waiting for host-1 to
+  report again (last measured 14:05 UTC)”): a host that went quiet because it was overloaded, or
+  rebooted, or lost its network, would otherwise get every queued run at once when it came back;
+- a host that never sent its resources, or one connected now that has sent none for 30 minutes
+  (its monitoring stopped), gives no sign of being near capacity, so its runs start.
+
+**Start now** bypasses the capacity hold for a new run. Automatic retries wait for admission.
+
+A run also queues while earlier runs wait in its host's queue, so the queue keeps its order. The
+decision and the start are made in one transaction holding the host's queue lock (an advisory
+lock per host), so runs started at the same moment are judged one after another, each counting
+those just before it.
+
+A new queued run has no agents or commands yet. A ready retry keeps its startup phase and joins
+the queue through `workflow_runs.start_retry_queued`. `workflow_runs.queue_reason` says why it waits
+(kept current while it waits, and kept after), its events say when it was `queued` and
+`dequeued`, and `workflow_run_queue` lists each host's queue in order (`position` 1 is next). The
+runs list and the run page show it queued, where in line (“2nd in line for host-1”) and why, and
+the run page says when it was queued, not started; the run page's **Start now** starts it at once,
+whatever the host's load (`POST /api/workflow-runs/{id}/start`), and **Cancel run** cancels it.
+
+The server starts queued runs on a host, oldest first, while the projection leaves room: every 15
+seconds, on each minute of resources the host sends, and when a run ends or fails to start. Runs
+already going are never stopped or paused. The queue is rows in Postgres, so it survives restarts.
 
 ### Attachments
 
@@ -708,11 +912,17 @@ database and read-only role (`internal/dbtest`) on the server in `TEST_DATABASE_
 
 ### Public repository
 
-This repository is public. Two gates keep private details out of it:
+This repository is public. Three gates keep private details out of it:
 
 - `internal/hygiene` (in `make test`, so in CI and the image build) fails on any file that holds a
   private or tailnet address, a tailnet name, a home-directory path, an email outside `example.com`,
   a private key or a token. Tests use `192.0.2.0/24`, `/home/someone` and `someone@example.com`.
+- `internal/hygiene` also fails when Git tracks agent output or data: anything under `work/`,
+  `scratch/`, `.factory-scratch/` or `.factory-evidence/`, or a CSV, TSV, spreadsheet, Parquet,
+  DuckDB, SQLite or JSON Lines file. Reports and their data are delivered privately, never committed
+  here. It also fails when a commit not yet on `origin/main`, a merge included, adds such a file, even if a later
+  commit deletes it, since the push would publish it. It needs `.git`, so it runs in `make test` and
+  CI, not the image build (which has no `.git`); the outgoing check needs an `origin/main` ref.
 - CI runs gitleaks over every commit on every push and pull request.
 
 On GitHub, `main` cannot be force-pushed or deleted, secret scanning with push protection is on,
@@ -875,7 +1085,10 @@ origin (another site's request is refused with 403), and those with a body must 
 - `POST /api/workflows` with `{"name", "description", "definition"}`: 201 `{"id", "version": 1}`;
   400 for a definition that cannot run. `PUT /api/workflows/{id}`, the same body: the next version.
 - `POST /api/workflow-runs` with `{"workflowId", "input"}`: starts a run on the workflow's host
-  (201, with its `Location`); 400 for a workflow saved without one.
+  (201, with its `Location`), or queues it while the host is near capacity; 400 for a workflow
+  saved without one.
+- `POST /api/workflow-runs/{id}/start` with `{}`: starts a queued run now, ahead of its queue and
+  whatever its host's load (204; 409 for a run that is not queued).
 - `POST /api/workflow-runs/{id}/reply` with `{"text"}`: answers the note the run waits on (204;
   409 when it waits on none). `POST /api/workflow-runs/{id}/cancel` with `{}`: ends the run and
   stops its orchestrator (204).
@@ -906,10 +1119,31 @@ and anonymous access, embed images with Markdown image syntax, and link Markdown
 as `text/plain; charset=utf-8` so they open in the browser. They also rewrite local file references
 inside those reports. File delivery is allowed in any step, including sign-off, unless that step
 explicitly forbids uploads; it is an exception to the external changes deferred to landing.
-Donor, contact, financial and student data stay restricted to the recipient and are linked as text
-unless Zach explicitly asks to publish that data. Agents verify anonymous access returns 401 for
+Donor, contact, financial and student data stay restricted to the verified recipients specified
+by the request or saved workflow, or to Zach by default, and are linked as text unless Zach explicitly asks to publish that data or
+an authorized sharing manager requests publication as described below. So do internal metrics (counts, rates or spend,
+even aggregate) and every internal report, even one with no metrics: audits, reviews, walkthroughs of
+runs, agents, workflows or incidents, and anything naming security weaknesses or credentials. Agents verify anonymous access returns 401 for
 these private files. A worker explicitly barred from uploading preserves artifacts for an authorized
 step. No upload credentials are held by the app.
+For existing links, an authorized request to make the file public authorizes its current
+contents. Zach can authorize publication. For others, sharing authority must come from Zach's instructions or the owning workflow, including a workflow that creates collateral for their role to share externally. Honor any workflow sign-off gate. Viewing access alone is insufficient.
+No request to make an existing link public permits redacting, trimming, rewriting, swapping maps or media, rebuilding or re-uploading. If authority is missing or sign-off is pending, leave the files and access untouched. Ask Zach whether to open the existing link as-is when his decision is needed.
+Follow file-share for access changes and give the requester the original link and public notice.
+Sharing-policy review must never redact, trim, rewrite, rebuild, swap maps or media, or re-upload content to satisfy a restriction. If public access lacks authorization under the defaults, correct only allowed_emails on the existing bytes, honoring the specified recipients. If public access is authorized, preserve it and at most add a missing notice to the message.
+Public Git review governs Git contents. Keep private deliverable URLs out of public repositories,
+issues and pages.
+
+Every step's prompt (saved workflows included) also says that a run whose result is a deliverable
+for Zach (a report, investigation, answer, proposal, plan, deck or analysis) rather than landed code
+or a change to hosts or services ends with that deliverable emailed to him from the zrl-bot mailbox,
+as the `zrl-bot-email` skill says, in any repository and even when nothing lands: the full
+substance in the body, with file links. Earlier steps draft it; only the last step (or, when the
+run ends early, a worker started before the run is failed or skipped to its end) sends it, once:
+first it searches zrl-bot's sent mail from the run's request date (by subject, by the report's URL
+and in the request thread) and inspects every match. The run's final summary names the sent
+message, or the earlier one that already delivered it. The app never sends mail itself: its only
+mail credential is the read-only token of an email trigger's mailbox (above).
 Notes, step reports and transcripts render file-share images inline; other image origins and local
 paths remain placeholders. Existing local-path notes must be republished by an agent on the host
 that still holds the files; the server cannot recover them from a path alone.
@@ -932,6 +1166,9 @@ Server:
   random bytes in base64 (`openssl rand -base64 32`); it seals each mailbox's token, so changing
   it means connecting again.
 - `PUBLIC_URL`: optional; the server's origin, for Google's redirect. Default each request's.
+- `WORKFLOW_QUEUE_CPU_PCT`, `WORKFLOW_QUEUE_MEM_PCT`, `WORKFLOW_QUEUE_LOAD_PER_CPU`: optional;
+  when a host is near capacity, so a new workflow run queues (The run queue, above). Defaults 85,
+  90 and 1.5; `0` or `off` turns one off.
 
 The version is stamped at build (`-X main.buildCommit`, from Coolify's `SOURCE_COMMIT` build
 argument); else `SOURCE_COMMIT` at run time, else Go's VCS stamp, else `dev`.

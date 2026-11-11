@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/zachlatta/intelligence/internal/workflow"
 )
 
 func env(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
@@ -192,6 +194,29 @@ func TestServerConfigReadsDevboxBinariesFromBeforeTheRename(t *testing.T) {
 		"READONLY_DATABASE_URL": "postgres://ro:p@db/app", "DEVBOX_BINARIES": "/old"}))
 	if err != nil || c.BinDir != "/old" {
 		t.Errorf("BinDir = %q, %v; want /old", c.BinDir, err)
+	}
+}
+
+func TestServerConfigReadsTheWorkflowQueueLimits(t *testing.T) {
+	base := map[string]string{"DATABASE_URL": "postgres://app:p@db/app", "READONLY_DATABASE_URL": "postgres://ro:p@db/app"}
+	c, err := serverConfig(env(base))
+	if err != nil || c.QueueLimits != workflow.DefaultLimits() {
+		t.Fatalf("default limits = %+v, %v", c.QueueLimits, err)
+	}
+	set := map[string]string{"WORKFLOW_QUEUE_CPU_PCT": "70", "WORKFLOW_QUEUE_MEM_PCT": "off", "WORKFLOW_QUEUE_LOAD_PER_CPU": "2.5"}
+	for k, v := range base {
+		set[k] = v
+	}
+	c, err = serverConfig(env(set))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l := c.QueueLimits; l.CPUPct != 70 || l.MemPct != 0 || l.LoadPerCPU != 2.5 {
+		t.Errorf("limits = %+v", l)
+	}
+	set["WORKFLOW_QUEUE_CPU_PCT"] = "lots"
+	if _, err := serverConfig(env(set)); err == nil || !strings.Contains(err.Error(), "WORKFLOW_QUEUE_CPU_PCT") {
+		t.Errorf("a bad limit should be refused: %v", err)
 	}
 }
 
