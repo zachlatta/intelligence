@@ -197,6 +197,9 @@ const PublicRepoRule = "If this run's repository is public, everything committed
 	"about people, programs or money, data exports (CSV, JSON, spreadsheets), work/ or scratch folders, or donor, contact, " +
 	"financial or student data. Aggregate-only and no-secrets do not make internal data publishable, and a work/ folder already " +
 	"on main is not a convention to follow. Keep such output in .factory-scratch/ (git-ignored) and deliver it to Zach privately. " +
+	"Keep files.zachlatta.com URLs to private deliverables out of public repositories, issues and pages. " +
+	"This rule governs what enters public Git or is posted publicly. For an outgoing Git finding, fix only the Git contents. " +
+	"Never use this rule to edit, re-upload or change access to a hosted deliverable. " +
 	"Before any push, review every outgoing commit, merge commits included, not only the final diff (git log -m --stat origin/main..HEAD; " +
 	"-m shows what merge commits add): a file added and " +
 	"deleted in a later commit is still published with the push. If any commit adds such output, rewrite the commits to drop it first. " +
@@ -248,7 +251,7 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 		"Pass each sub-agent its role, current step, run id, task context and limits, including this workflow contract. " +
 		"Follow this workflow's model choices rather than a shared skill's default.\n\n" +
 		"Builders may edit, test and commit in the worktree; do not push, land, deploy or change external systems before the step that authorizes it. " +
-		"Uploading images and Markdown files to files.zachlatta.com to show Zach is an exception to this external-change limit: follow the file-delivery rule below in any step. Checkers follow their step's edit limits. Shared skill writes and queued mutations are external changes too: " +
+		"Uploading images and Markdown files to files.zachlatta.com to show Zach is an exception to this external-change limit: follow the file-delivery rule below in any step. The exception also covers access-only changes requested by Zach or an authorized sharing manager for an existing artifact, unless the step forbids the change. Checkers follow their step's edit limits. Shared skill writes and queued mutations are external changes too: " +
 		"pass proposed edits and evidence to the landing step. " +
 		"The landing step also applies the run's approved external changes (skill edits, queued mutations). " +
 		"Preserve scratch needed by later steps. A worker reports back and ends its turn; the orchestrator owns reuse and archiving. " +
@@ -284,7 +287,11 @@ const FileDeliveryRule = `When showing Zach images or Markdown files in notes, a
 
 For public files, omit passwords and allowed_emails (or emails); omit namespace on the first upload so the service generates it. Do not invent a URL or reuse a predictable namespace. Check the returned SHA-256 against the local bytes and verify an anonymous GET returns 200 with the expected content type before linking it. Use ![description](https://...) for images and [report](https://...) for Markdown. Upload Markdown as text/plain; charset=utf-8 so browsers open it inline, and upload and rewrite any local image or Markdown references inside the report too.
 
-Files containing donor, contact, financial or student data must stay restricted to Zach's verified email address from the file-share skill unless Zach explicitly asks to publish that data. So must internal metrics: counts, rates or spend about people, programs or money, even when every number is an aggregate. So must every internal report, even with no metrics: audits, reviews, walkthroughs of Zach's runs, agents, workflows or incidents, and anything naming security weaknesses or credential names, even redacted. For these private files, set allowed_emails (or emails) to that address, verify the SHA-256 and that an anonymous GET returns 401, and link them as text rather than embedding images. This exception also applies to private files referenced inside a report; never publish private data through a public parent report.
+Files containing donor, contact, financial or student data must stay restricted to Zach's verified email address from the file-share skill (or the recipients specified by the request or saved workflow) unless Zach explicitly asks to publish that data or an authorized sharing manager requests publication as described below. So must internal metrics: counts, rates or spend about people, programs or money, even when every number is an aggregate. So must every internal report, even with no metrics: audits, reviews, walkthroughs of Zach's runs, agents, workflows or incidents, and anything naming security weaknesses or credential names, even redacted. For these private files, set allowed_emails (or emails) to the specified verified recipients, verify the SHA-256 and that an anonymous GET returns 401, and link them as text rather than embedding images. This exception also applies to private files referenced inside a report; never publish private data through a public parent report (an authorized make-public request excepted).
+
+Honor access settings and recipient lists specified for initial delivery. An authorized request to make an existing link public publishes its current contents, including private material. Zach can authorize publication. For others, sharing authority must come from Zach's instructions or the owning workflow, including a workflow that creates collateral for their role to share externally. Honor any workflow sign-off gate. Viewing access alone is insufficient. No request to make an existing link public permits redacting, trimming, rewriting, swapping maps or media, rebuilding or re-uploading. If authority is missing or sign-off is pending, leave the files and access untouched. Ask Zach whether to open the existing link as-is when his decision is needed. On authorized publication, clear password and allowed_emails only on the covered files. Verify unchanged URLs, versions and SHA-256 hashes and anonymous GET 200. Put “Public link. Anyone with the URL can open this file.” beside each public link in the reply to the requester, including initial public deliveries. Keep private deliverable URLs out of public repositories, issues and pages.
+
+Sharing-policy review must never redact, trim, rewrite, rebuild, swap maps or media, or re-upload content to satisfy a restriction. If public access lacks authorization under the defaults, correct only allowed_emails on the existing bytes, honoring the specified recipients. If public access is authorized, preserve it and at most add a missing notice to the message.
 
 Never send local paths as deliverables. Pass this file-delivery rule to every worker. If the current step explicitly forbids uploads, preserve the files and pass their paths and this rule to an authorized step. If upload or access verification fails, report the failure and keep the files for retry; do not claim they were delivered.`
 
@@ -330,6 +337,8 @@ var Starting = Definition{
 			"Send the work back to Do the work if any commit adds a result rather than a change the repository keeps: a report, deck, " +
 			"analysis, metrics or counts about people, programs or money, a data export (CSV, JSON, spreadsheet), a work/ or scratch " +
 			"folder, or donor, contact, financial or student data; Do the work must rewrite the commits to drop it. " +
+			"Flag any files.zachlatta.com link to a private deliverable, including in documentation. Remove it from every outgoing commit that introduces it. " +
+			"Keep those links out of public issues and pages too. This gate reviews Git contents only. Never send a hosted deliverable back for edits, re-upload or access changes. " +
 			"Aggregate-only and no-secrets do not make internal data publishable. " +
 			"It also checks for secrets, hostnames, private addresses, home-directory paths and personal emails, and fixes small ones here. " +
 			"Move on when no outgoing commit adds anything private."},

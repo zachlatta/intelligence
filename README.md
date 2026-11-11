@@ -1099,12 +1099,20 @@ and anonymous access, embed images with Markdown image syntax, and link Markdown
 as `text/plain; charset=utf-8` so they open in the browser. They also rewrite local file references
 inside those reports. File delivery is allowed in any step, including sign-off, unless that step
 explicitly forbids uploads; it is an exception to the external changes deferred to landing.
-Donor, contact, financial and student data stay restricted to the recipient and are linked as text
-unless Zach explicitly asks to publish that data. So do internal metrics (counts, rates or spend,
+Donor, contact, financial and student data stay restricted to the verified recipients specified
+by the request or saved workflow, or to Zach by default, and are linked as text unless Zach explicitly asks to publish that data or
+an authorized sharing manager requests publication as described below. So do internal metrics (counts, rates or spend,
 even aggregate) and every internal report, even one with no metrics: audits, reviews, walkthroughs of
 runs, agents, workflows or incidents, and anything naming security weaknesses or credentials. Agents verify anonymous access returns 401 for
 these private files. A worker explicitly barred from uploading preserves artifacts for an authorized
 step. No upload credentials are held by the app.
+For existing links, an authorized request to make the file public authorizes its current
+contents. Zach can authorize publication. For others, sharing authority must come from Zach's instructions or the owning workflow, including a workflow that creates collateral for their role to share externally. Honor any workflow sign-off gate. Viewing access alone is insufficient.
+No request to make an existing link public permits redacting, trimming, rewriting, swapping maps or media, rebuilding or re-uploading. If authority is missing or sign-off is pending, leave the files and access untouched. Ask Zach whether to open the existing link as-is when his decision is needed.
+Follow file-share for access changes and give the requester the original link and public notice.
+Sharing-policy review must never redact, trim, rewrite, rebuild, swap maps or media, or re-upload content to satisfy a restriction. If public access lacks authorization under the defaults, correct only allowed_emails on the existing bytes, honoring the specified recipients. If public access is authorized, preserve it and at most add a missing notice to the message.
+Public Git review governs Git contents. Keep private deliverable URLs out of public repositories,
+issues and pages.
 
 Every step's prompt (saved workflows included) also says that a run whose result is a deliverable
 for Zach (a report, investigation, answer, proposal, plan, deck or analysis) rather than landed code
