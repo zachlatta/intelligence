@@ -219,3 +219,28 @@ func TestToolLabelsAreFriendly(t *testing.T) {
 		t.Errorf("tool type labels should read as words: %s", page)
 	}
 }
+
+func TestTranscriptEditDiffHasNoBlankGapLinesAndRespectsTopbar(t *testing.T) {
+	diffHTML := renderBlocksForTest(t, []fleet.Entry{fe(1,
+		`{"type":"tool_call","name":"Edit","status":"completed","detail":{"type":"edit","filePath":"/w/a.go","unifiedDiff":"@@ -1 +1 @@\n-old\n+new"},"error":null}`)})
+	if !strings.Contains(diffHTML, `class="del">-old</span><span class="add">&#43;new</span>`) {
+		t.Errorf("edit diff has stray whitespace/newlines between spans:\n%s", diffHTML)
+	}
+
+	h := reported(t)
+	sendBatch(t, h, batch(true, "ep1",
+		tentry(1, `{"type":"tool_call","callId":"c","name":"Bash","status":"completed","detail":{"type":"shell","command":"ls","output":"ok"},"error":null}`)))
+	trPage := get(t, h, "/hosts/host-1/agents/"+agentA1, nil).Body.String()
+	for _, want := range []string{"top: var(--topbar-h)", `class="content-shell"`} {
+		if !strings.Contains(trPage, want) {
+			t.Errorf("transcript page misses %q", want)
+		}
+	}
+
+	entryPage := get(t, h, "/hosts/host-1/agents/"+agentA1+"/entries/1", nil).Body.String()
+	for _, want := range []string{`<details class="card"`, `<footer title="`} {
+		if !strings.Contains(entryPage, want) {
+			t.Errorf("entry page misses %q:\n%s", want, entryPage)
+		}
+	}
+}

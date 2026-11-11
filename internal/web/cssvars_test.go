@@ -1,6 +1,7 @@
 package web
 
 import (
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -46,6 +47,40 @@ func TestEveryCSSVariableIsDefined(t *testing.T) {
 				seen[v] = true
 				t.Errorf("%s reads var(%s), which neither ui.css nor the page defines", name, v)
 			}
+		}
+	}
+}
+
+// TestEverySharedCSSVariableIsRead: a ui.css token nothing reads is a palette entry that looks
+// live but changes nothing (--accent-hover outlived its last reader when links and the primary
+// button moved to --link).
+func TestEverySharedCSSVariableIsRead(t *testing.T) {
+	files, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var all strings.Builder
+	for _, f := range files {
+		name := f.Name()
+		if strings.HasSuffix(name, "_test.go") || !(strings.HasSuffix(name, ".css") || strings.HasSuffix(name, ".html") ||
+			strings.HasSuffix(name, ".js") || strings.HasSuffix(name, ".go")) {
+			continue
+		}
+		b, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		all.Write(b)
+	}
+	read := map[string]bool{}
+	for _, m := range regexp.MustCompile(`var\(\s*(--[a-zA-Z0-9-]+)`).FindAllStringSubmatch(all.String(), -1) {
+		read[m[1]] = true
+	}
+	seen := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(--[a-zA-Z0-9-]+)\s*:`).FindAllStringSubmatch(string(uiCSS), -1) {
+		if v := m[1]; !read[v] && !seen[v] {
+			seen[v] = true
+			t.Errorf("ui.css defines %s, which nothing reads", v)
 		}
 	}
 }

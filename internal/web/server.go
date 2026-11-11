@@ -215,7 +215,7 @@ func newHandler(cfg Config, workers bool) http.Handler {
 		return func(w http.ResponseWriter, r *http.Request) { transcriptResources(cfg, v.reg, w, r) }
 	}))
 	mux.HandleFunc("GET /hosts/{host}/agents/{agent}/entries/{seq}", a.page(func(v viewer) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) { transcriptEntry(v.reg, w, r) }
+		return func(w http.ResponseWriter, r *http.Request) { transcriptEntry(cfg, v.reg, w, r) }
 	}))
 	mux.HandleFunc("GET /schedules", a.page(func(v viewer) http.HandlerFunc { return schedulesPage(cfg, v.reg) }))
 	mux.HandleFunc("GET /hosts/{host}/schedules/new", a.page(func(v viewer) http.HandlerFunc { return newSchedulePage(cfg, v.reg) }))

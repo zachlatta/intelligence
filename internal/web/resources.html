@@ -7,8 +7,10 @@
     {{if .OOMs}}<span class="bad">{{plural (len .OOMs) "OOM kill"}}</span>{{end}}
   {{else}}<span class="restitle">Resources</span> <span>No resources recorded for this agent yet: its host reports each minute it has processes.</span>{{end}}</summary>
   {{if .Minutes}}<div class="resbody">
-    {{if .CPU}}<h3>CPU, in cores</h3>{{.CPU}}{{end}}
-    {{if .Mem}}<h3>Memory (proportional set size of its processes, the most each minute)</h3>{{.Mem}}{{end}}
+    <div class="rescharts">
+      {{if .CPU}}<div><h3>CPU, in cores</h3>{{.CPU}}</div>{{end}}
+      {{if .Mem}}<div><h3>Memory (proportional set size of its processes, the most each minute)</h3>{{.Mem}}</div>{{end}}
+    </div>
     {{if .OOMs}}<h3 class="bad">OOM kills</h3>
     <table>{{range .OOMs}}<tr><td>{{at .At "seconds"}}</td><td>{{.Comm}} ({{.PID}})</td><td class="n">{{size .AnonRSS}}</td></tr>{{end}}</table>{{end}}
     <p class="small muted">{{plural .Minutes "minute"}} measured, {{at .First "short"}} to {{at .Last "short"}}{{if .CPUs}} on a host with {{.CPUs}} CPUs{{end}}.

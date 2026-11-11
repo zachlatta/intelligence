@@ -181,22 +181,28 @@ func transcriptBlocks(cfg Config, reg *fleet.Registry, w http.ResponseWriter, r 
 		Blocks: buildBlocks(tr.Entries), Now: cfg.Now()})
 }
 
-var entryTmpl = template.Must(template.New("entry").Parse(`<!doctype html>
+var entryTmpl = template.Must(template.New("entry").Funcs(template.FuncMap{"short": short}).Parse(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Entry {{.Seq}} · Intelligence</title>
 {{template "css"}}
-<style>pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; padding: .9rem 1rem; font-size: 12.5px; }
-.card-head .mono { font-size: 12.5px; }</style></head>
+<style>pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; padding: .9rem 1rem; font-size: 12.5px; line-height: 1.5; }
+.card-head .mono { font-size: 12.5px; }
+details.card > summary { cursor: pointer; list-style: none; }
+details.card > summary::-webkit-details-marker { display: none; }
+details.card:not([open]) > .card-head { border-bottom: 0; }
+details.card > summary .fold-hint::after { content: "Expand"; }
+details.card[open] > summary .fold-hint::after { content: "Collapse"; }</style></head>
 <body>{{template "top" "/"}}
 <main class="container page">
 <div class="crumbs"><a href="{{.Back}}">← Back to the transcript</a></div>
 <div class="page-head"><h1>{{.Kind}}{{if .Tool}} · {{.Tool}}{{end}}</h1><span class="badge">seq {{.Seq}}</span></div>
 {{range .Texts}}<section class="card"><div class="card-head"><h2>{{.Name}}</h2></div><pre>{{.Text}}</pre></section>{{end}}
-<section class="card"><div class="card-head"><h2>Item</h2></div><pre>{{.Item}}</pre></section>
-</main></body></html>` + layoutHTML))
+<details class="card"{{if not .Texts}} open{{end}}><summary class="card-head"><h2>Raw JSON item</h2><span class="meta fold-hint" style="margin-left:auto"></span></summary><pre>{{.Item}}</pre></details>
+</main>
+<footer title="{{.Version}}">version {{short .Version}}</footer></body></html>` + layoutHTML))
 
 // transcriptEntry shows one entry whole: its long texts as text, then its item as JSON.
-func transcriptEntry(reg *fleet.Registry, w http.ResponseWriter, r *http.Request) {
+func transcriptEntry(cfg Config, reg *fleet.Registry, w http.ResponseWriter, r *http.Request) {
 	host, agentID := r.PathValue("host"), r.PathValue("agent")
 	seq, err := strconv.Atoi(r.PathValue("seq"))
 	if err != nil {
@@ -233,7 +239,7 @@ func transcriptEntry(reg *fleet.Registry, w http.ResponseWriter, r *http.Request
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = entryTmpl.Execute(w, map[string]any{"Back": "/hosts/" + host + "/agents/" + agentID + "#seq-" + strconv.Itoa(seq),
-		"Kind": e.Kind, "Tool": e.Tool, "Seq": seq, "Texts": texts, "Item": item.String()})
+		"Kind": e.Kind, "Tool": e.Tool, "Seq": seq, "Texts": texts, "Item": item.String(), "Version": cfg.Version})
 }
 
 // preview is the first line of a text, at most 160 characters.
