@@ -794,9 +794,10 @@ its host is near capacity; with room, it starts at once. There is no fixed count
 host's measured load decides.
 
 The server projects the host's load from its newest minute of resources (Host resources, above):
-that minute's CPU, memory used (by the minute's least available) and 1-minute load per CPU, plus
-one run's footprint for each run still starting, whose load the minute cannot show yet, and one
-for the run about to start. A run is starting from its launch (`workflow_runs.launched_at`) until
+that minute's CPU, memory used (by the minute's least available) and 1-minute load per CPU.
+CPU and load add one run's footprint for each run still starting, whose load the minute cannot
+show yet, and one for the run about to start. Memory reservations persist throughout active runs,
+as described below. A run is starting from its launch (`workflow_runs.launched_at`) until
 its orchestrator has started: for its whole start-up. A run that finds its project first is
 starting all the while it finds it (its orchestrator is still to come), and every run is starting
 until the host reports its workspace and orchestrator command (`launch_command`) done and the
@@ -819,8 +820,18 @@ adds 25% headroom, and applies a 1 GiB floor. Without history the estimate is 4 
 while a finder has not selected a project. Agent samples expire after 90 days, so older history
 eventually falls back. These views and `workflow_runs.estimated_memory_bytes` expose the evidence
 and estimate through SQL; the run page shows the estimate. Estimates are fixed at repository
-selection and reused for reservations and retries. Each starting run reserves its own estimate
-instead of a host-wide percentage. The existing memory percentage limit supplies host headroom.
+selection and reused for reservations and retries. Every starting, running or waiting run reserves
+`max(estimate - resident memory, 0)` in addition to the host's measured memory usage. Resident memory
+is the sum for that run's known agents in the exact newest host minute; without a matching sample,
+its full estimate stays reserved. This prevents a run's quiet phase from admitting another heavy
+run, without counting its resident memory twice. The existing memory percentage limit supplies
+host headroom. Memory queue reasons name the repository estimate, measured free RAM and reservations.
+To prevent an estimate from permanently blocking the FIFO, the oldest run may start alone when
+there are no other active or starting runs and measured memory is below the limit, even when its
+estimate exceeds the remaining idle budget (including the OS baseline). CPU, load and
+telemetry checks still apply. Its full estimate stays reserved until it ends, so it cannot block
+the queue forever solely because the estimate exceeds host RAM. This is an advisory estimate,
+not a guarantee that an oversized workload will fit or avoid an OOM kill.
 After a finder selects a repository, admission replaces its reservation with that estimate,
 without counting the finder twice. If it no longer fits, the same run re-enters the existing FIFO
 and resumes with its selected repository when room returns; it never repeats project finding.
@@ -852,7 +863,8 @@ Without fresh telemetry the server cannot know the host's capacity:
 
 **Start now** bypasses the capacity hold for a new run. Automatic retries wait for admission.
 
-A run also queues while earlier runs wait in its host's queue, so the queue keeps its order. The
+A run also queues while earlier runs wait in its host's queue, so the queue keeps strict FIFO
+order: light runs wait behind heavy ones. The
 decision and the start are made in one transaction holding the host's queue lock (an advisory
 lock per host), so runs started at the same moment are judged one after another, each counting
 those just before it.

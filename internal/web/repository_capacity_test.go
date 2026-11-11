@@ -51,6 +51,9 @@ func TestRepositoryEstimateGatesExistingQueue(t *testing.T) {
 	b := sendReport(t, h, wfReport())
 	heavy := repositoryHistory(t, h, d, "/w/app")
 	b.command() // historical workspace
+	otherDef := workflow.Starting
+	otherDef.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/other"}
+	other := startRun(t, h, createWorkflow(t, h, otherDef), "another active run")
 	repositoryMinute(t, b, 7<<30)
 	id := startRun(t, h, heavy, "large build")
 	if got := runField(t, h, id, "status"); got != "queued" {
@@ -63,6 +66,9 @@ func TestRepositoryEstimateGatesExistingQueue(t *testing.T) {
 		t.Fatal("page hides repository estimate")
 	}
 	if rec := call(t, h, http.MethodPost, "/api/workflow-runs/"+id+"/cancel", `{}`, sameOriginFetch); rec.Code != http.StatusNoContent {
+		t.Fatal(rec.Body)
+	}
+	if rec := call(t, h, http.MethodPost, "/api/workflow-runs/"+other+"/cancel", `{}`, sameOriginFetch); rec.Code != http.StatusNoContent {
 		t.Fatal(rec.Body)
 	}
 	def := workflow.Starting
@@ -92,6 +98,9 @@ func TestRepositoryMemoryEstimateHoldsStartRetry(t *testing.T) {
 	if ack := b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{ID: cmd.ID, Status: hostclient.CommandFailed, Error: "temporary failure"}}); ack.Error != "" {
 		t.Fatal(ack.Error)
 	}
+	otherDef := workflow.Starting
+	otherDef.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/other"}
+	startRun(t, h, createWorkflow(t, h, otherDef), "another active run")
 	clock.Add(16 * time.Second)
 	if err := workflow.NewEngine(d.Owner, clock.Now).RetryStarts(t.Context()); err != nil {
 		t.Fatal(err)
@@ -113,9 +122,12 @@ func TestMatchedRepositoryReentersExistingQueue(t *testing.T) {
 	b := sendReport(t, h, wfReport())
 	repositoryHistory(t, h, d, "/w/app")
 	b.command()
-	repositoryMinute(t, b, 7<<30)
 	id := startRun(t, h, createWorkflow(t, h, workflow.Starting), "choose project")
 	succeed(t, b, b.command(), `{"agentId":"finder"}`)
+	otherDef := workflow.Starting
+	otherDef.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/other"}
+	startRun(t, h, createWorkflow(t, h, otherDef), "another active run")
+	repositoryMinute(t, b, 7<<30)
 	if code, msg := move(t, h, keyOf(t, h, "host-1"), id, map[string]string{"move": "project", "directory": "/w/app"}); code != http.StatusOK {
 		t.Fatalf("project: %d %s", code, msg)
 	}
@@ -125,5 +137,106 @@ func TestMatchedRepositoryReentersExistingQueue(t *testing.T) {
 	repositoryMinute(t, b, 16<<30)
 	if got := runField(t, h, id, "status"); got != "starting" {
 		t.Fatalf("queue did not resume selected project: %v", got)
+	}
+}
+
+func TestOversizedRepositoryRunsAloneWithoutBlockingFIFOForever(t *testing.T) {
+	h, d := dbServer(t)
+	b := sendReport(t, h, wfReport())
+	wf := repositoryHistory(t, h, d, "/w/app")
+	b.command()
+	if _, err := d.Owner.Exec(t.Context(), `UPDATE agent_minutes SET mem_max=$1`, int64(7<<30)); err != nil {
+		t.Fatal(err)
+	}
+	// Queue both while memory is busy, then give the idle host a chance to drain.
+	repositoryMinute(t, b, 1<<30)
+	heavy := startRun(t, h, wf, "oversized build")
+	desk := workflow.Starting
+	desk.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/desk"}
+	light := startRun(t, h, createWorkflow(t, h, desk), "next job")
+	repositoryMinute(t, b, 16<<30)
+	if got := runField(t, h, heavy, "status"); got != "starting" {
+		t.Fatalf("oversized head never starts: %v", got)
+	}
+	if got := runField(t, h, light, "status"); got != "queued" {
+		t.Fatalf("oversized run must run alone: %v", got)
+	}
+	// Completion releases the estimate, so the next FIFO entry starts automatically.
+	if _, err := d.Owner.Exec(t.Context(), `UPDATE workflow_runs SET status='succeeded',finished_at=now() WHERE id=$1`, heavy); err != nil {
+		t.Fatal(err)
+	}
+	repositoryMinute(t, b, 16<<30)
+	if got := runField(t, h, light, "status"); got != "starting" {
+		t.Fatalf("FIFO did not progress: %v", got)
+	}
+	// An OS baseline can also make an estimate permanently exceed the idle
+	// budget, even when the estimate is smaller than physical RAM.
+	if _, err := d.Owner.Exec(t.Context(), `UPDATE workflow_runs SET status='succeeded',finished_at=now() WHERE id=$1`, light); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Owner.Exec(t.Context(), `UPDATE agent_minutes SET mem_max=$1`, int64(4<<30)); err != nil {
+		t.Fatal(err)
+	}
+	repositoryMinute(t, b, 7<<30)
+	baseline := startRun(t, h, wf, "build alongside OS baseline")
+	if got := runField(t, h, baseline, "status"); got != "starting" {
+		t.Fatalf("OS baseline blocked a solo run forever: %v", got)
+	}
+}
+
+func TestActiveRepositoryRunKeepsUnconsumedMemoryReservation(t *testing.T) {
+	d := dbtest.New(t)
+	clock := &fakeClock{t: time.Now().UTC()}
+	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.Now = clock.Now; c.QueueInterval = time.Hour })
+	b := sendReport(t, h, wfReport())
+	wf := repositoryHistory(t, h, d, "/w/app")
+	b.command()
+	if _, err := d.Owner.Exec(t.Context(), `UPDATE agent_minutes SET mem_max=$1`, int64(5<<30)); err != nil {
+		t.Fatal(err)
+	}
+	repositoryMinute(t, b, 16<<30)
+	first := startRun(t, h, wf, "first heavy run")
+	succeed(t, b, b.command(), `{"workspaceId":"heavy-workspace","agentId":"heavy-agent"}`)
+	clock.Add(2 * time.Minute)
+	minute := clock.Now().UTC().Truncate(time.Minute)
+	if _, err := d.Owner.Exec(t.Context(), `INSERT INTO workflow_run_agents (run_id,host,agent_id,agent,workspace,captured_at)
+		VALUES ($1,'host-1','heavy-agent','{}','{}',now());`, first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Owner.Exec(t.Context(), `INSERT INTO agent_minutes (host,agent_id,minute,mem_max) VALUES ('host-1','heavy-agent',$1,$2)`, minute, int64(1<<30)); err != nil {
+		t.Fatal(err)
+	}
+	cpu := 10.0
+	rep := resources.Report{Minutes: []resources.Minute{{Minute: minute, Samples: 12, CPUs: 8, CPUAvgPct: &cpu, Load1: 1, MemTotal: 16 << 30, MemAvailableMin: 15 << 30}}}
+	if ack := b.call(hostclient.Frame{Type: hostclient.HostFrame, Host: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	second := startRun(t, h, wf, "second heavy run")
+	if got := runField(t, h, second, "status"); got != "queued" {
+		t.Fatalf("active run lost peak reservation: %v", got)
+	}
+	reason := runField(t, h, second, "queue_reason").(string)
+	if !strings.Contains(reason, "12.5 GiB") || !strings.Contains(reason, "/w/app") || !strings.Contains(reason, "free") {
+		t.Fatalf("reason hides estimate or free memory: %s", reason)
+	}
+	// Use most of the estimate, then show a small job still fits: resident memory
+	// must be subtracted from the reservation, not charged a second time.
+	if rec := call(t, h, http.MethodPost, "/api/workflow-runs/"+second+"/cancel", `{}`, sameOriginFetch); rec.Code != http.StatusNoContent {
+		t.Fatal(rec.Body)
+	}
+	if _, err := d.Owner.Exec(t.Context(), `UPDATE agent_minutes SET mem_max=$1 WHERE agent_id='heavy-agent'`, int64(10<<30)); err != nil {
+		t.Fatal(err)
+	}
+	rep.Minutes[0].MemAvailableMin = 6 << 30
+	if ack := b.call(hostclient.Frame{Type: hostclient.HostFrame, Host: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	// 1 GiB estimate leaves room under the 90% limit alongside 12.5 GiB.
+	if _, err := d.Owner.Exec(t.Context(), `UPDATE agent_minutes SET mem_max=$1 WHERE agent_id IN ('worker-a','worker-b')`, int64(128<<20)); err != nil {
+		t.Fatal(err)
+	}
+	small := startRun(t, h, wf, "small learned footprint")
+	if got := runField(t, h, small, "status"); got != "starting" {
+		t.Fatalf("resident memory charged twice: %v", got)
 	}
 }

@@ -453,7 +453,7 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		if err != nil {
 			return err
 		}
-		why, err := e.queueReason(ctx, tx, host, "", estimate)
+		why, err := e.queueReason(ctx, tx, host, "", repo, estimate)
 		if err != nil {
 			return err
 		}
@@ -738,7 +738,7 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		}
 		// This run already holds a startup reservation. Replace it with the selected
 		// project's estimate; do not count the finder twice or lose its FIFO priority.
-		why, err := e.room(ctx, tx, r.Host, r.ID, estimate)
+		why, err := e.room(ctx, tx, r.Host, r.ID, repo, estimate)
 		if err != nil {
 			return "", err
 		}
