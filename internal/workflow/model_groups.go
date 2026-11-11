@@ -234,7 +234,7 @@ func (e *Engine) DeleteModelGroup(ctx context.Context, account int64, id string)
 // Run delivery only takes the model lock, so it can expand while holding a host's queue lock.
 func validateModelTokens(ctx context.Context, tx pgx.Tx, account int64, d Definition) error {
 	for _, s := range d.Steps {
-		for _, m := range groupToken.FindAllStringSubmatch(s.Instructions, -1) {
+		for _, m := range groupToken.FindAllStringSubmatch(s.Instructions+" "+s.Model, -1) {
 			var exists bool
 			if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM model_groups WHERE account_id=$1 AND token=$2 AND deleted_at IS NULL)", account, m[1]).Scan(&exists); err != nil {
 				return err
@@ -253,19 +253,49 @@ func (e *Engine) fillModels(ctx context.Context, tx pgx.Tx, r run, step int) (De
 	d := r.Def
 	d.Steps = append([]Step(nil), d.Steps...)
 	text := d.Steps[step].Instructions
-	seen := map[string]bool{}
+	seen := map[string]modelSuggestion{}
 	var notes []string
-	for _, m := range groupToken.FindAllStringSubmatch(text, -1) {
-		if seen[m[1]] {
-			continue
+	suggest := func(token string) (modelSuggestion, error) {
+		if msg, ok := seen[token]; ok {
+			return msg, nil
 		}
-		seen[m[1]] = true
-		msg, err := e.suggestModel(ctx, tx, r, step, m[1], nil)
+		msg, err := e.suggestModel(ctx, tx, r, step, token, nil)
+		if err != nil {
+			return msg, err
+		}
+		seen[token] = msg
+		notes = append(notes, "- "+token+": "+msg.Note)
+		return msg, nil
+	}
+	for _, m := range groupToken.FindAllStringSubmatch(text, -1) {
+		msg, err := suggest(m[1])
 		if err != nil {
 			return d, err
 		}
 		text = strings.ReplaceAll(text, m[0], msg.Inline)
-		notes = append(notes, "- "+m[1]+": "+msg.Note)
+	}
+	// The step's own model: a group resolves like a token (sharing its allocation); an explicit
+	// model is passed on with its launch settings.
+	if s := d.Steps[step]; s.Model != "" {
+		if m := stepGroupModel.FindStringSubmatch(s.Model); m != nil {
+			msg, err := suggest(m[1])
+			if err != nil {
+				return d, err
+			}
+			if strings.HasPrefix(msg.Inline, "no eligible model") {
+				text += "\n\nThis step's model group " + m[1] + " has no eligible model now: see the model suggestions below before starting its sub-agents."
+			} else {
+				text += "\n\nThis step's model: " + msg.Inline + ". Start this step's sub-agents with it (launch settings in the model suggestions below)."
+			}
+		} else {
+			provider, _, _ := strings.Cut(s.Model, "/")
+			label, launch := s.Model, "--provider "+s.Model+" --mode "+agentMode(provider)
+			if s.Thinking != "" {
+				label += " (" + s.Thinking + ")"
+				launch += " --thinking " + s.Thinking
+			}
+			text += "\n\nThis step's model: " + label + ". Start this step's sub-agents with " + launch + "."
+		}
 	}
 	if len(notes) > 0 {
 		text += "\n\nModel suggestions:\n" + strings.Join(notes, "\n")

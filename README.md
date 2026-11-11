@@ -817,6 +817,14 @@ future suggestions, not delivered ones. Before another worker, refresh with
 Queued runs allocate when they launch; startup retries rebuild the prompt with fresh suggestions.
 Direct edits and proposal approvals validate group tokens before saving a workflow.
 
+A step can also name its model (**Model for this step** in the editor; `model` and `thinking` in
+the step's JSON): empty leaves it to the orchestrator; a group's token (`"{{frontier_model}}"`)
+is resolved on step entry like a token in the instructions (one allocation if both name the
+group), and the step's message tells the orchestrator to start its sub-agents with the pick; an
+explicit `provider/model` (from the host's catalog, with an optional `thinking`) is passed on
+with its launch settings. A group sets its own thinking, so a group step has none. A group a
+step names cannot be deleted while a saved workflow or active run uses it.
+
 Group writes use `POST /api/model-groups`, `PUT /api/model-groups/{id}` (with `revision`) and
 `DELETE /api/model-groups/{id}`. A host records a suggestion with
 `POST /api/workflow-runs/{id}/suggestions`, JSON `{"token", "exclude": []}`. Read groups, members,
