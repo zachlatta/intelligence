@@ -196,6 +196,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /gmail/callback", gmailCallback)
 	mux.HandleFunc("GET /workflows/email", a.page(func(v viewer) http.HandlerFunc { return emailPage(cfg, a, v) }))
 	mux.HandleFunc("GET /workflows/{id}", a.page(func(v viewer) http.HandlerFunc { return workflowPage(cfg, a, v) }))
+	mux.HandleFunc("GET /workflows/{id}/prompts", a.page(func(v viewer) http.HandlerFunc { return workflowPromptsPage(cfg, v) }))
 	mux.HandleFunc("GET /workflow-runs/{id}", a.page(func(v viewer) http.HandlerFunc { return runPage(cfg, v) }))
 	mux.HandleFunc("GET /usage", a.page(func(v viewer) http.HandlerFunc { return usagePage(cfg, v.reg) }))
 	mux.HandleFunc("GET /resources", a.page(func(v viewer) http.HandlerFunc { return hostResourcesPage(cfg, v.reg) }))
