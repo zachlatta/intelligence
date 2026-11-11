@@ -137,6 +137,8 @@ func TestAHostJoinsAnAccountWithItsCode(t *testing.T) {
 	}
 	if page := get(t, h, "/account", nil).Body.String(); !strings.Contains(page, "new-host") {
 		t.Errorf("the account page does not list the new host")
+	} else if !strings.Contains(page, `<span class="dot `) {
+		t.Errorf("the account page shows a host's status without a status dot")
 	}
 }
 

@@ -48,7 +48,8 @@ func TestEveryPageSharesTheStylesheetAndTopBar(t *testing.T) {
 		{"/usage", `href="/usage" aria-current="page"`},
 		{"/resources", `href="/resources" aria-current="page"`},
 		{"/account", `href="/account" aria-current="page"`},
-		{"/login", `href="/" aria-current="page"`},
+		{"/workflow-proposals", `href="/workflow-proposals" id="proposals-nav" aria-current="page"`},
+		{"/whats-new", `href="/whats-new" id="nav-whats-new" aria-current="page"`},
 		{newAgentPath, `href="/" aria-current="page"`},
 		{"/hosts/host-1/workspaces/new", `href="/" aria-current="page"`},
 		{"/hosts/host-1/agents/" + agentA1, `href="/" aria-current="page"`},
@@ -62,7 +63,7 @@ func TestEveryPageSharesTheStylesheetAndTopBar(t *testing.T) {
 		}
 		page := rec.Body.String()
 		nav, _, _ := strings.Cut(page[strings.Index(page, `class="topnav"`)+1:], "</nav>")
-		for _, tab := range []string{">Hosts<", ">Plans<", ">Host monitoring<", ">Account<"} { // one tab each
+		for _, tab := range []string{">Hosts<", ">Workflows<", ">Proposals<", ">Schedules<", ">Plans<", ">Host monitoring<", ">What's New<", ">Account<"} { // one tab each
 			if n := strings.Count(nav, tab); n != 1 {
 				t.Errorf("%s: %d tabs %s, want 1", p.path, n, tab)
 			}
@@ -77,6 +78,27 @@ func TestEveryPageSharesTheStylesheetAndTopBar(t *testing.T) {
 		}
 		if n := strings.Count(page, "<body"); n != 1 {
 			t.Errorf("%s: %d <body> tags, want 1", p.path, n)
+		}
+	}
+}
+
+// The sign-in page keeps the top bar's brand but shows no tabs: a signed-out visitor cannot open them.
+func TestLoginPageHasNoTabs(t *testing.T) {
+	h, _ := cmdServer(t)
+	rec := get(t, h, "/login", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	page := rec.Body.String()
+	for _, want := range []string{`class="topbar"`, `class="brand"`, `<link rel="stylesheet" href="/ui.css`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("login page misses %q", want)
+		}
+	}
+	for _, bad := range []string{`class="topnav"`, `aria-current="page"`, ">Host monitoring<", `id="nav-whats-new"`,
+		`id="proposals-count"`, `workflow_proposal_status`} {
+		if strings.Contains(page, bad) {
+			t.Errorf("login page has %q", bad)
 		}
 	}
 }

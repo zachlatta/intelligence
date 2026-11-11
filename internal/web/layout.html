@@ -2,10 +2,10 @@
 <script src="/submitkeys.js" defer></script>
 <script src="/whatsnew.js" defer></script>
 <script src="/localtime.js" defer></script>{{end}}
-{{define "top"}}{{/* the top bar, with the tab whose path is . marked */}}
+{{define "top"}}{{/* the top bar, with the tab whose path is . marked; with no path (signed out), no tabs */}}
 <header class="topbar"><div class="container topbar-inner">
   <a class="brand" href="/"><svg viewBox="0 0 20 20" aria-hidden="true"><rect width="20" height="20" rx="5" fill="currentColor"/><path d="M6 13.5 10 6l4 7.5" fill="none" stroke="var(--panel)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Intelligence</a>
-  <nav class="topnav" aria-label="Primary">
+  {{if .}}<nav class="topnav" aria-label="Primary">
     <a href="/"{{if eq . "/"}} aria-current="page"{{end}}>Hosts</a>
     <a href="/workflows"{{if eq . "/workflows"}} aria-current="page"{{end}}>Workflows</a>
     <a href="/workflow-proposals" id="proposals-nav"{{if eq . "/workflow-proposals"}} aria-current="page"{{end}}>Proposals<span id="proposals-count"></span></a>
@@ -14,13 +14,13 @@
     <a href="/resources"{{if eq . "/resources"}} aria-current="page"{{end}}>Host monitoring</a>
     <a href="/whats-new" id="nav-whats-new"{{if eq . "/whats-new"}} aria-current="page"{{end}}>What's New<span class="unseen-count" aria-hidden="true" hidden></span></a>
     <a href="/account"{{if eq . "/account"}} aria-current="page"{{end}}>Account</a>
-  </nav>
+  </nav>{{end}}
 </div></header>
-<script>
+{{if .}}<script>
 // Every page reads its pending count through the same account-scoped SQL API.
 fetch('/api/sql?q='+encodeURIComponent("SELECT count(*) FROM workflow_proposal_status WHERE effective_status='pending'"))
 .then(r=>r.ok?r.json():null).then(data=>{if(!data)return;const count=Number(data.rows?.[0]?.[0]||0);const badge=document.getElementById('proposals-count');if(badge){badge.textContent=count?' ('+count+')':'';badge.parentElement.setAttribute('aria-label','Proposals, '+count+' pending');}}).catch(()=>{});
-</script>
+</script>{{end}}
 {{end}}
 {{define "archivejs"}}
 <script>

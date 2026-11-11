@@ -10,7 +10,7 @@
 </style>
 </head>
 <body>
-{{/* the tab follows the page: Account's own, else Hosts, whose forms these are */}}{{if eq . "Account"}}{{template "top" "/account"}}{{else}}{{template "top" "/"}}{{end}}
+{{/* the tab follows the page: none signed out, Account's own, else Hosts, whose forms these are */}}{{if eq . "Sign in"}}{{template "top" ""}}{{else if eq . "Account"}}{{template "top" "/account"}}{{else}}{{template "top" "/"}}{{end}}
 <main class="container page narrow">
 {{end}}
 

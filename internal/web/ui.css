@@ -151,6 +151,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--line);
 .dot.green, .dot.online { background: var(--green); }
 .dot.red, .dot.offline { background: var(--faint); }
 .dot.blue { background: var(--accent); }
+.dot-label { display: inline-flex; align-items: center; gap: .4rem; white-space: nowrap; }
 
 /* buttons, links that look like them, and the segmented range picker */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: .35rem; height: 2.1rem; padding: 0 .85rem;

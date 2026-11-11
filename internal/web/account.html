@@ -42,7 +42,7 @@ for (const [id, path] of [["login", "/api/session"], ["signup", "/api/accounts"]
 <h2 class="section-title" id="hosts">Hosts</h2>
 {{if .Hosts}}<div class="card"><table class="table">
   <thead><tr><th>Host</th><th>Status</th><th>Joined</th><th>Key last used</th><th></th></tr></thead>
-  <tbody>{{range .Hosts}}<tr><td><b>{{.Host}}</b></td><td>{{if .Online}}<span class="badge">online</span>{{else}}<span class="meta">offline</span>{{end}}</td>
+  <tbody>{{range .Hosts}}<tr><td><b>{{.Host}}</b></td><td><span class="dot-label"><span class="dot {{if .Online}}online{{else}}offline{{end}}"></span>{{if .Online}}online{{else}}<span class="meta">offline</span>{{end}}</span></td>
     <td class="meta">{{ago $.Now .Joined}}</td><td class="meta">{{with .Used}}{{ago $.Now .}}{{else}}never{{end}}</td>
     <td><button class="btn ghost sm remove" data-host="{{.Host}}">Remove</button></td></tr>{{end}}</tbody>
 </table></div>

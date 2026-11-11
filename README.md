@@ -1391,7 +1391,8 @@ the account and enrollment routes, the host binaries and the streams (with a hos
   commands API, follows it through `/api/sql`, then opens the new agent's transcript; a failure
   shows Paseo's reason. The prompt takes dictation as the chat box does (below): ⌘D or Enter again
   in an empty prompt starts the agent.
-- `GET /login`: signs a browser in, or makes an account, through the account APIs.
+- `GET /login`: signs a browser in, or makes an account, through the account APIs. Its top bar has
+  no tabs, as a signed-out visitor can open none of them.
 - `GET /account`: the account's hosts (online, when each joined and last used its key), how to
   install one, the form that adds a host by its code, and the password form.
 - `GET /hosts/{host}/agents/{id}`: one agent's transcript as turns: messages rendered as Markdown
