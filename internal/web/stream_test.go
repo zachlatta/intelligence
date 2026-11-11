@@ -11,6 +11,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/zachlatta/intelligence/internal/dbtest"
+	"github.com/zachlatta/intelligence/internal/fleet"
 	"github.com/zachlatta/intelligence/internal/hostclient"
 	"github.com/zachlatta/intelligence/internal/resources"
 	"github.com/zachlatta/intelligence/internal/usage"
@@ -18,10 +19,13 @@ import (
 
 // rawHost is a host's end of the stream, driven frame by frame.
 type rawHost struct {
-	t     *testing.T
-	conn  *websocket.Conn
-	hello hostclient.Hello
-	next  uint64
+	local    *app
+	streamID string
+	commands []hostclient.Command
+	t        *testing.T
+	conn     *websocket.Conn
+	hello    hostclient.Hello
+	next     uint64
 }
 
 // streamWait bounds each wait on a host stream: the hello, an ack, a command. It only ends a
@@ -70,9 +74,12 @@ func openStream(t *testing.T, h http.Handler, host string) *rawHost {
 	return b
 }
 
-// call sends f and returns its ack, skipping any command frames.
+// call sends f and returns its ack, retaining commands that arrive before it.
 func (b *rawHost) call(f hostclient.Frame) hostclient.Frame {
 	b.t.Helper()
+	if b.local != nil {
+		return receive(b.t.Context(), b.local, "host-1", b.streamID, f)
+	}
 	b.next++
 	f.ID = b.next
 	ctx, cancel := context.WithTimeout(context.Background(), streamWait)
@@ -91,12 +98,32 @@ func (b *rawHost) call(f hostclient.Frame) hostclient.Frame {
 			}
 			return got
 		}
+		if got.Type == hostclient.CommandFrame {
+			b.commands = append(b.commands, *got.Command)
+		}
 	}
 }
 
 // command reads frames until a command arrives.
 func (b *rawHost) command() hostclient.Command {
 	b.t.Helper()
+	if b.local != nil && len(b.commands) == 0 {
+		cmds, err := b.local.reg.Claim(b.t.Context(), "host-1", fleet.ClaimOptions{StreamID: b.streamID, RetryReady: true}, b.local.cfg.Now())
+		if err != nil {
+			b.t.Fatal(err)
+		}
+		for _, c := range cmds {
+			b.commands = append(b.commands, c.Wire())
+		}
+		if len(b.commands) == 0 {
+			b.t.Fatal("expected a queued command after synchronous reconciliation")
+		}
+	}
+	if len(b.commands) > 0 {
+		c := b.commands[0]
+		b.commands = b.commands[1:]
+		return c
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), streamWait)
 	defer cancel()
 	for {

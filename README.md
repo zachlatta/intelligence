@@ -112,6 +112,58 @@ Orchestrators continue in the same turn after `next`, `skip` and `back`, and wai
 in the foreground. They end the turn after a successful `ask` or when the run is over.
 This lifecycle rule wraps every definition, including saved workflows.
 
+A server watchdog checks up to 100 running runs each minute, oldest checked first. For an
+unchanged eligible idle snapshot, attempts are due at two and ten minutes and the run becomes
+**Stalled** at twelve minutes, measured from `idle_since`. These are idle-window thresholds,
+not deadlines measured from the first detection of a stuck run.
+
+A continuation normally wakes the orchestrator and changes its reported activity. Once it
+becomes idle again, the next observation starts a new idle window. The remaining second attempt
+then needs ten unchanged idle minutes; after that attempt wakes it again, marking it stalled
+needs twelve unchanged idle minutes. There are still at most two attempts per lifecycle
+transition. For example, brief wakeups can produce attempts at minutes 2 and 13, then a stall at
+minute 26. The minute worker and host reporting can add their normal scheduling delay.
+
+Running or initializing workers and permission blocks prevent automatic recovery. Worker or
+agent snapshot changes and stale/offline hosts reset the idle window; pending commands pause
+reconciliation until they clear. No gate is skipped and no replacement agent starts. Hosts send
+a full snapshot every 30 seconds; the watchdog requires a heartbeat and a report received within
+the last minute. Older host clients must update before their idle runs can be recovered.
+Provider-error, closed or missing orchestrators require inspection of the agent/provider;
+automatic recovery only handles idle orchestrators and does not restart or replace them.
+
+`workflow_runs.idle_since`, `idle_observation`, `stall_checked_at`, status and error, and
+`workflow_run_continuations` (event, attempt, command and creation time) expose recovery through SQL.
+Run row locks and the unique `(run_id, event_id, attempt)` key coordinate server instances.
+Each continuation attempt and the stalled transition write an event and update `updated_at`, so
+both appear in What happened. Finished-turn attention is not a permission block; only a current
+`permission` attention reason or an open pending/error/stuck permission audit prevents recovery.
+Admission-waiting runs and startup retries are excluded before scanning and again under the run
+lock; this watchdog neither calls admission nor spends a startup retry. Each run reconciles in
+its own transaction, and failures are reported together so one bad run cannot roll back healthy
+recoveries. The minute worker lives beside `RunStartRetries` and stops with the server.
+`workflow_run_latest_transition` is a security-invoker view of the latest lifecycle event;
+label edits and message events do not create a new recovery epoch. Agent activity still resets
+the idle grace period.
+Attempts survive server restarts. Continuations expire after one minute; progress, asking,
+cancellation or completion invalidates them before delivery. An already delivered message cannot
+be recalled. The agent must check prior outcomes before repeating work.
+
+Stalled is a watchdog diagnosis, not a permission gate. Accepted run replies and forwarded
+thread messages clear the stalled reason, record a resume event and start a fresh recovery
+generation before sending the input to the existing orchestrator. An authenticated valid move
+also clears it in the same transaction, then applies normally; invalid moves roll everything
+back. This includes a new ask, completion or failure, whose normal resulting status still applies.
+These paths neither send an extra continuation nor create an agent. Direct agent conversations
+can carry on and clear the run's marker with their next valid move; they do not require a web-only
+unlock. A running run's label edits and messages still do not reset its recovery budget.
+
+**Resume** on the runs list or run page calls `POST /api/workflow-runs/{id}/resume` with `{}`.
+It starts a new recovery generation on the same idle orchestrator at the same step, only on a
+fresh online host without active or permission-blocked workers or pending commands. It returns
+204 on success, 409 when unsafe or not stalled, and 404 outside the account. Missing, closed or
+permission-blocked agents need inspection; Resume never replaces them or approves tools.
+
 ### The stream
 
 A host dials `GET /api/hosts/{host}/stream` (a WebSocket, with its own key) and keeps it
@@ -120,8 +172,8 @@ open, dialing again 5 seconds after it drops. Each frame is a JSON `hostclient.F
 - server to host: `hello` first (where its transcript copies end), then `command`s. The server's
   version is in the dial's `X-Intelligence-Version` header.
 - host to server: `report` (on each new stream, and within a second of a change; the host re-reads
-  the daemon's status every 15 seconds and reports it if it changed), `transcript` batches, `usage`
-  (every 5 minutes), `host` (every minute), `schedules` (when they changed, below), `diff` (a workspace's diff, when it
+  the daemon's status every 15 seconds and sends a full snapshot every 30 seconds), `transcript`
+  batches, `usage` (every 5 minutes), `host` (every minute), `schedules` (when they changed, below), `diff` (a workspace's diff, when it
   changed, below) and `command_update`s. Each carries an `id`, and the server answers each with an
   `ack` once it is stored (or with why not), transcript batches on their own so a large one holds up
   nothing else.
@@ -134,6 +186,7 @@ server instance holds it.
 Server instances learn of each other's changes through Postgres `NOTIFY` on the `fleet` channel
 (`fleet.Changes`): a queued command, a command's update and a stream taking a host over.
 Workflow start retries additionally reconcile finished startup commands every five seconds.
+The stall watchdog checks idle orchestrators each minute through the same command queue.
 
 ### Proposed workflow mutations
 

@@ -92,7 +92,7 @@ func (r *Registry) record(ctx context.Context, rep hostclient.Report, at time.Ti
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, "UPDATE hosts SET projects = $2 WHERE name = $1", rep.Name, projects); err != nil {
+		if _, err := tx.Exec(ctx, "UPDATE hosts SET projects = $2, report_received_at = $3 WHERE name = $1", rep.Name, projects, at); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, "DELETE FROM workspaces WHERE host = $1", rep.Name); err != nil { // and their agents
