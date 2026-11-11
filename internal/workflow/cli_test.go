@@ -11,6 +11,35 @@ import (
 	"testing"
 )
 
+func TestProposalCLIUsesHostConfiguration(t *testing.T) {
+	var paths []string
+	var bodies []map[string]any
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer host-key" {
+			t.Error("missing host key")
+		}
+		var b map[string]any
+		json.NewDecoder(r.Body).Decode(&b)
+		paths = append(paths, r.URL.Path)
+		bodies = append(bodies, b)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"demo","approvalURL":"https://example.com/review/demo"}`))
+	}))
+	defer s.Close()
+	home := boxHome(t, s.URL)
+	file := filepath.Join(t.TempDir(), "proposal.json")
+	os.WriteFile(file, []byte(`{"operation":"delete","summary":"Remove unused","workflowId":"demo","baseVersion":1}`), 0600)
+	for _, args := range [][]string{{"propose", file}, {"withdraw", "demo", "--reason", "Replaced by a better plan"}} {
+		code, out, errOut := runCLI(t, home, "", args...)
+		if code != 0 || !strings.Contains(out, "demo") {
+			t.Fatalf("%v: %d %s %s", args, code, out, errOut)
+		}
+	}
+	if paths[0] != "/api/workflow-proposals" || paths[1] != "/api/workflow-proposals/demo/withdraw" || bodies[1]["reason"] != "Replaced by a better plan" {
+		t.Fatalf("requests: %v %+v", paths, bodies)
+	}
+}
+
 // fakeServer answers moves with what it was sent, and records each request.
 func fakeServer(t *testing.T, code int) (*httptest.Server, *[]*http.Request, *[]Move) {
 	t.Helper()

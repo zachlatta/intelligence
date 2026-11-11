@@ -1,8 +1,9 @@
 # Intelligence: the SQL guide
 
 Read app state with `query`. There are no separate list-agents, list-runs, read-run or
-read-transcript tools. Writes use the existing JSON `/api/` routes with browser
-authentication; MCP credentials cannot write.
+read-transcript tools. MCP credentials can create and withdraw workflow proposals, but
+cannot apply changes. Workflow edits require approval in an authenticated browser,
+through the existing JSON `/api/` routes.
 
 1. Use `schema_overview` when you do not know the relation.
 2. Call `describe_table` with `{"table":"workflow_runs"}` (an unqualified public name)
@@ -23,6 +24,7 @@ narrow the query. When truncated, continue with a stable key cursor, not an unbo
 | Hosts, freshness, workspaces | `host_status`, `hosts`, `recorded_workspace_status` |
 | Live agents, or live plus retained workflow agents | `agents`, `recorded_agents` |
 | Workflow definitions and versions | `workflows`, `workflow_versions` |
+| Workflow proposals, snapshots, expiry and decisions | `workflow_proposals`, `workflow_proposal_status` |
 | Runs, task input, current step, waiting note, errors | `workflow_runs` |
 | Run events, agents, step durations | `workflow_run_events`, `workflow_run_agents`, `workflow_run_step_times` |
 | Synced transcript metadata and full entries | `transcripts`, `transcript_entries` |
@@ -34,6 +36,23 @@ Host and agent IDs form a composite key: join on both, never agent ID alone. Run
 is a zero-based index into the saved `workflow_versions.definition` JSON's `steps` array.
 Join definitions using both `workflow_id` and `version`, not the latest workflow version.
 Postgres booleans are real booleans; JSON columns are `jsonb` (`->>` extracts text).
+
+## Propose a workflow change
+
+Call `propose_mutation_help` for the schema and a full workflow example. Read the current
+workflow and definition with `query` before preparing a replacement. `propose_mutation`
+queues a create, update or delete proposal and returns its id and approvalURL. Share that
+URL for browser review; opening it alone applies nothing. Updates/deletes require the
+current workflowId and baseVersion. There is no approval, undo or direct workflow-write
+tool. Choosing the default workflow and step-level patches are not supported.
+
+`withdraw_mutation` takes the proposal id and a required reason. A token can withdraw or
+replace only its own pending proposals; optional replacesId withdraws the old proposal
+atomically. Optional proposedBy and runId add context, while the authenticated MCP token
+id remains the authoritative proposer. Proposals expire after seven days and go stale
+if the workflow changes. Read their status, before/after snapshots and undo record with
+`query` against the proposal relations above. Browser approval/undo refuse conflicting
+later edits. CLI host keys are not MCP credentials.
 
 ## Example queries
 

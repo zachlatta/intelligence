@@ -4,6 +4,7 @@ package fleet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -46,12 +47,31 @@ func New(p *pgxpool.Pool) *Registry { return &Registry{p: p} }
 // Record stores rep, received at at, as its host's latest state: it replaces the host's
 // workspaces and agents.
 func (r *Registry) Record(ctx context.Context, rep hostclient.Report, at time.Time) error {
+	return r.record(ctx, rep, at, "")
+}
+
+// RecordStream accepts reports only from the current stream. The host row lock
+// keeps a replacement from inheriting a report's retry capability.
+func (r *Registry) RecordStream(ctx context.Context, rep hostclient.Report, at time.Time, stream string) error {
+	return r.record(ctx, rep, at, stream)
+}
+
+func (r *Registry) record(ctx context.Context, rep hostclient.Report, at time.Time, stream string) error {
 	ps := rep.Paseo
 	providers, err := json.Marshal(nonNil(ps.Providers))
 	if err != nil {
 		return err
 	}
 	return pgx.BeginFunc(ctx, r.p, func(tx pgx.Tx) error {
+		if stream != "" {
+			tag, err := tx.Exec(ctx, "UPDATE hosts SET start_retry_keys = $3 WHERE name = $1 AND stream_id = $2", rep.Name, stream, rep.StartRetryKeys)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() == 0 {
+				return errors.New("host stream was replaced")
+			}
+		}
 		_, err := tx.Exec(ctx, `INSERT INTO hosts (name, client_version, collected_at, last_seen, connected, paseo_error,
 			status_error, paseo_version, hostname, listen, pid, started_at, providers, providers_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
@@ -157,7 +177,8 @@ func (r *Registry) list(ctx context.Context, history bool) ([]Host, error) {
 	}
 	rows, err := r.p.Query(ctx, `SELECT name, client_version, collected_at, last_seen, online, connected, paseo_error,
 		status_error, paseo_version, hostname, listen, pid, started_at, providers, providers_at,
-		(SELECT projects FROM hosts WHERE hosts.name = host_status.name)
+		(SELECT projects FROM hosts WHERE hosts.name = host_status.name),
+		(SELECT start_retry_keys FROM hosts WHERE hosts.name = host_status.name)
 		FROM host_status ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -168,7 +189,7 @@ func (r *Registry) list(ctx context.Context, history bool) ([]Host, error) {
 		var providers, projects []byte
 		p := &b.Report.Paseo
 		if err := row.Scan(&b.Report.Name, &b.Report.Version, &collected, &b.LastSeen, &b.Online, &p.Connected, &p.Error,
-			&p.StatusError, &p.Version, &p.Hostname, &p.Listen, &p.PID, &started, &providers, &providersAt, &projects); err != nil {
+			&p.StatusError, &p.Version, &p.Hostname, &p.Listen, &p.PID, &started, &providers, &providersAt, &projects, &b.Report.StartRetryKeys); err != nil {
 			return b, err
 		}
 		b.Report.CollectedAt, p.StartedAt, p.ProvidersAt = deref(collected), deref(started), deref(providersAt)

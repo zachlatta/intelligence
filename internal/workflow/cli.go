@@ -30,11 +30,25 @@ The agents of a workflow run move it with these, on the run's host:
   done      --run <id> [--summary <text>]  finish the run now
   fail      --run <id> --why <text>
 
+  propose <file.json>|-                propose a workflow change; prints its approval URL
+  withdraw <id> --reason <text>        withdraw your pending proposal with a reason
+
 It reaches the server with this host's key (HOST_SERVER and the key, as the host client has them).`
 
 // CLI runs `intelligence workflow args...` and returns its exit code.
 func CLI(ctx context.Context, args []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer, client *http.Client) int {
-	m, run, err := parseCLI(args, stdin)
+	var body []byte
+	var path string
+	var err error
+	if len(args) > 0 && (args[0] == "propose" || args[0] == "withdraw") {
+		path, body, err = parseProposalCLI(args, stdin)
+	} else {
+		var m Move
+		var run string
+		m, run, err = parseCLI(args, stdin)
+		body, _ = json.Marshal(m)
+		path = "/api/workflow-runs/" + run + "/moves"
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "%v\n\n%s\n", err, CLIUsage)
 		return 2
@@ -44,10 +58,9 @@ func CLI(ctx context.Context, args []string, getenv func(string) string, stdin i
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	body, _ := json.Marshal(m)
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(server, "/")+"/api/workflow-runs/"+run+"/moves", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(server, "/")+path, bytes.NewReader(body))
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -73,6 +86,56 @@ func CLI(ctx context.Context, args []string, getenv func(string) string, stdin i
 	}
 	fmt.Fprintln(stdout, out.Message)
 	return 0
+}
+
+func parseProposalCLI(args []string, stdin io.Reader) (string, []byte, error) {
+	if args[0] == "propose" {
+		if len(args) != 2 {
+			return "", nil, errors.New("propose needs <file.json> (or - for standard input)")
+		}
+		var b []byte
+		var err error
+		if args[1] == "-" {
+			b, err = io.ReadAll(io.LimitReader(stdin, 1<<20+1))
+		} else {
+			var f *os.File
+			f, err = os.Open(args[1])
+			if err == nil {
+				defer f.Close()
+				b, err = io.ReadAll(io.LimitReader(f, 1<<20+1))
+			}
+		}
+		if err != nil {
+			return "", nil, err
+		}
+		if len(b) > 1<<20 || !json.Valid(b) {
+			return "", nil, errors.New("proposal must be JSON, at most 1 MiB")
+		}
+		return "/api/workflow-proposals", b, nil
+	}
+	var id, reason string
+	fs := flag.NewFlagSet("withdraw", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&reason, "reason", "", "")
+	rest := args[1:]
+	for {
+		if err := fs.Parse(rest); err != nil {
+			return "", nil, err
+		}
+		if fs.NArg() == 0 {
+			break
+		}
+		if id != "" {
+			return "", nil, errors.New("withdraw takes one proposal id")
+		}
+		id = fs.Arg(0)
+		rest = fs.Args()[1:]
+	}
+	if id == "" || strings.ContainsAny(id, "/?#") || strings.TrimSpace(reason) == "" {
+		return "", nil, errors.New("withdraw needs <id> --reason <text>")
+	}
+	b, _ := json.Marshal(map[string]string{"reason": reason})
+	return "/api/workflow-proposals/" + id + "/withdraw", b, nil
 }
 
 // parseCLI reads a move and its run from args; flags may come before or after the positional argument.

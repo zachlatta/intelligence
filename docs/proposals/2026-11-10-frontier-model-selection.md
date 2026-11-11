@@ -1,6 +1,6 @@
 # Frontier model selection in workflows: audit and proposal
 
-Investigation of 2026-11-10 (workflow run `b8f0791f`). The [reproduction notes](https://files.zachlatta.com/c7b545ad-284d-4ea4-bc4c-7457bbed7cbc/work-README.md) describe the scripts and counts. Scripts live in the private desk work item `work/2026-11-10-frontier-model-selection/`.
+Investigation of 2026-11-10 (workflow run `b8f0791f`). The reproduction notes describe the scripts and counts. Scripts live in the private desk work item `work/2026-11-10-frontier-model-selection/`.
 
 ## Summary
 
@@ -104,7 +104,7 @@ more, all detached workers of run `f50f17c8`): 311 in total. Workers with neithe
 label cannot be found, so 311 is a lower bound.
 
 Intelligence's own `/api/sql` was not reachable (section 6). Full tables:
-[`sampling.md`](https://files.zachlatta.com/c7b545ad-284d-4ea4-bc4c-7457bbed7cbc/sampling.md).
+`sampling.md`.
 
 ### 2.1 By role
 
@@ -182,12 +182,12 @@ the proposed mid-run `suggest --exclude agy-opus --why "Individual quota reached
 
 ### 2.5 Plan meters: history
 
-- **Claude** ([`claude_weeks.md`](https://files.zachlatta.com/c7b545ad-284d-4ea4-bc4c-7457bbed7cbc/claude_weeks.md)). cswap
+- **Claude** (`claude_weeks.md`). cswap
   switched logins 4 times from 10-28 to 11-07. Each switch came when the active login reached
   90%. In the weeks to 10-31 and 11-07, both logins reached 90-94%. This week, login 1 is at 59%
   and login 2 is at 0%. Demand fell: 853 new agents on 11-06, and 117-398 a day after the board
   was retired.
-- **Codex** ([`codex_weeks.md`](https://files.zachlatta.com/c7b545ad-284d-4ea4-bc4c-7457bbed7cbc/codex_weeks.md)). In the
+- **Codex** (`codex_weeks.md`). In the
   completed week to 11-04, the highest reading seen was 68%, so about 32% of that week was not
   used. In the current week to 11-11, 41% is used and 59% remains. These are host-local readings
   of the account-wide meter.

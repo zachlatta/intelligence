@@ -4,7 +4,9 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/zachlatta/intelligence/internal/dbtest"
 	"github.com/zachlatta/intelligence/internal/workflow"
 )
 
@@ -80,11 +82,12 @@ func TestRunSummaryIsStoredThroughTheAPIAndDisplayed(t *testing.T) {
 }
 
 func TestSummaryLabelsEveryRunStatusWithoutMovingIt(t *testing.T) {
-	h, d := dbServer(t)
+	d := dbtest.New(t)
+	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
 	run := startRun(t, h, createWorkflow(t, h, workflow.Starting), "Please summarize historical tasks")
-	for _, status := range []string{"finding_project", "starting", "running", "waiting", "succeeded", "failed", "canceled"} {
+	for _, status := range []string{"queued", "finding_project", "starting", "running", "waiting", "succeeded", "failed", "canceled"} {
 		t.Run(status, func(t *testing.T) {
 			if _, err := d.Owner.Exec(t.Context(), "UPDATE workflow_runs SET status = $2 WHERE id = $1", run, status); err != nil {
 				t.Fatal(err)
@@ -102,6 +105,12 @@ func TestSummaryLabelsEveryRunStatusWithoutMovingIt(t *testing.T) {
 			code, events := sqlPost(t, h, q("SELECT text, step, to_step FROM workflow_run_events WHERE run_id = '"+run+"' AND kind = 'summarize' ORDER BY id DESC LIMIT 1"))
 			if code != http.StatusOK || len(events.Rows) != 1 || events.Rows[0][0] != summary || events.Rows[0][1] != nil || events.Rows[0][2] != nil {
 				t.Fatalf("missing label event: %d %+v", code, events)
+			}
+			if status == "queued" {
+				code, queue := sqlPost(t, h, q("SELECT title FROM workflow_run_queue WHERE run_id = '"+run+"'"))
+				if code != http.StatusOK || len(queue.Rows) != 1 || queue.Rows[0][0] != summary {
+					t.Fatalf("queue should show the task summary: %d %+v", code, queue)
+				}
 			}
 		})
 	}

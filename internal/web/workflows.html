@@ -16,6 +16,8 @@
   .st-needs, .st-sent-back, .st-asking { background: var(--orange-bg); border-color: var(--orange-line); color: var(--orange); }
   .st-needs::before, .st-sent-back::before, .st-asking::before { background: var(--orange); }
   .st-needs::before, .st-asking::before { animation: pulse 1.6s infinite; }
+  .st-queued { background: var(--orange-bg); border-color: var(--orange-line); color: var(--orange); }
+  .st-queued::before { background: var(--orange); }
   .st-done { background: var(--green-bg); border-color: var(--green-line); color: var(--green); }
   .st-done::before { background: var(--green); }
   .st-error, .st-failed { background: var(--red-bg); border-color: var(--red-line); color: var(--red); }
@@ -183,6 +185,7 @@
     {{if eq .Definition.Trigger "email"}}<p class="hint">✉ {{emailSummary .Definition.Email}}</p>{{end}}</div>
   <div class="card-foot">{{if eq .Definition.Trigger "task"}}
     <button class="btn sm" data-default-workflow="{{.ID}}" data-default="{{if .IsDefault}}false{{else}}true{{end}}">{{if .IsDefault}}Clear default{{else}}Make default{{end}}</button>{{end}}
+    {{if .PendingProposals}}<a href="/workflow-proposals?workflow={{.ID}}">{{.PendingProposals}} pending proposal{{if ne .PendingProposals 1}}s{{end}}</a>{{end}}
     <span class="grow"></span><button class="btn sm ghost" data-delete-workflow="{{.ID}}" data-name="{{.Name}}">Delete</button><a class="btn sm" href="/workflows/{{.ID}}">Edit</a></div>
 </section>
 {{end}}
@@ -677,13 +680,23 @@ render();
       <span><b>{{.Run.Workflow}}</b> v{{.Run.Version}}{{if .Run.WorkflowDeleted}} (deleted){{end}}</span><span>on <b class="mono">{{.Run.Host}}</b></span>
       {{if .Run.Repo}}<span><b class="mono">{{.Run.Repo}}</b> @ <span class="mono">{{.Run.Branch}}</span></span>{{end}}
       {{if .Run.WorkspaceTitle}}<span>workspace <b>{{.Run.WorkspaceTitle}}</b></span>{{end}}
-      <span>{{plural (len .Agents) "agent"}}</span><span>started {{ago .Now .Run.CreatedAt}}</span></div></div>
-  <div class="actions">{{if .Run.Live}}<button class="btn sm" id="cancel">Cancel run</button>{{end}}</div>
+      <span>{{plural (len .Agents) "agent"}}</span><span>{{if eq .Run.Status "queued"}}queued{{else}}started{{end}} {{ago .Now .Run.CreatedAt}}</span></div></div>
+  <div class="actions">{{if eq .Run.Status "queued"}}<button class="btn sm primary" id="start-now">Start now</button>{{end}}{{if .Run.Live}}<button class="btn sm" id="cancel">Cancel run</button>{{end}}</div>
 </div>
 <div class="request">{{.Run.Input}}</div>
 {{if .Emails}}<section class="card"><div class="card-head"><h2>Email thread</h2><span class="meta grow">what each email in it did</span><a class="btn sm ghost" href="/workflows/email">All email</a></div>
   <div class="card-body"><ul class="events">{{range .Emails}}<li><span class="t">{{.ReceivedAt.Format "Jan 2 15:04"}}</span><b>{{.Who}}</b> · {{or .Subject "(no subject)"}} · <span class="badge {{.Badge}}">{{.Label}}</span>{{with .Reason}} <span class="meta">{{.}}</span>{{end}}</li>{{end}}</ul></div></section>{{end}}
+{{if eq .Run.Status "queued"}}<p class="banner note">Queued, {{.Run.InLine}}: {{.Run.QueueReason}}. It starts by itself, oldest first, once the host has room; <b>Start now</b> starts it anyway.</p>{{end}}
 {{if eq .Run.Status "failed"}}<p class="banner">{{or .Run.Error "The orchestrator marked the run failed."}}</p>{{end}}
+{{if .Run.RetryStatus}}<div class="banner note" id="start-retry" role="status">
+  <strong>{{.Run.RetryStatus}}</strong>.
+  {{if .Run.StartRetryAt}}{{if .Run.Position}}Waiting for capacity, {{.Run.InLine}}. {{with .Run.QueueReason}}{{.}}. {{end}}Retry eligible since {{else}}Next retry scheduled for {{end}}<time datetime="{{.Run.StartRetryAt.Format "2006-01-02T15:04:05Z07:00"}}">{{.Run.StartRetryAt.Format "Jan 2, 2006 15:04:05 MST"}}</time>.
+    {{if not .Run.HostOnline}}Waiting for the host to reconnect.{{else if not .Run.DaemonConnected}}Waiting for the Paseo daemon to reconnect.{{end}}
+    {{if not .Run.RetryKeys}}Waiting for the host to support retry keys.{{end}}
+    This queued retry can wait up to 24 hours, until {{.Run.RetryDeadline.Format "Jan 2, 2006 15:04:05 MST"}}.
+  {{else}}Waiting for the host's result.{{end}}
+  <div>Last start error: {{.Run.Error}}</div>
+</div>{{end}}
 {{if .ArchiveStatus}}<p class="banner{{if and (ne .ArchiveStatus "failed") (ne .ArchiveStatus "expired")}} note{{end}}">Workspace archive: {{.ArchiveStatus}}{{if .ArchiveError}} — {{.ArchiveError}}{{end}}</p>{{end}}
 </div>
 <p class="banner" id="error" hidden></p>
@@ -696,8 +709,8 @@ render();
 <div id="steps" class="builder">
   <div class="pipe">
     <div class="node fixed"><div class="nh"><div><div class="kind">Before the orchestrator</div><div class="ttl">Find the project</div></div>
-      <span class="grow-r">{{if eq .Run.Status "finding_project"}}<span class="status st-running">running</span>{{else}}<span class="status st-done">done</span>{{end}}</span></div>
-      <div class="nb">{{if eq .Run.Status "finding_project"}}An agent is choosing the repository.{{else if .Run.Repo}}<span class="mono">{{.Run.Repo}}</span>, worktree <span class="mono">{{.Run.Branch}}</span>{{else}}No repository: the home directory.{{end}}
+      <span class="grow-r">{{if eq .Run.Status "finding_project"}}<span class="status st-running">running</span>{{else if eq .Run.Status "queued"}}<span class="status st-queued">queued</span>{{else}}<span class="status st-done">done</span>{{end}}</span></div>
+      <div class="nb">{{if eq .Run.Status "queued"}}Waits in the queue for room on <span class="mono">{{.Run.Host}}</span>.{{else if eq .Run.Status "finding_project"}}An agent is choosing the repository.{{else if .Run.Repo}}<span class="mono">{{.Run.Repo}}</span>, worktree <span class="mono">{{.Run.Branch}}</span>{{else}}No repository: the home directory.{{end}}
         <ul class="events">{{range .Before}}<li><span class="t">{{.At.Format "15:04"}}</span><div class="md">{{markdown .Line}}</div></li>{{end}}</ul></div></div>
     <div class="link{{if .Run.Orchestrator}} done{{end}}"></div>
     <div class="node fixed"><div class="nh"><div><div class="kind">In the worktree</div><div class="ttl">Orchestrator and its sub-agents</div></div></div>
@@ -727,6 +740,10 @@ async function post(path, body) {
   if (!res.ok) throw new Error(await res.text());
 }
 function bind() {
+  if ($("#start-now")) $("#start-now").onclick = async (ev) => {
+    ev.target.disabled = true;
+    try { await post(`/api/workflow-runs/${run}/start`, {}); refresh(true); } catch (e) { err(e.message); ev.target.disabled = false; }
+  };
   if ($("#cancel")) $("#cancel").onclick = async () => {
     if (!confirm("Cancel this run? Its orchestrator is stopped; the worktree stays.")) return;
     try { await post(`/api/workflow-runs/${run}/cancel`, {}); refresh(true); } catch (e) { err(e.message); }
