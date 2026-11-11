@@ -254,9 +254,10 @@ func (s *Service) Poll(ctx context.Context, account int64) error {
 		if d, ok := ctx.Value(intervalKey{}).(time.Duration); ok {
 			every = d
 		}
-		// Align successful reads to interval windows: starting a worker just after
-		// a timer tick must not make the next tick miss its deadline by microseconds.
-		nextPoll = started.Truncate(every).Add(every)
+		// Leave scheduling slack relative to the actual start, independent of wall-clock
+		// boundaries. A slightly late worker must still be due at the next timer tick.
+		// Error retries below use their full delay, without this slack.
+		nextPoll = started.Add(every - every/10)
 		if perr != nil {
 			var retry *retryError
 			if errors.As(perr, &retry) {
@@ -306,7 +307,27 @@ func (s *Service) read(ctx context.Context, account int64, owners []string, toke
 	if err != nil {
 		return err
 	}
+	// A failed batch leaves the history cursor unchanged. Messages already kept
+	// have also had their routing decision committed, so retry only unsaved IDs
+	// rather than paying another full-message fetch for each successful predecessor.
+	stored := map[string]bool{}
+	if len(ids) > 0 {
+		rows, err := s.DB.Query(ctx, "SELECT gmail_id FROM emails WHERE account_id = $1 AND gmail_id = ANY($2::text[])", account, ids)
+		if err != nil {
+			return err
+		}
+		known, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return err
+		}
+		for _, id := range known {
+			stored[id] = true
+		}
+	}
 	for _, id := range ids {
+		if stored[id] {
+			continue
+		}
 		g, err := mb.Message(ctx, id)
 		if err != nil {
 			if strings.Contains(err.Error(), "404") {
