@@ -699,7 +699,7 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 		}
 		var before []runEvent // what happened before the steps: the start and the project
 		for _, e := range events {
-			if e.Step == nil && e.Kind != "cancel" {
+			if e.Step == nil && e.Kind != "cancel" && e.Kind != "summarize" {
 				before = append(before, e)
 			}
 		}

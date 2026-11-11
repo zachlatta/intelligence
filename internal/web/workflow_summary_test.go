@@ -42,8 +42,19 @@ func TestRunSummaryIsStoredThroughTheAPIAndDisplayed(t *testing.T) {
 		t.Fatalf("SQL summary: %d %+v", code, result)
 	}
 	for _, path := range []string{"/workflows", "/workflow-runs/" + run} {
-		if page := get(t, h, path, nil).Body.String(); !strings.Contains(page, summary) {
+		page := get(t, h, path, nil).Body.String()
+		if !strings.Contains(page, summary) {
 			t.Errorf("%s missing summary", path)
+		}
+		if path != "/workflows" {
+			cards, history, found := strings.Cut(page, "<h2>What happened</h2>")
+			line := "Task summary: " + summary
+			if !found || strings.Contains(cards, line) || !strings.Contains(history, line) {
+				t.Error("summary event should appear only in What happened, not in the project card")
+			}
+			if !strings.Contains(cards, "<p>Started</p>") {
+				t.Error("project card should still show the run's start event")
+			}
 		}
 	}
 	after := readRun(t, h, run)

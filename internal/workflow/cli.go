@@ -21,14 +21,14 @@ const CLIUsage = `usage: intelligence workflow <move> --run <id> [...]
 
 The agents of a workflow run move it with these, on the run's host:
 
-  project --run <id> <directory>|none    the project finder's answer
-  summarize --run <id> --summary <text> save a short task summary without moving the run
-  next    --run <id> [--summary <text>]  this step is done; prints the next step (after the last, finishes the run)
-  back    --run <id> <step id> --why <text>
-  skip    --run <id> --why <text>
-  ask     --run <id> --note <file>|-      ask Zach (Markdown); his reply comes as your next message
-  done    --run <id> [--summary <text>]  finish the run now
-  fail    --run <id> --why <text>
+  project   --run <id> <directory>|none   the project finder's answer
+  summarize --run <id> --summary <text>   save a short task summary without moving the run
+  next      --run <id> [--summary <text>]  this step is done; prints the next step (after the last, finishes the run)
+  back      --run <id> <step id> --why <text>
+  skip      --run <id> --why <text>
+  ask       --run <id> --note <file>|-     ask Zach (Markdown); his reply comes as your next message
+  done      --run <id> [--summary <text>]  finish the run now
+  fail      --run <id> --why <text>
 
 It reaches the server with this host's key (HOST_SERVER and the key, as the host client has them).`
 
