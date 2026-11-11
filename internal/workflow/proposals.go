@@ -11,6 +11,7 @@ import (
 )
 
 type ProposalRequest struct {
+	Input       string         `json:"input,omitempty"`
 	Operation   string         `json:"operation"`
 	WorkflowID  string         `json:"workflowId,omitempty"`
 	BaseVersion int            `json:"baseVersion,omitempty"`
@@ -58,7 +59,7 @@ func (e *Engine) withdrawTx(ctx context.Context, tx pgx.Tx, account int64, propo
 	return err
 }
 
-// Propose records a single atomic create/update/delete without changing a workflow.
+// Propose records a reviewed workflow edit or run request without applying it.
 func (e *Engine) Propose(ctx context.Context, account int64, proposer string, r ProposalRequest) (string, error) {
 	if r.ReplacesID != "" && !uuidRe.MatchString(r.ReplacesID) {
 		return "", bad("replacesId must be a proposal UUID")
@@ -69,17 +70,27 @@ func (e *Engine) Propose(ctx context.Context, account int64, proposer string, r 
 	if strings.TrimSpace(r.Summary) == "" || len(r.Summary) > 2000 {
 		return "", bad("summary is required (up to 2000 characters)")
 	}
-	if r.Operation != "create" && r.Operation != "update" && r.Operation != "delete" {
-		return "", bad("operation must be create, update or delete")
+	if r.Operation != "create" && r.Operation != "update" && r.Operation != "delete" && r.Operation != "run" {
+		return "", bad("operation must be create, update, delete or run")
+	}
+	if r.Operation == "run" {
+		if !uuidRe.MatchString(r.WorkflowID) || r.BaseVersion < 0 || r.Workflow != nil {
+			return "", bad("run requires workflowId and takes no workflow; baseVersion is optional")
+		}
+		if strings.TrimSpace(r.Input) == "" || len(r.Input) > 1<<20 {
+			return "", bad("run input must contain 1 to 1048576 bytes")
+		}
+	} else if r.Input != "" {
+		return "", bad("input is only supported for run proposals")
 	}
 	if r.Operation == "create" {
 		if r.WorkflowID != "" || r.BaseVersion != 0 {
 			return "", bad("create takes no workflowId or baseVersion")
 		}
-	} else if !uuidRe.MatchString(r.WorkflowID) || r.BaseVersion < 1 {
+	} else if r.Operation != "run" && (!uuidRe.MatchString(r.WorkflowID) || r.BaseVersion < 1) {
 		return "", bad("workflowId and baseVersion are required")
 	}
-	if r.Operation == "delete" {
+	if r.Operation == "delete" || r.Operation == "run" {
 		if r.Workflow != nil {
 			return "", bad("delete takes no workflow")
 		}
@@ -113,7 +124,7 @@ func (e *Engine) Propose(ctx context.Context, account int64, proposer string, r 
 			if err != nil {
 				return err
 			}
-			if before.Deleted || before.Version != r.BaseVersion {
+			if before.Deleted || (r.BaseVersion != 0 && before.Version != r.BaseVersion) {
 				return conflict("workflow changed; read its latest state and propose again")
 			}
 		}
@@ -125,20 +136,32 @@ func (e *Engine) Propose(ctx context.Context, account int64, proposer string, r 
 				return err
 			}
 		}
+		if r.Operation == "run" {
+			if before.Definition.Host == "" {
+				return bad("workflow must name a host before proposing a run")
+			}
+			if err := ownsHost(ctx, tx, account, before.Definition.Host); err != nil {
+				return err
+			}
+			copy := *before
+			r.Workflow = &copy
+		}
 		// Store the exact target, including automatic revision/default changes.
 		if r.Operation == "delete" {
 			copy := *before
 			r.Workflow = &copy
 			r.Workflow.Deleted, r.Workflow.IsDefault = true, false
 		}
-		r.Workflow.Version = 1
-		if before != nil {
-			r.Workflow.Version = before.Version + 1
-			if r.Operation == "delete" {
-				r.Workflow.Version = before.Version
-			}
-			if r.Operation == "update" {
-				r.Workflow.IsDefault = before.IsDefault && r.Workflow.Definition.Trigger == TriggerTask
+		if r.Operation != "run" {
+			r.Workflow.Version = 1
+			if before != nil {
+				r.Workflow.Version = before.Version + 1
+				if r.Operation == "delete" {
+					r.Workflow.Version = before.Version
+				}
+				if r.Operation == "update" {
+					r.Workflow.IsDefault = before.IsDefault && r.Workflow.Definition.Trigger == TriggerTask
+				}
 			}
 		}
 		b, _ := json.Marshal(before)
@@ -148,8 +171,8 @@ func (e *Engine) Propose(ctx context.Context, account int64, proposer string, r 
 				return err
 			}
 		}
-		return tx.QueryRow(ctx, `INSERT INTO workflow_proposals(account_id,proposer,operation,workflow_id,summary,before_state,proposed_state,created_at,expires_at,proposed_by,run_id,replaces_id)
-   VALUES($1,$2,$3,NULLIF($4,'')::uuid,$5,$6,$7,$8::timestamptz,$8::timestamptz+interval '7 days',$9,$10,NULLIF($11,'')::uuid) RETURNING id::text`, account, proposer, r.Operation, r.WorkflowID, r.Summary, b, p, e.Now(), r.ProposedBy, r.RunID, r.ReplacesID).Scan(&id)
+		return tx.QueryRow(ctx, `INSERT INTO workflow_proposals(account_id,proposer,operation,workflow_id,summary,before_state,proposed_state,created_at,expires_at,proposed_by,run_id,replaces_id,input)
+   VALUES($1,$2,$3,NULLIF($4,'')::uuid,$5,$6,$7,$8::timestamptz,$8::timestamptz+interval '7 days',$9,$10,NULLIF($11,'')::uuid,$12) RETURNING id::text`, account, proposer, r.Operation, r.WorkflowID, r.Summary, b, p, e.Now(), r.ProposedBy, r.RunID, r.ReplacesID, r.Input).Scan(&id)
 	})
 	return id, err
 }
@@ -166,12 +189,12 @@ func (e *Engine) Decide(ctx context.Context, account int64, id, action string) e
 		if err := lockWorkflowAccount(ctx, tx, account); err != nil {
 			return err
 		}
-		var status string
+		var status, operation, input string
 		var wid *string
 		var before, proposed, after []byte
 		var expired bool
-		err := tx.QueryRow(ctx, `SELECT status,workflow_id::text,before_state,proposed_state,after_state,expires_at <= $3
-   FROM workflow_proposals WHERE id=$1 AND account_id=$2 FOR UPDATE`, id, account, e.Now()).Scan(&status, &wid, &before, &proposed, &after, &expired)
+		err := tx.QueryRow(ctx, `SELECT status,workflow_id::text,before_state,proposed_state,after_state,expires_at <= $3,operation,input
+   FROM workflow_proposals WHERE id=$1 AND account_id=$2 FOR UPDATE`, id, account, e.Now()).Scan(&status, &wid, &before, &proposed, &after, &expired, &operation, &input)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -183,6 +206,9 @@ func (e *Engine) Decide(ctx context.Context, account int64, id, action string) e
 			return err
 		}
 		if action == "undo" {
+			if operation == "run" {
+				return conflict("run proposals cannot be undone; cancel the run separately")
+			}
 			if status != "applied" {
 				return conflict("only an applied proposal can be undone")
 			}
@@ -229,6 +255,15 @@ func (e *Engine) Decide(ctx context.Context, account int64, id, action string) e
 			}
 			refusal = conflict("proposal is stale; workflow changed")
 			return set("stale")
+		}
+		if operation == "run" {
+			run, err := e.StartRunTx(ctx, tx, account, *wid, input)
+			if err != nil {
+				return err
+			}
+			state, _ := json.Marshal(current)
+			_, err = tx.Exec(ctx, "UPDATE workflow_proposals SET status='applied',after_state=$2,decided_at=$3,started_run_id=$4 WHERE id=$1", id, state, e.Now(), run)
+			return err
 		}
 		if target == nil { // Undo a create: retain history and definition.
 			copy := *current

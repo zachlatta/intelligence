@@ -2,7 +2,7 @@
 
 Read app state with `query`. There are no separate list-agents, list-runs, read-run or
 read-transcript tools. MCP credentials can create, withdraw and comment on workflow proposals, but
-cannot apply changes. Workflow edits require approval in an authenticated browser,
+cannot apply changes. Workflow edits and run starts require approval in an authenticated browser,
 through the existing JSON `/api/` routes.
 
 1. Use `schema_overview` when you do not know the relation.
@@ -44,7 +44,7 @@ Postgres booleans are real booleans; JSON columns are `jsonb` (`->>` extracts te
 
 Call `propose_mutation_help` for the schema and a full workflow example. Read the current
 workflow and definition with `query` before preparing a replacement. `propose_mutation`
-queues a create, update or delete proposal and returns its id and approvalURL. Share that
+queues a create, update, delete or run proposal and returns its id and approvalURL. Share that
 URL for browser review; opening it alone applies nothing. Updates/deletes require the
 current workflowId and baseVersion. There is no approval, undo or direct workflow-write
 tool. Choosing the default workflow and step-level patches are not supported.
@@ -56,6 +56,17 @@ id remains the authoritative proposer. Proposals expire after seven days and go 
 if the workflow changes. Read their status, before/after snapshots and undo record with
 `query` against the proposal relations above. Browser approval/undo refuse conflicting
 later edits. CLI host keys are not MCP credentials.
+
+To propose a run (not start one), call `propose_mutation` with
+`{"operation":"run","workflowId":"<workflow UUID>","input":"Full task text","summary":"Why this run is needed"}`.
+`input` is required only for runs. Optional `baseVersion` must match; otherwise the current
+complete workflow is snapshotted. Existing `proposedBy`, `runId` and `replacesId` also apply.
+No run or launch command exists before browser approval. The approval page shows the full task
+as quoted data; approval atomically starts one run via the normal engine and records
+`workflow_proposals.started_run_id`. Double approval cannot start a second run. Read the new
+run through SQL. Changed/deleted workflows make proposals stale; expiry, rejection, replacement
+and same-token withdrawal apply as usual. Run proposals have no undo; cancel the approved run
+separately with browser controls. MCP tokens cannot directly start, approve, reject or undo runs.
 
 ## Example queries
 

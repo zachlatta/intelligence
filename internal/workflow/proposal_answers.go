@@ -49,8 +49,8 @@ func resolveProposalAnswerLocation(ctx context.Context, tx pgx.Tx, account int64
 }
 
 type questionProposal struct {
-	ID, Summary, Operation, Status string
-	Before, After                  *WorkflowState
+	ID, Summary, Operation, Status, Input string
+	Before, After                         *WorkflowState
 }
 
 func readQuestionProposal(ctx context.Context, tx pgx.Tx, account int64, id string) (questionProposal, error) {
@@ -59,7 +59,7 @@ func readQuestionProposal(ctx context.Context, tx pgx.Tx, account int64, id stri
 		return p, ErrNotFound
 	}
 	var before, after []byte
-	err := tx.QueryRow(ctx, `SELECT summary,operation,status,before_state,proposed_state FROM workflow_proposals WHERE id=$1 AND account_id=$2 FOR NO KEY UPDATE`, id, account).Scan(&p.Summary, &p.Operation, &p.Status, &before, &after)
+	err := tx.QueryRow(ctx, `SELECT summary,operation,status,before_state,proposed_state,input FROM workflow_proposals WHERE id=$1 AND account_id=$2 FOR NO KEY UPDATE`, id, account).Scan(&p.Summary, &p.Operation, &p.Status, &before, &after, &p.Input)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return p, ErrNotFound
 	}
@@ -162,7 +162,7 @@ func (e *Engine) queueProposalAnswer(ctx context.Context, tx pgx.Tx, account int
 		}
 		fmt.Fprintf(&diff, "%s%s\n", prefix, line.Text)
 	}
-	rawContext, _ := json.Marshal(map[string]any{"proposalId": p.ID, "operation": p.Operation, "status": p.Status, "summary": p.Summary, "question": target, "Workflow diff": diff.String(), "Thread": thread})
+	rawContext, _ := json.Marshal(map[string]any{"proposalId": p.ID, "operation": p.Operation, "status": p.Status, "summary": p.Summary, "taskInput": p.Input, "question": target, "Workflow diff": diff.String(), "Thread": thread})
 	// Escape attachment references inside quoted JSON so fleet.EnqueueTx leaves data inert.
 	contextJSON := strings.ReplaceAll(string(rawContext), "[attachment:", `\u005battachment:`)
 	prompt := fmt.Sprintf(`Answer the reviewer's question %d about workflow proposal %s. This is a discussion task, not a workflow run or an instruction to apply a change.

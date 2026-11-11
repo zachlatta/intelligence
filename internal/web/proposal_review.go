@@ -108,6 +108,7 @@ type proposalView struct {
 	TokenCreated                                                                                *time.Time
 	Decided, Undone                                                                             *time.Time
 	BeforeState, AfterState, AppliedState, UndoState                                            *workflow.WorkflowState
+	Input, StartedRunID                                                                         string
 	RawBefore, RawAfter                                                                         string
 	Target, Dictation                                                                           string
 	BaseVersion, ResultVersion                                                                  int
@@ -197,7 +198,7 @@ func (c proposalComment) AnswerPending() bool {
 func readProposalViews(ctx context.Context, v viewer, id, wid string) ([]proposalView, error) {
 	rows, err := v.pool.Query(ctx, `SELECT id::text,coalesce(workflow_id::text,''),summary,operation,proposer,proposed_by,run_id,effective_status,
  withdraw_reason,coalesce(replaces_id::text,''),created_at,expires_at,decided_at,undone_at,before_state,proposed_state,after_state,undo_state,
- (SELECT t.created_at FROM mcp_tokens t WHERE 'mcp:' || t.id::text = proposer) AS token_created_at
+ (SELECT t.created_at FROM mcp_tokens t WHERE 'mcp:' || t.id::text = proposer) AS token_created_at,input,coalesce(started_run_id::text,'')
  FROM workflow_proposal_status WHERE ($1='' OR id::text=$1) AND ($2='' OR workflow_id::text=$2)
  ORDER BY (effective_status='pending') DESC,created_at DESC,id LIMIT 200`, id, wid)
 	if err != nil {
@@ -206,7 +207,7 @@ func readProposalViews(ctx context.Context, v viewer, id, wid string) ([]proposa
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (proposalView, error) {
 		var p proposalView
 		var before, after, applied, undo []byte
-		err := row.Scan(&p.ID, &p.WorkflowID, &p.Summary, &p.Operation, &p.Proposer, &p.ProposedBy, &p.RunID, &p.Status, &p.Reason, &p.ReplacesID, &p.Created, &p.Expiry, &p.Decided, &p.Undone, &before, &after, &applied, &undo, &p.TokenCreated)
+		err := row.Scan(&p.ID, &p.WorkflowID, &p.Summary, &p.Operation, &p.Proposer, &p.ProposedBy, &p.RunID, &p.Status, &p.Reason, &p.ReplacesID, &p.Created, &p.Expiry, &p.Decided, &p.Undone, &before, &after, &applied, &undo, &p.TokenCreated, &p.Input, &p.StartedRunID)
 		if err != nil {
 			return p, err
 		}
@@ -223,14 +224,14 @@ func readProposalViews(ctx context.Context, v viewer, id, wid string) ([]proposa
 		p.RawBefore = prettyProposal(p.BeforeState)
 		p.RawAfter = prettyProposal(p.AfterState)
 		p.Pending = p.Status == "pending"
-		p.Applied = p.Status == "applied"
+		p.Applied = p.Status == "applied" && p.Operation != "run"
 		if p.BeforeState != nil {
 			p.Target = p.BeforeState.Name
 			p.BaseVersion = p.BeforeState.Version
 		} else if p.AfterState != nil {
 			p.Target = p.AfterState.Name
 		}
-		if p.AppliedState != nil {
+		if p.AppliedState != nil && p.Operation != "run" {
 			p.ResultVersion = p.AppliedState.Version
 		}
 		if p.UndoState != nil {

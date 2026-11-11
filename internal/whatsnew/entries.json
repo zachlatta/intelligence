@@ -1,5 +1,13 @@
 [
   {
+    "id": "workflow-run-proposals",
+    "released": "2026-11-11",
+    "title": "Review proposed workflow runs before they start",
+    "summary": "MCP clients and host agents can now propose workflow runs. Open Proposals to review the full task and saved workflow, then approve or reject. Nothing starts before approval. Approved proposals link to the resulting run; changed workflows require a fresh proposal.",
+    "media": "workflow-run-proposals.png",
+    "mediaAlt": "A pending workflow run proposal showing its summary, Approve run and Reject controls, full quoted task input and saved workflow"
+  },
+  {
     "id": "voice-memo-triggers",
     "released": "2026-11-11",
     "title": "Start workflows from voice memos",

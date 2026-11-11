@@ -133,7 +133,7 @@ Workflow start retries additionally reconcile finished startup commands every fi
 
 ### Proposed workflow mutations
 
-Agents can propose a workflow creation, replacement or deletion without applying it. A proposal
+Agents can propose a workflow creation, replacement, deletion or run without applying it. A proposal
 returns an `approvalURL`: the account owner signs in there, reviews complete before/after snapshots
 and visible word-level changes, then approves or rejects. Full before/after text and a line diff
 are also available. The Proposals tab lists the latest 200 proposals.
@@ -203,6 +203,23 @@ eligible host fails atomically and leaves the draft intact. Discussion never app
 }
 ```
 
+To propose a run, use the same route (or MCP `propose_mutation`) with:
+
+```json
+{"operation":"run","workflowId":"<workflow UUID>","input":"The full task to perform","summary":"Why this run is needed"}
+```
+
+`input` is required for `run` only, up to 1 MiB (MCP requests retain their 64 KiB limit).
+The server snapshots the current complete workflow; optional `baseVersion` must match if supplied.
+No run or launch command is created by proposing. The review page quotes the full task input and
+shows the saved workflow. Browser approval checks for drift and calls the existing run engine in
+one transaction, recording `workflow_proposals.started_run_id`; a second approval cannot create
+another run. The run uses the normal capacity queue and startup path. Rejection, withdrawal,
+replacement and seven-day expiry work as for workflow edits. Changed or deleted workflows make
+pending run proposals stale. Run proposals cannot be undone; cancel an approved run separately
+from its run page. `runId` remains proposer attribution, distinct from `started_run_id`.
+Proposal discussions include the full task as quoted data and never authorize starting it.
+
 Use `create` without `workflowId` or `baseVersion`; use `delete` with those fields and without
 `workflow`. Updates replace the complete definition, including steps, prompts, models, host and
 trigger. Read the current `workflows` and `workflow_versions` rows first and preserve fields you
@@ -245,6 +262,7 @@ intelligence workflow withdraw <proposal-id> --reason "Replaced by a better plan
 ```
 
 `propose -` reads JSON from standard input. The result includes the approval URL to share.
+Run proposals also work with `intelligence workflow propose` using the JSON above.
 Step edits use a complete replacement definition; step-level patch operations and choosing the
 default workflow are not supported by proposals.
 
@@ -343,8 +361,9 @@ Read tools (annotated read-only):
 | `describe_table` | `table` (unqualified public relation name) | Exact column names and types |
 | `query` | `query` | One read-only SQL statement, including arbitrary joins/views |
 
-The proposal tools are annotated as writes to review state: `propose_mutation` returns id and
-approvalURL, `withdraw_mutation` takes id and a required reason, and `propose_mutation_help`
+The proposal tools are annotated as writes to review state: `propose_mutation` accepts
+`operation: create|update|delete|run` (`run` requires `workflowId`, `input` and `summary`) and
+returns id and approvalURL, `withdraw_mutation` takes id and a required reason, and `propose_mutation_help`
 returns the schema and an example. They also return JSON text and `structuredContent`.
 `comment_proposal` is also a write to review state: it takes `id` and `text` and posts a discussion
 reply under the authenticated MCP token. It cannot approve or resume a workflow.

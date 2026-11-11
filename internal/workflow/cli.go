@@ -30,7 +30,7 @@ The agents of a workflow run move it with these, on the run's host:
   done      --run <id> [--summary <text>]  finish the run now
   fail      --run <id> --why <text>
 
-  propose <file.json>|-                propose a workflow change; prints its approval URL
+  propose <file.json>|-                propose a workflow change or run; prints its approval URL
   withdraw <id> --reason <text>        withdraw your pending proposal with a reason
   answer-proposal --proposal <id> --question <id> --note <file>|-
                                       post a dispatched question's Markdown answer
