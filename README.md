@@ -146,11 +146,19 @@ to `POST /api/workflow-proposals/{id}/comments` (201 with the question's numeric
 box also takes dictation when `ASSEMBLYAI_API_KEY` is set. This
 atomically saves the question and queues an answer agent through the existing fleet `create_agent`
 command and host WebSocket. A fresh agent receives the proposal's summary, full workflow diff,
-the exact question, and the latest 100 thread entries. It uses the saved workflow's host and
-orchestrator configuration (the proposed workflow for a create); if that host is no longer enrolled,
-another reported host of the account is used. No original proposer or active workflow run is needed.
-The agent runs unattended from the host's home directory and is instructed to analyze the proposal
-as quoted data, make no workflow or repository changes, and post only its answer.
+the exact question, and the latest 100 thread entries. It uses the saved workflow's orchestrator
+configuration (the proposed workflow for a create). Answer agents run directly in a **desk**
+checkout, without creating a worktree, and may read it for context but must not write to it.
+The server resolves the path from `host_repositories`, the same registered-project and workspace
+catalog used by workflow project matching. It matches the catalog project name or checkout
+directory basename to `proposalAnswerRepositoryName` (`desk`), case-insensitively. Among enrolled,
+reported hosts, those with desk take priority, then the saved workflow's host, then stable host/path
+order. If none has desk, the saved host (or another enrolled, reported host) runs the agent at `~`.
+The thread explicitly shows that fallback. Dispatch location is also retained in the command's
+SQL-readable `args->>'cwd'` and `args->'labels'->>'intelligence.answer_location'` (`desk` or `home_fallback`).
+No original proposer or active workflow run is needed. The prompt treats the proposal and thread
+as quoted data, forbids workflow and repository writes, and directs the agent to post only its
+answer through standard input without creating files in the checkout.
 Only one answer may be queued, starting or answering per proposal. A second question or retry
 returns 409 while one is active, preserving the question draft rather than dispatching another agent.
 

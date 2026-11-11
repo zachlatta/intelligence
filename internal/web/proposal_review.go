@@ -139,6 +139,7 @@ type proposalComment struct {
 	Author, Text                                string
 	Created                                     time.Time
 	State, AnswerHost, AnswerAgent, AnswerError string
+	AnswerLocation                              string
 	AnswerOnline                                bool
 }
 
@@ -211,16 +212,16 @@ func proposalPage(cfg Config, v viewer) http.HandlerFunc {
 			http.NotFound(w, r)
 			return
 		}
-		rows, err := v.pool.Query(r.Context(), `SELECT c.id,c.author,c.text,c.created_at,coalesce(q.state,''),coalesce(q.host,''),coalesce(q.agent_id,''),coalesce(q.error,''),coalesce(h.online,false)
+		rows, err := v.pool.Query(r.Context(), `SELECT c.id,c.author,c.text,c.created_at,coalesce(q.state,''),coalesce(q.host,''),coalesce(q.agent_id,''),coalesce(q.error,''),coalesce(h.online,false),coalesce(dispatch.args->'labels'->>'intelligence.answer_location','')
  FROM workflow_proposal_comments c LEFT JOIN workflow_proposal_question_status q ON q.question_id=c.id
- LEFT JOIN host_status h ON h.name=q.host WHERE c.proposal_id=$1 ORDER BY c.id`, id)
+ LEFT JOIN host_status h ON h.name=q.host LEFT JOIN commands dispatch ON dispatch.id=q.command_id WHERE c.proposal_id=$1 ORDER BY c.id`, id)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
 		ps[0].Comments, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (proposalComment, error) {
 			var c proposalComment
-			err := row.Scan(&c.ID, &c.Author, &c.Text, &c.Created, &c.State, &c.AnswerHost, &c.AnswerAgent, &c.AnswerError, &c.AnswerOnline)
+			err := row.Scan(&c.ID, &c.Author, &c.Text, &c.Created, &c.State, &c.AnswerHost, &c.AnswerAgent, &c.AnswerError, &c.AnswerOnline, &c.AnswerLocation)
 			return c, err
 		})
 		if err != nil {
