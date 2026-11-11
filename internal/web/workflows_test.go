@@ -1297,3 +1297,20 @@ func TestMoveRepliesControlTurnLifetime(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkflowsPageStylesWaitingCalloutAndStickyInspector(t *testing.T) {
+	run := runRow{ID: "r1", Status: "waiting", Workflow: "Task", Title: "Approve deploy", CreatedAt: t0, Version: 1, Host: "host-1", Repo: "acme/app"}
+	rec := httptest.NewRecorder()
+	renderWorkflows(rec, "list", map[string]any{
+		"Workflows": []map[string]any{{"ID": "w1", "Name": "Task", "Version": 1, "IsDefault": true, "Description": "", "Definition": workflow.Starting}},
+		"Waiting":   []runRow{run},
+		"List":      runsPage{Runs: []runRow{run}, Page: 1, Total: 1},
+		"Now":       t0,
+	})
+	body := rec.Body.String()
+	for _, want := range []string{`class="banner callout"`, "<thead>", "top: calc(var(--topbar-h) + 1rem)"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("workflows page misses %q", want)
+		}
+	}
+}

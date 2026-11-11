@@ -8,8 +8,8 @@
 {{template "css"}}
 <script src="/model-groups.js" defer></script>
 <style>
-  .status { display: inline-flex; align-items: center; justify-content: center; gap: .3rem; height: 1.3rem; min-width: 4.6rem; padding: 0 .45rem;
-    border-radius: 4px; border: 1px solid var(--line-strong); background: var(--bg-subtle); color: var(--fg-2); font-size: 12px; font-weight: 500;
+  .status { display: inline-flex; align-items: center; justify-content: center; gap: .35rem; height: 1.35rem; min-width: 4.5rem; padding: 0 .55rem;
+    border-radius: 999px; border: 1px solid var(--line); background: var(--bg-subtle); color: var(--fg-2); font-size: 11.5px; font-weight: 500;
     flex: none; white-space: nowrap; }
   .status::before { content: ""; width: .4rem; height: .4rem; border-radius: 50%; background: var(--faint); }
   .st-running { background: var(--accent-bg); border-color: var(--accent-line); color: var(--accent); }
@@ -35,16 +35,16 @@
   .card-foot { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; padding: .6rem 1rem; border-top: 1px solid var(--line); background: var(--bg-subtle); }
   .strip { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; margin: .6rem 0 0; }
   .strip .arrow { color: var(--faint); font-size: 12px; }
-  .chip { display: inline-flex; align-items: center; height: 1.45rem; padding: 0 .5rem; border-radius: 4px; font-size: 12px;
-    border: 1px solid var(--line-strong); background: var(--bg-subtle); color: var(--fg-2); white-space: nowrap; }
+  .chip { display: inline-flex; align-items: center; height: 1.4rem; padding: 0 .5rem; border-radius: var(--radius); font-size: 11.5px; font-weight: 500;
+    border: 1px solid var(--line); background: var(--bg-subtle); color: var(--fg-2); white-space: nowrap; }
   .chip.k-gate { background: var(--orange-bg); border-color: var(--orange-line); color: var(--orange); }
   .chip.k-signoff { background: var(--accent-bg); border-color: var(--accent-line); color: var(--accent); }
-  .composer { border: 1px solid var(--line-strong); border-radius: 10px; background: var(--panel); margin-bottom: 1.5rem; box-shadow: var(--shadow); }
+  .composer { border: 1px solid var(--line-strong); border-radius: var(--radius-lg); background: var(--panel); margin-bottom: 1.5rem; box-shadow: var(--shadow); }
   .composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
   .composer > label { margin: 1rem 1rem 0; }
-  .composer textarea { display: block; min-height: 10rem; border: 0; box-shadow: none; padding: .7rem 1rem; background: transparent; resize: vertical; }
+  .composer textarea { display: block; min-height: 9rem; border: 0; box-shadow: none; padding: .7rem 1rem; background: transparent; resize: vertical; }
   .composer textarea:focus { box-shadow: none; }
-  .composer .composer-toolbar { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; padding: .7rem 1rem; border-top: 1px solid var(--line); background: var(--bg-subtle); border-radius: 0 0 10px 10px; }
+  .composer .composer-toolbar { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; padding: .7rem 1rem; border-top: 1px solid var(--line); background: var(--bg-subtle); border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
   .composer .pick { display: flex; min-width: 0; align-items: center; gap: .5rem; margin-left: auto; }
   .composer .pick select { width: auto; max-width: 22rem; min-width: 0; }
   .composer .pick label { margin: 0; font-size: 12.5px; color: var(--muted); font-weight: 500; }
@@ -62,35 +62,42 @@
     .composer .attachment-help summary::after { content: "ⓘ"; font-size: 16px; }
     .wf-grid { grid-template-columns: minmax(0, 1fr); }
   }
+  .editor-head .title-col { flex: 1 1 16rem; min-width: 0; }
+  .editor-head .actions { flex-wrap: wrap; }
+  #wf-name { font-size: 1.375rem; font-weight: 600; letter-spacing: -.018em; border-color: transparent; background: transparent; box-shadow: none; padding: .15rem .35rem; margin-left: -.35rem; }
+  #wf-desc { border-color: transparent; background: transparent; box-shadow: none; padding: .15rem .35rem; margin-left: -.35rem; color: var(--muted); }
+  #wf-name:hover, #wf-desc:hover { border-color: var(--line); background: var(--panel); }
+  #wf-name:focus, #wf-desc:focus { border-color: var(--accent); background: var(--panel); box-shadow: 0 0 0 3px var(--ring); }
   .builder { display: grid; grid-template-columns: minmax(0, 1fr) 24rem; gap: 1.5rem; align-items: start; }
   .builder > * { min-width: 0; }
   @media (max-width: 62rem) { .builder { grid-template-columns: minmax(0, 1fr); } }
-  .pipe { max-width: 36rem; }
-  .node { position: relative; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: var(--shadow); }
-  .node.click { cursor: pointer; } .node.click:hover { border-color: var(--faint); }
+  .pipe { max-width: 38rem; }
+  .node { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: var(--shadow); }
+  .node.click { cursor: pointer; } .node.click:hover { border-color: var(--line-strong); }
   .node.sel { border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
-  .node.fixed { background: var(--bg-subtle); border-style: dashed; }
-  .node .nh { display: flex; align-items: center; gap: .6rem; padding: .65rem .8rem; }
+  .node.fixed { background: var(--bg-subtle); border-style: dashed; border-color: var(--line-strong); box-shadow: none; }
+  .node .nh { display: flex; align-items: center; gap: .6rem; padding: .65rem .85rem; }
   .node .kind { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--faint); font-weight: 600; }
   .node .ttl { font-weight: 600; overflow-wrap: anywhere; }
-  .node .nb { padding: 0 .8rem .65rem; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
-  .node .instr { color: var(--fg-2); white-space: pre-wrap; overflow: hidden; display: -webkit-host; -webkit-line-clamp: 3; -webkit-host-orient: vertical; }
+  .node .nb { padding: 0 .85rem .7rem; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+  .node .instr { color: var(--fg-2); white-space: pre-wrap; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
   .node.sel .instr { -webkit-line-clamp: unset; }
   .node.k-gate { border-left: 3px solid var(--orange-line); } .node.k-signoff { border-left: 3px solid var(--accent-line); }
   .node.r-pending { opacity: .6; } .node.r-running { border-color: var(--accent-line); } .node.r-asking { border-color: var(--orange); }
   .node .grow-r { margin-left: auto; display: flex; gap: .4rem; align-items: center; }
-  .node .spent { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; cursor: help; }
+  .node .spent { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; cursor: help; }
   .node .grip { color: var(--faint); cursor: grab; user-select: none; }
   .node.dragging { opacity: .4; }
   .node.drop-before { box-shadow: 0 -3px 0 var(--accent); } .node.drop-after { box-shadow: 0 3px 0 var(--accent); }
-  .link { height: 1.6rem; margin-left: 1.5rem; border-left: 1.5px solid var(--line-strong); position: relative; }
+  .link { height: 1.5rem; margin-left: 1.5rem; border-left: 1.5px solid var(--line-strong); position: relative; }
   .link.done { border-left-color: var(--green); }
-  .link .add { position: absolute; left: 0; top: 50%; transform: translate(-50%, -50%); width: 1.3rem; height: 1.3rem; border-radius: 50%;
-    border: 1px solid var(--line-strong); background: var(--panel); color: var(--muted); cursor: pointer; padding: 0; line-height: 1; opacity: 0; }
+  .link .add { position: absolute; left: 0; top: 50%; transform: translate(-50%, -50%); width: 1.35rem; height: 1.35rem; border-radius: 50%;
+    border: 1px solid var(--line-strong); background: var(--panel); color: var(--muted); cursor: pointer; padding: 0; line-height: 1; opacity: 0; box-shadow: var(--shadow); }
   .pipe:hover .link .add, .link .add:focus { opacity: 1; }
-  .var { color: var(--accent); background: var(--accent-bg); border-radius: 3px; padding: 0 2px; }
-  .inspector { position: sticky; top: 1rem; }
-  .inspector .card-body { max-height: calc(100vh - 8rem); overflow: auto; }
+  @media (hover: none) { .link .add { opacity: 1; } }
+  .var { color: var(--accent); background: var(--accent-bg); border-radius: 3px; padding: 0 3px; font-family: var(--mono); font-size: 11.5px; }
+  .inspector { position: sticky; top: calc(var(--topbar-h) + 1rem); }
+  .inspector .card-body { max-height: calc(100vh - var(--topbar-h) - 5rem); overflow: auto; }
   .inspector label:first-child { margin-top: 0; }
   .inspector textarea { min-height: 12rem; }
   .vars { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .35rem; }
@@ -100,8 +107,8 @@
   .json { width: 100%; min-height: 30rem; font-family: var(--mono); font-size: 12px; }
   .tree .ag { display: flex; gap: .4rem; align-items: center; margin-top: .25rem; flex-wrap: wrap; }
   .tree .ag .status { min-width: 3.8rem; }
-  .request { white-space: pre-wrap; font-size: 13px; color: var(--fg-2); background: var(--bg-subtle); border: 1px solid var(--line);
-    border-radius: var(--radius); padding: .6rem .8rem; margin: 0 0 1.25rem; }
+  .request { white-space: pre-wrap; font-size: 13px; color: var(--fg-2); background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius-lg); padding: .65rem .9rem; margin: 0 0 1.25rem; box-shadow: var(--shadow); }
   .note { border: 1px solid var(--orange-line); }
   .note > .card-head { background: var(--orange-bg); } .note > .card-head h2 { color: var(--orange); }
   .md { font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
@@ -113,26 +120,24 @@
   .preview li.no { opacity: .55; }
   .preview .ic { font-weight: 700; color: var(--green); } .preview li.no .ic { color: var(--faint); }
   .preview .subj { color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .md img { max-width: 100%; }
-  .md pre { background: var(--bg-muted); padding: .6rem; border-radius: var(--radius); overflow: auto; }
-  .reply-host { display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-start; margin-top: .75rem; }
+  .reply-host { display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-start; margin-top: .85rem; }
   .reply-host .dictation { flex: 1 1 100%; }
   .reply-host textarea { min-height: 5rem; flex: 1; }
   .reply-host .side { display: flex; flex-direction: column; gap: .4rem; }
   .reply-host .side[hidden] { display: none; }
   .events { list-style: none; margin: .4rem 0 0; padding: 0; font-size: 12.5px; }
-  .events li { padding: .15rem 0; color: var(--fg-2); white-space: pre-wrap; overflow-wrap: anywhere; }
-  .events .t { color: var(--faint); font-family: var(--mono); font-size: 11px; margin-right: .4rem; }
+  .events li { padding: .2rem 0; color: var(--fg-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .events .t { color: var(--faint); font-family: var(--mono); font-size: 11px; margin-right: .4rem; font-variant-numeric: tabular-nums; }
   .events .md { white-space: normal; }
   .events .md > :first-child { margin-top: 0; }
   .events .md > :last-child { margin-bottom: 0; }
   .run-meta { display: flex; flex-wrap: wrap; gap: .3rem 1.2rem; font-size: 13px; color: var(--muted); margin-top: .35rem; align-items: center; }
   .run-meta b { color: var(--fg-2); font-weight: 500; }
-  dialog { border: 1px solid var(--line-strong); border-radius: 8px; padding: 0; background: var(--panel); color: var(--fg); width: min(36rem, 92vw); }
-  dialog::backdrop { background: rgba(20,20,20,.35); }
-  dialog form { padding: 1rem; }
-  .menu { position: absolute; z-index: 20; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius);
-    box-shadow: 0 6px 24px rgba(0,0,0,.12); padding: .3rem; width: 17rem; }
+  dialog { border: 1px solid var(--line-strong); border-radius: var(--radius-lg); padding: 0; background: var(--panel); color: var(--fg); width: min(36rem, 92vw); box-shadow: var(--shadow-md); }
+  dialog::backdrop { background: rgba(31, 30, 30, .35); backdrop-filter: blur(2px); }
+  dialog form { padding: 1rem 1.25rem 1.25rem; }
+  .menu { position: absolute; z-index: 20; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md); padding: .3rem; width: min(17rem, calc(100vw - 1rem)); }
   .menu button { display: block; width: 100%; text-align: left; padding: .45rem .5rem; border: 0; background: none; border-radius: 4px;
     font: inherit; color: var(--fg); cursor: pointer; }
   .menu button:hover { background: var(--bg-muted); }
@@ -183,7 +188,7 @@
   </section>
 {{end}}
 {{range .QueueHeads}}<p class="banner note queue-head" data-host="{{.Host}}"><b>{{plural .Queued "run"}} queued on <span class="mono">{{.Host}}</span>.</b> Next: <a href="/workflow-runs/{{.RunID}}">{{.Title}}</a>. {{or .Reason "Checking its host for room"}}.</p>{{end}}
-{{range .Waiting}}<p class="banner note"><b>{{.Workflow}}</b> is asking you: “{{.Title}}” · <a href="/workflow-runs/{{.ID}}">Read the note →</a></p>{{end}}
+{{range .Waiting}}<p class="banner callout"><b>{{.Workflow}}</b> is asking you: “{{.Title}}” · <a href="/workflow-runs/{{.ID}}">Read the note →</a></p>{{end}}
 <h2 class="section-title">Workflows</h2>
 <div class="wf-grid">
 {{range .Workflows}}
@@ -206,15 +211,15 @@
 </form></div>
 <div id="runs">
 {{with .List}}{{if .Runs}}<div class="table-wrap"><table class="table">
-  <tr><th>Status</th><th>What</th><th>Workflow</th><th>Now</th><th>Host</th><th>Project</th><th>Asked → answered</th><th class="n">Started</th></tr>
-  {{range .Runs}}<tr>
+  <thead><tr><th>Status</th><th>What</th><th>Workflow</th><th>Now</th><th>Host</th><th>Project</th><th>Asked → answered</th><th class="n">Started</th></tr></thead>
+  <tbody>{{range .Runs}}<tr>
     <td><span class="status {{.StatusClass}}">{{.StatusLabel}}</span>{{if eq .Status "stalled"}} <button class="btn sm" data-resume-run="{{.ID}}">Resume</button>{{end}}</td>
     <td><a href="/workflow-runs/{{.ID}}">{{.Title}}</a></td>
     <td>{{.Workflow}} <span class="meta">v{{.Version}}{{if .WorkflowDeleted}} (deleted){{end}}</span></td>
     <td class="meta">{{.Where}}</td>
     <td class="mono" style="white-space:nowrap">{{.Host}}</td>
     <td class="mono">{{.Repo}}</td>
-    <td>{{if .MissingAnswer}}<span class="status st-error">{{.AnswerTiming}}</span>{{else}}{{.AnswerTiming}}{{end}}{{with .UncheckedTiming}}<div class="meta">{{.}}</div>{{end}}</td><td class="n meta">{{ago $.Now .CreatedAt}}</td></tr>{{end}}
+    <td>{{if .MissingAnswer}}<span class="status st-error">{{.AnswerTiming}}</span>{{else}}{{.AnswerTiming}}{{end}}{{with .UncheckedTiming}}<div class="meta">{{.}}</div>{{end}}</td><td class="n meta">{{ago $.Now .CreatedAt}}</td></tr>{{end}}</tbody>
 </table></div>{{else if .Query}}<p class="empty-state">No runs match “{{.Query}}”.</p>{{else if gt .Page 1}}<p class="empty-state">No runs on this page.</p>{{else}}<p class="empty-state">No runs yet.</p>{{end}}
 {{if or .Runs (gt .Page 1)}}<nav class="pager" aria-label="Runs pages">
   {{with .Newer}}<a class="btn sm" href="{{.}}" rel="prev">← Newer</a>{{end}}
@@ -321,10 +326,10 @@ setInterval(async () => {
 {{define "editor"}}{{template "wfhead" .Workflow.Name}}
 <main class="container page" data-submit="#save">
 <div class="crumbs"><a href="/workflows">Workflows</a><span class="sep">/</span><span id="crumb">{{.Workflow.Name}}</span></div>
-<div class="page-head">
-  <div style="flex:1;min-width:16rem">
-    <input id="wf-name" aria-label="Name" style="font-size:1.4rem;font-weight:600;border-color:transparent;box-shadow:none;padding:.1rem .3rem;margin-left:-.3rem">
-    <input id="wf-desc" aria-label="Description" placeholder="What is this workflow for?" style="border-color:transparent;box-shadow:none;padding:.1rem .3rem;margin-left:-.3rem;color:var(--muted)">
+<div class="page-head editor-head">
+  <div class="title-col">
+    <input id="wf-name" aria-label="Name">
+    <input id="wf-desc" aria-label="Description" placeholder="What is this workflow for?">
   </div>
   <div class="actions">
     <span class="meta" id="saved"></span>
@@ -608,7 +613,7 @@ function bind() {
     e.stopPropagation();
     const m = $("#menu"), r = b.getBoundingClientRect();
     m.innerHTML = Object.keys(KIND).map((k) => `<button data-k="${k}"><b>${KIND[k]}</b><span class="d">${KIND_DESC[k]}</span></button>`).join("");
-    m.style.left = r.right + 8 + scrollX + "px"; m.style.top = r.top - 10 + scrollY + "px"; m.hidden = false;
+    m.style.left = Math.max(8, Math.min(r.right + 8 + scrollX, innerWidth - 280)) + "px"; m.style.top = r.top - 10 + scrollY + "px"; m.hidden = false;
     $$("button", m).forEach((x) => x.onclick = () => { m.hidden = true; insert(+b.dataset.insert, x.dataset.k); });
   });
   const on = (attr, target) => $$(`#inspector [data-${attr}]`).forEach((el) => {

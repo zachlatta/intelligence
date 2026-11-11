@@ -86,7 +86,7 @@ func TestNoRenamedCSSProperties(t *testing.T) {
 		"schedules": schedulesHTML, "spawn": spawnHTML, "account": accountHTML, "usage": usageHTML, "plan": planHTML,
 		"transcript": transcriptHTML, "blocks": blocksHTML, "workflows": workflowsHTML, "hostresources": hostResourcesHTML,
 	} {
-		for _, bad := range []string{"host-shadow", "host-sizing"} {
+		for _, bad := range []string{"host-shadow", "host-sizing", "-webkit-host"} {
 			if strings.Contains(src, bad) {
 				t.Errorf("%s has %q", name, bad)
 			}
