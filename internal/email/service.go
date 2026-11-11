@@ -35,7 +35,7 @@ type Service struct {
 }
 
 // Interval is how often each mailbox is read.
-const Interval = 15 * time.Second
+const Interval = time.Second
 
 // backfill is what is read in when a mailbox is connected, for the trigger editor's preview.
 const (
@@ -88,7 +88,7 @@ func (s *Service) Connect(ctx context.Context, account int64, code, state, base 
 	_, err = s.DB.Exec(ctx, `INSERT INTO gmail_connections (account_id, address, token, history_id, connected_at)
 		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (account_id) DO UPDATE SET address = $2, token = $3, history_id = $4, connected_at = $5, backfilled = false,
-			error = '', error_at = NULL,
+			error = '', error_at = NULL, backfill_ids = NULL,
 			owners = CASE WHEN gmail_connections.address = $2 THEN gmail_connections.owners ELSE '{}' END`,
 		account, address, sealed, history, s.now())
 	if err != nil {
@@ -138,37 +138,60 @@ func (s *Service) Disconnect(ctx context.Context, account int64) error {
 
 // Run reads every mailbox every interval until ctx ends.
 func (s *Service) Run(ctx context.Context, interval time.Duration) {
+	ctx = context.WithValue(ctx, intervalKey{}, interval)
 	t := time.NewTicker(interval)
 	defer t.Stop()
-	for {
-		if err := s.PollAll(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("email: %v", err)
+	// Keep scheduling while a worker paces a backfill. Each account has at most
+	// one active job; the database row lock also protects across server instances.
+	done := make(chan int64, 4)
+	active := map[int64]bool{}
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	limit := min(4, max(1, int(s.DB.Config().MaxConns)/2))
+	schedule := func() {
+		rows, err := s.DB.Query(ctx, "SELECT account_id FROM gmail_connections WHERE next_poll_at <= $1 ORDER BY next_poll_at, account_id", s.now())
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Printf("email: %v", err)
+			}
+			return
 		}
+		accounts, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Printf("email: %v", err)
+			}
+			return
+		}
+		for _, a := range accounts {
+			if len(active) >= limit {
+				break
+			}
+			if active[a] {
+				continue
+			}
+			active[a] = true
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := s.Poll(ctx, a); err != nil && ctx.Err() == nil {
+					log.Printf("email account %d: %v", a, err)
+				}
+				done <- a
+			}()
+		}
+	}
+	schedule()
+	for {
 		select {
 		case <-ctx.Done():
 			return
+		case a := <-done:
+			delete(active, a)
 		case <-t.C:
+			schedule()
 		}
 	}
-}
-
-// PollAll reads each connected mailbox once.
-func (s *Service) PollAll(ctx context.Context) error {
-	rows, err := s.DB.Query(ctx, "SELECT account_id FROM gmail_connections ORDER BY account_id")
-	if err != nil {
-		return err
-	}
-	accounts, err := pgx.CollectRows(rows, pgx.RowTo[int64])
-	if err != nil {
-		return err
-	}
-	var errs []error
-	for _, a := range accounts {
-		if err := s.Poll(ctx, a); err != nil {
-			errs = append(errs, fmt.Errorf("account %d: %w", a, err))
-		}
-	}
-	return errors.Join(errs...)
 }
 
 func (s *Service) mailbox(account int64, refresh string) *Mailbox {
@@ -193,16 +216,46 @@ func (s *Service) Poll(ctx context.Context, account int64) error {
 		var token []byte
 		var history string
 		var backfilled bool
-		var connected time.Time
-		err := lock.QueryRow(ctx, `SELECT owners, token, history_id, backfilled, connected_at FROM gmail_connections WHERE account_id = $1
-			FOR UPDATE SKIP LOCKED`, account).Scan(&owners, &token, &history, &backfilled, &connected)
+		var pending []string
+		var connected, nextPoll, nextRequest time.Time
+		var failures int
+		err := lock.QueryRow(ctx, `SELECT owners, token, history_id, backfilled, connected_at, next_poll_at, next_request_at, retry_count, backfill_ids FROM gmail_connections WHERE account_id = $1
+			FOR UPDATE SKIP LOCKED`, account).Scan(&owners, &token, &history, &backfilled, &connected, &nextPoll, &nextRequest, &failures, &pending)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		perr := s.read(ctx, account, owners, token, connected, &history, &backfilled)
+		if s.now().Before(nextPoll) {
+			return nil
+		}
+		started := s.now()
+		pace := &pacer{Next: nextRequest}
+		perr := s.read(context.WithValue(ctx, paceKey{}, pace), account, owners, token, connected, &history, &backfilled, &pending)
+		every := Interval
+		if d, ok := ctx.Value(intervalKey{}).(time.Duration); ok {
+			every = d
+		}
+		// Leave scheduling slack relative to the actual start, independent of wall-clock
+		// boundaries. A slightly late worker must still be due at the next timer tick.
+		// Error retries below use their full delay, without this slack.
+		nextPoll = started.Add(every - every/10)
+		if perr != nil {
+			// Back off on every failure, honouring a longer Retry-After: network, token and
+			// local failures must not become one-second retry storms either.
+			var requested time.Duration
+			if retry := (*retryError)(nil); errors.As(perr, &retry) {
+				requested = retry.Delay
+			}
+			nextPoll = s.now().Add(max(every, retryDelay(failures, requested)))
+			failures = min(failures+1, 7)
+		} else {
+			failures = 0
+		}
+		if _, err = lock.Exec(ctx, "UPDATE gmail_connections SET next_poll_at=$2, next_request_at=$3, retry_count=$4, backfill_ids=$5 WHERE account_id=$1", account, nextPoll, pace.Next, failures, pending); err != nil {
+			return err
+		}
 		if perr != nil {
 			_, err = lock.Exec(ctx, "UPDATE gmail_connections SET history_id = $2, backfilled = $3, error = $4, error_at = $5 WHERE account_id = $1",
 				account, history, backfilled, perr.Error(), s.now())
@@ -217,7 +270,7 @@ func (s *Service) Poll(ctx context.Context, account int64) error {
 	})
 }
 
-func (s *Service) read(ctx context.Context, account int64, owners []string, token []byte, connected time.Time, history *string, backfilled *bool) error {
+func (s *Service) read(ctx context.Context, account int64, owners []string, token []byte, connected time.Time, history *string, backfilled *bool, pending *[]string) error {
 	refresh, err := s.Key.Open(token)
 	if err != nil {
 		return err
@@ -236,7 +289,27 @@ func (s *Service) read(ctx context.Context, account int64, owners []string, toke
 	if err != nil {
 		return err
 	}
+	// A failed batch leaves the history cursor unchanged. Messages already kept
+	// have also had their routing decision committed, so retry only unsaved IDs
+	// rather than paying another full-message fetch for each successful predecessor.
+	stored := map[string]bool{}
+	if len(ids) > 0 {
+		rows, err := s.DB.Query(ctx, "SELECT gmail_id FROM emails WHERE account_id = $1 AND gmail_id = ANY($2::text[])", account, ids)
+		if err != nil {
+			return err
+		}
+		known, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return err
+		}
+		for _, id := range known {
+			stored[id] = true
+		}
+	}
 	for _, id := range ids {
+		if stored[id] {
+			continue
+		}
 		g, err := mb.Message(ctx, id)
 		if err != nil {
 			if strings.Contains(err.Error(), "404") {
@@ -254,25 +327,30 @@ func (s *Service) read(ctx context.Context, account int64, owners []string, toke
 	// then what came before it was connected: new mail first, and none of it, which the next
 	// read finds in the history, is taken as before
 	if !*backfilled {
-		ids, err := mb.Search(ctx, backfillQuery, backfillMax)
-		if err != nil {
-			return err
-		}
-		for _, id := range ids {
-			g, err := mb.Message(ctx, id)
+		if *pending == nil {
+			ids, err := mb.Search(ctx, backfillQuery, backfillMax)
 			if err != nil {
 				return err
 			}
-			if !g.Received().Before(connected) {
-				continue
-			}
-			if err := s.keep(ctx, account, g, func(pgx.Tx, workflow.Mail) (decision, error) {
-				return decision{Decision: "before", Reason: "it came before the mailbox was connected"}, nil
-			}); err != nil {
+			*pending = orEmpty(ids)
+		}
+		// Read one preview message per poll, so pacing a large backfill does not
+		// keep new arrivals waiting for several minutes. Resume the stored queue.
+		if len(*pending) > 0 {
+			g, err := mb.Message(ctx, (*pending)[0])
+			if err != nil && !strings.Contains(err.Error(), "404") {
 				return err
 			}
+			if err == nil && g.Received().Before(connected) {
+				if err := s.keep(ctx, account, g, func(pgx.Tx, workflow.Mail) (decision, error) {
+					return decision{Decision: "before", Reason: "it came before the mailbox was connected"}, nil
+				}); err != nil {
+					return err
+				}
+			}
+			*pending = (*pending)[1:]
 		}
-		*backfilled = true
+		*backfilled = len(*pending) == 0
 	}
 	return nil
 }
