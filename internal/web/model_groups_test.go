@@ -59,6 +59,64 @@ func TestModelGroupsStableTokensAndIsolation(t *testing.T) {
 	}
 }
 
+func TestModelGroupNames(t *testing.T) {
+	h, _ := dbServer(t)
+	body := func(name string, revision int) string {
+		b, _ := json.Marshal(map[string]any{"name": name, "revision": revision, "members": []any{}})
+		return string(b)
+	}
+	for _, name := range []string{"", strings.Repeat("a", 300)} {
+		rec := call(t, h, "POST", "/api/model-groups", body(name, 0), sameOriginFetch)
+		if rec.Code != 400 || !strings.Contains(rec.Body.String(), "a model group needs a name") || strings.Contains(rec.Body.String(), "workflow") {
+			t.Errorf("group name validation: %d %s", rec.Code, rec.Body)
+		}
+	}
+	rec := call(t, h, "POST", "/api/model-groups", body("Frontier", 0), sameOriginFetch)
+	if rec.Code != 201 {
+		t.Fatal(rec.Body)
+	}
+	var group workflow.ModelGroup
+	json.Unmarshal(rec.Body.Bytes(), &group)
+	for _, name := range []string{"Frontier", "frontier", " FRONTIER "} {
+		rec = call(t, h, "POST", "/api/model-groups", body(name, 0), sameOriginFetch)
+		if rec.Code != 409 || !strings.Contains(rec.Body.String(), "already exists") {
+			t.Errorf("duplicate %q: %d %s", name, rec.Code, rec.Body)
+		}
+	}
+	rec = call(t, h, "POST", "/api/model-groups", body("Fast", 0), sameOriginFetch)
+	if rec.Code != 201 {
+		t.Fatal(rec.Body)
+	}
+	var fast workflow.ModelGroup
+	json.Unmarshal(rec.Body.Bytes(), &fast)
+	rec = call(t, h, "PUT", "/api/model-groups/"+fast.ID, body("FRONTIER", 1), sameOriginFetch)
+	if rec.Code != 409 {
+		t.Errorf("duplicate rename: %d %s", rec.Code, rec.Body)
+	}
+	rec = call(t, h, "PUT", "/api/model-groups/"+group.ID, body("frontier", 1), sameOriginFetch)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"token":"frontier_model"`) {
+		t.Errorf("self rename: %d %s", rec.Code, rec.Body)
+	}
+	// Names are scoped to the app account, and a deleted name may be used again.
+	ts := h.(*testServer)
+	other, err := ts.store.Create(t.Context(), "group-names", testPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec = call(t, h, "POST", "/api/model-groups", body("Frontier", 0), sameOriginFetch, sessionFor(t, ts.store, other))
+	if rec.Code != 201 {
+		t.Errorf("other account: %d %s", rec.Code, rec.Body)
+	}
+	rec = call(t, h, "DELETE", "/api/model-groups/"+group.ID, "", sameOriginFetch)
+	if rec.Code != 204 {
+		t.Fatal(rec.Body)
+	}
+	rec = call(t, h, "POST", "/api/model-groups", body("Frontier", 0), sameOriginFetch)
+	if rec.Code != 201 {
+		t.Errorf("reuse deleted name: %d %s", rec.Code, rec.Body)
+	}
+}
+
 func TestModelGroupCanConfigureUnknownMeters(t *testing.T) {
 	h, d := dbServer(t)
 	rep := wfReport()

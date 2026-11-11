@@ -23,16 +23,31 @@ func TestModelGroupsBrowser(t *testing.T) {
 	}
 	h, d := dbServer(t)
 	report := wfReport()
-	report.Paseo.Providers = []hostclient.Provider{{Name: "codex", Available: true, Models: []hostclient.Model{{ID: "gpt-6.1-sol", Label: "GPT 6.1 Sol", Thinking: []string{"high"}}}}}
+	report.Paseo.Providers = []hostclient.Provider{
+		{Name: "codex", Available: true, Models: []hostclient.Model{{ID: "gpt-6.1-sol", Label: "GPT 6.1 Sol", Thinking: []string{"high"}}}},
+		{Name: "antigravity", Available: true, Models: []hostclient.Model{{ID: "gemini-4-carbon-medium", Label: "Gemini 4 Carbon"}}},
+	}
 	sendReport(t, h, report)
 	for _, query := range []string{
 		`INSERT INTO usage_accounts(provider,account,label,first_seen,last_seen) VALUES('codex','one','Test plan',now(),now())`,
 		`INSERT INTO usage_sources(host,provider,account,ok,received_at) VALUES('host-1','codex','one',true,now())`,
 		`INSERT INTO usage_active(host,provider,account,since,until) VALUES('host-1','codex','one',now(),now())`,
 		`INSERT INTO usage_readings(provider,account,window_id,window_seconds,used_pct,resets_at,first_observed,last_observed) VALUES('codex','one','7d',604800,30,now()+interval '1 day',now(),now())`,
+		`INSERT INTO usage_accounts(provider,account,label,first_seen,last_seen) VALUES('antigravity','default','Antigravity plan',now(),now())`,
+		`INSERT INTO usage_sources(host,provider,account,ok,received_at) VALUES('host-1','antigravity','default',true,now())`,
+		`INSERT INTO usage_active(host,provider,account,since,until) VALUES('host-1','antigravity','default',now(),now())`,
+		`INSERT INTO usage_readings(provider,account,window_id,window_seconds,used_pct,resets_at,first_observed,last_observed) VALUES('antigravity','default','gemini/7d',604800,30,now()+interval '1 day',now(),now())`,
 	} {
 		if _, err := d.Owner.Exec(t.Context(), query); err != nil {
 			t.Fatal(err)
+		}
+	}
+	for _, body := range []string{
+		`{"name":"Google frontier","members":[{"provider":"antigravity","model":"gemini-4-carbon-medium","thinking":"","login":"default","longWindow":"gemini/7d","enabled":true}]}`,
+		`{"name":"Empty","members":[]}`,
+	} {
+		if rec := call(t, h, "POST", "/api/model-groups", body, sameOriginFetch); rec.Code != 201 {
+			t.Fatal(rec.Body)
 		}
 	}
 	for _, name := range []string{"Frontier", "A deliberately long frontier model group name"} {

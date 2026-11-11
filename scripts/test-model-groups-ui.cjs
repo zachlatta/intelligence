@@ -31,6 +31,29 @@ const path = require("node:path");
         await page.goto(process.env.MODEL_GROUP_TEST_URL + route);
         if (route === "/usage") {
           await page.locator("#model-groups [data-edit]").first().waitFor();
+          const google = page
+            .locator("#model-groups section.card")
+            .filter({
+              has: page.locator("code", {
+                hasText: "{{google_frontier_model}}",
+              }),
+            });
+          const suggested = await google
+            .locator(".card-body > p")
+            .first()
+            .innerText();
+          if (
+            !suggested.includes("Antigravity plan") ||
+            suggested.includes(" · default ·")
+          )
+            failures.push("suggested model shows raw login instead of label");
+          const empty = page
+            .locator("#model-groups section.card")
+            .filter({
+              has: page.locator("code", { hasText: "{{empty_model}}" }),
+            });
+          if (!(await empty.innerText()).includes("Empty group"))
+            failures.push("empty group is not identified clearly");
           const group = page.locator("#model-groups section.card").filter({
             has: page.locator("code", { hasText: "{{frontier_model}}" }),
           });

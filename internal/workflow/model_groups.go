@@ -50,20 +50,27 @@ func tokenBase(name string) string {
 // SaveModelGroup creates or replaces a group. Account locking serializes edits, workflow
 // reference checks and allocations; an editor's revision prevents overwriting another draft.
 func (e *Engine) SaveModelGroup(ctx context.Context, account int64, id string, g ModelGroup) (ModelGroup, error) {
-	name, err := checkName(g.Name)
-	if err != nil {
-		return g, err
+	g.Name = strings.TrimSpace(g.Name)
+	if g.Name == "" || len(g.Name) > 100 {
+		return g, bad("a model group needs a name, up to 100 characters")
 	}
-	g.Name = name
 	if len(g.Members) > 100 {
 		return g, bad("at most 100 members per group")
 	}
 	if id != "" && !uuidRe.MatchString(id) {
 		return g, ErrNotFound
 	}
-	err = pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
 		if err := lockModels(ctx, tx, account); err != nil {
 			return err
+		}
+		var duplicate bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM model_groups
+            WHERE account_id=$1 AND deleted_at IS NULL AND lower(name)=lower($2) AND id::text<>$3)`, account, g.Name, id).Scan(&duplicate); err != nil {
+			return err
+		}
+		if duplicate {
+			return conflict("A model group with this name already exists. Choose a different name.")
 		}
 		if id == "" {
 			base := tokenBase(g.Name)

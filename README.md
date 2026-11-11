@@ -530,6 +530,8 @@ template token: **Frontier** becomes `{{frontier_model}}`, **Fast checks** becom
 `{{fast_checks_model}}`. Names use lowercase ASCII words separated by underscores; collisions
 get a numeric suffix. The token is shown and copyable in the group editor, and each group has
 an insertion chip under a workflow step's instructions. Renaming a group keeps its token.
+Active group names are unique within an account, ignoring case. Groups without members may be
+saved while editing; they are marked **Empty group** until a model is added.
 There is no per-workflow group selector: use different tokens in different steps, or several
 tokens in one step. Model-group tokens are for step instructions, not finder or orchestrator
 standing instructions. Their explicit model settings stay unchanged.

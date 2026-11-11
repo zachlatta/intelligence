@@ -155,6 +155,12 @@
     subtree: true,
     childList: true,
   });
+  function loginLabel(provider, login) {
+    return (
+      windows.find((w) => w.provider === provider && w.account === login)
+        ?.label || login
+    );
+  }
   function render() {
     root.innerHTML = `<div class="card-head"><h2>Model groups</h2><span class="grow"></span><select aria-label="Preview host" style="width:auto" data-host>${[...new Set(catalog.map((c) => c.host))].map((h) => `<option ${h === host ? "selected" : ""}>${esc(h)}</option>`).join("")}</select><button type="button" class="btn sm" data-new>+ New group</button></div><div class="card-body"><p class="meta">Each group has its own token. Shared edits apply to future suggestions; renames keep the token.</p>${
       groups.length
@@ -163,8 +169,9 @@
               const cs = candidates.filter(
                   (c) => c.group_id === g.id && c.host === host,
                 ),
-                best = cs.find((c) => c.eligible);
-              return `<section class="card"><div class="card-head"><b>${esc(g.name)}</b><code>${esc(token(g))}</code><span class="grow"></span><button type="button" class="btn sm" data-copy="${esc(token(g))}">Copy</button><button type="button" class="btn sm" data-edit="${g.id}">Edit</button></div><div class="card-body"><p>${best ? `<span class="badge blue">Suggested now</span> ${esc(best.provider + "/" + best.model)}${best.thinking ? " · " + esc(best.thinking) : ""}<span class="meta"> · ${esc(best.login)} · meter ${Math.max(0, Math.floor((Date.now() - Date.parse(best.last_observed)) / 60000))} min old</span><br><span class="meta">More quota likely to remain at reset.</span>` : '<span class="muted">No eligible model. Check logins, meters and quota.</span>'}</p><details><summary class="meta">Members and alternatives (${members.filter((m) => m.group_id === g.id).length})</summary>${cs.length ? cs.map((c) => `<p>${esc(c.provider + "/" + c.model)} · ${esc(c.thinking || "effort in model ID / default")} · ${esc(c.login)} <span class="badge">${esc(c.eligible ? "Available" : c.reason || "Quota reserved for recent suggestions")}</span></p>`).join("") : "<p>No candidates on this host.</p>"}</details></div></section>`;
+                best = cs.find((c) => c.eligible),
+                empty = !members.some((m) => m.group_id === g.id);
+              return `<section class="card"><div class="card-head"><b>${esc(g.name)}</b><code>${esc(token(g))}</code><span class="grow"></span><button type="button" class="btn sm" data-copy="${esc(token(g))}">Copy</button><button type="button" class="btn sm" data-edit="${g.id}">Edit</button></div><div class="card-body"><p>${empty ? '<span class="badge orange">Empty group</span> <span class="muted">Add a model before using this token.</span>' : best ? `<span class="badge blue">Suggested now</span> ${esc(best.provider + "/" + best.model)}${best.thinking ? " · " + esc(best.thinking) : ""}<span class="meta"> · ${esc(loginLabel(best.provider, best.login))} · meter ${Math.max(0, Math.floor((Date.now() - Date.parse(best.last_observed)) / 60000))} min old</span><br><span class="meta">More quota likely to remain at reset.</span>` : '<span class="muted">No eligible model. Check logins, meters and quota.</span>'}</p><details><summary class="meta">Members and alternatives (${members.filter((m) => m.group_id === g.id).length})</summary>${cs.length ? cs.map((c) => `<p>${esc(c.provider + "/" + c.model)} · ${esc(c.thinking || "effort in model ID / default")} · ${esc(loginLabel(c.provider, c.login))} <span class="badge">${esc(c.eligible ? "Available" : c.reason || "Quota reserved for recent suggestions")}</span></p>`).join("") : "<p>No candidates on this host.</p>"}</details></div></section>`;
             })
             .join("")
         : '<p class="muted">Create Frontier, Fast, or any other group. Then insert its token into a workflow step.</p>'
@@ -252,31 +259,37 @@
       const models = [
         ...new Map(catalog.map((c) => [c.provider + "/" + c.id, c])).values(),
       ];
-      dialog.querySelector("[data-rows]").innerHTML = g.members
-        .map((m, i) => {
-          const cat = models.find(
-              (c) => c.provider === m.provider && c.id === m.model,
-            ),
-            levels = [
-              ...new Set(
-                catalog
-                  .filter((c) => c.provider === m.provider && c.id === m.model)
-                  .flatMap((c) => c.thinking || []),
+      dialog.querySelector("[data-rows]").innerHTML =
+        g.members
+          .map((m, i) => {
+            const cat = models.find(
+                (c) => c.provider === m.provider && c.id === m.model,
               ),
+              levels = [
+                ...new Set(
+                  catalog
+                    .filter(
+                      (c) => c.provider === m.provider && c.id === m.model,
+                    )
+                    .flatMap((c) => c.thinking || []),
+                ),
+              ];
+            const logins = [
+              ...new Map(
+                windows
+                  .filter((w) => w.provider === m.provider)
+                  .map((w) => [w.account, w]),
+              ).values(),
             ];
-          const logins = [
-            ...new Map(
-              windows
-                .filter((w) => w.provider === m.provider)
-                .map((w) => [w.account, w]),
-            ).values(),
-          ];
-          if (!m.thinking && levels.length)
-            m.thinking = cat?.default_thinking || levels[0];
-          const ws = quotaWindows(m).filter((w) => w.window_id.endsWith("7d"));
-          return `<fieldset data-row="${i}"><legend>Member ${i + 1}</legend><div class="fields"><div><label>Model<select data-field="model">${!cat ? `<option value="">Choose model…</option>` : ""}${models.map((c) => `<option value="${esc(c.provider + "/" + c.id)}" ${c.provider === m.provider && c.id === m.model ? "selected" : ""}>${esc(c.label || c.id)} · ${esc(c.provider)}</option>`).join("")}</select></label></div><div><label>Thinking<select data-field="thinking">${[...(levels.length ? levels : [""]), ...(m.thinking && !levels.includes(m.thinking) ? [m.thinking] : [])].map((t) => `<option value="${esc(t)}" ${t === m.thinking ? "selected" : ""}>${esc(t || (levels.length ? "Provider default" : "In model ID / default"))}</option>`).join("")}</select></label></div><div><label>Plan / login<select data-field="login" required><option value="">Choose login…</option>${logins.map((l) => `<option value="${esc(l.account)}" ${l.account === m.login ? "selected" : ""}>${esc(l.label || l.account)}</option>`).join("")}</select></label></div></div><details><summary class="meta">Quota and plan options</summary><div class="fields"><label>Weekly quota pool<select data-field="longWindow"><option value="">Choose pool…</option>${ws.map((w) => `<option ${w.window_id === m.longWindow ? "selected" : ""}>${esc(w.window_id)}</option>`).join("")}</select></label><label>Short-window gates (comma separated)<input data-field="gateWindows" value="${esc((m.gateWindows || []).join(", "))}" placeholder="5h"></label></div><label>Plan ends (optional, UTC)<input type="datetime-local" data-field="eligibleUntil" value="${esc(m.eligibleUntil?.slice(0, 16) || "")}"></label><label class="check"><input type="checkbox" data-field="enabled" ${m.enabled ? "checked" : ""}>Enabled</label></details><div style="display:flex;gap:.4rem;margin-top:.7rem"><button type="button" class="btn sm" data-up ${i === 0 ? "disabled" : ""}>Move up</button><button type="button" class="btn sm" data-remove>Remove</button></div></fieldset>`;
-        })
-        .join("");
+            if (!m.thinking && levels.length)
+              m.thinking = cat?.default_thinking || levels[0];
+            const ws = quotaWindows(m).filter((w) =>
+              w.window_id.endsWith("7d"),
+            );
+            return `<fieldset data-row="${i}"><legend>Member ${i + 1}</legend><div class="fields"><div><label>Model<select data-field="model">${!cat ? `<option value="">Choose model…</option>` : ""}${models.map((c) => `<option value="${esc(c.provider + "/" + c.id)}" ${c.provider === m.provider && c.id === m.model ? "selected" : ""}>${esc(c.label || c.id)} · ${esc(c.provider)}</option>`).join("")}</select></label></div><div><label>Thinking<select data-field="thinking">${[...(levels.length ? levels : [""]), ...(m.thinking && !levels.includes(m.thinking) ? [m.thinking] : [])].map((t) => `<option value="${esc(t)}" ${t === m.thinking ? "selected" : ""}>${esc(t || (levels.length ? "Provider default" : "In model ID / default"))}</option>`).join("")}</select></label></div><div><label>Plan / login<select data-field="login" required><option value="">Choose login…</option>${logins.map((l) => `<option value="${esc(l.account)}" ${l.account === m.login ? "selected" : ""}>${esc(l.label || l.account)}</option>`).join("")}</select></label></div></div><details><summary class="meta">Quota and plan options</summary><div class="fields"><label>Weekly quota pool<select data-field="longWindow"><option value="">Choose pool…</option>${ws.map((w) => `<option ${w.window_id === m.longWindow ? "selected" : ""}>${esc(w.window_id)}</option>`).join("")}</select></label><label>Short-window gates (comma separated)<input data-field="gateWindows" value="${esc((m.gateWindows || []).join(", "))}" placeholder="5h"></label></div><label>Plan ends (optional, UTC)<input type="datetime-local" data-field="eligibleUntil" value="${esc(m.eligibleUntil?.slice(0, 16) || "")}"></label><label class="check"><input type="checkbox" data-field="enabled" ${m.enabled ? "checked" : ""}>Enabled</label></details><div style="display:flex;gap:.4rem;margin-top:.7rem"><button type="button" class="btn sm" data-up ${i === 0 ? "disabled" : ""}>Move up</button><button type="button" class="btn sm" data-remove>Remove</button></div></fieldset>`;
+          })
+          .join("") ||
+        '<p class="banner note">Empty group. Add a model before using its token.</p>';
       dialog.querySelectorAll("[data-row]").forEach((row) => {
         const i = +row.dataset.row,
           m = g.members[i];
