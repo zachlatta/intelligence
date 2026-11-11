@@ -52,14 +52,17 @@ END $$;
 -- One row per member and owned host. Scores and exclusion reasons are available to SQL clients.
 -- A quota pool is (usage_provider, login, long_window), regardless of models or groups.
 CREATE VIEW model_group_candidates WITH (security_invoker = true) AS
-WITH inputs AS (
+WITH pooled AS (
+ SELECT m.*, 2 * (SELECT count(*) FROM workflow_model_suggestions s
+                  WHERE s.account_id=m.account_id AND s.usage_provider=m.usage_provider
+                    AND s.login=m.login AND s.long_window=m.long_window
+                    AND s.created_at > now() - interval '60 minutes') AS penalty
+ FROM model_group_members m
+), inputs AS (
  SELECT m.*, g.token, g.name AS group_name, g.revision, h.name AS host,
         c.remaining_pct, c.last_observed, c.resets_at,
         c.remaining_pct - 100 * extract(epoch FROM least(c.resets_at, coalesce(m.eligible_until,c.resets_at)) - now()) / nullif(c.window_seconds,0)
-          - 2 * (SELECT count(*) FROM workflow_model_suggestions s
-                 WHERE s.account_id=m.account_id AND s.usage_provider=m.usage_provider
-                   AND s.login=m.login AND s.long_window=m.long_window
-                   AND s.created_at > now() - interval '60 minutes') AS score,
+          - m.penalty AS score,
         CASE
           WHEN NOT m.enabled THEN 'Disabled'
           WHEN m.eligible_until <= now() THEN 'Plan ended'
@@ -82,11 +85,9 @@ WITH inputs AS (
                          AND (gate.window_seconds<c.window_seconds OR gate.window_seconds IS NULL)
                          AND (gate.remaining_pct IS NULL OR gate.stale OR gate.remaining_pct<=5)) THEN 'Short-window quota unavailable'
           ELSE '' END AS reason
- FROM model_group_members m JOIN model_groups g ON g.id=m.group_id AND g.account_id=m.account_id AND g.deleted_at IS NULL
+ FROM pooled m JOIN model_groups g ON g.id=m.group_id AND g.account_id=m.account_id AND g.deleted_at IS NULL
  JOIN host_keys k ON k.account_id=m.account_id JOIN hosts h ON h.name=k.host
  LEFT JOIN usage_current c ON c.provider=m.usage_provider AND c.account=m.login AND c.window_id=m.long_window
 )
-SELECT *, reason='' AND remaining_pct - 2 * (SELECT count(*) FROM workflow_model_suggestions s
-    WHERE s.account_id=inputs.account_id AND s.usage_provider=inputs.usage_provider AND s.login=inputs.login
-      AND s.long_window=inputs.long_window AND s.created_at>now()-interval '60 minutes') > 5 AS eligible
+SELECT *, reason='' AND remaining_pct - penalty > 5 AS eligible
 FROM inputs;

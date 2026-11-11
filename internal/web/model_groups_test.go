@@ -311,3 +311,12 @@ func TestModelGroupRankingAndWorkflowExpansion(t *testing.T) {
 		}
 	}
 }
+
+// model-groups.js is served like the other embedded scripts: revalidated by an ETag of its content.
+func TestModelGroupsScriptIsServed(t *testing.T) {
+	rec := get(t, dictationServer(t, "", ""), "/model-groups.js", nil)
+	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/javascript") ||
+		!strings.Contains(rec.Body.String(), "model-groups") || rec.Header().Get("ETag") == "" || rec.Header().Get("Cache-Control") != "no-cache" {
+		t.Errorf("/model-groups.js: %d %q, etag %q", rec.Code, rec.Header().Get("Content-Type"), rec.Header().Get("ETag"))
+	}
+}

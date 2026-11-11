@@ -1,16 +1,12 @@
 package web
 
 import (
-	_ "embed"
 	"errors"
 	"log"
 	"net/http"
 
 	"github.com/zachlatta/intelligence/internal/workflow"
 )
-
-//go:embed model-groups.js
-var modelGroupsJS string
 
 func modelGroupError(w http.ResponseWriter, err error) {
 	var refusal *workflow.Refusal
