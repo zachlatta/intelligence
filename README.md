@@ -152,8 +152,9 @@ checkout, without creating a worktree, and may read it for context but must not 
 The server resolves the path from `host_repositories`, the same registered-project and workspace
 catalog used by workflow project matching. It matches the catalog project name or checkout
 directory basename to `proposalAnswerRepositoryName` (`desk`), case-insensitively. Among enrolled,
-reported hosts, those with desk take priority, then the saved workflow's host, then stable host/path
-order. If none has desk, the saved host (or another enrolled, reported host) runs the agent at `~`.
+reported hosts, those with desk take priority; among them online hosts win, then the saved workflow's
+host, then stable host/path order. If none has desk, an online host is preferred for the `~` fallback,
+then the saved host, then stable host order.
 The thread explicitly shows that fallback. Dispatch location is also retained in the command's
 SQL-readable `args->>'cwd'` and `args->'labels'->>'intelligence.answer_location'` (`desk` or `home_fallback`).
 No original proposer or active workflow run is needed. The prompt treats the proposal and thread

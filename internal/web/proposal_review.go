@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"html"
 	"html/template"
 	"net/http"
 	"strconv"
@@ -13,6 +14,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 	"github.com/zachlatta/intelligence/internal/workflow"
 )
 
@@ -112,12 +116,52 @@ type proposalView struct {
 }
 
 func (p proposalView) Headline() string {
-	for line := range strings.Lines(p.Summary) {
-		line = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "#>-* "))
-		line = strings.TrimSpace(strings.Trim(line, "*_`"))
-		if line != "" {
-			return line
+	// Read visible text from the existing Markdown parser, preserving literal
+	// punctuation inside code spans and resolving links to their labels. Parsing
+	// the whole summary also resolves reference links defined on later lines.
+	source := []byte(p.Summary)
+	doc := md.Parser().Parse(text.NewReader(source))
+	var line strings.Builder
+	var block ast.Node
+	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if block == nil && entering {
+			switch n.(type) {
+			case *ast.Paragraph, *ast.Heading, *ast.TextBlock:
+				block = n
+			}
 		}
+		if block == nil {
+			return ast.WalkContinue, nil
+		}
+		if !entering {
+			if n == block {
+				if strings.TrimSpace(line.String()) != "" {
+					return ast.WalkStop, nil
+				}
+				block = nil
+			}
+			return ast.WalkContinue, nil
+		}
+		switch n := n.(type) {
+		case *ast.Text:
+			value := string(n.Value(source))
+			if n.Parent() != nil && n.Parent().Kind() == ast.KindCodeSpan {
+				line.WriteString(strings.ReplaceAll(value, "\n", " "))
+			} else {
+				line.WriteString(html.UnescapeString(string(util.UnescapePunctuations([]byte(value)))))
+			}
+			if (n.SoftLineBreak() || n.HardLineBreak()) && strings.TrimSpace(line.String()) != "" {
+				return ast.WalkStop, nil
+			}
+		case *ast.String:
+			line.Write(n.Value)
+		case *ast.AutoLink:
+			line.Write(n.Label(source))
+		}
+		return ast.WalkContinue, nil
+	})
+	if headline := strings.TrimSpace(line.String()); headline != "" {
+		return headline
 	}
 	if p.Target != "" {
 		return "Proposed " + p.Operation + " to " + p.Target

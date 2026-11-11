@@ -49,12 +49,14 @@ eval(process.argv[1]);
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 (async()=>{
  if(process.argv[2]==='true'){
+  els['comment-error'].textContent='An answer is already queued';
   assert(timer,'pending thread must schedule a poll');
   const poll=timer();await tick();await refreshThread();
   assert.strictEqual(gets,1,'overlapping polls must not start more requests');
   release();await poll;
   assert(els['proposal-thread'].innerHTML.includes('Automatic answer'));
   assert(!timer,'answered thread must stop polling');
+  assert.strictEqual(els['comment-error'].textContent,'','resolved answer left a stale 409 error');
  }else{
   assert(!timer,'idle thread must not poll');
   await visibility();assert.strictEqual(gets,0,'idle tab visibility must not poll');

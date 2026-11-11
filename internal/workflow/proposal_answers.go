@@ -19,12 +19,12 @@ type proposalAnswerLocation struct{ Host, Cwd, Name string }
 
 // Use the same registered-project/workspace catalog as workflow project matching.
 // A desk checkout takes precedence over the saved host; within either group the
-// saved host wins, followed by stable host/directory order. Only owned hosts enter
+// online hosts win, then the saved host and stable host/directory order. Only owned hosts enter
 // this query, even though this engine writes through the owner connection.
 func resolveProposalAnswerLocation(ctx context.Context, tx pgx.Tx, account int64, preferredHost string) (proposalAnswerLocation, error) {
 	rows, err := tx.Query(ctx, `SELECT k.host,coalesce(r.directory,''),coalesce(r.project,'')
- FROM host_keys k JOIN hosts h ON h.name=k.host LEFT JOIN host_repositories r ON r.host=k.host
- WHERE k.account_id=$1 ORDER BY (k.host=$2) DESC,k.host,r.directory`, account, preferredHost)
+ FROM host_keys k JOIN host_status h ON h.name=k.host LEFT JOIN host_repositories r ON r.host=k.host
+ WHERE k.account_id=$1 ORDER BY h.online DESC,(k.host=$2) DESC,k.host,r.directory`, account, preferredHost)
 	if err != nil {
 		return proposalAnswerLocation{}, err
 	}

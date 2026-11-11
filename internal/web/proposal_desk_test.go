@@ -19,10 +19,13 @@ func TestProposalAnswerUsesDeskCatalog(t *testing.T) {
 		first, second     []hostclient.Project
 		wantHost, wantCwd string
 		workspace         bool
+		firstOffline      bool
 	}{
 		{name: "catalog identifier", first: []hostclient.Project{project("Desk", "/catalog/private-notes")}, wantHost: "host-1", wantCwd: "/catalog/private-notes"},
 		{name: "desk host beats saved host", first: []hostclient.Project{project("other", "/catalog/desk-copy")}, second: []hostclient.Project{project("Notes", "/catalog/second/desk")}, wantHost: "host-2", wantCwd: "/catalog/second/desk"},
 		{name: "saved host wins among desk hosts", first: []hostclient.Project{project("desk", "/catalog/preferred/desk")}, second: []hostclient.Project{project("desk", "/catalog/alternate/desk")}, wantHost: "host-1", wantCwd: "/catalog/preferred/desk"},
+		{name: "online desk beats offline saved desk", first: []hostclient.Project{project("desk", "/catalog/preferred/desk")}, second: []hostclient.Project{project("desk", "/catalog/online/desk")}, firstOffline: true, wantHost: "host-2", wantCwd: "/catalog/online/desk"},
+		{name: "online fallback beats offline saved host", first: []hostclient.Project{project("other", "/catalog/other")}, second: []hostclient.Project{project("other", "/catalog/another")}, firstOffline: true, wantHost: "host-2", wantCwd: "~"},
 		{name: "workspace catalog fallback", workspace: true, wantHost: "host-1", wantCwd: "/catalog/legacy/desk"},
 		{name: "no desk falls back visibly", first: []hostclient.Project{project("other", "/catalog/desk-copy"), {ID: "plain-dir", Name: "desk", Kind: "directory", Directory: "/catalog/not-a-repository"}}, wantHost: "host-1", wantCwd: "~"},
 	} {
@@ -41,6 +44,11 @@ func TestProposalAnswerUsesDeskCatalog(t *testing.T) {
 				other.Name = "host-2"
 				other.Paseo.Projects = tc.second
 				sendReport(t, h, other)
+			}
+			if tc.firstOffline {
+				if _, err := d.Owner.Exec(t.Context(), "UPDATE hosts SET stream_id=NULL,last_seen=now()-interval '2 minutes' WHERE name='host-1'"); err != nil {
+					t.Fatal(err)
+				}
 			}
 			id := proposalForQuestion(t, h)
 			question := askProposal(t, h, id, "Where can you read context?")

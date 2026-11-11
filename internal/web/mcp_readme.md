@@ -129,7 +129,7 @@ Comments accept safe Markdown up to 20000 bytes and record this token as author.
 questions automatically dispatch answer agents through the host command stream. Agent comments
 do not dispatch more agents or approve changes. The review page shows new replies automatically.
 Answer agents run directly in a cataloged desk checkout, read-only, without creating worktrees.
-An enrolled host with desk takes priority; among those, the workflow's saved host is preferred.
+An enrolled host with desk takes priority; among those, online hosts win, then the workflow's saved host.
 If no enrolled, reported host has desk, the agent runs at `~` and the review thread explains the
 fallback. Read the selected host, `commands.args->>'cwd'`, and
 `commands.args->'labels'->>'intelligence.answer_location'` by joining the question's `command_id`

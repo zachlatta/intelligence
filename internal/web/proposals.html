@@ -96,6 +96,7 @@ async function refreshThread() {
   if (revision !== threadRevision) return;
   const current = document.getElementById('proposal-thread');
   if (current.innerHTML !== next.innerHTML || current.dataset.pending !== next.dataset.pending) current.replaceWith(next);
+  if (!hasPendingAnswers()) document.getElementById('comment-error').textContent = '';
   document.getElementById('thread-update').textContent = '';
  } catch(e) { document.getElementById('thread-update').textContent = 'Replies could not update. Retrying automatically.'; }
  finally { refreshingThread = false; scheduleThreadRefresh(); }
