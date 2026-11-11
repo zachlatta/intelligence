@@ -11,10 +11,25 @@
   .host-head h2 { font-size: 15px; margin: 0; }
   .host-head .grow { flex: 1; }
   .sched-name { font-weight: 500; }
-  .sched-prompt { color: var(--muted); max-width: 18rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sched-prompt { color: var(--muted); max-width: 20rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sched-meta { max-width: 18rem; overflow-wrap: anywhere; }
-  .when-col { white-space: nowrap; }
+  .when-col { min-width: 6.5rem; }
   .actions { white-space: nowrap; text-align: right; }
+  .sched-actions { display: flex; justify-content: flex-end; gap: .35rem; }
+  @media (max-width: 40rem) {
+    .sched-table thead { display: none; }
+    .sched-table, .sched-table tbody, .sched-table tr, .sched-table td { display: block; }
+    .sched-table tr { padding: .75rem .9rem; border-top: 1px solid var(--line); }
+    .sched-table tbody tr:first-child { border-top: 0; }
+    .sched-table td { padding: 0; border: 0; }
+    .sched-table td[data-label] { display: flex; flex-wrap: wrap; gap: 0 .5rem; margin-top: .4rem; font-size: 13px; }
+    .sched-table td[data-label]::before { content: attr(data-label); flex: 0 0 4.5rem; color: var(--muted); }
+    .sched-table td[data-label] div.meta { flex-basis: 100%; padding-left: 5rem; }
+    .sched-table tr:hover td { background: none; }
+    .sched-prompt, .sched-meta { max-width: none; }
+    .sched-table td.act { width: auto; margin-top: .65rem; }
+    .sched-actions { justify-content: flex-start; }
+  }
   .facts { display: grid; grid-template-columns: max-content 1fr; gap: .35rem 1.2rem; padding: 1rem 1.25rem; margin: 0; font-size: 13.5px; }
   .facts dt { color: var(--muted); }
   .facts dd { margin: 0; }
@@ -153,7 +168,7 @@ document.querySelectorAll("input[type=datetime-local][data-utc]").forEach((i) =>
 {{end}}
 
 {{define "schedules"}}{{template "schedhead" "Schedules"}}
-<main class="container page mid">
+<main class="container page">
 <div class="page-head"><div><h1>Schedules</h1>
 <p class="sub">Prompts each host's Paseo runs on a cadence, each time in a new agent.</p></div></div>
 <p id="progress" class="progress"></p>
@@ -167,7 +182,7 @@ document.querySelectorAll("input[type=datetime-local][data-utc]").forEach((i) =>
 </div>
 {{if .Problem}}<p class="banner">{{.Host.Report.Name}} could not list its schedules: {{.Problem}}</p>{{end}}
 {{if .Schedules}}
-<div class="table-wrap"><table class="table">
+<div class="table-wrap"><table class="table sched-table">
   <thead><tr><th>Schedule</th><th>When</th><th>Next</th><th>Last run</th><th></th></tr></thead>
   <tbody>
   {{range .Schedules}}
@@ -175,11 +190,11 @@ document.querySelectorAll("input[type=datetime-local][data-utc]").forEach((i) =>
     <td><a class="sched-name" href="/hosts/{{.Host}}/schedules/{{.ID}}">{{or .Name .Title .ID}}</a> {{template "status" .Status}}
       <div class="sched-prompt" title="{{.Prompt}}">{{.Prompt}}</div>
       <div class="meta sched-meta">{{if eq .Target "new-agent"}}{{.Provider}}{{if .Model}} · {{.Model}}{{end}} · <span class="mono">{{.Cwd}}</span>{{if eq .Isolation "worktree"}} · worktree{{end}}{{else}}in agent <span class="mono">{{.AgentID}}</span>{{end}}</div></td>
-    <td class="when-col">{{cadence .Schedule}}{{if .Timezone}}<div class="meta">{{.Timezone}}</div>{{end}}</td>
-    <td class="when-col">{{if eq .Status "active"}}{{until $.Now .NextRunAt}}<div class="meta">{{at .NextRunAt "weekday"}}</div>{{else}}<span class="meta">—</span>{{end}}</td>
-    <td class="when-col">{{with .LastRun}}{{template "runstatus" .Status}} <span class="meta">{{ago $.Now .StartedAt}}</span>{{else}}<span class="meta">none</span>{{end}}
+    <td class="when-col" data-label="When">{{cadence .Schedule}}{{if .Timezone}}<div class="meta">{{.Timezone}}</div>{{end}}</td>
+    <td class="when-col" data-label="Next">{{if eq .Status "active"}}{{until $.Now .NextRunAt}}<div class="meta">{{at .NextRunAt "weekday"}}</div>{{else}}<span class="meta">—</span>{{end}}</td>
+    <td class="when-col" data-label="Last run">{{with .LastRun}}{{template "runstatus" .Status}} <span class="meta">{{ago $.Now .StartedAt}}</span>{{else}}<span class="meta">none</span>{{end}}
       <div class="meta">{{.RunCount}} run{{if ne .RunCount 1}}s{{end}}{{if .FailedRuns}}, {{.FailedRuns}} failed{{end}}</div></td>
-    <td class="actions">{{template "actions" .}}</td>
+    <td class="act"><div class="sched-actions">{{template "actions" .}}</div></td>
   </tr>
   {{end}}
   </tbody>
