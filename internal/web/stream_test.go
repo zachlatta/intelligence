@@ -110,14 +110,52 @@ func (b *rawHost) command() hostclient.Command {
 	}
 }
 
+func TestReplacementStreamWaitsForRetryKeySupport(t *testing.T) {
+	h, db := dbServer(t)
+	rep := wfReport()
+	old := sendReport(t, h, rep)
+	old.conn.CloseNow()
+	for _, status := range []string{"queued", "sent"} {
+		_, err := db.Owner.Exec(t.Context(), `INSERT INTO commands (host, kind, args, status, created_at, expires_at, idempotency_key)
+			VALUES ('host-1', 'create_agent', '{"provider":"claude","cwd":"~"}', $1, now() - interval '1 minute', now() + interval '1 hour', $1)`, status)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An ordinary command is a delivery barrier. Any retry selected by the
+	// initial claim would be sent ahead of this newer command.
+	_, err := db.Owner.Exec(t.Context(), `INSERT INTO commands (host, kind, args, created_at, expires_at)
+		VALUES ('host-1', 'archive_agent', '{"agentId":"barrier"}', now(), now() + interval '1 hour')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := openStream(t, h, "host-1")
+	if c := b.command(); c.Kind != hostclient.ArchiveAgentKind {
+		t.Fatalf("replacement received a retry before reporting support: %+v", c)
+	}
+	rep.StartRetryKeys = false
+	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	rep.StartRetryKeys = true
+	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	got := map[string]bool{b.command().IdempotencyKey: true, b.command().IdempotencyKey: true}
+	if !got["queued"] || !got["sent"] {
+		t.Fatalf("replacement did not receive both retries: %v", got)
+	}
+}
+
 // sendReport sends rep on its host's stream, which stays open (so the host is online), and fails
 // the test unless it is stored.
-func sendReport(t *testing.T, h http.Handler, rep hostclient.Report) {
+func sendReport(t *testing.T, h http.Handler, rep hostclient.Report) *rawHost {
 	t.Helper()
 	b := openStream(t, h, rep.Name)
 	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
 		t.Fatalf("report refused: %s", ack.Error)
 	}
+	return b
 }
 
 // sendBatch sends a transcript batch on its host's stream and returns the ack.
