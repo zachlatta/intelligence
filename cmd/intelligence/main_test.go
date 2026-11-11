@@ -249,6 +249,25 @@ func TestServerConfigTurnsEmailTriggersOnWithBothGoogleSettings(t *testing.T) {
 	}
 }
 
+func TestVoiceMemoConfigRequiresAnOriginKeyAndAccount(t *testing.T) {
+	base := map[string]string{"DATABASE_URL": "postgres://app:p@db/app", "READONLY_DATABASE_URL": "postgres://ro:p@db/app"}
+	base["PDW_URL"] = "https://pdw.example.com"
+	if _, err := serverConfig(env(base)); err == nil {
+		t.Fatal("unbound PDW connection accepted")
+	}
+	base["PDW_API_KEY"] = "test-key"
+	base["PDW_INTELLIGENCE_ACCOUNT"] = "owner"
+	if _, err := serverConfig(env(base)); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"http://pdw.example.com", "https://pdw.example.com/api", "https://pdw.example.com?token=secret"} {
+		base["PDW_URL"] = bad
+		if _, err := serverConfig(env(base)); err == nil {
+			t.Errorf("invalid origin accepted: %s", bad)
+		}
+	}
+}
+
 func TestEmailPollInterval(t *testing.T) {
 	base := map[string]string{"DATABASE_URL": "postgres://app:p@db/app", "READONLY_DATABASE_URL": "postgres://ro:p@db/app"}
 	for _, tt := range []struct {

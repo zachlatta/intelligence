@@ -77,10 +77,10 @@ type hostCard struct {
 	OOMs     []fleet.OOMKill
 }
 
-// hostResourcesPage charts each host over the last ?hours= (default 24) and ranks its agents.
+// hostResourcesPage charts each host over the last ?hours= (default 1) and ranks its agents.
 func hostResourcesPage(cfg Config, reg *fleet.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		hours := 24
+		hours := 1
 		if v := r.URL.Query().Get("hours"); v != "" {
 			n, err := strconv.Atoi(v)
 			if err != nil || n < 1 || n > 24*90 {

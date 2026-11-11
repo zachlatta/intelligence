@@ -8,6 +8,30 @@
     "mediaAlt": "A queued application build showing its 10 GiB repository memory estimate and the host memory capacity reason"
   },
   {
+    "id": "workflow-model-groups",
+    "released": "2026-11-11",
+    "title": "Choose worker models with reusable groups",
+    "summary": "Create model groups on Plans or Workflows, then insert their tokens into step instructions. Each suggestion balances reachable plan logins using current quota usage, with a model and thinking level you choose. Tokens stay stable when groups are renamed; shared edits affect future suggestions.",
+    "media": "model-groups.png",
+    "mediaAlt": "Model groups on Plans, with Frontier and Google frontier tokens, current suggestions, plan labels, and Copy and Edit controls"
+  },
+  {
+    "id": "workflow-run-proposals",
+    "released": "2026-11-11",
+    "title": "Review proposed workflow runs before they start",
+    "summary": "MCP clients and host agents can now propose workflow runs. Open Proposals to review the full task and saved workflow, then approve or reject. Nothing starts before approval. Approved proposals link to the resulting run; changed workflows require a fresh proposal.",
+    "media": "workflow-run-proposals.png",
+    "mediaAlt": "A pending workflow run proposal showing its summary, Approve run and Reject controls, full quoted task input and saved workflow"
+  },
+  {
+    "id": "voice-memo-triggers",
+    "released": "2026-11-11",
+    "title": "Start workflows from voice memos",
+    "summary": "Choose a PDW voice memo trigger in the workflow editor. Matching recordings start runs with a 1000-character transcript preview and a command to fetch the full transcript. Workflows \u2192 Voice memos shows polling status, decisions and links to the matched workflow and run.",
+    "media": "voice-memo-triggers.png",
+    "mediaAlt": "Voice memo history with polling status and a recording linked to its workflow and run"
+  },
+  {
     "id": "workflow-proposal-review",
     "released": "2026-11-11",
     "title": "Review workflow changes and ask questions",
@@ -27,9 +51,9 @@
     "id": "mcp",
     "released": "2026-11-10",
     "title": "Read Intelligence from MCP clients",
-    "summary": "Intelligence is now a read-only MCP server at /mcp. Make a token under Account → MCP connections, add it to an MCP client, and that client can query your hosts, agents and workflow runs with SQL. It can read but never change anything.",
+    "summary": "Intelligence is now a read-only MCP server at /mcp. Make a token under Account \u2192 MCP connections, add it to an MCP client, and that client can query your hosts, agents and workflow runs with SQL. It can read but never change anything.",
     "media": "mcp.gif",
-    "mediaAlt": "Account → MCP connections: Create MCP token shows the MCP URL and a new token (blurred here) once, and lists it as active"
+    "mediaAlt": "Account \u2192 MCP connections: Create MCP token shows the MCP URL and a new token (blurred here) once, and lists it as active"
   },
   {
     "id": "image-attachments",
@@ -53,21 +77,21 @@
     "title": "Unattended agents get past permission prompts",
     "summary": "When an unattended workflow agent stops on a permission prompt, Intelligence now answers it with an audited denial so the agent carries on, and shows any prompt it could not clear.",
     "media": "permission-recovery.png",
-    "mediaAlt": "An agent page marked “permission recovery stuck” next to its running and needs-attention badges"
+    "mediaAlt": "An agent page marked \u201cpermission recovery stuck\u201d next to its running and needs-attention badges"
   },
   {
     "id": "email-triggers",
     "released": "2026-11-08",
     "title": "Start workflows from email",
-    "summary": "Connect a Gmail mailbox under Workflows → Email, and an email that matches a workflow's senders and filters starts a run of it. Replies in the thread go to that run.",
+    "summary": "Connect a Gmail mailbox under Workflows \u2192 Email, and an email that matches a workflow's senders and filters starts a run of it. Replies in the thread go to that run.",
     "media": "email-triggers.gif",
-    "mediaAlt": "Workflows → Email: the connected mailbox and what came in, one email ignored as bulk mail and one that started a run; its link opens the run with the email thread"
+    "mediaAlt": "Workflows \u2192 Email: the connected mailbox and what came in, one email ignored as bulk mail and one that started a run; its link opens the run with the email thread"
   },
   {
     "id": "dictation",
     "released": "2026-11-08",
     "title": "Dictate instead of typing",
-    "summary": "Press ⌘D (or Ctrl+D, or the mic button) in the chat box, a task box or a new agent prompt to speak instead of type. Press it again in an empty box to send.",
+    "summary": "Press \u2318D (or Ctrl+D, or the mic button) in the chat box, a task box or a new agent prompt to speak instead of type. Press it again in an empty box to send.",
     "media": "dictation.gif",
     "mediaAlt": "Clicking the mic in the task box: the words appear as they are said, then Edit stops and leaves them in the box"
   }

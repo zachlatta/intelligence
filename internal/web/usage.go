@@ -39,7 +39,7 @@ var usageFuncs = template.FuncMap{
 	"list":      func(xs ...int) []int { return xs },
 }
 
-var usageTmpl = template.Must(template.Must(template.New("usage").Funcs(usageFuncs).Parse(usageHTML)).Parse(planHTML + layoutHTML))
+var usageTmpl = template.Must(template.Must(template.New("usage").Funcs(usageFuncs).Parse(usageHTML)).Parse(planHTML + layoutHTML + modelGroupsHTML))
 
 // usagePage shows every login's plan, a chart of each over the last ?days= (default 7), and how
 // much of each week each login used.

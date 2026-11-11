@@ -75,7 +75,7 @@ h1, h2, h3 { color: var(--fg); letter-spacing: -.01em; }
   margin-bottom: 1.5rem; }
 .page-head h1 { font-size: 1.6rem; font-weight: 600; margin: 0; line-height: 1.25; overflow-wrap: anywhere; }
 .page-head .sub { color: var(--muted); margin: .3rem 0 0; }
-.page-head .actions { display: flex; align-items: center; gap: .5rem; }
+.page-head .actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; max-width: 100%; }
 .section-title { font-size: 1rem; font-weight: 600; margin: 2rem 0 .75rem; }
 .crumbs { font-size: 13px; color: var(--muted); margin-bottom: .4rem; }
 .crumbs a { color: var(--muted); } .crumbs a:hover { color: var(--fg); }
@@ -88,8 +88,16 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--line);
 /* cards and rows */
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
   margin: 0 0 1rem; overflow: hidden; }
-.card-head { display: flex; align-items: center; gap: .6rem; padding: .8rem 1rem; border-bottom: 1px solid var(--line); }
+.card-head { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; padding: .8rem 1rem; border-bottom: 1px solid var(--line); }
 .card-head h2 { font-size: 15px; font-weight: 600; margin: 0; }
+.model-groups { overflow-wrap: anywhere; }
+.model-groups .card-head > * { min-width: 0; max-width: 100%; }
+.model-groups [data-host] { width: auto; }
+.model-group-manager { width: min(58rem, 94vw); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 0; background: var(--panel); color: var(--fg); }
+.model-group-manager > .form-actions { margin: 1rem; }
+.model-group-editor { width: min(64rem, 94vw); max-height: 90vh; overflow: auto; border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 1rem; background: var(--panel); color: var(--fg); }
+.model-group-editor form { padding: 0; }
+.model-group-row-actions { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .7rem; }
 .card-body { padding: .9rem 1rem; }
 .card-body > :first-child { margin-top: 0; }
 .card-body h3 { font-size: 13px; font-weight: 600; color: var(--fg-2); margin: 1.2rem 0 .3rem; }
@@ -143,6 +151,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--line);
 /* notices */
 .banner { display: block; margin: .5rem 0; padding: .55rem .8rem; border-radius: var(--radius); font-size: 13px;
   border: 1px solid var(--red-line); background: var(--red-bg); color: var(--red); white-space: pre-wrap; overflow-wrap: anywhere; }
+.banner[hidden] { display: none; }
 .banner.note { border-color: var(--line); background: var(--bg-subtle); color: var(--fg-2); }
 #start-retry { white-space: normal; }
 .warn { color: var(--red); }

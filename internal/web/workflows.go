@@ -30,7 +30,7 @@ var workflowsHTML string
 
 var workflowsTmpl = template.Must(template.New("workflows").Funcs(template.FuncMap{
 	"memoryGiB": func(b int64) string { return fmt.Sprintf("%.1f", float64(b)/(1<<30)) },
-	"short":     short, "ago": ago, "markdown": markdown, "plural": plural, "emailSummary": emailSummary,
+	"short":     short, "ago": ago, "markdown": markdown, "plural": plural, "emailSummary": emailSummary, "voiceMemoSummary": voiceMemoSummary,
 	"json": func(v any) (template.JS, error) {
 		b, err := json.Marshal(v)
 		return template.JS(b), err //nolint:gosec // JSON from the server's own values, in a script
@@ -39,7 +39,7 @@ var workflowsTmpl = template.Must(template.New("workflows").Funcs(template.FuncM
 	"kind": func(k string) string {
 		return map[string]string{"step": "Step", "gate": "Gate", "signoff": "Sign-off"}[k]
 	},
-}).Parse(workflowsHTML + layoutHTML))
+}).Parse(workflowsHTML + layoutHTML + modelGroupsHTML))
 
 const maxWorkflow = 1 << 20
 
@@ -241,10 +241,33 @@ func (a *app) moveRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var m workflow.Move
-	if !decodeJSON(w, r, &m) {
+	if !decodeWorkflowJSON(w, r, &m) {
 		return
 	}
 	msg, err := a.wf.MoveRun(r.Context(), host, r.PathValue("id"), m)
+	if err == nil && m.Move != "summarize" { // labeling a run must not start it or another queued run
+		a.startQueued(r.Context()) // a run that ended may make room for a queued one
+	}
+	workflowResult(w, msg, err)
+}
+
+func decodeWorkflowJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxWorkflow))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		workflowMessage(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return false
+	}
+	return true
+}
+
+func workflowMessage(w http.ResponseWriter, code int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(map[string]string{"message": msg})
+}
+
+func workflowResult(w http.ResponseWriter, msg string, err error) {
 	if err != nil {
 		var ref *workflow.Refusal
 		code := http.StatusInternalServerError
@@ -256,15 +279,11 @@ func (a *app) moveRun(w http.ResponseWriter, r *http.Request) {
 		case errors.As(err, &ref):
 			code, msg = http.StatusBadRequest, ref.Msg
 		default:
-			msg = err.Error()
+			log.Printf("workflow host request: %v", err)
+			msg = "Could not complete the workflow request. Please try again."
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(code)
-		_ = json.NewEncoder(w).Encode(map[string]string{"message": msg})
+		workflowMessage(w, code, msg)
 		return
-	}
-	if m.Move != "summarize" { // labeling a run must not start it or another queued run
-		a.startQueued(r.Context()) // a run that ended may make room for a queued one
 	}
 	writeJSON(w, map[string]string{"message": msg})
 }
@@ -667,29 +686,21 @@ func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 	}
 }
 
-func readWorkflow(w http.ResponseWriter, r *http.Request, p *pgxpool.Pool) (workflowRow, bool) {
-	id := r.PathValue("id")
-	if !workflowIDRe.MatchString(id) {
-		http.NotFound(w, r)
-		return workflowRow{}, false
-	}
-	wfs, err := readWorkflows(r.Context(), p, id)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return workflowRow{}, false
-	}
-	if len(wfs) == 0 {
-		http.NotFound(w, r)
-		return workflowRow{}, false
-	}
-	return wfs[0], true
-}
-
 // workflowPage: GET /workflows/{id}: the editor.
 func workflowPage(cfg Config, a *app, v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		wf, ok := readWorkflow(w, r, v.pool)
-		if !ok {
+		id := r.PathValue("id")
+		if !workflowIDRe.MatchString(id) {
+			http.NotFound(w, r)
+			return
+		}
+		wfs, err := readWorkflows(r.Context(), v.pool, id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if len(wfs) == 0 {
+			http.NotFound(w, r)
 			return
 		}
 		hosts, err := readHosts(r.Context(), v.pool)
@@ -719,55 +730,18 @@ func workflowPage(cfg Config, a *app, v viewer) http.HandlerFunc {
 		}
 		others := []workflowRow{} // the other workflows email starts: the preview says which email they would take
 		for _, o := range all {
-			if o.ID != wf.ID && o.Definition.Trigger == workflow.TriggerEmail && o.Definition.Email != nil {
+			if o.ID != id && o.Definition.Trigger == workflow.TriggerEmail && o.Definition.Email != nil {
 				others = append(others, o)
 			}
 		}
-		renderWorkflows(w, "editor", map[string]any{"Version": cfg.Version, "Workflow": wf, "Hosts": hosts, "Repos": repos,
-			"EmailOn": a.mail != nil, "Mailbox": mb.Address, "Emails": previews(emails), "Others": others,
-			"Dictation": dictationPath(cfg), "Providers": workflow.Providers()})
-	}
-}
-
-// workflowPromptsPage previews the current saved version using the runtime prompt builders.
-// Definition and repository data are read through the account's SQL role. Run-specific values
-// remain visible placeholders; this preview neither starts a run nor persists new state.
-func workflowPromptsPage(cfg Config, v viewer) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		wf, ok := readWorkflow(w, r, v.pool)
-		if !ok {
+		voiceStatus, err := readVoiceMemoStatus(r.Context(), cfg, v)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
 			return
 		}
-		d := wf.Definition
-		vars := workflow.Vars{Run: "{{run}}", Input: "{{input}}", Repo: "{{repo}}", Branch: "{{branch}}"}
-		if d.Project.Mode == workflow.ProjectFixed {
-			vars.Repo = d.Project.Directory
-		}
-		var project string
-		if d.Project.Mode == workflow.ProjectMatch {
-			repos, err := workflow.Repositories(r.Context(), v.pool, d.Host)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			project = workflow.ProjectPrompt(vars.Run, d, vars.Input, repos)
-		}
-		type promptStep struct {
-			workflow.Step
-			N       int
-			Message string
-		}
-		steps := make([]promptStep, len(d.Steps))
-		for i, s := range d.Steps {
-			steps[i] = promptStep{Step: s, N: i + 1, Message: workflow.StepMessage(d, i, vars)}
-		}
-		// Old definitions are decoded as the editor decodes them, rather than revalidated.
-		var orchestrator string
-		if len(d.Steps) > 0 {
-			orchestrator = workflow.OrchestratorPrompt(wf.Name, d, vars)
-		}
-		renderWorkflows(w, "prompts", map[string]any{"Version": cfg.Version, "Workflow": wf,
-			"ProjectPrompt": project, "OrchestratorPrompt": orchestrator, "Steps": steps})
+		renderWorkflows(w, "editor", map[string]any{"Version": cfg.Version, "Workflow": wfs[0], "Hosts": hosts, "Repos": repos,
+			"VoiceStatus": voiceStatus, "EmailOn": a.mail != nil, "Mailbox": mb.Address, "Emails": previews(emails), "Others": others,
+			"Dictation": dictationPath(cfg), "Providers": workflow.Providers()})
 	}
 }
 
@@ -795,14 +769,22 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 			return
 		}
 		run := runs[0]
-		rows, err = v.pool.Query(ctx, "SELECT kind, step, to_step, text, at FROM workflow_run_events WHERE run_id = $1 ORDER BY id", id)
+		// A model suggestion reads as its saved choice; its full text stays in SQL.
+		rows, err = v.pool.Query(ctx, `SELECT e.kind,e.step,e.to_step,e.text,e.at,s.snapshot->'selected',s.token
+            FROM workflow_run_events e LEFT JOIN workflow_model_suggestions s ON s.id=e.suggestion_id
+            WHERE e.run_id=$1 ORDER BY e.id`, id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		events, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (runEvent, error) {
 			var e runEvent
-			err := row.Scan(&e.Kind, &e.Step, &e.ToStep, &e.Text, &e.At)
+			var selected []byte
+			var token *string
+			err := row.Scan(&e.Kind, &e.Step, &e.ToStep, &e.Text, &e.At, &selected, &token)
+			if err == nil && e.Kind == "model_suggestion" {
+				e.Text = modelSuggestionLine(selected, token)
+			}
 			return e, err
 		})
 		if err != nil {
@@ -853,15 +835,49 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		voiceMemos, err := readVoiceMemos(ctx, v.pool, id)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
 		slices.Reverse(emails) // oldest first, as a thread reads
 		renderWorkflows(w, "run", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Run": run, "Steps": stepViews(run, events, visits, cfg.Now()),
-			"Agents": agents, "Before": before, "Events": events, "Emails": emails, "ArchiveStatus": archiveStatus, "ArchiveError": archiveError, "Dictation": dictationPath(cfg)})
+			"Agents": agents, "Before": before, "Events": events, "Emails": emails, "VoiceMemos": voiceMemos, "ArchiveStatus": archiveStatus, "ArchiveError": archiveError, "Dictation": dictationPath(cfg)})
 	}
 }
 
-// eventLine is how one event reads on the run page.
+// modelSuggestionLine uses the saved choice, including labels that may have changed since.
+func modelSuggestionLine(selected []byte, token *string) string {
+	if token == nil {
+		return "Model suggestion recorded"
+	}
+	var choice struct {
+		Model      string `json:"model"`
+		Label      string `json:"model_label"`
+		Thinking   string `json:"thinking"`
+		Login      string `json:"login"`
+		LoginLabel string `json:"login_label"`
+	}
+	if json.Unmarshal(selected, &choice) != nil || choice.Model == "" {
+		return "No eligible model for {{" + *token + "}}"
+	}
+	if choice.Label == "" {
+		choice.Label = choice.Model
+	}
+	if choice.LoginLabel == "" {
+		choice.LoginLabel = choice.Login
+	}
+	if choice.Thinking != "" {
+		choice.Label += " (" + strings.ToUpper(choice.Thinking[:1]) + choice.Thinking[1:] + ")"
+	}
+	return fmt.Sprintf("Suggested %s on %s for {{%s}}", choice.Label, choice.LoginLabel, *token)
+}
+
+// Line is how one event reads on the run page.
 func (e runEvent) Line() string {
 	switch e.Kind {
+	case "model_suggestion":
+		return e.Text
 	case "started":
 		return "Started"
 	case "summarize":

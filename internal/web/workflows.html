@@ -6,6 +6,7 @@
 <title>{{.}} · Intelligence</title>
 <script src="/attachments.js"></script>
 {{template "css"}}
+<script src="/model-groups.js" defer></script>
 <style>
   .status { display: inline-flex; align-items: center; justify-content: center; gap: .3rem; height: 1.3rem; min-width: 4.6rem; padding: 0 .45rem;
     border-radius: 4px; border: 1px solid var(--line-strong); background: var(--bg-subtle); color: var(--fg-2); font-size: 12px; font-weight: 500;
@@ -23,7 +24,6 @@
   .st-error, .st-failed { background: var(--red-bg); border-color: var(--red-line); color: var(--red); }
   .st-error::before, .st-failed::before { background: var(--red); }
   @keyframes pulse { 50% { opacity: .35; } }
-  .banner[hidden] { display: none; }
   .wf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr)); gap: 1rem; }
   .wf-card { display: flex; flex-direction: column; margin: 0; }
   .wf-card .card-body { flex: 1; }
@@ -59,7 +59,8 @@
     .wf-grid { grid-template-columns: minmax(0, 1fr); }
   }
   .builder { display: grid; grid-template-columns: minmax(0, 1fr) 24rem; gap: 1.5rem; align-items: start; }
-  @media (max-width: 62rem) { .builder { grid-template-columns: 1fr; } }
+  .builder > * { min-width: 0; }
+  @media (max-width: 62rem) { .builder { grid-template-columns: minmax(0, 1fr); } }
   .pipe { max-width: 36rem; }
   .node { position: relative; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: var(--shadow); }
   .node.click { cursor: pointer; } .node.click:hover { border-color: var(--faint); }
@@ -68,7 +69,7 @@
   .node .nh { display: flex; align-items: center; gap: .6rem; padding: .65rem .8rem; }
   .node .kind { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--faint); font-weight: 600; }
   .node .ttl { font-weight: 600; overflow-wrap: anywhere; }
-  .node .nb { padding: 0 .8rem .65rem; font-size: 12.5px; color: var(--muted); }
+  .node .nb { padding: 0 .8rem .65rem; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
   .node .instr { color: var(--fg-2); white-space: pre-wrap; overflow: hidden; display: -webkit-host; -webkit-line-clamp: 3; -webkit-host-orient: vertical; }
   .node.sel .instr { -webkit-line-clamp: unset; }
   .node.k-gate { border-left: 3px solid var(--orange-line); } .node.k-signoff { border-left: 3px solid var(--accent-line); }
@@ -132,9 +133,7 @@
     font: inherit; color: var(--fg); cursor: pointer; }
   .menu button:hover { background: var(--bg-muted); }
   .menu .d { display: block; font-size: 12px; color: var(--muted); }
-  .prompt-inspection pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.6 var(--mono); margin: 0; }
-  .prompt-inspection nav { display: flex; flex-wrap: wrap; gap: .5rem 1rem; margin: 1rem 0; }
-  .prompt-inspection section { scroll-margin-top: 1rem; }
+  .model-token-chips button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
@@ -147,14 +146,15 @@
 </html>
 {{end}}
 
-{{define "chips"}}<span class="chip"{{if eq .Trigger "email"}} title="{{emailSummary .Email}}"{{end}}>{{if eq .Trigger "task"}}Task{{else if eq .Trigger "email"}}Email{{else}}By hand{{end}}</span><span class="arrow">→</span><span class="chip">Find the project</span><span class="arrow">→</span><span class="chip">Orchestrator</span>{{range .Steps}}<span class="arrow">→</span><span class="chip k-{{.Kind}}">{{.Title}}</span>{{end}}{{end}}
+{{define "chips"}}<span class="chip"{{if eq .Trigger "email"}} title="{{emailSummary .Email}}"{{else if eq .Trigger "voice_memo"}} title="{{voiceMemoSummary .VoiceMemo}}"{{end}}>{{if eq .Trigger "task"}}Task{{else if eq .Trigger "email"}}Email{{else if eq .Trigger "voice_memo"}}Voice memo{{else}}By hand{{end}}</span><span class="arrow">→</span><span class="chip">Find the project</span><span class="arrow">→</span><span class="chip">Orchestrator</span>{{range .Steps}}<span class="arrow">→</span><span class="chip k-{{.Kind}}">{{.Title}}</span>{{end}}{{end}}
 
 {{define "list"}}{{template "wfhead" "Workflows"}}
 <main class="container page">
 <div class="page-head">
   <div><h1>Workflows</h1><p class="sub">Each run finds its project, starts an orchestrator in the worktree, and hands it the steps one at a time.</p></div>
-  <div class="actions"><a class="btn sm" href="/workflows/email">Email</a>{{if .Workflows}}<button class="btn sm" id="new-workflow">New workflow</button>{{end}}</div>
+  <div class="actions"><a class="btn sm" href="/workflows/email">Email</a><a class="btn sm" href="/workflows/voice-memos">Voice memos</a>{{if .Workflows}}<button class="btn sm" id="new-workflow">New workflow</button>{{end}}<button type="button" class="btn sm" data-model-groups-open>Model groups</button></div>
 </div>
+{{template "modelgroups" "dialog"}}
 <p class="banner" id="error" hidden></p>
 {{if not .Workflows}}
 <div class="empty-state">
@@ -185,11 +185,11 @@
 <section class="card wf-card">
   <div class="card-head"><h2><a href="/workflows/{{.ID}}">{{.Name}}</a></h2><span class="badge">v{{.Version}}</span>{{if .IsDefault}}<span class="badge">Default</span>{{end}}</div>
   <div class="card-body">{{with .Description}}<div class="meta">{{.}}</div>{{end}}<div class="strip">{{template "chips" .Definition}}</div>
-    {{if eq .Definition.Trigger "email"}}<p class="hint">✉ {{emailSummary .Definition.Email}}</p>{{end}}</div>
+    {{if eq .Definition.Trigger "email"}}<p class="hint">✉ {{emailSummary .Definition.Email}}</p>{{end}}{{if eq .Definition.Trigger "voice_memo"}}<p class="hint">{{voiceMemoSummary .Definition.VoiceMemo}}</p>{{end}}</div>
   <div class="card-foot">{{if eq .Definition.Trigger "task"}}
     <button class="btn sm" data-default-workflow="{{.ID}}" data-default="{{if .IsDefault}}false{{else}}true{{end}}">{{if .IsDefault}}Clear default{{else}}Make default{{end}}</button>{{end}}
     {{if .PendingProposals}}<a href="/workflow-proposals?workflow={{.ID}}">{{.PendingProposals}} pending proposal{{if ne .PendingProposals 1}}s{{end}}</a>{{end}}
-    <span class="grow"></span><button class="btn sm ghost" data-delete-workflow="{{.ID}}" data-name="{{.Name}}">Delete</button><a class="btn sm" href="/workflows/{{.ID}}/prompts">Prompts</a><a class="btn sm" href="/workflows/{{.ID}}">Edit</a></div>
+    <span class="grow"></span><button class="btn sm ghost" data-delete-workflow="{{.ID}}" data-name="{{.Name}}">Delete</button><a class="btn sm" href="/workflows/{{.ID}}">Edit</a></div>
 </section>
 {{end}}
 </div>
@@ -296,23 +296,6 @@ setInterval(async () => {
 </script>{{end}}
 {{template "wffoot" .}}{{end}}
 
-{{define "prompts"}}{{template "wfhead" (printf "Prompts · %s" .Workflow.Name)}}
-<main class="container page prompt-inspection">
-<div class="crumbs"><a href="/workflows">Workflows</a><span class="sep">/</span><a href="/workflows/{{.Workflow.ID}}">{{.Workflow.Name}}</a><span class="sep">/</span>Prompts</div>
-<div class="page-head"><div><h1>Workflow prompts</h1><p class="sub">{{.Workflow.Name}} · saved version {{.Workflow.Version}}{{with .Workflow.Definition.Host}} · on <span class="mono">{{.}}</span>{{end}}</p></div><a class="btn sm" href="/workflows/{{.Workflow.ID}}">Edit workflow</a></div>
-<p>These are the messages Intelligence composes using the same code that starts agents and hands the orchestrator each step. Saved instructions include any model-choice or usage-balancing guidance; repository visibility, shell guidance, file-delivery and deliverable-email rules are appended at runtime.</p>
-<p class="meta">This previews the saved version, including all text without truncation; unsaved edits are not included. {{if .ProjectPrompt}}Run-specific values appear as <code>{{"{{run}}"}}</code>, <code>{{"{{input}}"}}</code>, <code>{{"{{repo}}"}}</code> and <code>{{"{{branch}}"}}</code>. The project finder uses the host's current repository list; the orchestrator preview assumes a repository is chosen (a run with <code>none</code> omits the worktree clause).{{else}}<code>{{"{{repo}}"}}</code> is filled with the fixed repository <code>{{.Workflow.Definition.Project.Directory}}</code>; run-specific values appear as <code>{{"{{run}}"}}</code>, <code>{{"{{input}}"}}</code> and <code>{{"{{branch}}"}}</code>.{{end}} Moving a run with <code>intelligence workflow</code> prefixes the next step message with a one-line transition (<code>Step N is done.</code> or <code>Back to step N. What is missing, as you said: …</code>) or returns a one-line closing or waiting reply.</p>
-<p class="meta">These are Intelligence's messages, not the provider's underlying system prompt. If a never-ask-mode agent still hits a permission prompt on the host (such as a shell safety check), the host client automatically denies it with rewrite guidance. Host skills, repository instructions, attachment paths, later replies or thread emails, and worker messages written by the orchestrator are supplied separately and are not reproduced here. Any deliverable-email rule stored in the workflow's instructions appears below.</p>
-<nav aria-label="Prompt sections"><a href="#project-prompt">Project</a><a href="#orchestrator-prompt">Orchestrator</a>{{range .Steps}}<a href="#step-{{.ID}}">{{.N}}. {{.Title}}</a>{{end}}</nav>
-<section class="card" id="project-prompt"><div class="card-head"><h2>Project finder</h2></div><div class="card-body">
-{{if .ProjectPrompt}}<p class="meta">{{with .Workflow.Definition.Project}}{{.Provider}}{{with .Model}} · {{.}}{{end}}{{with .Thinking}} · thinking {{.}}{{end}}{{end}}</p><pre>{{.ProjectPrompt}}</pre>{{else}}<p>No finder message: this workflow uses the fixed repository <code>{{.Workflow.Definition.Project.Directory}}</code>.</p>{{end}}
-</div></section>
-<section class="card" id="orchestrator-prompt"><div class="card-head"><h2>Orchestrator: initial message and contract</h2></div><div class="card-body">
-<p class="meta">{{with .Workflow.Definition.Orchestrator}}{{.Provider}}{{with .Model}} · {{.}}{{end}}{{with .Thinking}} · thinking {{.}}{{end}}{{end}}. Includes the first step.</p><pre>{{.OrchestratorPrompt}}</pre>
-</div></section>
-{{range .Steps}}<section class="card" id="step-{{.ID}}"><div class="card-head"><h2>{{.N}}. {{.Title}}</h2><span class="chip k-{{.Kind}}">{{kind .Kind}}</span><span class="meta">{{.ID}}</span></div><div class="card-body"><p class="meta">Step message to the orchestrator, including runtime rules. The initial contract continues to apply.</p><pre>{{.Message}}</pre></div></section>{{end}}
-{{template "wffoot" .}}{{end}}
-
 {{define "editor"}}{{template "wfhead" .Workflow.Name}}
 <main class="container page" data-submit="#save">
 <div class="crumbs"><a href="/workflows">Workflows</a><span class="sep">/</span><span id="crumb">{{.Workflow.Name}}</span></div>
@@ -323,16 +306,18 @@ setInterval(async () => {
   </div>
   <div class="actions">
     <span class="meta" id="saved"></span>
-    <a class="btn sm" href="/workflows/{{.Workflow.ID}}/prompts">Prompts</a>
     <div class="segmented"><a href="#" id="v-vis" class="on">Visual</a><a href="#" id="v-json">JSON</a></div>
     <button class="btn sm" id="discard" disabled>Discard</button>
     <button class="btn sm" id="save" title="⌘/Ctrl Enter" disabled>Save</button>
     <button class="btn sm ghost" id="delete">Delete</button>
     <button class="btn sm primary" id="run">Run…</button>
+    <button type="button" class="btn sm" data-model-groups-open>Model groups</button>
   </div>
 </div>
 <p class="banner" id="error" hidden></p>
+<template id="voice-poll-status">{{template "voice-status" .VoiceStatus}}<p class="hint"><a href="/workflows/voice-memos">Recent voice memos and polling status</a></p></template>
 <div id="editor"></div>
+{{template "modelgroups" "dialog"}}
 <div id="menu" class="menu" hidden></div>
 <dialog id="start">
   <div class="card-head"><h2>Run this workflow</h2></div>
@@ -358,7 +343,10 @@ const repoLabel = (r) => `${r.project || r.directory.split("/").pop()} · ${r.di
 let wf = structuredClone(saved), sel = "__trigger", json = false, dirty = false;
 const $ = (s, el = document) => el.querySelector(s), $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const vars = (s) => esc(s).replace(/\{\{(input|repo|branch|run)\}\}/g, (m) => `<span class="var">${m}</span>`);
+const vars = (s) => esc(s).replace(/\{\{(input|repo|branch|run|[a-z][a-z0-9_]*_model)\}\}/g, (m) => `<span class="var">${m}</span>`);
+function modelTokenChips(groups) {
+  return `<div class="model-token-chips" data-model-token-chips><p class="meta">Model groups · <button type="button" class="btn sm" data-model-groups-open>Edit groups</button></p><div class="vars">${groups.map(g => `<button type="button" data-var="${esc(V(g.token))}" title="${esc(g.name)}">${esc(V(g.token))}</button>`).join("")}</div></div>`;
+}
 // V is a variable as instructions write it ({ { input } } without the spaces; spelled out here, as this file is a Go template)
 const V = (n) => "{" + "{" + n + "}" + "}";
 const KIND = { step: "Step", gate: "Gate", signoff: "Sign-off" };
@@ -385,10 +373,10 @@ function head() {
 function fixedCards() {
   const d = def(), p = d.project, o = d.orchestrator;
   const card = (id, kind, ttl, body) => `<div class="node fixed click${sel === id ? " sel" : ""}" data-id="${id}"><div class="nh"><div><div class="kind">${kind}</div><div class="ttl">${ttl}</div></div></div><div class="nb">${body}</div></div>`;
-  return card("__trigger", "Trigger", d.trigger === "task" ? "Task in Intelligence" : d.trigger === "email" ? "Email" : "By hand",
+  return card("__trigger", "Trigger", d.trigger === "task" ? "Task in Intelligence" : d.trigger === "email" ? "Email" : d.trigger === "voice_memo" ? "Voice memo" : "By hand",
       (d.trigger === "task" ? "A task submitted on the Workflows page. It becomes " + V("input") + "." :
         d.trigger === "email" ? esc(emailSummary(d.email)) + (mailbox ? ` to <b>${esc(mailbox)}</b>` : "") + ". The email becomes " + V("input") + "." :
-        "Someone presses Run and types what it should do.") +
+        d.trigger === "voice_memo" ? "A new PDW recording matching the filter. The first 1000 transcript characters become " + V("input") + " with instructions for fetching the full transcript." : "Someone presses Run and types what it should do.") +
       ` Runs on <b class="mono">${esc(d.host || "no host yet")}</b>.`) +
     `<div class="link"></div>` +
     card("__project", "Before the orchestrator", "Find the project", p.mode === "fixed" ? `Always ${esc(allRepos.find((r) => r.directory === p.directory)?.project || "")} <span class="mono">${esc(p.directory)}</span>.` :
@@ -484,6 +472,9 @@ function previewHTML(f) {
     <ul>${list || `<li class="no"><span></span><span class="meta">None of the recent email matches.</span></li>`}</ul></div>
     <p class="hint">Recent email to ${esc(mailbox)}, matched as you type. Replies in a run's thread go to that run instead.</p>`;
 }
+function voiceMemoPanel(f = {}) {
+  return `${$("#voice-poll-status").innerHTML}<p class="hint">Matches every field, ignoring case. Leave all fields empty for every new recording. Most filled fields wins; ties use the oldest workflow. Only the first 1000 transcript characters enter a run.</p>${[["title","Title contains"],["words","Title or transcript contains"],["without","Does not contain"]].map(([k,l]) => `<label>${l}</label><input data-vm="${k}" value="${esc(f[k] || "")}">`).join("")}`;
+}
 function emailPanel(f) {
   return `${mailbox ? `<p class="hint">Email to <b>${esc(mailbox)}</b> that matches every field you fill in starts a run.</p>` : ""}
     <label>From</label><input data-e="from" value="${esc((f.from || []).join(", "))}" placeholder="christina@example.com, @example.org">
@@ -512,8 +503,8 @@ function inspector() {
   if (sel === "__trigger") {
     const hostOpts = hosts.map((h) => [h, h]);
     if (d.host && !hosts.includes(d.host)) hostOpts.push([d.host, d.host + " (not in this account)"]);
-    return panel("Trigger", "", `<label>Starts when</label><select data-d="trigger">${opts([["task", "A task is submitted on the Workflows page"], ["manual", "Someone presses Run"], ["email", "An email arrives"]], d.trigger)}</select>
-    ${d.trigger === "email" ? emailPanel(d.email) : `<p class="hint">What was submitted is ${V("input")} in the instructions.</p>`}
+    return panel("Trigger", "", `<label>Starts when</label><select data-d="trigger">${opts([["task", "A task is submitted on the Workflows page"], ["manual", "Someone presses Run"], ["email", "An email arrives"], ["voice_memo", "A voice memo is transcribed in PDW"]], d.trigger)}</select>
+    ${d.trigger === "email" ? emailPanel(d.email) : d.trigger === "voice_memo" ? voiceMemoPanel(d.voiceMemo) : `<p class="hint">What was submitted is ${V("input")} in the instructions.</p>`}
     <label>Runs on</label><select data-d="host">${d.host ? "" : `<option value="" selected disabled>Pick a host</option>`}${opts(hostOpts, d.host || "")}</select>
     <p class="hint">Every run of this workflow happens on this host: its project is found among the host's repositories, and its worktree and agents are made there.</p>`);
   }
@@ -538,7 +529,7 @@ function inspector() {
   return panel(`${KIND[s.kind]} ${i + 1}`, KIND_DESC[s.kind], `<label>Title</label><input data-s="title" value="${esc(s.title)}">
     <p class="hint mono">id: ${esc(s.id)} · <code>intelligence workflow back ${esc(s.id)}</code> returns here</p>
     <label>Kind</label><select data-s="kind">${opts(Object.entries(KIND), s.kind)}</select>
-    <label>Instructions to the orchestrator</label><textarea data-s="instructions" class="prompt">${esc(s.instructions)}</textarea>${chips}
+    <label>Instructions to the orchestrator</label><textarea data-s="instructions" class="prompt">${esc(s.instructions)}</textarea>${chips}${modelTokenChips(window.modelGroups?.groups() || [])}
     <p class="hint">${s.kind === "gate" ? "Say what to check and which step to send work back to." : s.kind === "signoff" ? "Say when to skip it, and what the note should hold. Zach replies on the run's page; his reply goes to the orchestrator." : "Say when the step is done."}</p>`);
 }
 
@@ -546,6 +537,8 @@ function render() {
   const d = def();
   if (d.trigger === "email" && !d.email) d.email = { from: [], replies: "run" };
   if (d.trigger !== "email") delete d.email;
+  if (d.trigger === "voice_memo" && !d.voiceMemo) d.voiceMemo = {};
+  if (d.trigger !== "voice_memo") delete d.voiceMemo;
   head();
   if (json) {
     $("#editor").innerHTML = `<div class="card" data-submit="#json-apply"><div class="card-head"><h2>As JSON</h2><span class="meta grow">What <code>PUT /api/workflows/{id}</code> takes as <code>definition</code>.</span><button class="btn sm" id="json-apply" title="⌘/Ctrl Enter">Apply</button></div>
@@ -567,6 +560,8 @@ function newStep(kind) {
 function insert(at, kind) { const s = newStep(kind); def().steps.splice(at, 0, s); sel = s.id; markDirty(true); }
 
 function bind() {
+  const modelGroupsButton = $("#inspector [data-model-groups-open]");
+  if (modelGroupsButton) modelGroupsButton.onclick = () => window.modelGroups.open();
   $$("#pipe .node").forEach((el) => {
     el.onclick = (e) => { if (e.target.closest("[data-del]")) return; sel = el.dataset.id; render(); };
     if (el.classList.contains("fixed")) return;
@@ -617,6 +612,7 @@ function bind() {
     const card = $(`#pipe .node[data-id="__trigger"] .nb`);
     if (card) card.firstChild.textContent = emailSummary(f);
   }));
+  $$("#inspector [data-vm]").forEach((el) => el.oninput = () => { def().voiceMemo[el.dataset.vm] = el.value; markDirty(false); });
   bindPreview();
   on("d", def); on("p", () => def().project); on("o", () => def().orchestrator); on("s", () => def().steps.find((x) => x.id === sel));
   $$("#inspector [data-var]").forEach((b) => b.onclick = () => {
@@ -674,6 +670,7 @@ $("#start form").addEventListener("submit", async (ev) => {
   finally { starting = false; button.disabled = false; }
 });
 window.addEventListener("beforeunload", (e) => { if (dirty) e.preventDefault(); });
+document.addEventListener("modelgroupschange", () => { if (!json) render(); });
 render();
 </script>
 {{if .Dictation}}<script src="/dictation.js"></script>
@@ -705,6 +702,7 @@ render();
   <div class="actions">{{if eq .Run.Status "queued"}}<button class="btn sm primary" id="start-now">Start now</button>{{end}}{{if .Run.Live}}<button class="btn sm" id="cancel">Cancel run</button>{{end}}</div>
 </div>
 <div class="request">{{.Run.Input}}</div>
+{{if .VoiceMemos}}<section class="card"><div class="card-head"><h2>Voice memo that started this run</h2><span class="grow"></span><a class="btn sm ghost" href="/workflows/voice-memos">All voice memos</a></div><div class="card-body">{{template "voice-memo-rows" .VoiceMemos}}</div></section>{{end}}
 {{if .Emails}}<section class="card"><div class="card-head"><h2>Email thread</h2><span class="meta grow">what each email in it did</span><a class="btn sm ghost" href="/workflows/email">All email</a></div>
   <div class="card-body"><ul class="events">{{range .Emails}}<li><span class="t">{{.ReceivedAt.Format "Jan 2 15:04"}}</span><b>{{.Who}}</b> · {{or .Subject "(no subject)"}} · <span class="badge {{.Badge}}">{{.Label}}</span>{{with .Reason}} <span class="meta">{{.}}</span>{{end}}</li>{{end}}</ul></div></section>{{end}}
 {{if eq .Run.Status "queued"}}<p class="banner note">Queued, {{.Run.InLine}}: {{.Run.QueueReason}}. It starts by itself, oldest first, once the host has room; <b>Start now</b> starts it anyway.</p>{{end}}
@@ -805,4 +803,25 @@ async function refresh(all) {
 bind();
 setInterval(refresh, 4000);
 </script>
+{{template "wffoot" .}}{{end}}
+
+{{define "voice-status"}}
+<p role="status">{{.Message}}</p>
+<p class="hint">Last check: {{with .CheckedAt}}{{.Format "Jan 2, 2006 15:04:05 MST"}}{{else}}not checked yet{{end}} · {{if .Initialized}}Baseline complete{{else}}Waiting for the first complete scan{{end}}</p>
+{{with .Error}}<p class="banner" role="alert">Last poll error: {{.}}</p>{{end}}
+{{end}}
+
+{{define "voice-memo-rows"}}
+<ul class="events">{{range .}}<li><b>{{or .Title "Untitled voice memo"}}</b>
+<div class="meta">Recorded: {{with .RecordedAt}}{{.Format "Jan 2, 2006 15:04:05 MST"}}{{else}}unknown{{end}} · ID: {{.ID}} · {{.Source}} / {{.Account}}</div>
+<div><span class="badge">{{.Decision}}</span> · {{.Reason}}{{if .WorkflowID}} · <a href="/workflows/{{.WorkflowID}}">{{or .Workflow "Workflow"}}</a>{{end}}{{if .ShowRunLink}} · <a href="/workflow-runs/{{.Run}}">Open run</a>{{end}}</div>
+<details><summary>Transcript preview</summary><p style="white-space:pre-wrap">{{.Preview}}</p></details>
+</li>{{else}}<li>No voice memos received yet.</li>{{end}}</ul>
+{{end}}
+
+{{define "voice-memos"}}{{template "wfhead" "Voice memos"}}
+<main class="container page"><div class="crumbs"><a href="/workflows">Workflows</a> / Voice memos</div>
+<h1>Voice memos</h1><section class="card"><div class="card-body">{{template "voice-status" .VoiceStatus}}
+<p class="hint">The most recent 200 receipts. The first scan skips the existing backlog. Later recordings start one matching workflow; updates do not start another run. PDW retains a 48-hour feed window.</p></div></section>
+<section class="card"><div class="card-head"><h2>Recent voice memos</h2></div><div class="card-body">{{template "voice-memo-rows" .VoiceMemos}}</div></section>
 {{template "wffoot" .}}{{end}}

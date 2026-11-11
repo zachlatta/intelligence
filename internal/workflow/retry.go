@@ -87,7 +87,7 @@ func (e *Engine) dequeueRetry(ctx context.Context, tx pgx.Tx, r run) (bool, erro
 	if r.Status == FindingProject {
 		args, err = projectStartArgs(ctx, tx, r)
 	} else {
-		args, err = orchestratorStartArgs(r)
+		args, err = e.orchestratorStartArgs(ctx, tx, r)
 	}
 	if err != nil {
 		return false, err

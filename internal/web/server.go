@@ -19,12 +19,15 @@ import (
 	"github.com/zachlatta/intelligence/internal/email"
 	"github.com/zachlatta/intelligence/internal/fleet"
 	"github.com/zachlatta/intelligence/internal/hostclient"
+	"github.com/zachlatta/intelligence/internal/voicememo"
 	"github.com/zachlatta/intelligence/internal/workflow"
 )
 
 // Config is what the server needs. All app state is in DB; each account reads it through its own
 // role, made with Readonly's settings (db.AccountRoles).
 type Config struct {
+	// PDWURL, PDWKey and PDWAccount turn voice memo triggers on for the account named PDWAccount.
+	PDWURL, PDWKey, PDWAccount string
 	// Context is the server's lifetime: its listener for fleet changes stops when it ends. Default: never.
 	Context    context.Context
 	Version    string        // the deployed commit, shown on every page and by /healthz
@@ -105,6 +108,10 @@ func New(cfg Config) http.Handler {
 	}
 	go a.wf.RunQueue(cfg.Context, cfg.QueueInterval)
 	go a.wf.RunStartRetries(cfg.Context)
+	if cfg.PDWURL != "" && cfg.PDWKey != "" && cfg.PDWAccount != "" {
+		voice := &voicememo.Service{DB: cfg.DB, Engine: a.wf, URL: cfg.PDWURL, Key: cfg.PDWKey, Username: cfg.PDWAccount}
+		go voice.Run(cfg.Context)
+	}
 	if cfg.Google != nil && cfg.EmailKey != nil {
 		a.mail = &email.Service{DB: cfg.DB, Engine: a.wf, Google: cfg.Google, Key: cfg.EmailKey, Now: cfg.Now}
 		interval := cfg.EmailInterval
@@ -209,6 +216,11 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /workflow-proposals/{id}", a.page(func(v viewer) http.HandlerFunc { return proposalPage(cfg, v) }))
 	mux.HandleFunc("GET /workflows/{id}/versions/{version}", a.page(workflowVersionPage))
 	mux.HandleFunc("POST /api/workflows", a.write(a.createWorkflow))
+	mux.HandleFunc("POST /api/model-groups", a.write(a.saveModelGroup))
+	mux.HandleFunc("PUT /api/model-groups/{id}", a.write(a.saveModelGroup))
+	mux.HandleFunc("DELETE /api/model-groups/{id}", a.write(a.deleteModelGroup))
+	mux.HandleFunc("POST /api/workflow-runs/{id}/suggestions", a.suggestModel)
+	mux.HandleFunc("GET /model-groups.js", modelGroupsScript)
 	mux.HandleFunc("PUT /api/workflows/{id}", a.write(a.updateWorkflow))
 	mux.HandleFunc("PUT /api/workflows/{id}/default", a.write(a.setDefaultWorkflow))
 	mux.HandleFunc("DELETE /api/workflows/{id}", a.write(a.deleteWorkflow))
@@ -224,9 +236,9 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("PUT /api/gmail/owners", a.write(a.gmailOwners))
 	mux.HandleFunc("DELETE /api/gmail", a.write(a.gmailDisconnect))
 	mux.HandleFunc("GET /gmail/callback", gmailCallback)
+	mux.HandleFunc("GET /workflows/voice-memos", a.page(func(v viewer) http.HandlerFunc { return voiceMemosPage(cfg, v) }))
 	mux.HandleFunc("GET /workflows/email", a.page(func(v viewer) http.HandlerFunc { return emailPage(cfg, a, v) }))
 	mux.HandleFunc("GET /workflows/{id}", a.page(func(v viewer) http.HandlerFunc { return workflowPage(cfg, a, v) }))
-	mux.HandleFunc("GET /workflows/{id}/prompts", a.page(func(v viewer) http.HandlerFunc { return workflowPromptsPage(cfg, v) }))
 	mux.HandleFunc("GET /workflow-runs/{id}", a.page(func(v viewer) http.HandlerFunc { return runPage(cfg, v) }))
 	mux.HandleFunc("GET /usage", a.page(func(v viewer) http.HandlerFunc { return usagePage(cfg, v.reg) }))
 	mux.HandleFunc("GET /resources", a.page(func(v viewer) http.HandlerFunc { return hostResourcesPage(cfg, v.reg) }))

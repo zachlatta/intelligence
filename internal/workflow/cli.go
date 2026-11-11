@@ -29,8 +29,9 @@ The agents of a workflow run move it with these, on the run's host:
   ask       --run <id> --note <file>|-     ask Zach (Markdown); his reply comes as your next message
   done      --run <id> [--summary <text>]  finish the run now
   fail      --run <id> --why <text>
+  suggest   --run <id> <group_token> [--exclude <provider/model>]  record a fresh suggestion without moving
 
-  propose <file.json>|-                propose a workflow change; prints its approval URL
+  propose <file.json>|-                propose a workflow change or run; prints its approval URL
   withdraw <id> --reason <text>        withdraw your pending proposal with a reason
   answer-proposal --proposal <id> --question <id> --note <file>|-
                                       post a dispatched question's Markdown answer
@@ -52,6 +53,13 @@ func CLI(ctx context.Context, args []string, getenv func(string) string, stdin i
 		m, run, err = parseCLI(args, stdin)
 		body, _ = json.Marshal(m)
 		path = "/api/workflow-runs/" + run + "/moves"
+		if m.Move == "suggest" {
+			path = "/api/workflow-runs/" + run + "/suggestions"
+			body, _ = json.Marshal(struct {
+				Token   string   `json:"token"`
+				Exclude []string `json:"exclude"`
+			}{m.Token, strings.FieldsFunc(m.Exclude, func(r rune) bool { return r == ',' })})
+		}
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "%v\n\n%s\n", err, CLIUsage)
@@ -185,6 +193,7 @@ func parseCLI(args []string, stdin io.Reader) (Move, string, error) {
 	run := fs.String("run", "", "the run's id")
 	fs.StringVar(&m.Summary, "summary", "", "")
 	fs.StringVar(&m.Why, "why", "", "")
+	fs.StringVar(&m.Exclude, "exclude", "", "comma-separated provider/model routes to skip")
 	note := fs.String("note", "", "")
 	var pos []string
 	rest := args[1:]
@@ -213,6 +222,8 @@ func parseCLI(args []string, stdin io.Reader) (Move, string, error) {
 		m.Directory, err = one("a directory, or none")
 	case "back":
 		m.Step, err = one("the step's id")
+	case "suggest":
+		m.Token, err = one("a model group’s token key, without braces")
 	case "summarize":
 		if strings.TrimSpace(m.Summary) == "" {
 			err = errors.New("summarize needs --summary <text>")
@@ -232,7 +243,7 @@ func parseCLI(args []string, stdin io.Reader) (Move, string, error) {
 	default:
 		err = fmt.Errorf("unknown move %q", m.Move)
 	}
-	if err == nil && len(pos) > 0 && m.Move != "project" && m.Move != "back" {
+	if err == nil && len(pos) > 0 && m.Move != "project" && m.Move != "back" && m.Move != "suggest" {
 		err = fmt.Errorf("%s takes no argument %q", m.Move, pos[0])
 	}
 	return m, *run, err

@@ -35,11 +35,20 @@ var submitKeysJS []byte
 //go:embed attachments.js
 var attachmentsJS []byte
 
+// modelGroupsJS is the model group manager and token chips on Plans and Workflows.
+//
+//go:embed model-groups.js
+var modelGroupsJS []byte
+
+//go:embed model_groups.html
+var modelGroupsHTML string
+
 var (
 	stylesheet        = asset("ui.css", "text/css; charset=utf-8", uiCSS)
 	dictationScript   = asset("dictation.js", "text/javascript; charset=utf-8", dictationJS)
 	submitKeysScript  = asset("submitkeys.js", "text/javascript; charset=utf-8", submitKeysJS)
 	attachmentsScript = asset("attachments.js", "text/javascript; charset=utf-8", attachmentsJS)
+	modelGroupsScript = asset("model-groups.js", "text/javascript; charset=utf-8", modelGroupsJS)
 )
 
 // asset serves an embedded file, revalidated on each load (by an ETag of its content) so a deploy's

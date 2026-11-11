@@ -133,7 +133,7 @@ Workflow start retries additionally reconcile finished startup commands every fi
 
 ### Proposed workflow mutations
 
-Agents can propose a workflow creation, replacement or deletion without applying it. A proposal
+Agents can propose a workflow creation, replacement, deletion or run without applying it. A proposal
 returns an `approvalURL`: the account owner signs in there, reviews complete before/after snapshots
 and visible word-level changes, then approves or rejects. Full before/after text and a line diff
 are also available. The Proposals tab lists the latest 200 proposals.
@@ -203,6 +203,23 @@ eligible host fails atomically and leaves the draft intact. Discussion never app
 }
 ```
 
+To propose a run, use the same route (or MCP `propose_mutation`) with:
+
+```json
+{"operation":"run","workflowId":"<workflow UUID>","input":"The full task to perform","summary":"Why this run is needed"}
+```
+
+`input` is required for `run` only, up to 1 MiB (MCP requests retain their 64 KiB limit).
+The server snapshots the current complete workflow; optional `baseVersion` must match if supplied.
+No run or launch command is created by proposing. The review page quotes the full task input and
+shows the saved workflow. Browser approval checks for drift and calls the existing run engine in
+one transaction, recording `workflow_proposals.started_run_id`; a second approval cannot create
+another run. The run uses the normal capacity queue and startup path. Rejection, withdrawal,
+replacement and seven-day expiry work as for workflow edits. Changed or deleted workflows make
+pending run proposals stale. Run proposals cannot be undone; cancel an approved run separately
+from its run page. `runId` remains proposer attribution, distinct from `started_run_id`.
+Proposal discussions include the full task as quoted data and never authorize starting it.
+
 Use `create` without `workflowId` or `baseVersion`; use `delete` with those fields and without
 `workflow`. Updates replace the complete definition, including steps, prompts, models, host and
 trigger. Read the current `workflows` and `workflow_versions` rows first and preserve fields you
@@ -245,6 +262,7 @@ intelligence workflow withdraw <proposal-id> --reason "Replaced by a better plan
 ```
 
 `propose -` reads JSON from standard input. The result includes the approval URL to share.
+Run proposals also work with `intelligence workflow propose` using the JSON above.
 Step edits use a complete replacement definition; step-level patch operations and choosing the
 default workflow are not supported by proposals.
 
@@ -343,8 +361,9 @@ Read tools (annotated read-only):
 | `describe_table` | `table` (unqualified public relation name) | Exact column names and types |
 | `query` | `query` | One read-only SQL statement, including arbitrary joins/views |
 
-The proposal tools are annotated as writes to review state: `propose_mutation` returns id and
-approvalURL, `withdraw_mutation` takes id and a required reason, and `propose_mutation_help`
+The proposal tools are annotated as writes to review state: `propose_mutation` accepts
+`operation: create|update|delete|run` (`run` requires `workflowId`, `input` and `summary`) and
+returns id and approvalURL, `withdraw_mutation` takes id and a required reason, and `propose_mutation_help`
 returns the schema and an example. They also return JSON text and `structuredContent`.
 `comment_proposal` is also a write to review state: it takes `id` and `text` and posts a discussion
 reply under the authenticated MCP token. It cannot approve or resume a workflow.
@@ -781,6 +800,30 @@ either is deleted.
 
 Variables in instructions: `{{input}}`, `{{repo}}`, `{{branch}}` and `{{run}}`.
 
+#### Model groups
+
+Plans and Workflows share a model group editor. Each group generates a token, such as
+`{{frontier_model}}`, that can be copied or inserted into a step's instructions. Renames keep
+the token; active names are unique per account, ignoring case. Empty groups are marked until
+models are added. Each member selects a catalog model, thinking level, login and observed quota
+pool. Unmetered entries can be saved disabled until usage is available. The finder and
+orchestrator keep their explicit models.
+
+On step entry, each token expands to a compact recommendation; one appended note per group
+holds the reason, meter time and launch settings. Suggestions favor quota likely to remain at
+reset or plan end, require fresh meters and a 5% reserve, and charge a fixed 2-point allocation
+penalty to the shared pool for 60 minutes. Inactive logins cannot be selected. Groups affect
+future suggestions, not delivered ones. Before another worker, refresh with
+`intelligence workflow suggest --run <id> frontier_model` (`--exclude provider/model` skips a route).
+Queued runs allocate when they launch; startup retries rebuild the prompt with fresh suggestions.
+Direct edits and proposal approvals validate group tokens before saving a workflow.
+
+Group writes use `POST /api/model-groups`, `PUT /api/model-groups/{id}` (with `revision`) and
+`DELETE /api/model-groups/{id}`. A host records a suggestion with
+`POST /api/workflow-runs/{id}/suggestions`, JSON `{"token", "exclude": []}`. Read groups, members,
+rankings and history through SQL (`model_groups`, `model_group_members`, `model_group_candidates`,
+`workflow_model_suggestions`). Detailed audit data stays in SQL; the run page shows a short summary.
+
 The starting workflow spreads frontier work across Claude Opus 5.5, Codex and Gemini 4 Carbon
 (`antigravity/gemini-4-carbon-high`). Antigravity encodes effort in the model ID; Carbon also has
 `gemini-4-carbon-medium` and `gemini-4-carbon-low`. Models are read from the host's Paseo catalog,
@@ -1146,7 +1189,7 @@ the account and enrollment routes, the host binaries and the streams (with a hos
 - `GET /usage?days=7` (1 to 365): every login with a chart of each window's used % over the days,
   and its weekly peaks.
 - `GET /api/usage`: the logins and their windows, as JSON.
-- `GET /resources?hours=24` (1 to 2160; it was `/hosts`, which sends here), the Host monitoring tab: each host's CPU and
+- `GET /resources?hours=1` (1 to 2160; it was `/hosts`, which sends here), the Host monitoring tab: each host's CPU and
   memory charts, its OOM kills and its agents ranked by CPU, with their most memory and commands
   started. The home page shows each host's CPU, memory, disk and pressure under its name, and each
   agent's memory beside it.
@@ -1271,12 +1314,6 @@ origin (another site's request is refused with 403), and those with a body must 
   A project that is always the same repository is picked from those the workflow's host reported
   (its workspaces' `project_root`s), or typed. The “Run this workflow” dialog takes the run's task;
   with `ASSEMBLYAI_API_KEY` set, its mic button or ⌘D/Ctrl+D uses the shared dictation controls.
-- `GET /workflows/{id}/prompts`: inspect the current saved version's full project-finder message,
-  orchestrator instructions and contract, and every step message with its runtime shell and
-  file-delivery rules. Linked as **Prompts** from workflow cards and the editor. Uses the same
-  prompt builders as live runs, reading definitions and the host's current repositories through
-  the account's SQL role. Run-specific values remain labeled placeholders; this is a preview,
-  not a historical snapshot of a run or of provider, host-skill or worker-generated instructions.
 - `GET /workflow-runs/{id}`: a run: its project, the orchestrator and its sub-agents, each step's
   state, how long the run spent on it (summed over its visits, each visit in the tooltip; the
   current step so far) and what happened in it, and, while it waits, the orchestrator's note with a reply box,
@@ -1348,6 +1385,55 @@ paths remain placeholders. Existing local-path notes must be republished by an a
 that still holds the files; the server cannot recover them from a path alone.
 
 ## Configuration
+
+### Voice memo workflow triggers
+
+Choose “A voice memo is transcribed in PDW” in the workflow editor, or save a definition
+through `POST /api/workflows` or `PUT /api/workflows/{id}` with `"trigger": "voice_memo"`
+and `"voiceMemo": {"title": "ideas", "words": "build", "without": "private"}`.
+Each optional field is a case-insensitive substring; all filled fields must match.
+`words` and `without` search the title and full transcript. An empty filter `{}` accepts all.
+One memo starts one run: the matching workflow with the most filled fields wins, with the
+oldest workflow winning ties. Deleted workflows do not match.
+
+The server reads PDW's scoped `GET /api/external-feeds/voice-memos` feed every 30 seconds.
+PDW supplies transcribed, enriched recordings from the last 48 hours (including separate
+parts of stopped and restarted recordings). The first scan establishes a baseline and does
+not start runs for existing recordings. Later arrivals start runs; feed updates and retries
+cannot start the same source/account/recording ID twice. The arrival cursor survives server
+restarts. An outage longer than the feed's 48-hour window can lose recordings.
+
+Run input contains the title, recording time, duration, PDW identity, at most the first 1000
+Unicode characters of transcript, its total character count, and a truncation notice when
+needed. PDW's summary is included when available, also capped at 1000 Unicode characters.
+It includes exact SQL and a shell-quoted `pdw sql` command to fetch the full transcript
+by source, account and recording ID. Agents use their own normal PDW access for that command;
+the server's feed key cannot run SQL. Full transcripts are used for matching but never stored
+in Intelligence or embedded in run input.
+
+Read `voice_memo_polling` through `/api/sql` for the cursor, initialization, last check and
+poll error. Read `voice_memos` for previews, lengths, decisions and linked workflow/run IDs.
+Both tables are restricted to their owning Intelligence account.
+The workflow editor shows whether PDW is configured for the signed-in account, the last check
+and the last poll error. `/workflows/voice-memos` shows the latest 200 receipts with their
+recording time and reason: baseline backlog skipped, no transcript, no workflow matched, or the
+run started. A recording that arrives with an empty transcript is kept as ignored and never retried.
+If a matching workflow refuses to start (for example, its host was removed or has not reported),
+its memo is kept as ignored with the matched workflow and refusal reason. Later memos still run.
+Unexpected database or infrastructure failures leave the memo and cursor retryable instead.
+The run page links back to its triggering memo.
+If `PDW_INTELLIGENCE_ACCOUNT` names no existing account, the server log names the missing
+username and setting to correct; no account-owned polling row can be stored until it exists.
+
+Set all three server variables to enable polling:
+
+- `PDW_URL`: PDW's HTTPS origin, without a path.
+- `PDW_API_KEY`: a PDW external-feed key with the `feed:voice-memos` scope. The server sends
+  `Authorization: Bearer intelligence:<key>`; it does not need general SQL access.
+- `PDW_INTELLIGENCE_ACCOUNT`: the existing Intelligence username that owns this PDW connection.
+  Only this account's workflows can receive its memos; other accounts never receive this data.
+
+Unset all three to disable polling. Removing configuration preserves cursors and receipts.
 
 Server:
 

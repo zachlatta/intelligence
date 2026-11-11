@@ -32,11 +32,11 @@ func (a *app) hostCaller(w http.ResponseWriter, r *http.Request) (accounts.Accou
 	key, _ := bearerOf(r)
 	host, acct, err := a.store.HostIdentity(r.Context(), key)
 	if err != nil {
-		accountError(w, err)
+		workflowResult(w, "", err)
 		return accounts.Account{}, "", false
 	}
 	if host == "" {
-		http.Error(w, "bad or missing host key", http.StatusUnauthorized)
+		workflowMessage(w, http.StatusUnauthorized, "bad or missing host key")
 		return accounts.Account{}, "", false
 	}
 	return acct, host, true

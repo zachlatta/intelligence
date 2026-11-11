@@ -67,6 +67,65 @@ func TestResourcesPageChartsEachHostAndRanksAgents(t *testing.T) {
 	}
 }
 
+// With no ?hours=, the page shows the last hour, like /resources?hours=1.
+func TestResourcesPageDefaultsToOneHour(t *testing.T) {
+	d := dbtest.New(t)
+	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.Now = func() time.Time { return t0 } })
+	sendReport(t, h, sampleReport)
+	f := func(v float64) *float64 { return &v }
+	reg := fleet.New(d.Owner)
+	record := func(at time.Time, agentID, comm string) {
+		rep := resources.Report{
+			Minutes: []resources.Minute{{Minute: at, Samples: 12, CPUs: 24, CPUAvgPct: f(20), MemTotal: 20 << 30, MemAvailableMin: 8 << 30}},
+			Agents:  []resources.AgentMinute{{AgentID: agentID, Minute: at, CPUSeconds: f(6), CPUSource: "ebpf", MemMax: 3 << 30}},
+			OOMs:    []probe.OOM{{At: at, PID: 42, Comm: comm, AgentID: agentID, AnonRSS: 9 << 30}},
+		}
+		if err := reg.RecordHost(t.Context(), "host-1", rep, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record(t0.Add(-2*time.Hour), sampleReport.Paseo.Agents[1].ID, "older-oom")
+	record(t0.Add(-10*time.Minute), agentA1, "recent-oom")
+
+	var bodies [3]string
+	cases := []struct {
+		path    string
+		on      string
+		wantOld bool
+	}{
+		{"/resources", "1", false},
+		{"/resources?hours=1", "1", false},
+		{"/resources?hours=24", "24", true},
+	}
+	for i, tc := range cases {
+		rec := get(t, h, tc.path, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status %d", tc.path, rec.Code)
+		}
+		body := rec.Body.String()
+		bodies[i] = body
+		for _, hrs := range []string{"1", "6", "24", "168", "720"} {
+			sel := strings.Contains(body, `<a href="/resources?hours=`+hrs+`" class="on">`)
+			if sel != (hrs == tc.on) {
+				t.Errorf("%s: hours=%s selected = %v, want %v", tc.path, hrs, sel, hrs == tc.on)
+			}
+		}
+		for _, want := range []string{"Fix the", "recent-oom"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s misses recent %q", tc.path, want)
+			}
+		}
+		for _, old := range []string{"Write notes", "older-oom"} {
+			if got := strings.Contains(body, old); got != tc.wantOld {
+				t.Errorf("%s: contains %q = %v, want %v", tc.path, old, got, tc.wantOld)
+			}
+		}
+	}
+	if bodies[0] != bodies[1] {
+		t.Errorf("/resources differs from /resources?hours=1")
+	}
+}
+
 func TestHostResourcesAPI(t *testing.T) {
 	h, d := dbServer(t)
 	seedHost(t, d)

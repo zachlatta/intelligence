@@ -31,7 +31,7 @@ func TestQueueCreationUpgradeDoesNotRelabelLegacyFinder(t *testing.T) {
 	}
 	if _, err := d.Owner.Exec(t.Context(), `DROP VIEW workflow_repository_memory, workflow_run_memory;
 		ALTER TABLE workflow_runs DROP COLUMN queued_at_creation, DROP COLUMN project_selected, DROP COLUMN estimated_memory_bytes;
-		DELETE FROM schema_migrations WHERE version='0039_workflow_repository_memory'`); err != nil {
+		DELETE FROM schema_migrations WHERE version='0040_workflow_repository_memory'`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Migrate(t.Context(), d.Owner); err != nil {

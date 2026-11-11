@@ -23,12 +23,13 @@ import (
 // Definition is one version of a workflow: the host it runs on, what starts it, how its project
 // is found, its orchestrator, and its steps, in order.
 type Definition struct {
-	Host         string       `json:"host"`            // the account's host every run happens on
-	Trigger      string       `json:"trigger"`         // task (submitted on the Workflows page), manual or email
-	Email        *EmailFilter `json:"email,omitempty"` // email: which email starts a run
-	Project      Project      `json:"project"`
-	Orchestrator Orchestrator `json:"orchestrator"`
-	Steps        []Step       `json:"steps"`
+	Host         string           `json:"host"`                // the account's host every run happens on
+	Trigger      string           `json:"trigger"`             // task (submitted on the Workflows page), manual, email or voice_memo
+	Email        *EmailFilter     `json:"email,omitempty"`     // email: which email starts a run
+	VoiceMemo    *VoiceMemoFilter `json:"voiceMemo,omitempty"` // voice_memo: which new PDW recording starts a run
+	Project      Project          `json:"project"`
+	Orchestrator Orchestrator     `json:"orchestrator"`
+	Steps        []Step           `json:"steps"`
 }
 
 // Project is how a run's project is found, before the orchestrator starts in its worktree: an
@@ -61,14 +62,15 @@ type Step struct {
 
 // Triggers, project modes and step kinds.
 const (
-	TriggerTask   = "task"
-	TriggerManual = "manual"
-	TriggerEmail  = "email" // an email to the account's connected Gmail matches Email
-	ProjectMatch  = "match"
-	ProjectFixed  = "fixed"
-	KindStep      = "step"
-	KindGate      = "gate"
-	KindSignoff   = "signoff"
+	TriggerTask      = "task"
+	TriggerManual    = "manual"
+	TriggerEmail     = "email"      // an email to the account's connected Gmail matches Email
+	TriggerVoiceMemo = "voice_memo" // a new PDW voice memo recording matches VoiceMemo
+	ProjectMatch     = "match"
+	ProjectFixed     = "fixed"
+	KindStep         = "step"
+	KindGate         = "gate"
+	KindSignoff      = "signoff"
 )
 
 var stepID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
@@ -102,8 +104,12 @@ func (d Definition) Validate() error {
 		return errors.New("a workflow needs a host to run on")
 	case !hostclient.ValidName(d.Host):
 		return fmt.Errorf("host %q is not a host's name", d.Host)
-	case d.Trigger != TriggerTask && d.Trigger != TriggerManual && d.Trigger != TriggerEmail:
-		return fmt.Errorf("trigger %q: want %s, %s or %s", d.Trigger, TriggerTask, TriggerManual, TriggerEmail)
+	case d.Trigger != TriggerTask && d.Trigger != TriggerManual && d.Trigger != TriggerEmail && d.Trigger != TriggerVoiceMemo:
+		return fmt.Errorf("trigger %q: want %s, %s, %s or %s", d.Trigger, TriggerTask, TriggerManual, TriggerEmail, TriggerVoiceMemo)
+	case d.Trigger == TriggerVoiceMemo && d.VoiceMemo == nil:
+		return errors.New("a voice memo trigger needs a voiceMemo filter (use {} for all recordings)")
+	case d.Trigger != TriggerVoiceMemo && d.VoiceMemo != nil:
+		return errors.New("only a voice memo trigger has a voiceMemo filter")
 	case d.Trigger == TriggerEmail && d.Email == nil:
 		return errors.New("an email trigger needs an email filter: which senders, address or words start a run")
 	case d.Trigger != TriggerEmail && d.Email != nil:

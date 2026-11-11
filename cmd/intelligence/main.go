@@ -105,6 +105,9 @@ type serverSettings struct {
 	ReadonlyPassword string
 	BinDir           string // HOST_BINARIES: host binaries to serve; default /usr/local/share/intelligence/host
 	AssemblyAIKey    string // ASSEMBLYAI_API_KEY: for the chat box's dictation; unset turns it off
+	// PDW_URL (an HTTPS origin), PDW_API_KEY (a feed:voice-memos key) and PDW_INTELLIGENCE_ACCOUNT
+	// (the username whose workflows its voice memos start) turn voice memo triggers on; unset, they are off.
+	PDWURL, PDWKey, PDWAccount string
 	// GOOGLE_OAUTH_CLIENT_JSON (a Google OAuth client, raw or base64) and CONNECTIONS_KEY (32
 	// random bytes, base64: seals each mailbox's token) turn email triggers on; unset, they are off.
 	EmailInterval time.Duration // EMAIL_POLL_INTERVAL, default 1s
@@ -148,6 +151,13 @@ func serverConfig(getenv func(string) string) (serverSettings, error) {
 		c.EmailInterval = d
 	}
 	c.PublicURL = getenv("PUBLIC_URL")
+	c.PDWURL, c.PDWKey, c.PDWAccount = getenv("PDW_URL"), getenv("PDW_API_KEY"), getenv("PDW_INTELLIGENCE_ACCOUNT")
+	if c.PDWURL != "" || c.PDWKey != "" || c.PDWAccount != "" {
+		u, e := url.Parse(c.PDWURL)
+		if e != nil || u.Scheme != "https" || u.Host == "" || (u.Path != "" && u.Path != "/") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || c.PDWKey == "" || c.PDWAccount == "" {
+			return c, errors.New("voice memo triggers need PDW_URL (HTTPS origin), PDW_API_KEY and PDW_INTELLIGENCE_ACCOUNT")
+		}
+	}
 	if c.QueueLimits, err = queueLimits(getenv); err != nil {
 		return c, err
 	}
@@ -227,7 +237,8 @@ func serve(ctx context.Context) error {
 	srv := &http.Server{
 		Addr: addr(os.Getenv),
 		Handler: web.New(web.Config{Context: ctx, Version: v, DB: owner, Readonly: ro, BinDir: c.BinDir,
-			AssemblyAIKey: c.AssemblyAIKey, Google: c.Google, EmailKey: c.EmailKey, EmailInterval: c.EmailInterval, PublicURL: c.PublicURL, QueueLimits: &c.QueueLimits}),
+			AssemblyAIKey: c.AssemblyAIKey, Google: c.Google, EmailKey: c.EmailKey, PublicURL: c.PublicURL, EmailInterval: c.EmailInterval, QueueLimits: &c.QueueLimits,
+			PDWURL: c.PDWURL, PDWKey: c.PDWKey, PDWAccount: c.PDWAccount}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go pruneHosts(ctx, fleet.New(owner))

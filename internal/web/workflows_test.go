@@ -520,8 +520,13 @@ func TestWorkflowPages(t *testing.T) {
 	if !strings.Contains(ed.Body.String(), `const allRepos = [{"directory":"/w/app","project":"example/app","hosts":["host-1"]}]`) {
 		t.Errorf("the editor should offer the hosts' repositories")
 	}
-	if rec := get(t, h, "/workflows/00000000-0000-4000-8000-000000000000", nil); rec.Code != http.StatusNotFound {
-		t.Errorf("no such workflow = %d", rec.Code)
+	for _, p := range []string{"/workflows/bad-id", "/workflows/00000000-0000-4000-8000-000000000000", "/workflows/" + wf + "/prompts"} {
+		if rec := get(t, h, p, nil); rec.Code != http.StatusNotFound {
+			t.Errorf("%s = %d, want 404", p, rec.Code)
+		}
+	}
+	if strings.Contains(list.Body.String(), "/prompts") || strings.Contains(ed.Body.String(), "/prompts") {
+		t.Error("workflow pages should not link to a prompts page")
 	}
 	if !strings.Contains(get(t, h, "/", nil).Body.String(), `href="/workflows"`) {
 		t.Error("the top bar should link to Workflows")
