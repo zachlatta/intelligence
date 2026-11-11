@@ -134,32 +134,11 @@ func (e *Engine) SaveModelGroup(ctx context.Context, account int64, id string, g
 			if !valid {
 				return bad("plan login is not one of this account's observed logins")
 			}
-			if m.LongWindow != "7d" && !strings.HasSuffix(m.LongWindow, "/7d") {
-				return bad("choose a weekly quota pool")
-			}
-			if m.GateWindows == nil {
-				m.GateWindows = []string{}
+			if err := deriveQuotaWindows(ctx, tx, &m); err != nil {
+				return err
 			}
 			g.Members[i] = m
-			windows := append([]string{m.LongWindow}, m.GateWindows...)
-			for _, window := range windows {
-				err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM usage_readings WHERE provider=$1 AND account=$2 AND window_id=$3)", m.Provider, m.Login, window).Scan(&valid)
-				if err != nil {
-					return err
-				}
-				if !valid && window != "7d" && window != "5h" && window != "gemini/7d" && window != "gemini/5h" && window != "claude-gpt/7d" && window != "claude-gpt/5h" {
-					return bad("choose an observed quota window")
-				}
-				if m.Provider == "antigravity" {
-					prefix := "claude-gpt/"
-					if strings.HasPrefix(m.Model, "gemini-") {
-						prefix = "gemini/"
-					}
-					if !strings.HasPrefix(window, prefix) {
-						return bad("quota pool does not match this model family")
-					}
-				}
-			}
+
 			if _, err := tx.Exec(ctx, `INSERT INTO model_group_members(account_id,group_id,position,provider,model,thinking,usage_provider,login,long_window,gate_windows,eligible_until,enabled)
      VALUES($1,$2,$3,$4,$5,$6,$4,$7,$8,$9,$10,$11)`, account, g.ID, i, m.Provider, m.Model, m.Thinking, m.Login, m.LongWindow, m.GateWindows, m.EligibleUntil, m.Enabled); err != nil {
 				return err
@@ -168,6 +147,72 @@ func (e *Engine) SaveModelGroup(ctx context.Context, account int64, id string, g
 		return nil
 	})
 	return g, err
+}
+
+// Window names and durations come from usage, not model-name conventions. The user
+// chooses a pool explicitly; every observed shorter window in it is a gate.
+func deriveQuotaWindows(ctx context.Context, tx pgx.Tx, m *ModelMember) error {
+	rows, err := tx.Query(ctx, `SELECT window_id,coalesce(window_seconds,0) FROM usage_current
+        WHERE provider=$1 AND account=$2 ORDER BY window_id`, m.Provider, m.Login)
+	if err != nil {
+		return err
+	}
+	type window struct {
+		ID      string
+		Seconds int
+	}
+	windows, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (window, error) {
+		var w window
+		err := row.Scan(&w.ID, &w.Seconds)
+		return w, err
+	})
+	if err != nil {
+		return err
+	}
+	if !m.Enabled && m.LongWindow == "" && len(m.GateWindows) == 0 {
+		m.GateWindows = []string{}
+		return nil
+	}
+	pool := func(id string) string { return id[:strings.LastIndexByte(id, '/')+1] }
+	seconds := 0
+	for _, w := range windows {
+		if w.ID == m.LongWindow {
+			seconds = w.Seconds
+		}
+	}
+	if !m.Enabled && seconds <= 0 {
+		m.LongWindow = ""
+		m.GateWindows = []string{}
+		return nil
+	}
+	if seconds <= 0 {
+		return bad("Choose an observed quota pool, or disable this entry until usage is available.")
+	}
+	for _, w := range windows {
+		if pool(w.ID) == pool(m.LongWindow) && w.Seconds > seconds {
+			return bad("Choose the longest observed window in this quota pool.")
+		}
+	}
+	gates := []string{}
+	for _, w := range windows {
+		if pool(w.ID) == pool(m.LongWindow) && w.Seconds > 0 && w.Seconds < seconds {
+			gates = append(gates, w.ID)
+		}
+	}
+	for _, id := range m.GateWindows {
+		found := false
+		for _, gate := range gates {
+			if id == gate {
+				found = true
+				break
+			}
+		}
+		if !found && m.Enabled {
+			return bad("Choose observed shorter windows from the selected quota pool.")
+		}
+	}
+	m.GateWindows = gates
+	return nil
 }
 
 func lockModels(ctx context.Context, tx pgx.Tx, account int64) error {

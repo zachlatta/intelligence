@@ -48,27 +48,17 @@ func (a *app) deleteModelGroup(v viewer) http.HandlerFunc {
 }
 
 func (a *app) suggestModel(w http.ResponseWriter, r *http.Request) {
-	key, _ := bearerOf(r)
-	host, err := a.store.HostOfKey(r.Context(), key)
-	if err != nil {
-		modelGroupError(w, err)
-		return
-	}
-	if host == "" {
-		http.Error(w, "bad or missing host key", 401)
+	host, ok := a.workflowHost(w, r)
+	if !ok {
 		return
 	}
 	var req struct {
 		Token   string   `json:"token"`
 		Exclude []string `json:"exclude"`
 	}
-	if !decodeJSON(w, r, &req) {
+	if !decodeWorkflowJSON(w, r, &req) {
 		return
 	}
 	msg, err := a.wf.SuggestModel(r.Context(), host, r.PathValue("id"), req.Token, req.Exclude)
-	if err != nil {
-		modelGroupError(w, err)
-		return
-	}
-	writeJSON(w, map[string]string{"message": msg})
+	workflowResult(w, msg, err)
 }

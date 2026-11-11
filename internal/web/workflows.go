@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"log"
 	"net/http"
 	"regexp"
 	"slices"
@@ -37,7 +38,7 @@ var workflowsTmpl = template.Must(template.New("workflows").Funcs(template.FuncM
 	"kind": func(k string) string {
 		return map[string]string{"step": "Step", "gate": "Gate", "signoff": "Sign-off"}[k]
 	},
-}).Parse(workflowsHTML + layoutHTML))
+}).Parse(workflowsHTML + layoutHTML + modelGroupsHTML))
 
 const maxWorkflow = 1 << 20
 
@@ -213,21 +214,50 @@ func (a *app) cancelRun(v viewer) http.HandlerFunc {
 // moveRun: POST /api/workflow-runs/{id}/moves, from a host's agent with the host's key
 // (`intelligence workflow`). It answers {"message"}: what the agent should read next.
 func (a *app) moveRun(w http.ResponseWriter, r *http.Request) {
-	key, _ := bearerOf(r)
-	host, err := a.store.HostOfKey(r.Context(), key)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if host == "" {
-		http.Error(w, "bad or missing host key", http.StatusUnauthorized)
+	host, ok := a.workflowHost(w, r)
+	if !ok {
 		return
 	}
 	var m workflow.Move
-	if !decodeJSON(w, r, &m) {
+	if !decodeWorkflowJSON(w, r, &m) {
 		return
 	}
 	msg, err := a.wf.MoveRun(r.Context(), host, r.PathValue("id"), m)
+	workflowResult(w, msg, err)
+}
+
+// workflowHost is the shared host-key boundary for moves and recorded suggestions.
+func (a *app) workflowHost(w http.ResponseWriter, r *http.Request) (string, bool) {
+	key, _ := bearerOf(r)
+	host, err := a.store.HostOfKey(r.Context(), key)
+	if err != nil {
+		workflowResult(w, "", err)
+		return "", false
+	}
+	if host == "" {
+		workflowMessage(w, http.StatusUnauthorized, "bad or missing host key")
+		return "", false
+	}
+	return host, true
+}
+
+func decodeWorkflowJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxWorkflow))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		workflowMessage(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return false
+	}
+	return true
+}
+
+func workflowMessage(w http.ResponseWriter, code int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(map[string]string{"message": msg})
+}
+
+func workflowResult(w http.ResponseWriter, msg string, err error) {
 	if err != nil {
 		var ref *workflow.Refusal
 		code := http.StatusInternalServerError
@@ -239,11 +269,10 @@ func (a *app) moveRun(w http.ResponseWriter, r *http.Request) {
 		case errors.As(err, &ref):
 			code, msg = http.StatusBadRequest, ref.Msg
 		default:
-			msg = err.Error()
+			log.Printf("workflow host request: %v", err)
+			msg = "Could not complete the workflow request. Please try again."
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(code)
-		_ = json.NewEncoder(w).Encode(map[string]string{"message": msg})
+		workflowMessage(w, code, msg)
 		return
 	}
 	writeJSON(w, map[string]string{"message": msg})

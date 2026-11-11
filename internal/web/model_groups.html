@@ -1,0 +1,38 @@
+{{define "modelgroups"}}
+{{if eq . "dialog"}}<dialog class="model-group-manager" id="model-group-manager">{{end}}
+<section class="card model-groups" id="model-groups">
+  <div class="card-head"><h2>Model groups</h2><span class="grow"></span><select aria-label="Preview host" data-host></select><button type="button" class="btn sm" data-new>+ New group</button></div>
+  <div class="card-body"><p class="meta">Each group has its own token. Shared edits apply to future suggestions; renames keep the token.</p><div data-group-cards></div></div>
+</section>
+{{if eq . "dialog"}}<div class="form-actions"><button type="button" class="btn sm" data-model-groups-close>Close</button></div></dialog>{{end}}
+<dialog class="model-group-editor" id="model-group-editor">
+  <h2 data-editor-title></h2><form>
+    <label>Name<input name="name" maxlength="100" required></label>
+    <p class="meta">Token: <code data-token-preview></code> <button type="button" class="btn sm" data-copy-token>Copy</button><br>Generated on creation. Kept on rename so existing workflows still work.</p>
+    <div data-rows></div><button type="button" class="btn sm" data-add>+ Add model</button>
+    <p class="meta">Each login is a separate plan. Models sharing a quota pool share its allocation penalty. Inactive logins stay visible but are not suggested.</p>
+    <p class="banner" data-error hidden></p><p class="meta" data-used-by></p>
+    <div class="form-actions"><button class="btn primary" type="submit">Save group</button><button class="btn" type="button" data-cancel>Cancel</button><button class="btn danger" type="button" data-delete hidden>Delete group</button></div>
+  </form>
+</dialog>
+<template id="model-group-card">
+  <section class="card"><div class="card-head"><b data-name></b><code data-token></code><span class="grow"></span><button type="button" class="btn sm" data-copy>Copy</button><button type="button" class="btn sm" data-edit>Edit</button></div>
+    <div class="card-body"><p><span class="badge" data-status></span> <span data-choice></span><span class="meta" data-meter></span><br><span class="meta" data-reason></span></p>
+      <details><summary class="meta" data-members></summary><div data-alternatives></div></details>
+    </div>
+  </section>
+</template>
+<template id="model-group-candidate"><p><span data-setting></span> <span class="badge" data-status></span></p></template>
+<template id="model-group-member">
+  <fieldset><legend data-number></legend><div class="fields">
+    <label>Model<select data-field="model"></select></label>
+    <label>Thinking<select data-field="thinking"></select></label>
+    <label>Plan / login<select data-field="login" required></select></label>
+  </div><label>Quota pool<select data-field="longWindow"></select></label><p class="meta" data-quota-note></p>
+  <details><summary class="meta">Plan options</summary>
+    <label>Short-window gates (from usage)<input data-field="gateWindows" readonly></label>
+    <label>Plan ends (optional, UTC)<input type="datetime-local" data-field="eligibleUntil"></label>
+    <label class="check"><input type="checkbox" data-field="enabled">Enabled</label>
+  </details><div class="model-group-row-actions"><button type="button" class="btn sm" data-up>Move up</button><button type="button" class="btn sm" data-remove>Remove</button></div></fieldset>
+</template>
+{{end}}

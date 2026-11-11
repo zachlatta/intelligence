@@ -40,6 +40,9 @@ var attachmentsJS []byte
 //go:embed model-groups.js
 var modelGroupsJS []byte
 
+//go:embed model_groups.html
+var modelGroupsHTML string
+
 var (
 	stylesheet        = asset("ui.css", "text/css; charset=utf-8", uiCSS)
 	dictationScript   = asset("dictation.js", "text/javascript; charset=utf-8", dictationJS)

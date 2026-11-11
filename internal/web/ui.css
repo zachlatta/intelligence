@@ -74,9 +74,14 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--line);
   margin: 0 0 1rem; overflow: hidden; }
 .card-head { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; padding: .8rem 1rem; border-bottom: 1px solid var(--line); }
 .card-head h2 { font-size: 15px; font-weight: 600; margin: 0; }
-#model-groups { overflow-wrap: anywhere; }
-#model-groups .card-head > * { min-width: 0; max-width: 100%; }
-[data-model-token-chips] .btn { max-width: 100%; height: auto; min-height: 1.75rem; white-space: normal; overflow-wrap: anywhere; }
+.model-groups { overflow-wrap: anywhere; }
+.model-groups .card-head > * { min-width: 0; max-width: 100%; }
+.model-groups [data-host] { width: auto; }
+.model-group-manager { width: min(58rem, 94vw); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 0; background: var(--panel); color: var(--fg); }
+.model-group-manager > .form-actions { margin: 1rem; }
+.model-group-editor { width: min(64rem, 94vw); max-height: 90vh; overflow: auto; border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 1rem; background: var(--panel); color: var(--fg); }
+.model-group-editor form { padding: 0; }
+.model-group-row-actions { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .7rem; }
 .card-body { padding: .9rem 1rem; }
 .card-body > :first-child { margin-top: 0; }
 .card-body h3 { font-size: 13px; font-weight: 600; color: var(--fg-2); margin: 1.2rem 0 .3rem; }

@@ -3,6 +3,8 @@ package web
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -56,6 +58,123 @@ func TestModelGroupsStableTokensAndIsolation(t *testing.T) {
 	code, _ = sqlPost(t, h, q(`UPDATE model_groups SET name='write'`))
 	if code != 400 {
 		t.Fatalf("SQL could write groups: %d", code)
+	}
+}
+
+func TestModelGroupPageMarkup(t *testing.T) {
+	h, _ := dbServer(t)
+	sendReport(t, h, wfReport())
+	wf := createWorkflow(t, h, workflow.Starting)
+	for _, path := range []string{"/usage", "/workflows", "/workflows/" + wf} {
+		page := get(t, h, path, nil).Body.String()
+		for _, markup := range []string{`id="model-groups"`, `id="model-group-editor"`, `id="model-group-member"`} {
+			if !strings.Contains(page, markup) {
+				t.Errorf("%s lacks server-rendered %s", path, markup)
+			}
+		}
+	}
+}
+
+func TestModelGroupClientHelpers(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node")
+	}
+	out, err := exec.Command(node, "-e", `
+const assert=require('assert'),vm=require('vm'),fs=require('fs');
+global.document={querySelector:()=>null};
+vm.runInThisContext(fs.readFileSync(process.argv[1],'utf8'));
+const windows=[
+ {provider:'p',account:'one',window_id:'capacity/cycle',window_seconds:1000},
+ {provider:'p',account:'one',window_id:'capacity/burst',window_seconds:50},
+ {provider:'p',account:'one',window_id:'other/cycle',window_seconds:800},
+ {provider:'p',account:'two',window_id:'private/cycle',window_seconds:9000}];
+assert.deepEqual(modelGroupPools(windows,'p','one'),[
+ {id:'capacity/cycle',gates:['capacity/burst']},{id:'other/cycle',gates:[]}]);
+assert.deepEqual(modelGroupPools([], 'p','one'),[]);
+assert.deepEqual(modelGroupPools([{provider:'p',account:'one',window_id:'unknown',window_seconds:null}],'p','one'),[]);
+`, "model-groups.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("model group pools: %v\n%s", err, out)
+	}
+	// Exercise the inspector's own renderer using the same plain-node approach as other UI tests.
+	_, script, ok := strings.Cut(workflowsHTML, "function modelTokenChips(")
+	if !ok {
+		t.Fatal("missing inspector renderer")
+	}
+	script, _, ok = strings.Cut(script, "\n}")
+	if !ok {
+		t.Fatal("missing renderer end")
+	}
+	out, err = exec.Command(node, "-e", `const assert=require('assert');const esc=s=>String(s).replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;');const V=s=>'{{'+s+'}}';`+"function modelTokenChips("+script+"\n}\n"+`
+const html=modelTokenChips([{name:'Frontier',token:'frontier_model'},{name:'Fast <checks>',token:'fast_checks_model'}]);
+assert(html.includes('data-var="{{frontier_model}}"'));
+assert(html.includes('data-var="{{fast_checks_model}}"'));
+assert(html.includes('Fast &lt;checks>'));
+assert(modelTokenChips([]).includes('Edit groups'));
+`).CombinedOutput()
+	if err != nil {
+		t.Fatalf("model token chips: %v\n%s", err, out)
+	}
+}
+
+func TestWorkflowHostAPIErrorsAreJSON(t *testing.T) {
+	h, _ := dbServer(t)
+	for _, action := range []string{"moves", "suggestions"} {
+		for _, body := range []string{`{}`, `not-json`} {
+			rec := call(t, anon(h), "POST", "/api/workflow-runs/00000000-0000-4000-8000-000000000000/"+action, body, nil)
+			var out struct{ Message string }
+			if rec.Code != 401 || !strings.HasPrefix(rec.Header().Get("Content-Type"), "application/json") || json.Unmarshal(rec.Body.Bytes(), &out) != nil || out.Message == "" {
+				t.Errorf("%s auth: %d %s", action, rec.Code, rec.Body)
+			}
+			key := keyOf(t, h, "host-1")
+			rec = call(t, anon(h), "POST", "/api/workflow-runs/00000000-0000-4000-8000-000000000000/"+action, body, map[string]string{"Authorization": "Bearer " + key})
+			out.Message = ""
+			want := 404
+			if body == "not-json" {
+				want = 400
+			}
+			if rec.Code != want || !strings.HasPrefix(rec.Header().Get("Content-Type"), "application/json") || json.Unmarshal(rec.Body.Bytes(), &out) != nil || out.Message == "" {
+				t.Errorf("%s request: %d %s", action, rec.Code, rec.Body)
+			}
+		}
+	}
+}
+
+func TestModelGroupUsesObservedQuotaPools(t *testing.T) {
+	h, d := dbServer(t)
+	rep := wfReport()
+	rep.Paseo.Providers = []hostclient.Provider{{Name: "antigravity", Available: true, Models: []hostclient.Model{{ID: "new-model", Thinking: []string{"high"}}}}}
+	sendReport(t, h, rep)
+	for _, query := range []string{
+		`INSERT INTO usage_accounts(provider,account,first_seen,last_seen) VALUES('antigravity','default',now(),now())`,
+		`INSERT INTO usage_sources(host,provider,account,ok,received_at) VALUES('host-1','antigravity','default',true,now())`,
+		`INSERT INTO usage_readings(provider,account,window_id,window_seconds,used_pct,first_observed,last_observed) VALUES('antigravity','default','new-pool/month',2592000,0,now(),now()),('antigravity','default','new-pool/day',86400,0,now(),now()),('antigravity','default','other/month',2592000,0,now(),now())`,
+	} {
+		if _, err := d.Owner.Exec(t.Context(), query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request := func(long string, gates []string) *httptest.ResponseRecorder {
+		b, _ := json.Marshal(map[string]any{"name": long + strings.Join(gates, " "), "members": []any{map[string]any{"provider": "antigravity", "model": "new-model", "thinking": "high", "login": "default", "longWindow": long, "gateWindows": gates, "enabled": true}}})
+		return call(t, h, "POST", "/api/model-groups", string(b), sameOriginFetch)
+	}
+	rec := request("new-pool/month", nil)
+	if rec.Code != 201 {
+		t.Fatalf("observed pool rejected: %d %s", rec.Code, rec.Body)
+	}
+	var group workflow.ModelGroup
+	json.Unmarshal(rec.Body.Bytes(), &group)
+	if len(group.Members[0].GateWindows) != 1 || group.Members[0].GateWindows[0] != "new-pool/day" {
+		t.Errorf("short gates not derived: %s", rec.Body)
+	}
+	for _, test := range []struct {
+		long  string
+		gates []string
+	}{{"new-pool/day", nil}, {"invented/month", nil}, {"new-pool/month", []string{"other/month"}}} {
+		if rec := request(test.long, test.gates); rec.Code != 400 {
+			t.Errorf("invalid pool: %d %s", rec.Code, rec.Body)
+		}
 	}
 }
 
@@ -131,13 +250,23 @@ func TestModelGroupCanConfigureUnknownMeters(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	rec := call(t, h, "POST", "/api/model-groups", `{"name":"Unknown capacity","members":[{"provider":"muse","model":"wonder","thinking":"high","login":"default","longWindow":"7d","gateWindows":["5h"],"enabled":true}]}`, sameOriginFetch)
+	rec := call(t, h, "POST", "/api/model-groups", `{"name":"Unknown capacity","members":[{"provider":"muse","model":"wonder","thinking":"high","login":"default","longWindow":"","gateWindows":[],"enabled":true}]}`, sameOriginFetch)
+	if rec.Code != 400 {
+		t.Fatalf("unobserved quota enabled: %d %s", rec.Code, rec.Body)
+	}
+	rec = call(t, h, "POST", "/api/model-groups", `{"name":"Unknown capacity","members":[{"provider":"muse","model":"wonder","thinking":"high","login":"default","longWindow":"","gateWindows":[],"enabled":false}]}`, sameOriginFetch)
 	if rec.Code != 201 {
 		t.Fatalf("configure unknown meter: %d %s", rec.Code, rec.Body)
 	}
 	code, r := sqlPost(t, h, q(`SELECT eligible,reason FROM model_group_candidates`))
-	if code != 200 || len(r.Rows) != 1 || r.Rows[0][0] != false || r.Rows[0][1] != "Meter unknown or stale" {
+	if code != 200 || len(r.Rows) != 1 || r.Rows[0][0] != false || r.Rows[0][1] != "Disabled" {
 		t.Fatalf("unknown was capacity: %+v", r)
+	}
+	// Older saved entries could name guessed windows. Disabling them must remain possible.
+	rec = call(t, h, "POST", "/api/model-groups", `{"name":"Legacy unknown","members":[{"provider":"muse","model":"wonder","thinking":"high","login":"default","longWindow":"old-pool/week","gateWindows":["old-pool/session"],"enabled":false}]}`, sameOriginFetch)
+	var legacy workflow.ModelGroup
+	if rec.Code != 201 || json.Unmarshal(rec.Body.Bytes(), &legacy) != nil || len(legacy.Members) != 1 || legacy.Members[0].LongWindow != "" || len(legacy.Members[0].GateWindows) != 0 {
+		t.Fatalf("disabled unknown mapping: %d %s", rec.Code, rec.Body)
 	}
 	rec = call(t, h, "POST", "/api/model-groups", `{"name":"Missing effort","members":[{"provider":"muse","model":"wonder","thinking":"","login":"default","longWindow":"7d","gateWindows":[],"enabled":true}]}`, sameOriginFetch)
 	if rec.Code != 400 {
@@ -155,6 +284,7 @@ func TestModelGroupRejectsBlankLoginAndHidesDatabaseErrors(t *testing.T) {
 		`INSERT INTO usage_sources(host,provider,account,ok,received_at) VALUES('host-1','codex','',true,now())`,
 		`INSERT INTO usage_accounts(provider,account,first_seen,last_seen) VALUES('codex','one',now(),now())`,
 		`INSERT INTO usage_sources(host,provider,account,ok,received_at) VALUES('host-1','codex','one',true,now())`,
+		`INSERT INTO usage_readings(provider,account,window_id,window_seconds,used_pct,first_observed,last_observed) VALUES('codex','one','7d',604800,0,now(),now())`,
 	} {
 		if _, err := d.Owner.Exec(t.Context(), query); err != nil {
 			t.Fatal(err)

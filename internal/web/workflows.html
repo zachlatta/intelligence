@@ -131,6 +131,7 @@
     font: inherit; color: var(--fg); cursor: pointer; }
   .menu button:hover { background: var(--bg-muted); }
   .menu .d { display: block; font-size: 12px; color: var(--muted); }
+  .model-token-chips button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
@@ -149,8 +150,9 @@
 <main class="container page">
 <div class="page-head">
   <div><h1>Workflows</h1><p class="sub">Each run finds its project, starts an orchestrator in the worktree, and hands it the steps one at a time.</p></div>
-  <div class="actions"><a class="btn sm" href="/workflows/email">Email</a>{{if .Workflows}}<button class="btn sm" id="new-workflow">New workflow</button>{{end}}</div>
+  <div class="actions"><a class="btn sm" href="/workflows/email">Email</a>{{if .Workflows}}<button class="btn sm" id="new-workflow">New workflow</button>{{end}}<button type="button" class="btn sm" data-model-groups-open>Model groups</button></div>
 </div>
+{{template "modelgroups" "dialog"}}
 <p class="banner" id="error" hidden></p>
 {{if not .Workflows}}
 <div class="empty-state">
@@ -306,10 +308,12 @@ setInterval(async () => {
     <button class="btn sm" id="save" title="⌘/Ctrl Enter" disabled>Save</button>
     <button class="btn sm ghost" id="delete">Delete</button>
     <button class="btn sm primary" id="run">Run…</button>
+    <button type="button" class="btn sm" data-model-groups-open>Model groups</button>
   </div>
 </div>
 <p class="banner" id="error" hidden></p>
 <div id="editor"></div>
+{{template "modelgroups" "dialog"}}
 <div id="menu" class="menu" hidden></div>
 <dialog id="start">
   <div class="card-head"><h2>Run this workflow</h2></div>
@@ -336,6 +340,9 @@ let wf = structuredClone(saved), sel = "__trigger", json = false, dirty = false;
 const $ = (s, el = document) => el.querySelector(s), $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const vars = (s) => esc(s).replace(/\{\{(input|repo|branch|run|[a-z][a-z0-9_]*_model)\}\}/g, (m) => `<span class="var">${m}</span>`);
+function modelTokenChips(groups) {
+  return `<div class="model-token-chips" data-model-token-chips><p class="meta">Model groups · <button type="button" class="btn sm" data-model-groups-open>Edit groups</button></p><div class="vars">${groups.map(g => `<button type="button" data-var="${esc(V(g.token))}" title="${esc(g.name)}">${esc(V(g.token))}</button>`).join("")}</div></div>`;
+}
 // V is a variable as instructions write it ({ { input } } without the spaces; spelled out here, as this file is a Go template)
 const V = (n) => "{" + "{" + n + "}" + "}";
 const KIND = { step: "Step", gate: "Gate", signoff: "Sign-off" };
@@ -515,7 +522,7 @@ function inspector() {
   return panel(`${KIND[s.kind]} ${i + 1}`, KIND_DESC[s.kind], `<label>Title</label><input data-s="title" value="${esc(s.title)}">
     <p class="hint mono">id: ${esc(s.id)} · <code>intelligence workflow back ${esc(s.id)}</code> returns here</p>
     <label>Kind</label><select data-s="kind">${opts(Object.entries(KIND), s.kind)}</select>
-    <label>Instructions to the orchestrator</label><textarea data-s="instructions" class="prompt">${esc(s.instructions)}</textarea>${chips}<div data-model-token-chips></div>
+    <label>Instructions to the orchestrator</label><textarea data-s="instructions" class="prompt">${esc(s.instructions)}</textarea>${chips}${modelTokenChips(window.modelGroups?.groups() || [])}
     <p class="hint">${s.kind === "gate" ? "Say what to check and which step to send work back to." : s.kind === "signoff" ? "Say when to skip it, and what the note should hold. Zach replies on the run's page; his reply goes to the orchestrator." : "Say when the step is done."}</p>`);
 }
 
@@ -544,6 +551,8 @@ function newStep(kind) {
 function insert(at, kind) { const s = newStep(kind); def().steps.splice(at, 0, s); sel = s.id; markDirty(true); }
 
 function bind() {
+  const modelGroupsButton = $("#inspector [data-model-groups-open]");
+  if (modelGroupsButton) modelGroupsButton.onclick = () => window.modelGroups.open();
   $$("#pipe .node").forEach((el) => {
     el.onclick = (e) => { if (e.target.closest("[data-del]")) return; sel = el.dataset.id; render(); };
     if (el.classList.contains("fixed")) return;
@@ -651,6 +660,7 @@ $("#start form").addEventListener("submit", async (ev) => {
   finally { starting = false; button.disabled = false; }
 });
 window.addEventListener("beforeunload", (e) => { if (dirty) e.preventDefault(); });
+document.addEventListener("modelgroupschange", () => { if (!json) render(); });
 render();
 </script>
 {{if .Dictation}}<script src="/dictation.js"></script>

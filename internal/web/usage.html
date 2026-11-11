@@ -20,6 +20,7 @@
   <nav class="segmented" aria-label="Range">{{range $d := (list 1 7 30 90)}}<a href="/usage?days={{$d}}"{{if eq $d $.Days}} class="on"{{end}}>{{$d}}d</a>{{end}}</nav>
 </div>
 {{range .Problems}}<p class="banner">{{.}}</p>{{end}}
+{{template "modelgroups" "inline"}}
 {{range .Cards}}
 <section class="card">
   <div class="plan-wrap">{{template "plan" (planAt $.Now .Plan)}}</div>
