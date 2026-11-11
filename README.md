@@ -558,7 +558,7 @@ its active turn and earlier queued messages end. Uploads use the same account is
 
 A workflow's trigger can be email (`internal/email`). An account connects one Gmail mailbox with
 Google's sign-in (read-only scope, offline, PKCE; the state is signed and names the account), and
-the server reads it every 15 seconds: Gmail's history since the last read, then, once, the last 30
+the server reads it every second (configurable with `EMAIL_POLL_INTERVAL`): Gmail's history since the last read, then, once, the last 30
 days, kept as `before` for the editor's preview. Each new email is stored in `emails` with what it
 did, in the transaction that does it, so it does it once:
 
@@ -911,6 +911,12 @@ Server:
   `<PUBLIC_URL>/gmail/callback` as a redirect URI), with the Gmail API enabled. The second is 32
   random bytes in base64 (`openssl rand -base64 32`); it seals each mailbox's token, so changing
   it means connecting again.
+- `EMAIL_POLL_INTERVAL`: optional Go duration, default `1s`, minimum `1s`. Idle reads use
+  only Gmail history (2 quota units/tick). Full message fetches and backfills are paced at
+  50 units/second per mailbox. Backfill reads one preview message per poll, after new arrivals.
+  Four workers keep a slow mailbox from blocking all reads.
+  Retry deadlines and exponential backoff (1–64s plus jitter, or a longer `Retry-After`)
+  are stored in `gmail_connections`, shared across server instances and restarts.
 - `PUBLIC_URL`: optional; the server's origin, for Google's redirect. Default each request's.
 
 The version is stamped at build (`-X main.buildCommit`, from Coolify's `SOURCE_COMMIT` build

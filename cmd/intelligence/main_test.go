@@ -223,3 +223,20 @@ func TestServerConfigTurnsEmailTriggersOnWithBothGoogleSettings(t *testing.T) {
 		t.Error("a bad key: no error")
 	}
 }
+
+func TestEmailPollInterval(t *testing.T) {
+	base := map[string]string{"DATABASE_URL": "postgres://app:p@db/app", "READONLY_DATABASE_URL": "postgres://ro:p@db/app"}
+	for _, tt := range []struct {
+		value string
+		want  time.Duration
+		bad   bool
+	}{
+		{"", time.Second, false}, {"2s", 2 * time.Second, false}, {"100ms", 0, true}, {"0", 0, true}, {"bad", 0, true},
+	} {
+		base["EMAIL_POLL_INTERVAL"] = tt.value
+		c, err := serverConfig(env(base))
+		if (err != nil) != tt.bad || (!tt.bad && c.EmailInterval != tt.want) {
+			t.Fatalf("%q: interval=%v, error=%v", tt.value, c.EmailInterval, err)
+		}
+	}
+}
