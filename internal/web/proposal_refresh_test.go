@@ -28,7 +28,8 @@ const proposalRefreshHarness = `
 const assert=require('assert');
 const text={value:'An unfinished follow-up',readOnly:false},button={disabled:false};
 const form={querySelector:sel=>sel==='button'?button:text};
-const els={'proposal-comment':form,'comment-error':{textContent:''},'thread-update':{textContent:''},discussion:{addEventListener:()=>{}}};
+let onDiscussionClick;
+const els={'proposal-comment':form,'comment-error':{textContent:''},'thread-update':{textContent:''},discussion:{addEventListener:(name,fn)=>{if(name==='click')onDiscussionClick=fn;}}};
 function thread(html,pending){return {innerHTML:html,dataset:{pending},replaceWith(next){els['proposal-thread']=next;}};}
 els['proposal-thread']=thread('Question',process.argv[2]);
 let timer,visibility;
@@ -86,5 +87,14 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
  document.hidden=true;await visibility();assert(!timer,'hidden tab must pause polling');
  document.hidden=false;responsePending='false';const back=visibility();await tick();release();await back;await tick();
  assert(!timer,'resolved question must stop polling after returning to tab');
+ const retryBtn={disabled:false,dataset:{retryAnswer:'7'},closest:sel=>sel==='[data-retry-answer]'?retryBtn:null};
+ failPost=true;
+ await onDiscussionClick({target:retryBtn});
+ assert.strictEqual(retryBtn.disabled,false);
+ assert.strictEqual(els['comment-error'].textContent,'Could not dispatch');
+ failPost=false;responsePending='true';
+ const retried=onDiscussionClick({target:retryBtn});await tick();release();await retried;
+ assert.strictEqual(els['comment-error'].textContent,'','successful retry left a stale error while pending');
+ clearTimeout(timer);
 })().catch(error=>{console.error(error);process.exit(1);});
 `

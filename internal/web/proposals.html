@@ -58,7 +58,7 @@
 <details><summary>Line diff</summary><div class="review-diff">{{range .Lines}}<div class="review-text {{.Kind}}">{{if eq .Kind "added"}}+ {{else if eq .Kind "removed"}}− {{else}}  {{end}}{{.Text}}</div>{{end}}</div></details></section>{{else}}<p>No editable fields changed.</p>{{end}}
 <details class="review-full"><summary>Complete workflow before and after</summary><div class="review-pair"><div><h2>Before</h2>{{template "workflow-state" .BeforeState}}</div><div><h2>After</h2>{{template "workflow-state" .AfterState}}</div></div></details>
 <details class="review-full"><summary>Raw JSON</summary><div class="review-pair"><div><h3>Before</h3><pre class="review-text">{{.RawBefore}}</pre></div><div><h3>After</h3><pre class="review-text">{{.RawAfter}}</pre></div></div></details>
-<section class="review-discussion" id="discussion"><h2>Questions &amp; discussion</h2><p class="meta">Posting a question starts an agent in a cataloged desk checkout to answer it. The workflow's host is preferred when it has desk. One answer can be in progress at a time per proposal. Replies appear automatically. Discussion never applies the proposal.</p>
+<section class="review-discussion" id="discussion"><h2>Questions &amp; discussion</h2><p class="meta">Posting a question starts an agent in a cataloged desk checkout to answer it. Online hosts with desk are preferred, then the workflow's host. One answer can be in progress at a time per proposal. Replies appear automatically. Discussion never applies the proposal.</p>
 <div id="proposal-thread" data-pending="{{.HasPendingAnswers}}" aria-live="polite">{{range .Comments}}<article class="review-comment"><p class="meta"><strong>{{if eq .Author "reviewer"}}You{{else}}Agent · {{.Author}}{{end}}</strong> · {{stamp .Created}}</p>{{markdown .Text}}
 {{if .State}}<p class="meta"><span class="badge">{{.State}}</span> · {{.AnswerHost}}{{with .AnswerAgent}} · Agent: {{.}}{{end}}</p>{{end}}
 {{if eq .AnswerLocation "desk"}}<p class="meta">Answer location: desk repository (read-only).</p>{{else if eq .AnswerLocation "home_fallback"}}<p class="request">No desk repository was found in enrolled host catalogs. Using the host's home directory for this answer.</p>{{end}}
@@ -115,6 +115,7 @@ document.getElementById('proposal-comment').onsubmit=async event=>{
 };
 document.getElementById('discussion').addEventListener('click',async event=>{
  const button=event.target.closest('[data-retry-answer]');if(!button)return;button.disabled=true;
+ document.getElementById('comment-error').textContent='';
  try{const res=await fetch('/api/workflow-proposals/{{.ID}}/questions/'+button.dataset.retryAnswer+'/retry',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!res.ok)throw new Error(await res.text());await refreshAfterWrite();}
  catch(e){document.getElementById('comment-error').textContent=e.message;button.disabled=false;}
 });
@@ -131,7 +132,7 @@ document.getElementById('discussion').addEventListener('click',async event=>{
     warn: (msg) => { error.textContent = msg; } });
 })();
 </script>{{end}}
-<script>document.querySelectorAll('[data-action]').forEach(button=>button.onclick=async()=>{document.querySelectorAll('[data-action]').forEach(b=>b.disabled=true);try{const res=await fetch('/api/workflow-proposals/{{.ID}}/'+button.dataset.action,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!res.ok)throw new Error(await res.text());location.reload();}catch(e){document.querySelector('#error').textContent=e.message;document.querySelectorAll('[data-action]').forEach(b=>b.disabled=false);}});</script></body></html>{{end}}
+<script>document.querySelectorAll('[data-action]').forEach(button=>button.onclick=async()=>{document.querySelectorAll('[data-action]').forEach(b=>b.disabled=true);document.querySelector('#error').textContent='';try{const res=await fetch('/api/workflow-proposals/{{.ID}}/'+button.dataset.action,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!res.ok)throw new Error(await res.text());location.reload();}catch(e){document.querySelector('#error').textContent=e.message;document.querySelectorAll('[data-action]').forEach(b=>b.disabled=false);}});</script></body></html>{{end}}
 
 {{define "proposals"}}{{template "proposal-head" "Workflow proposals"}}<main class="container page"><h1>Workflow proposals</h1><p class="meta">Pending proposals appear first. Each link opens a review; no change is applied by opening it.</p>
 {{range .}}<article class="proposal-item {{if .Pending}}pending{{end}}"><h2><a href="/workflow-proposals/{{.ID}}">{{.Headline}}</a></h2><p>{{.Status}} · {{.Operation}} · {{.Target}}{{if .BaseVersion}} · v{{.BaseVersion}}{{else}} · new workflow{{end}}{{if .ResultVersion}} → <a href="/workflows/{{.WorkflowID}}/versions/{{.ResultVersion}}">v{{.ResultVersion}}</a>{{end}}</p>

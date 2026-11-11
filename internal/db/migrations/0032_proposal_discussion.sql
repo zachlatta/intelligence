@@ -33,6 +33,8 @@ CREATE POLICY own_rows ON workflow_proposal_questions FOR SELECT USING (
 -- succeeding means the agent started, not that an answer has been received.
 CREATE VIEW workflow_proposal_question_status WITH (security_invoker=true) AS
 SELECT q.*, comment.proposal_id, coalesce(c.result->>'agentId','') AS agent_id,
+    coalesce(c.args->>'cwd','') AS cwd,
+    coalesce(c.args->'labels'->>'intelligence.answer_location','') AS answer_location,
     CASE
         WHEN q.answer_comment_id IS NOT NULL THEN 'answered'
         WHEN c.id IS NULL OR c.status IN ('failed','expired') THEN 'failed'
@@ -55,3 +57,7 @@ SELECT q.*, comment.proposal_id, coalesce(c.result->>'agentId','') AS agent_id,
 FROM workflow_proposal_questions q
 JOIN workflow_proposal_comments comment ON comment.id=q.question_id
 LEFT JOIN commands c ON c.id=q.command_id;
+
+COMMENT ON TABLE workflow_proposal_comments IS 'Reviewer questions and agent replies on workflow proposals';
+COMMENT ON TABLE workflow_proposal_questions IS 'Durable answer-agent dispatches and linked answers for reviewer questions';
+COMMENT ON VIEW workflow_proposal_question_status IS 'Each proposal question''s dispatch state, agent, location and error';

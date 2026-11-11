@@ -131,6 +131,6 @@ do not dispatch more agents or approve changes. The review page shows new replie
 Answer agents run directly in a cataloged desk checkout, read-only, without creating worktrees.
 An enrolled host with desk takes priority; among those, online hosts win, then the workflow's saved host.
 If no enrolled, reported host has desk, the agent runs at `~` and the review thread explains the
-fallback. Read the selected host, `commands.args->>'cwd'`, and
-`commands.args->'labels'->>'intelligence.answer_location'` by joining the question's `command_id`
-to `commands`; the location label is `desk` or `home_fallback`.
+fallback. Read the selected host, `cwd`, and `answer_location` (`desk` or `home_fallback`) from
+`workflow_proposal_question_status` (also retained on `commands.args->>'cwd'` and
+`commands.args->'labels'->>'intelligence.answer_location'`).

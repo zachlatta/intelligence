@@ -25,6 +25,7 @@ func TestProposalAnswerUsesDeskCatalog(t *testing.T) {
 		{name: "desk host beats saved host", first: []hostclient.Project{project("other", "/catalog/desk-copy")}, second: []hostclient.Project{project("Notes", "/catalog/second/desk")}, wantHost: "host-2", wantCwd: "/catalog/second/desk"},
 		{name: "saved host wins among desk hosts", first: []hostclient.Project{project("desk", "/catalog/preferred/desk")}, second: []hostclient.Project{project("desk", "/catalog/alternate/desk")}, wantHost: "host-1", wantCwd: "/catalog/preferred/desk"},
 		{name: "online desk beats offline saved desk", first: []hostclient.Project{project("desk", "/catalog/preferred/desk")}, second: []hostclient.Project{project("desk", "/catalog/online/desk")}, firstOffline: true, wantHost: "host-2", wantCwd: "/catalog/online/desk"},
+		{name: "offline desk beats online non-desk", first: []hostclient.Project{project("desk", "/catalog/preferred/desk")}, second: []hostclient.Project{project("other", "/catalog/online/other")}, firstOffline: true, wantHost: "host-1", wantCwd: "/catalog/preferred/desk"},
 		{name: "online fallback beats offline saved host", first: []hostclient.Project{project("other", "/catalog/other")}, second: []hostclient.Project{project("other", "/catalog/another")}, firstOffline: true, wantHost: "host-2", wantCwd: "~"},
 		{name: "workspace catalog fallback", workspace: true, wantHost: "host-1", wantCwd: "/catalog/legacy/desk"},
 		{name: "no desk falls back visibly", first: []hostclient.Project{project("other", "/catalog/desk-copy"), {ID: "plain-dir", Name: "desk", Kind: "directory", Directory: "/catalog/not-a-repository"}}, wantHost: "host-1", wantCwd: "~"},
@@ -69,7 +70,11 @@ func TestProposalAnswerUsesDeskCatalog(t *testing.T) {
 			if fallback {
 				wantLocation = "home_fallback"
 			}
-			code, res := sqlPost(t, h, q(`SELECT args->>'cwd',args->'labels'->>'intelligence.answer_location' FROM commands WHERE id IN (SELECT command_id FROM workflow_proposal_questions)`))
+			code, res := sqlPost(t, h, q(`SELECT cwd,answer_location FROM workflow_proposal_question_status`))
+			if code != 200 || len(res.Rows) != 1 || res.Rows[0][0] != tc.wantCwd || res.Rows[0][1] != wantLocation {
+				t.Fatalf("question status location not SQL readable: %+v", res)
+			}
+			code, res = sqlPost(t, h, q(`SELECT args->>'cwd',args->'labels'->>'intelligence.answer_location' FROM commands WHERE id IN (SELECT command_id FROM workflow_proposal_questions)`))
 			if code != 200 || len(res.Rows) != 1 || res.Rows[0][0] != tc.wantCwd || res.Rows[0][1] != wantLocation {
 				t.Fatalf("location not SQL readable: %+v", res)
 			}

@@ -174,7 +174,7 @@ posts the answer using the host's normal configuration; `--note -` reads standar
 Read the thread through SQL: `SELECT id,author,text,created_at FROM workflow_proposal_comments
 WHERE proposal_id = '<proposal UUID>' ORDER BY id`. Account isolation applies to reads and writes.
 `workflow_proposal_questions` stores the linked command and answer; `workflow_proposal_question_status`
-adds SQL-visible queued, starting, answering, answered, failed and timed_out states, errors and agent ids.
+adds SQL-visible queued, starting, answering, answered, failed and timed_out states, errors, agent ids, `cwd` and `answer_location`.
 The page refreshes the thread every four seconds while an answer is pending, without replacing
 the question draft, and stops polling when idle or hidden. Queued questions show an offline hint
 from `host_status.online` when their host is disconnected. Offline hosts can receive queued
