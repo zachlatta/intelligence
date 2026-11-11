@@ -558,9 +558,10 @@ its active turn and earlier queued messages end. Uploads use the same account is
 
 A workflow's trigger can be email (`internal/email`). An account connects one Gmail mailbox with
 Google's sign-in (read-only scope, offline, PKCE; the state is signed and names the account), and
-the server reads it every second (configurable with `EMAIL_POLL_INTERVAL`): Gmail's history since the last read, then, once, the last 30
-days, kept as `before` for the editor's preview. Each new email is stored in `emails` with what it
-did, in the transaction that does it, so it does it once:
+the server reads it every second (`EMAIL_POLL_INTERVAL`): Gmail's history since the last read,
+then, one message per read until done, the last 30 days, kept as `before` for the editor's preview.
+Each new email is stored in `emails` with what it did, in the transaction that does it, so it does
+it once:
 
 1. **In the thread of a run** (an earlier email in its Gmail thread started one), the workflow's
    `replies` decides: `run` (the default) adds it to the run as a message to its orchestrator; if

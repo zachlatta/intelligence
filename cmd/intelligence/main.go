@@ -138,7 +138,7 @@ func serverConfig(getenv func(string) string) (serverSettings, error) {
 	if raw := getenv("EMAIL_POLL_INTERVAL"); raw != "" {
 		d, err := time.ParseDuration(raw)
 		if err != nil || d < time.Second {
-			return c, errors.New("EMAIL_POLL_INTERVAL must be a duration of at least 1s")
+			return c, fmt.Errorf("EMAIL_POLL_INTERVAL %q: want a duration of at least 1s", raw)
 		}
 		c.EmailInterval = d
 	}

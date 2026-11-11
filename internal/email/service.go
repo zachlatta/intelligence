@@ -192,25 +192,6 @@ func (s *Service) Run(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// PollAll reads each connected mailbox once.
-func (s *Service) PollAll(ctx context.Context) error {
-	rows, err := s.DB.Query(ctx, "SELECT account_id FROM gmail_connections ORDER BY account_id")
-	if err != nil {
-		return err
-	}
-	accounts, err := pgx.CollectRows(rows, pgx.RowTo[int64])
-	if err != nil {
-		return err
-	}
-	var errs []error
-	for _, a := range accounts {
-		if err := s.Poll(ctx, a); err != nil {
-			errs = append(errs, fmt.Errorf("account %d: %w", a, err))
-		}
-	}
-	return errors.Join(errs...)
-}
-
 func (s *Service) mailbox(account int64, refresh string) *Mailbox {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -259,15 +240,14 @@ func (s *Service) Poll(ctx context.Context, account int64) error {
 		// Error retries below use their full delay, without this slack.
 		nextPoll = started.Add(every - every/10)
 		if perr != nil {
-			var retry *retryError
-			if errors.As(perr, &retry) {
-				nextPoll = s.now().Add(max(every, retryDelay(failures, retry.Delay)))
-				failures = min(failures+1, 7)
-			} else {
-				// Network, token and local failures must not become one-second retry storms.
-				nextPoll = s.now().Add(max(every, retryDelay(failures, 0)))
-				failures = min(failures+1, 7)
+			// Back off on every failure, honouring a longer Retry-After: network, token and
+			// local failures must not become one-second retry storms either.
+			var requested time.Duration
+			if retry := (*retryError)(nil); errors.As(perr, &retry) {
+				requested = retry.Delay
 			}
+			nextPoll = s.now().Add(max(every, retryDelay(failures, requested)))
+			failures = min(failures+1, 7)
 		} else {
 			failures = 0
 		}
