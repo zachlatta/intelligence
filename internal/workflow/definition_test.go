@@ -6,6 +6,15 @@ import (
 	"testing"
 )
 
+func TestOrchestratorSummarizesTheTaskBeforeStartingWork(t *testing.T) {
+	p := OrchestratorPrompt("Saved workflow", Starting, Vars{Run: "run-1", Input: "a long task"})
+	for _, want := range []string{"intelligence workflow summarize --run run-1 --summary", "3–8 words", "whole task", "If saving the summary fails, continue"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("missing summary instruction %q", want)
+		}
+	}
+}
+
 func TestStartingWorkflowRecommendsCarbon(t *testing.T) {
 	p := OrchestratorPrompt("task", Starting, Vars{Run: "r"})
 	for _, want := range []string{"antigravity/gemini-4-carbon-high", "claude/claude-opus-5-5", "codex"} {

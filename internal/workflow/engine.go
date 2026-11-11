@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -639,7 +641,7 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 
 // Move is what `intelligence workflow` asks of a run.
 type Move struct {
-	Move      string `json:"move"`                // project, next, skip, back, ask, done, fail
+	Move      string `json:"move"`                // summarize, project, next, skip, back, ask, done, fail
 	Directory string `json:"directory,omitempty"` // project: a repository, or "none"
 	Step      string `json:"step,omitempty"`      // back: the step's id
 	Summary   string `json:"summary,omitempty"`
@@ -669,6 +671,20 @@ func (e *Engine) MoveRun(ctx context.Context, host, runID string, m Move) (strin
 }
 
 func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, error) {
+	// A label is independent of the run's lifecycle, so historical and in-flight runs
+	// can be backfilled without restarting agents or advancing a step.
+	if m.Move == "summarize" {
+		summary := strings.TrimSpace(m.Summary)
+		if summary == "" || utf8.RuneCountInString(summary) > 80 || strings.ContainsFunc(m.Summary, func(r rune) bool {
+			return unicode.IsControl(r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r) || unicode.Is(unicode.Cf, r)
+		}) {
+			return "", bad("a task summary must be one line of 1–80 characters")
+		}
+		if _, err := tx.Exec(ctx, "UPDATE workflow_runs SET task_summary = $2, updated_at = $3 WHERE id = $1", r.ID, summary, e.Now()); err != nil {
+			return "", err
+		}
+		return "Task summary saved. Only the label changed; run status and step are unchanged.", e.event(ctx, tx, r, "summarize", nil, nil, summary)
+	}
 	switch r.Status {
 	case Canceled:
 		return "", conflict("Zach canceled this run. Stop: do nothing more for it.")

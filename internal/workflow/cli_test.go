@@ -87,6 +87,7 @@ func TestTheCLISendsEachMoveWithTheBoxsKey(t *testing.T) {
 		{[]string{"project", "--run", "r1", "/srv/dev/app"}, Move{Move: "project", Directory: "/srv/dev/app"}},
 		{[]string{"project", "--run", "r1", "none"}, Move{Move: "project", Directory: "none"}},
 		{[]string{"next", "--run", "r1", "--summary", "built it"}, Move{Move: "next", Summary: "built it"}},
+		{[]string{"summarize", "--run", "r1", "--summary", "Summarize workflow run titles"}, Move{Move: "summarize", Summary: "Summarize workflow run titles"}},
 		{[]string{"back", "--run", "r1", "build", "--why", "no test"}, Move{Move: "back", Step: "build", Why: "no test"}},
 		{[]string{"back", "--why", "no test", "--run", "r1", "build"}, Move{Move: "back", Step: "build", Why: "no test"}},
 		{[]string{"skip", "--run", "r1", "--why", "only what he asked"}, Move{Move: "skip", Why: "only what he asked"}},

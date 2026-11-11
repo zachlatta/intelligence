@@ -262,7 +262,9 @@ func (a *app) moveRun(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"message": msg})
 		return
 	}
-	a.startQueued(r.Context()) // a run that ended may make room for a queued one
+	if m.Move != "summarize" { // labeling a run must not start it or another queued run
+		a.startQueued(r.Context()) // a run that ended may make room for a queued one
+	}
 	writeJSON(w, map[string]string{"message": msg})
 }
 
@@ -313,7 +315,7 @@ type runRow struct {
 	HostOnline, DaemonConnected, RetryKeys                               bool
 }
 
-const runRowSelect = `SELECT r.id::text, r.title, r.input, r.status, r.host, r.repo, r.branch, w.name, r.workflow_id::text, r.workspace_id, r.workspace_title,
+const runRowSelect = `SELECT r.id::text, coalesce(nullif(r.task_summary, ''), r.title), r.input, r.status, r.host, r.repo, r.branch, w.name, r.workflow_id::text, r.workspace_id, r.workspace_title,
 	r.orchestrator_id, r.project_agent_id, r.note, r.error, r.step, r.version, v.definition -> 'steps', r.created_at, r.updated_at, r.finished_at,
 	w.deleted_at IS NOT NULL, r.start_retries, r.start_retry_at,
 	COALESCE((SELECT online FROM host_status WHERE name=r.host),false),
@@ -838,7 +840,7 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 		}
 		var before []runEvent // what happened before the steps: the start and the project
 		for _, e := range events {
-			if e.Step == nil && e.Kind != "cancel" {
+			if e.Step == nil && e.Kind != "cancel" && e.Kind != "summarize" {
 				before = append(before, e)
 			}
 		}
@@ -858,6 +860,8 @@ func (e runEvent) Line() string {
 	switch e.Kind {
 	case "started":
 		return "Started"
+	case "summarize":
+		return "Task summary: " + e.Text
 	case "submitted": // the start of a run that was queued
 		return "Submitted"
 	case "queued":

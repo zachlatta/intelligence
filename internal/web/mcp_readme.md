@@ -63,7 +63,7 @@ List recent runs (add `WHERE status = 'waiting'` for ones awaiting a reply). Kee
 `input` out of lists; fetch it explicitly for one run.
 
 ```sql
-SELECT id, workflow_id, version, host, title, status, step, orchestrator_id,
+SELECT id, workflow_id, version, host, coalesce(nullif(task_summary, ''), title) AS title, status, step, orchestrator_id,
        note, error, created_at, finished_at
 FROM workflow_runs
 ORDER BY created_at DESC, id DESC LIMIT 50
@@ -72,7 +72,7 @@ ORDER BY created_at DESC, id DESC LIMIT 50
 Read one run, even if it has no events:
 
 ```sql
-SELECT id, title, input, status, step, note, error, host, orchestrator_id, workspace_id
+SELECT id, coalesce(nullif(task_summary, ''), title) AS title, task_summary, input, status, step, note, error, host, orchestrator_id, workspace_id
 FROM workflow_runs WHERE id = '00000000-0000-4000-8000-000000000001' LIMIT 1
 ```
 
