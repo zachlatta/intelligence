@@ -826,7 +826,7 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Step %d is done.\n\n%s", r.Step+1, StepMessage(d, r.Step+1, r.vars())), set(Running, r.Step+1, "")
+		return fmt.Sprintf("Step %d is done.\n\n%s", r.Step+1, StepMessage(d, r.Step+1, r.vars())+sameTurnReminder), set(Running, r.Step+1, "")
 	case "back":
 		to := r.Def.Index(m.Step)
 		if to < 0 || to >= r.Step {
@@ -842,7 +842,7 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Back to step %d. What is missing, as you said: %s\n\n%s", to+1, m.Why, StepMessage(d, to, r.vars())), set(Running, to, "")
+		return fmt.Sprintf("Back to step %d. What is missing, as you said: %s\n\n%s", to+1, m.Why, StepMessage(d, to, r.vars())+sameTurnReminder), set(Running, to, "")
 	case "ask":
 		if strings.TrimSpace(m.Note) == "" {
 			return "", bad("ask needs a note for Zach: --note <file>, in Markdown.")
@@ -858,10 +858,12 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		if err := e.event(ctx, tx, r, "fail", ptr(r.Step), nil, m.Why); err != nil {
 			return "", err
 		}
-		return "The run is marked failed. The workspace stays for inspection. Archive any sub-agents you started outside this workspace, then stop.", set(Failed, r.Step, "")
+		return "The run is marked failed. The workspace stays for inspection. Archive any sub-agents you started outside this workspace, then end your turn.", set(Failed, r.Step, "")
 	}
 	return "", bad("unknown move %q: want next, back, skip, ask, done or fail.", m.Move)
 }
+
+const sameTurnReminder = "\n\nContinue in this same turn. Wait for sub-agents in the foreground; end your turn only after a successful ask or when the run is finished. Leave every gate to its instructions."
 
 // archiveRun queues durable cleanup in the same transaction as the terminal move. Its
 // command's outcome is independent of the run's outcome and readable through archive_command.

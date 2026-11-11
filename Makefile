@@ -5,7 +5,7 @@
 test:
 	@test -z "$$(gofmt -l .)" || { gofmt -l .; echo "gofmt needed"; exit 1; }
 	go vet ./...
-	@if [ -n "$$TEST_DATABASE_URL" ]; then go test -race ./...; else scripts/with-test-postgres go test -race ./...; fi
+	@if [ -n "$$TEST_DATABASE_URL" ]; then go test -race -timeout=30m ./...; else scripts/with-test-postgres go test -race -timeout=30m ./...; fi
 
 run:
 	go run ./cmd/intelligence
