@@ -719,6 +719,8 @@ func (e runEvent) Line() string {
 	switch e.Kind {
 	case "started":
 		return "Started"
+	case "summarize":
+		return "Task summary: " + e.Text
 	case "project":
 		if e.Text == "none" {
 			return "Project: none (the home directory)"

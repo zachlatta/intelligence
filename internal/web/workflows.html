@@ -754,6 +754,7 @@ async function refresh(all) {
     const res = await fetch(location.href, { cache: "no-store" });
     if (!res.ok) return;
     const next = new DOMParser().parseFromString(await res.text(), "text/html");
+    document.title = next.title;
     const reply = $("#reply"), writing = reply && (reply.value || document.activeElement === reply || reply.classList.contains("listening"));
     for (const id of ["live", "steps"].concat(writing && !all ? [] : ["ask"])) {
       const n = next.getElementById(id), cur = document.getElementById(id);

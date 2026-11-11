@@ -17,7 +17,7 @@ func TestRunSummaryIsStoredThroughTheAPIAndDisplayed(t *testing.T) {
 	if page := get(t, h, "/workflows", nil).Body.String(); !strings.Contains(page, before["title"].(string)) {
 		t.Fatal("missing fallback title")
 	}
-	for _, invalid := range []string{"", " \n ", "two\nlines", strings.Repeat("x", 81)} {
+	for _, invalid := range []string{"", " \n ", "two\nlines", "two\u2028lines", "two\u2029paragraphs", "hidden\u200btext", "spoof\u202etext", strings.Repeat("x", 81)} {
 		if code, msg := move(t, h, key, run, map[string]string{"move": "summarize", "summary": invalid}); code != http.StatusBadRequest {
 			t.Fatalf("invalid summary: %d %s", code, msg)
 		}
@@ -63,7 +63,49 @@ func TestRunSummaryIsStoredThroughTheAPIAndDisplayed(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("cancel: %d %s", rec.Code, rec.Body)
 	}
-	if code, _ := move(t, h, key, run, map[string]string{"move": "summarize", "summary": "Overwrite canceled run"}); code != http.StatusConflict {
-		t.Fatalf("summarized canceled run: %d", code)
+	if code, _ := move(t, h, key, run, map[string]string{"move": "summarize", "summary": "Summarize canceled workflow run"}); code != http.StatusOK {
+		t.Fatalf("could not label canceled run: %d", code)
+	}
+}
+
+func TestSummaryLabelsEveryRunStatusWithoutMovingIt(t *testing.T) {
+	h, d := dbServer(t)
+	sendReport(t, h, wfReport())
+	key := keyOf(t, h, "host-1")
+	run := startRun(t, h, createWorkflow(t, h, workflow.Starting), "Please summarize historical tasks")
+	for _, status := range []string{"finding_project", "starting", "running", "waiting", "succeeded", "failed", "canceled"} {
+		t.Run(status, func(t *testing.T) {
+			if _, err := d.Owner.Exec(t.Context(), "UPDATE workflow_runs SET status = $2 WHERE id = $1", run, status); err != nil {
+				t.Fatal(err)
+			}
+			query := q("SELECT (to_jsonb(r) - 'task_summary' - 'updated_at')::text FROM workflow_runs r WHERE id = '" + run + "'")
+			_, before := sqlPost(t, h, query)
+			summary := "Summarize " + status + " workflow tasks"
+			if code, msg := move(t, h, key, run, map[string]string{"move": "summarize", "summary": summary}); code != http.StatusOK {
+				t.Fatalf("summary: %d %s", code, msg)
+			}
+			_, after := sqlPost(t, h, query)
+			if len(before.Rows) != 1 || len(after.Rows) != 1 || before.Rows[0][0] != after.Rows[0][0] {
+				t.Fatal("summary changed run state beyond its label and update time")
+			}
+			code, events := sqlPost(t, h, q("SELECT text, step, to_step FROM workflow_run_events WHERE run_id = '"+run+"' AND kind = 'summarize' ORDER BY id DESC LIMIT 1"))
+			if code != http.StatusOK || len(events.Rows) != 1 || events.Rows[0][0] != summary || events.Rows[0][1] != nil || events.Rows[0][2] != nil {
+				t.Fatalf("missing label event: %d %+v", code, events)
+			}
+		})
+	}
+}
+
+func TestRunSummaryHeadingRefresh(t *testing.T) {
+	h, _ := dbServer(t)
+	sendReport(t, h, wfReport())
+	run := startRun(t, h, createWorkflow(t, h, workflow.Starting), "Keep the heading current")
+	page := get(t, h, "/workflow-runs/"+run, nil).Body.String()
+	live, heading, request := strings.Index(page, `<div id="live">`), strings.Index(page, "<h1>"), strings.Index(page, `<div class="request">`)
+	if live < 0 || heading <= live || heading >= request || !strings.Contains(page, `["live", "steps"]`) {
+		t.Fatal("heading must be inside the refreshed live block")
+	}
+	if !strings.Contains(page, "document.title = next.title") {
+		t.Fatal("refresh must also update the document title")
 	}
 }
