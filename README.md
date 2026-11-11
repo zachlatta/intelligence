@@ -1125,6 +1125,12 @@ origin (another site's request is refused with 403), and those with a body must 
   A project that is always the same repository is picked from those the workflow's host reported
   (its workspaces' `project_root`s), or typed. The “Run this workflow” dialog takes the run's task;
   with `ASSEMBLYAI_API_KEY` set, its mic button or ⌘D/Ctrl+D uses the shared dictation controls.
+- `GET /workflows/{id}/prompts`: inspect the current saved version's full project-finder message,
+  orchestrator instructions and contract, and every step message with its runtime shell and
+  file-delivery rules. Linked as **Prompts** from workflow cards and the editor. Uses the same
+  prompt builders as live runs, reading definitions and the host's current repositories through
+  the account's SQL role. Run-specific values remain labeled placeholders; this is a preview,
+  not a historical snapshot of a run or of provider, host-skill or worker-generated instructions.
 - `GET /workflow-runs/{id}`: a run: its project, the orchestrator and its sub-agents, each step's
   state, how long the run spent on it (summed over its visits, each visit in the tooltip; the
   current step so far) and what happened in it, and, while it waits, the orchestrator's note with a reply box,

@@ -501,9 +501,11 @@ func (e *Engine) startFirst(ctx context.Context, tx pgx.Tx, r run) error {
 	return err
 }
 
-// repositories includes registered git projects without workspaces, with workspace roots as fallback.
-func repositories(ctx context.Context, tx pgx.Tx, host string) ([]string, error) {
-	rows, err := tx.Query(ctx, "SELECT DISTINCT directory FROM host_repositories WHERE host = $1 ORDER BY 1", host)
+// Repositories lists host's git repositories, including registered projects without workspaces and workspace roots as fallback.
+func Repositories(ctx context.Context, q interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}, host string) ([]string, error) {
+	rows, err := q.Query(ctx, "SELECT DISTINCT directory FROM host_repositories WHERE host = $1 ORDER BY 1", host)
 	if err != nil {
 		return nil, err
 	}
@@ -513,7 +515,7 @@ func repositories(ctx context.Context, tx pgx.Tx, host string) ([]string, error)
 // Rebuild starts from the run's unresolved input. Reusing commands.args would both
 // replay a stale repository catalog and try to resolve already-delivered images twice.
 func projectStartArgs(ctx context.Context, tx pgx.Tx, r run) (json.RawMessage, error) {
-	repos, err := repositories(ctx, tx, r.Host)
+	repos, err := Repositories(ctx, tx, r.Host)
 	if err != nil {
 		return nil, err
 	}
@@ -699,7 +701,7 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		if repo == "none" {
 			repo = ""
 		} else {
-			repos, err := repositories(ctx, tx, r.Host)
+			repos, err := Repositories(ctx, tx, r.Host)
 			if err != nil {
 				return "", err
 			}
