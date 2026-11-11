@@ -67,6 +67,21 @@ func TestResourcesPageChartsEachHostAndRanksAgents(t *testing.T) {
 	}
 }
 
+// With no ?hours=, the page shows the last hour, like /resources?hours=1.
+func TestResourcesPageDefaultsToOneHour(t *testing.T) {
+	h, d := dbServer(t)
+	seedHost(t, d)
+	for path, on := range map[string]string{"/resources": "1", "/resources?hours=1": "1", "/resources?hours=24": "24"} {
+		body := get(t, h, path, nil).Body.String()
+		for _, hrs := range []string{"1", "6", "24", "168", "720"} {
+			sel := strings.Contains(body, `<a href="/resources?hours=`+hrs+`" class="on">`)
+			if sel != (hrs == on) {
+				t.Errorf("%s: hours=%s selected = %v, want %v", path, hrs, sel, hrs == on)
+			}
+		}
+	}
+}
+
 func TestHostResourcesAPI(t *testing.T) {
 	h, d := dbServer(t)
 	seedHost(t, d)

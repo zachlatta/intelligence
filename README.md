@@ -730,7 +730,7 @@ the account and enrollment routes, the host binaries and the streams (with a hos
 - `GET /usage?days=7` (1 to 365): every login with a chart of each window's used % over the days,
   and its weekly peaks.
 - `GET /api/usage`: the logins and their windows, as JSON.
-- `GET /resources?hours=24` (1 to 2160; it was `/hosts`, which sends here), the Host monitoring tab: each host's CPU and
+- `GET /resources?hours=1` (1 to 2160, default 1; it was `/hosts`, which sends here), the Host monitoring tab: each host's CPU and
   memory charts, its OOM kills and its agents ranked by CPU, with their most memory and commands
   started. The home page shows each host's CPU, memory, disk and pressure under its name, and each
   agent's memory beside it.
