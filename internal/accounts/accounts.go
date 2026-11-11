@@ -353,15 +353,23 @@ func (s *Store) HostKey(ctx context.Context, host, key string) (bool, error) {
 
 // HostOfKey is the host key is good for, or "" when it is no host's key. It records the key as used.
 func (s *Store) HostOfKey(ctx context.Context, key string) (string, error) {
+	host, _, err := s.HostIdentity(ctx, key)
+	return host, err
+}
+
+// HostIdentity authenticates a host and its account in one query, recording use.
+func (s *Store) HostIdentity(ctx context.Context, key string) (string, Account, error) {
 	if key == "" {
-		return "", nil
+		return "", Account{}, nil
 	}
 	var host string
-	err := s.p.QueryRow(ctx, "UPDATE host_keys SET last_used_at = $2 WHERE key_hash = $1 RETURNING host", sha(key), s.Now()).Scan(&host)
+	var a Account
+	err := s.p.QueryRow(ctx, `UPDATE host_keys k SET last_used_at=$2 FROM accounts a
+	WHERE k.key_hash=$1 AND a.id=k.account_id RETURNING k.host,a.id,a.username,a.role_name`, sha(key), s.Now()).Scan(&host, &a.ID, &a.Username, &a.Role)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", nil
+		return "", Account{}, nil
 	}
-	return host, err
+	return host, a, err
 }
 
 // Owns says whether host is account id's.

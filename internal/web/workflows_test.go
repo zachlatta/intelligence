@@ -18,6 +18,7 @@ import (
 // wfReport is host-1 with one repository, /w/app (its workspaces' project root).
 func wfReport() hostclient.Report {
 	rep := sampleReport
+	rep.StartRetryKeys = true
 	rep.Paseo.Workspaces = append([]hostclient.Workspace(nil), sampleReport.Paseo.Workspaces...)
 	rep.Paseo.Workspaces[0].ProjectRoot = "/w/app"
 	return rep
@@ -209,7 +210,7 @@ func TestAWorkflowRunFindsItsProjectThenTheOrchestratorMovesItThroughTheSteps(t 
 	var wa hostclient.CreateWorkspaceArgs
 	json.Unmarshal(ws.Args, &wa)
 	if wa.Cwd != "/w/app" || !wa.Worktree || !strings.HasPrefix(wa.Branch, "wf-") || wa.Agent == nil || wa.Agent.Thinking != "high" || wa.Agent.Mode != "bypassPermissions" ||
-		wa.Agent.Labels["intelligence.run"] != run || !strings.Contains(wa.Agent.Prompt, "Step 1 of 6: Do the work") ||
+		wa.Agent.Labels["intelligence.run"] != run || !strings.Contains(wa.Agent.Prompt, "Step 1 of 7: Do the work") ||
 		!strings.Contains(wa.Agent.Prompt, "Have sub-agents do this in /w/app:") || !strings.Contains(wa.Agent.Prompt, "intelligence workflow next --run "+run) {
 		t.Fatalf("workspace = %+v %+v", wa, wa.Agent)
 	}
@@ -226,14 +227,14 @@ func TestAWorkflowRunFindsItsProjectThenTheOrchestratorMovesItThroughTheSteps(t 
 		t.Errorf("another host's key: %d", code)
 	}
 	if code, msg := move(t, h, key, run, map[string]string{"move": "next", "summary": "built it"}); code != http.StatusOK ||
-		!strings.Contains(msg, "Step 2 of 6: Meets the request") || !strings.Contains(msg, "fresh sub-agent") {
+		!strings.Contains(msg, "Step 2 of 7: Meets the request") || !strings.Contains(msg, "fresh sub-agent") {
 		t.Fatalf("next: %d %s", code, msg)
 	}
 	if code, msg := move(t, h, key, run, map[string]string{"move": "back", "step": "meets", "why": "x"}); code != http.StatusBadRequest {
 		t.Errorf("back to the current step: %d %s", code, msg)
 	}
 	if code, msg := move(t, h, key, run, map[string]string{"move": "back", "step": "build", "why": "the transcript page shows no model"}); code != http.StatusOK ||
-		!strings.Contains(msg, "Step 1 of 6: Do the work") || !strings.Contains(msg, "the transcript page shows no model") {
+		!strings.Contains(msg, "Step 1 of 7: Do the work") || !strings.Contains(msg, "the transcript page shows no model") {
 		t.Fatalf("back: %d %s", code, msg)
 	}
 	for range 4 {
@@ -281,7 +282,10 @@ func TestAWorkflowRunFindsItsProjectThenTheOrchestratorMovesItThroughTheSteps(t 
 	if r := readRun(t, h, run); r["status"] != "running" || r["note"] != "" {
 		t.Fatalf("run = %v", r)
 	}
-	if code, msg := move(t, h, key, run, map[string]string{"move": "next", "summary": "approved"}); code != http.StatusOK || !strings.Contains(msg, "Step 6 of 6: Land and deploy") {
+	if code, msg := move(t, h, key, run, map[string]string{"move": "next", "summary": "approved"}); code != http.StatusOK || !strings.Contains(msg, "Step 6 of 7: Public repo check") {
+		t.Fatalf("next: %d %s", code, msg)
+	}
+	if code, msg := move(t, h, key, run, map[string]string{"move": "next", "summary": "nothing private"}); code != http.StatusOK || !strings.Contains(msg, "Step 7 of 7: Land and deploy") {
 		t.Fatalf("next: %d %s", code, msg)
 	}
 	if code, msg := move(t, h, key, run, map[string]string{"move": "next", "summary": "landed"}); code != http.StatusOK || !strings.Contains(msg, "finished") {
@@ -310,7 +314,7 @@ func TestAWorkflowRunFindsItsProjectThenTheOrchestratorMovesItThroughTheSteps(t 
 	}
 
 	code, r := sqlPost(t, h, q(`SELECT string_agg(kind, ' ' ORDER BY id) FROM workflow_run_events WHERE run_id = '`+run+`'`))
-	want := "started project workspace next back next next next next ask reply next done"
+	want := "started project workspace next back next next next next ask reply next next done"
 	if code != http.StatusOK || len(r.Rows) != 1 || r.Rows[0][0] != want {
 		t.Errorf("events = %v, want %q", r.Rows, want)
 	}
@@ -393,11 +397,14 @@ func TestNoProjectRunsTheOrchestratorInTheHomeDirectory(t *testing.T) {
 }
 
 func TestAFailedStartFailsTheRun(t *testing.T) {
-	h, _ := dbServer(t)
+	h, db := dbServer(t)
 	sendReport(t, h, wfReport())
 	b := openStream(t, h, "host-1")
 	run := startRun(t, h, createWorkflow(t, h, workflow.Starting), "anything")
 	c := b.command()
+	if _, err := db.Owner.Exec(t.Context(), "UPDATE workflow_runs SET start_retries=3 WHERE id=$1", run); err != nil {
+		t.Fatal(err)
+	}
 	if ack := b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{ID: c.ID, Status: hostclient.CommandFailed,
 		Error: "provider claude is not available"}}); ack.Error != "" {
 		t.Fatal(ack.Error)
@@ -513,8 +520,13 @@ func TestWorkflowPages(t *testing.T) {
 	if !strings.Contains(ed.Body.String(), `const allRepos = [{"directory":"/w/app","project":"example/app","hosts":["host-1"]}]`) {
 		t.Errorf("the editor should offer the hosts' repositories")
 	}
-	if rec := get(t, h, "/workflows/00000000-0000-4000-8000-000000000000", nil); rec.Code != http.StatusNotFound {
-		t.Errorf("no such workflow = %d", rec.Code)
+	for _, p := range []string{"/workflows/bad-id", "/workflows/00000000-0000-4000-8000-000000000000", "/workflows/" + wf + "/prompts"} {
+		if rec := get(t, h, p, nil); rec.Code != http.StatusNotFound {
+			t.Errorf("%s = %d, want 404", p, rec.Code)
+		}
+	}
+	if strings.Contains(list.Body.String(), "/prompts") || strings.Contains(ed.Body.String(), "/prompts") {
+		t.Error("workflow pages should not link to a prompts page")
 	}
 	if !strings.Contains(get(t, h, "/", nil).Body.String(), `href="/workflows"`) {
 		t.Error("the top bar should link to Workflows")
@@ -821,13 +833,16 @@ func TestFinishedWorkflowQueuesArchiveAndKeepsArchiveFailureSeparate(t *testing.
 }
 
 func TestFailedOrchestratorStartArchivesItsPartialWorkspace(t *testing.T) {
-	h, _ := dbServer(t)
+	h, db := dbServer(t)
 	sendReport(t, h, wfReport())
 	b := openStream(t, h, "host-1")
 	def := workflow.Starting
 	def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
 	run := startRun(t, h, createWorkflow(t, h, def), "anything")
 	c := b.command()
+	if _, err := db.Owner.Exec(t.Context(), "UPDATE workflow_runs SET start_retries=3 WHERE id=$1", run); err != nil {
+		t.Fatal(err)
+	}
 	if ack := b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{
 		ID: c.ID, Status: hostclient.CommandFailed, Error: "agent failed to start", Result: json.RawMessage(`{"workspaceId":"partial"}`),
 	}}); ack.Error != "" {

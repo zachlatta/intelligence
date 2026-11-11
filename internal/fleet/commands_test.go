@@ -47,14 +47,14 @@ func TestClaimSendsEachQueuedCommandOnceInOrder(t *testing.T) {
 	r := commandRig(t)
 	a := enqueue(t, r, hostclient.ArchiveAgentKind, `{"agentId":"a1"}`, t1)
 	b := enqueue(t, r, hostclient.CancelAgentKind, `{"agentId":"a2"}`, t1.Add(time.Second))
-	got, err := r.Claim(ctx, "host-1", false, t1.Add(2*time.Second))
+	got, err := r.Claim(ctx, "host-1", ClaimOptions{}, t1.Add(2*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 2 || got[0].ID != a.ID || got[1].ID != b.ID || string(got[0].Args) != `{"agentId": "a1"}` {
 		t.Fatalf("claimed %+v", got)
 	}
-	if again, _ := r.Claim(ctx, "host-1", false, t1.Add(3*time.Second)); len(again) != 0 {
+	if again, _ := r.Claim(ctx, "host-1", ClaimOptions{}, t1.Add(3*time.Second)); len(again) != 0 {
 		t.Errorf("claimed again: %+v", again)
 	}
 	c, _ := r.Command(ctx, a.ID)
@@ -66,12 +66,12 @@ func TestClaimSendsEachQueuedCommandOnceInOrder(t *testing.T) {
 func TestANewStreamResendsWhatHasNoResult(t *testing.T) {
 	r := commandRig(t)
 	a := enqueue(t, r, hostclient.CreateAgentKind, `{"cwd":"/w","provider":"claude"}`, t1)
-	r.Claim(ctx, "host-1", false, t1)
+	r.Claim(ctx, "host-1", ClaimOptions{}, t1)
 	if err := r.UpdateCommand(ctx, "host-1", hostclient.CommandUpdate{ID: a.ID, Status: hostclient.CommandRunning}, t1.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	// the stream dropped; the host dials again
-	got, _ := r.Claim(ctx, "host-1", true, t1.Add(2*time.Second))
+	got, _ := r.Claim(ctx, "host-1", ClaimOptions{Replay: true}, t1.Add(2*time.Second))
 	if len(got) != 1 || got[0].ID != a.ID {
 		t.Fatalf("resent %+v", got)
 	}
@@ -84,7 +84,7 @@ func TestANewStreamResendsWhatHasNoResult(t *testing.T) {
 func TestUpdateRecordsTheResult(t *testing.T) {
 	r := commandRig(t)
 	a := enqueue(t, r, hostclient.CreateAgentKind, `{"cwd":"/w","provider":"claude"}`, t1)
-	r.Claim(ctx, "host-1", false, t1)
+	r.Claim(ctx, "host-1", ClaimOptions{}, t1)
 	up := func(u hostclient.CommandUpdate, at time.Time) error { return r.UpdateCommand(ctx, "host-1", u, at) }
 	up(hostclient.CommandUpdate{ID: a.ID, Status: hostclient.CommandRunning}, t1.Add(time.Second))
 	if err := up(hostclient.CommandUpdate{ID: a.ID, Status: hostclient.CommandSucceeded, Result: json.RawMessage(`{"agentId":"a9"}`)}, t1.Add(2*time.Second)); err != nil {
@@ -115,15 +115,15 @@ func TestCommandsExpire(t *testing.T) {
 	r := commandRig(t)
 	never := enqueue(t, r, hostclient.ArchiveAgentKind, `{"agentId":"a1"}`, t1)
 	lost := enqueue(t, r, hostclient.ArchiveAgentKind, `{"agentId":"a2"}`, t1)
-	r.Claim(ctx, "host-1", false, t1) // both sent
+	r.Claim(ctx, "host-1", ClaimOptions{}, t1) // both sent
 	r.UpdateCommand(ctx, "host-1", hostclient.CommandUpdate{ID: never.ID, Status: hostclient.CommandFailed, Error: "x"}, t1)
 	queued := enqueue(t, r, hostclient.ArchiveAgentKind, `{"agentId":"a3"}`, t1)
-	if got, _ := r.Claim(ctx, "host-1", true, t1.Add(11*time.Minute)); len(got) != 0 {
+	if got, _ := r.Claim(ctx, "host-1", ClaimOptions{Replay: true}, t1.Add(11*time.Minute)); len(got) != 0 {
 		t.Fatalf("claimed expired commands: %+v", got)
 	}
 	for id, want := range map[string]string{never.ID: hostclient.CommandFailed, lost.ID: hostclient.CommandExpired, queued.ID: hostclient.CommandExpired} {
 		c, _ := r.Command(ctx, id)
-		if c.Status != want || (want == hostclient.CommandExpired && (c.Error == "" || c.FinishedAt.IsZero())) {
+		if c.Status != want || (want == hostclient.CommandExpired && (c.Error == "" || !c.FinishedAt.Equal(c.ExpiresAt))) {
 			t.Errorf("%s: %+v, want %s", id, c, want)
 		}
 	}

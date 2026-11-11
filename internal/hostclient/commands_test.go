@@ -133,6 +133,28 @@ func TestAFailedAgentStillReportsTheWorkspaceItsCommandMade(t *testing.T) {
 	}
 }
 
+func TestRetryDeliveryReusesPaseoCreationKey(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	for _, kind := range []string{CreateWorkspaceKind, CreateAgentKind} {
+		args := json.RawMessage(`{"cwd":"/w/app","provider":"claude","prompt":"go"}`)
+		if kind == CreateWorkspaceKind {
+			args = json.RawMessage(`{"cwd":"/w/app","worktree":true,"branch":"retry","agent":{"provider":"claude","prompt":"go"}}`)
+		}
+		first, err := w.Execute(t.Context(), Command{ID: "first-" + kind, Kind: kind, Args: args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Simulates a creation whose success response was lost. A new delivery must
+		// recover the existing workspace/agent, including its original first prompt.
+		again, err := w.Execute(t.Context(), Command{ID: "retry-" + kind, IdempotencyKey: "first-" + kind, Kind: kind, Args: args})
+		if err != nil || again != first {
+			t.Fatalf("retry duplicated creation: %+v %+v %v", first, again, err)
+		}
+	}
+}
+
 func TestExecuteEveryOtherKind(t *testing.T) {
 	d := daemon(t)
 	w := watcher(t, d)

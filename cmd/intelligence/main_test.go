@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/zachlatta/intelligence/internal/workflow"
 )
 
 func env(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
@@ -195,6 +197,29 @@ func TestServerConfigReadsDevboxBinariesFromBeforeTheRename(t *testing.T) {
 	}
 }
 
+func TestServerConfigReadsTheWorkflowQueueLimits(t *testing.T) {
+	base := map[string]string{"DATABASE_URL": "postgres://app:p@db/app", "READONLY_DATABASE_URL": "postgres://ro:p@db/app"}
+	c, err := serverConfig(env(base))
+	if err != nil || c.QueueLimits != workflow.DefaultLimits() {
+		t.Fatalf("default limits = %+v, %v", c.QueueLimits, err)
+	}
+	set := map[string]string{"WORKFLOW_QUEUE_CPU_PCT": "70", "WORKFLOW_QUEUE_MEM_PCT": "off", "WORKFLOW_QUEUE_LOAD_PER_CPU": "2.5"}
+	for k, v := range base {
+		set[k] = v
+	}
+	c, err = serverConfig(env(set))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l := c.QueueLimits; l.CPUPct != 70 || l.MemPct != 0 || l.LoadPerCPU != 2.5 {
+		t.Errorf("limits = %+v", l)
+	}
+	set["WORKFLOW_QUEUE_CPU_PCT"] = "lots"
+	if _, err := serverConfig(env(set)); err == nil || !strings.Contains(err.Error(), "WORKFLOW_QUEUE_CPU_PCT") {
+		t.Errorf("a bad limit should be refused: %v", err)
+	}
+}
+
 func TestServerConfigReadsTheAssemblyAIKey(t *testing.T) {
 	c, err := serverConfig(env(map[string]string{"DATABASE_URL": "postgres://app:p@db/app",
 		"READONLY_DATABASE_URL": "postgres://ro:p@db/app", "ASSEMBLYAI_API_KEY": "k"}))
@@ -221,5 +246,22 @@ func TestServerConfigTurnsEmailTriggersOnWithBothGoogleSettings(t *testing.T) {
 	base["CONNECTIONS_KEY"] = "short"
 	if _, err := serverConfig(env(base)); err == nil {
 		t.Error("a bad key: no error")
+	}
+}
+
+func TestEmailPollInterval(t *testing.T) {
+	base := map[string]string{"DATABASE_URL": "postgres://app:p@db/app", "READONLY_DATABASE_URL": "postgres://ro:p@db/app"}
+	for _, tt := range []struct {
+		value string
+		want  time.Duration
+		bad   bool
+	}{
+		{"", time.Second, false}, {"2s", 2 * time.Second, false}, {"100ms", 0, true}, {"0", 0, true}, {"bad", 0, true},
+	} {
+		base["EMAIL_POLL_INTERVAL"] = tt.value
+		c, err := serverConfig(env(base))
+		if (err != nil) != tt.bad || (!tt.bad && c.EmailInterval != tt.want) {
+			t.Fatalf("%q: interval=%v, error=%v", tt.value, c.EmailInterval, err)
+		}
 	}
 }
