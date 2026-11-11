@@ -1,0 +1,58 @@
+[
+  {
+    "id": "whats-new",
+    "released": "2026-11-10",
+    "title": "What's New",
+    "summary": "A What's New tab now lists each feature as it ships, newest first, with a short summary and a demo. When there are some you have not seen, the tab shows how many and a note appears under the top bar; opening the tab or dismissing the note marks them seen.",
+    "media": "whats-new.gif",
+    "mediaAlt": "The What's New tab showing 7 unseen features; opening it shows them, newest first, and the count goes away"
+  },
+  {
+    "id": "mcp",
+    "released": "2026-11-10",
+    "title": "Read Intelligence from MCP clients",
+    "summary": "Intelligence is now a read-only MCP server at /mcp. Make a token under Account → MCP connections, add it to an MCP client, and that client can query your hosts, agents and workflow runs with SQL. It can read but never change anything.",
+    "media": "mcp.gif",
+    "mediaAlt": "Account → MCP connections: Create MCP token shows the MCP URL and a new token (blurred here) once, and lists it as active"
+  },
+  {
+    "id": "image-attachments",
+    "released": "2026-11-09",
+    "title": "Attach images to tasks and messages",
+    "summary": "Add screenshots and other images to a workflow task, a new agent or workspace, or a message in an agent's chat: pick, paste or drop them. The agent gets each image as a file in its worktree.",
+    "media": "image-attachments.gif",
+    "mediaAlt": "Typing a task on Workflows, then attaching two screenshots, which appear as removable thumbnails under the prompt"
+  },
+  {
+    "id": "workflow-step-times",
+    "released": "2026-11-09",
+    "title": "See how long each workflow step took",
+    "summary": "A workflow run's page now shows how long it spent on each step, and how many times it came back to one, with the current step counting up.",
+    "media": "workflow-step-times.gif",
+    "mediaAlt": "A workflow run's steps: done steps show their time and how many times the run was on them, and the running step counts up"
+  },
+  {
+    "id": "permission-recovery",
+    "released": "2026-11-09",
+    "title": "Unattended agents get past permission prompts",
+    "summary": "When an unattended workflow agent stops on a permission prompt, Intelligence now answers it with an audited denial so the agent carries on, and shows any prompt it could not clear.",
+    "media": "permission-recovery.png",
+    "mediaAlt": "An agent page marked “permission recovery stuck” next to its running and needs-attention badges"
+  },
+  {
+    "id": "email-triggers",
+    "released": "2026-11-08",
+    "title": "Start workflows from email",
+    "summary": "Connect a Gmail mailbox under Workflows → Email, and an email that matches a workflow's senders and filters starts a run of it. Replies in the thread go to that run.",
+    "media": "email-triggers.gif",
+    "mediaAlt": "Workflows → Email: the connected mailbox and what came in, one email ignored as bulk mail and one that started a run; its link opens the run with the email thread"
+  },
+  {
+    "id": "dictation",
+    "released": "2026-11-08",
+    "title": "Dictate instead of typing",
+    "summary": "Press ⌘D (or Ctrl+D, or the mic button) in the chat box, a task box or a new agent prompt to speak instead of type. Press it again in an empty box to send.",
+    "media": "dictation.gif",
+    "mediaAlt": "Clicking the mic in the task box: the words appear as they are said, then Edit stops and leaves them in the box"
+  }
+]

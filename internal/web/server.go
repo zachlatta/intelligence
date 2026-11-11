@@ -140,6 +140,11 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /attachments.js", attachmentsScript)
 	mux.HandleFunc("POST /api/attachments", a.write(a.uploadAttachment))
 	mux.HandleFunc("GET /submitkeys.js", submitKeysScript)
+	// What's New: the release notes (whatsnew), and which of them the account has seen
+	mux.HandleFunc("GET /whatsnew.js", whatsNewScript)
+	mux.HandleFunc("GET /whats-new/media/{name}", whatsNewMedia())
+	mux.HandleFunc("GET /whats-new", a.page(func(v viewer) http.HandlerFunc { return whatsNewPage(cfg, v) }))
+	mux.HandleFunc("POST /api/whats-new/seen", a.write(a.markWhatsNewSeen))
 	mux.HandleFunc("GET /account", a.page(func(v viewer) http.HandlerFunc { return accountPage(cfg, v) }))
 	// hosts: joining an account, and their streams
 	mux.HandleFunc("POST /api/host-enrollments", a.enroll)

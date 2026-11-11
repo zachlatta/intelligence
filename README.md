@@ -95,6 +95,9 @@ The hierarchy is hosts > workspaces > agents:
   addresses, how far it is read, and its Google token, sealed with `CONNECTIONS_KEY`, so reading it
   gives nothing) and `emails` (every email it received, and what it did and why): Email triggers,
   below.
+- `whats_new` (the release notes, synced from `internal/whatsnew/entries.json` when the server
+  starts; the same for every account, as they hold no account's state), `whats_new_seen` (which
+  entries the account has seen) and the view `whats_new_unseen` (those it has not): What's New, below.
 - `schema_migrations`.
 - `hosts.projects`: Paseo's registered project catalog, including projects with no workspaces.
   `host_repositories` combines its git projects with workspaces' repository roots for older hosts.
@@ -876,6 +879,34 @@ busy workers (`status = 'busy'`) and interrupted attempts are not retried after 
 successful response indicates an HTTP success, not confirmation that the sender's tracker recorded
 an open. The server admits at most eight concurrent email pixel jobs.
 
+### What's New
+
+The What's New tab (`/whats-new`) lists each user-visible feature as it ships, newest first: its
+title, release date, a short summary and a demo (a GIF, image or short MP4). When the account has
+entries it has not seen, the tab shows how many on every page (a number, also in the tab's
+accessible name: "What's New, 3 unseen") and a note under the top bar names the newest, with See
+what's new and Dismiss.
+
+- The entries are written in `internal/whatsnew/entries.json` (newest first), their demos in
+  `internal/whatsnew/media/`, both built into the binary. When the server starts, after migrating,
+  it syncs them into `whats_new` (`whatsnew.Sync`): new entries are added, edited ones changed,
+  removed ones (and who had seen them) deleted. An entry's `id` keys who has seen it, so it never
+  changes once released.
+- Seen state is per account, in `whats_new_seen`. `whatsnew.js` (every page loads it) reads
+  `whats_new_unseen` through `/api/sql` for the count and the note. The page itself writes nothing:
+  it marks the entries it shows unseen (`data-unseen`, with a New badge), and the script then sends
+  `POST /api/whats-new/seen` with their ids. Dismissing the note sends the same.
+- **Every change that ships a feature people can see adds an entry** to `entries.json` in the same
+  change: a lowercase-slug `id`, `released` (the day it lands, `YYYY-MM-DD`), a `title`, a `summary`
+  of a few plain sentences (what it is and where to find it, at most 600 bytes), and a `media` demo
+  in `media/` with `mediaAlt` text. **Every entry has a demo**: a GIF of the feature in use, or,
+  for one with nothing that moves, a screenshot of where it shows (a feature with no page of its
+  own still shows somewhere: a badge, a column, a log line). Keep each under 1.5 MiB (about 800
+  pixels wide, 3 frames a second, 64 colours is plenty). Capture demos from a local instance with
+  throwaway data: the repository is public, so a demo shows no real hosts, names, paths, addresses
+  or credentials (blur a token even when it is throwaway). `internal/whatsnew` tests check every
+  entry (ids, dates newest first, a demo present, small enough and used).
+
 ### Transcripts
 
 After each report, and every 2 seconds while an agent is running, the host syncs the transcripts of
@@ -1119,6 +1150,13 @@ origin (another site's request is refused with 403), and those with a body must 
 - `GET /submitkeys.js`: loaded by every page with its stylesheet. Cmd/Ctrl+Enter in any text box
   sends it: the default button of its form, or, for a box outside a form, the button named by the
   nearest `data-submit` ancestor. A disabled button sends nothing; plain Enter is unchanged.
+- `GET /whats-new`: the release notes (What's New, above), marking those the account had not seen.
+- `POST /api/whats-new/seen` with `{"ids": ["<entry id>", ...]}` (1 to 200): the account has seen
+  those entries (204; marking one again keeps when it was first seen); 400 for an id not in
+  `whats_new`.
+- `GET /whatsnew.js`: loaded by every page with its stylesheet: the unseen count on the What's New
+  tab and the note under the top bar.
+- `GET /whats-new/media/{name}`: an entry's demo, built into the binary; no sign-in needed.
 - `GET /ui.css`: the one stylesheet every page shares, with the top bar (`layout.html`) that links the
   pages.
 - `GET /workflows`: a new task (for workflows triggered by a task: pick the workflow, which names

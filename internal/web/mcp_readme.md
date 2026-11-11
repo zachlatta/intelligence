@@ -31,6 +31,7 @@ narrow the query. When truncated, continue with a stable key cursor, not an unbo
 | Commands and their results | `commands` |
 | Schedules and their runs | `schedule_status`, `schedule_runs` |
 | Resources, usage, diffs | `host_current`, `agent_days`, `usage_current`, `workspace_diff_files` |
+| Released features (What's New) and which this account has not seen | `whats_new`, `whats_new_unseen` |
 
 Host and agent IDs form a composite key: join on both, never agent ID alone. Run `step`
 is a zero-based index into the saved `workflow_versions.definition` JSON's `steps` array.

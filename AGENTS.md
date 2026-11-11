@@ -32,6 +32,17 @@ All app state is readable with a read-only SQL query (`/api/sql`). So:
   fails the build, so nothing deploys) and when the server starts (a failure stops the server).
 - A change that weakens the check or the read-only role is a blocking finding.
 
+## What's New
+
+Every change that ships a feature people can see in Intelligence adds an entry to
+`internal/whatsnew/entries.json` in the same change (newest first): a new page, tab, button,
+workflow ability, integration or visible behaviour. Fixes, refactors and internal changes do not.
+Give it a short plain summary of what the feature is and where to find it, and a demo in
+`internal/whatsnew/media/`: every entry has one (the tests fail without it). Make it a GIF of the
+feature in use, or a screenshot of where it shows if nothing moves, captured from a local instance
+with throwaway data, under 1.5 MiB. Never change a released entry's `id`. README's What's New
+section has the format.
+
 ## Repo hygiene
 
 The repository is public. Never commit secrets, hostnames, tailnet names, IP addresses or

@@ -38,6 +38,7 @@ import (
 	"github.com/zachlatta/intelligence/internal/resources"
 	"github.com/zachlatta/intelligence/internal/usage"
 	"github.com/zachlatta/intelligence/internal/web"
+	"github.com/zachlatta/intelligence/internal/whatsnew"
 	"github.com/zachlatta/intelligence/internal/workflow"
 )
 
@@ -199,6 +200,14 @@ func serve(ctx context.Context) error {
 	}
 	if err := db.EnsureReadonlyRole(ctx, owner, c.ReadonlyRole, c.ReadonlyPassword); err != nil {
 		return err
+	}
+	// the release notes this build ships, into whats_new for the What's New tab
+	entries, err := whatsnew.Entries()
+	if err != nil {
+		return err
+	}
+	if err := whatsnew.Sync(ctx, owner, entries); err != nil {
+		return fmt.Errorf("what's new: %w", err)
 	}
 	ro, err := pgxpool.New(ctx, c.ReadonlyURL)
 	if err != nil {

@@ -1,5 +1,6 @@
 {{define "css"}}<link rel="stylesheet" href="/ui.css">
-<script src="/submitkeys.js" defer></script>{{end}}
+<script src="/submitkeys.js" defer></script>
+<script src="/whatsnew.js" defer></script>{{end}}
 {{define "top"}}{{/* the top bar, with the tab whose path is . marked */}}
 <header class="topbar"><div class="container">
   <div class="brand-row">
@@ -12,6 +13,7 @@
     <a href="/schedules"{{if eq . "/schedules"}} aria-current="page"{{end}}>Schedules</a>
     <a href="/usage"{{if eq . "/usage"}} aria-current="page"{{end}}>Plans</a>
     <a href="/resources"{{if eq . "/resources"}} aria-current="page"{{end}}>Host monitoring</a>
+    <a href="/whats-new" id="nav-whats-new"{{if eq . "/whats-new"}} aria-current="page"{{end}}>What's New<span class="unseen-count" aria-hidden="true" hidden></span></a>
     <a href="/account"{{if eq . "/account"}} aria-current="page"{{end}}>Account</a>
   </nav>
 </div></header>
