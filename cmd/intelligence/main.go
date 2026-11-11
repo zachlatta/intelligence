@@ -106,9 +106,10 @@ type serverSettings struct {
 	AssemblyAIKey    string // ASSEMBLYAI_API_KEY: for the chat box's dictation; unset turns it off
 	// GOOGLE_OAUTH_CLIENT_JSON (a Google OAuth client, raw or base64) and CONNECTIONS_KEY (32
 	// random bytes, base64: seals each mailbox's token) turn email triggers on; unset, they are off.
-	Google    *email.Google
-	EmailKey  *email.Keyring
-	PublicURL string // PUBLIC_URL: the server's origin, for Google's redirect; default each request's
+	EmailInterval time.Duration // EMAIL_POLL_INTERVAL, default 1s
+	Google        *email.Google
+	EmailKey      *email.Keyring
+	PublicURL     string // PUBLIC_URL: the server's origin, for Google's redirect; default each request's
 	// WORKFLOW_QUEUE_CPU_PCT, WORKFLOW_QUEUE_MEM_PCT and WORKFLOW_QUEUE_LOAD_PER_CPU: when a host
 	// is near capacity, so a new workflow run queues; each defaults to workflow.DefaultLimits (85,
 	// 90 and 1.5), and 0 or "off" turns it off.
@@ -136,6 +137,14 @@ func serverConfig(getenv func(string) string) (serverSettings, error) {
 	c.ReadonlyPassword, _ = u.User.Password()
 	if c.ReadonlyRole == "" || c.ReadonlyPassword == "" {
 		return c, errors.New("READONLY_DATABASE_URL needs a user and a password")
+	}
+	c.EmailInterval = email.Interval
+	if raw := getenv("EMAIL_POLL_INTERVAL"); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil || d < time.Second {
+			return c, fmt.Errorf("EMAIL_POLL_INTERVAL %q: want a duration of at least 1s", raw)
+		}
+		c.EmailInterval = d
 	}
 	c.PublicURL = getenv("PUBLIC_URL")
 	if c.QueueLimits, err = queueLimits(getenv); err != nil {
@@ -209,7 +218,7 @@ func serve(ctx context.Context) error {
 	srv := &http.Server{
 		Addr: addr(os.Getenv),
 		Handler: web.New(web.Config{Context: ctx, Version: v, DB: owner, Readonly: ro, BinDir: c.BinDir,
-			AssemblyAIKey: c.AssemblyAIKey, Google: c.Google, EmailKey: c.EmailKey, PublicURL: c.PublicURL, QueueLimits: &c.QueueLimits}),
+			AssemblyAIKey: c.AssemblyAIKey, Google: c.Google, EmailKey: c.EmailKey, EmailInterval: c.EmailInterval, PublicURL: c.PublicURL, QueueLimits: &c.QueueLimits}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go pruneHosts(ctx, fleet.New(owner))
