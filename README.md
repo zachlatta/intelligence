@@ -142,7 +142,8 @@ including tradeoffs or risks, in up to 2000 bytes. Raw HTML is escaped and unsaf
 Existing plain-text summaries still work; an empty legacy summary falls back to a changed-field list.
 
 The review page has a persistent discussion thread. Browser sessions post `{"text":"Your question"}`
-to `POST /api/workflow-proposals/{id}/comments` (201 with the question's numeric `id`). This
+to `POST /api/workflow-proposals/{id}/comments` (201 with the question's numeric `id`); the question
+box also takes dictation when `ASSEMBLYAI_API_KEY` is set. This
 atomically saves the question and queues an answer agent through the existing fleet `create_agent`
 command and host WebSocket. A fresh agent receives the proposal's summary, full workflow diff,
 the exact question, and the latest 100 thread entries. It uses the saved workflow's host and
@@ -1063,8 +1064,8 @@ origin (another site's request is refused with 403), and those with a body must 
   "truncated"}`, or 400 with `{"error"}`. At most 10000 rows; 5 seconds per query.
 - `GET /api/host/binary/{os}/{arch}`: the host binary at the server's version.
 - `GET /dictation.js`: the dictation engine shared by the chat box, the new agent and workspace forms,
-  the new and edit schedule forms, the new task box, the workflow run dialog and the reply to a
-  waiting run.
+  the new and edit schedule forms, the new task box, the workflow run dialog, the reply to a
+  waiting run and workflow proposal questions.
 - `POST /api/attachments` with `{"name", "data"}` (base64 PNG, JPEG or GIF): stores one image in
   `attachments` and answers 201 with `{"id", "reference"}` (see Attachments, above).
 - `GET /attachments.js`: the image picker shared by the chat box, the new agent and workspace forms,

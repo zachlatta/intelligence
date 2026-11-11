@@ -9,6 +9,7 @@ import (
 	"html/template"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -103,11 +104,25 @@ type proposalView struct {
 	Decided, Undone                                                                             *time.Time
 	BeforeState, AfterState, AppliedState, UndoState                                            *workflow.WorkflowState
 	RawBefore, RawAfter                                                                         string
-	Target                                                                                      string
+	Target, Dictation                                                                           string
 	BaseVersion, ResultVersion                                                                  int
 	Pending, Applied                                                                            bool
 	Changes                                                                                     []proposalChange
 	Comments                                                                                    []proposalComment
+}
+
+func (p proposalView) Headline() string {
+	for line := range strings.Lines(p.Summary) {
+		line = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "#>-* "))
+		line = strings.TrimSpace(strings.Trim(line, "*_`"))
+		if line != "" {
+			return line
+		}
+	}
+	if p.Target != "" {
+		return "Proposed " + p.Operation + " to " + p.Target
+	}
+	return "Proposed " + p.Operation
 }
 
 func (p proposalView) HasPendingAnswers() bool {
@@ -180,7 +195,7 @@ func readProposalViews(ctx context.Context, v viewer, id, wid string) ([]proposa
 	})
 }
 
-func proposalPage(v viewer) http.HandlerFunc {
+func proposalPage(cfg Config, v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if !workflowIDRe.MatchString(id) {
@@ -212,6 +227,7 @@ func proposalPage(v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), 500)
 			return
 		}
+		ps[0].Dictation = dictationPath(cfg)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_ = proposalTmpl.ExecuteTemplate(w, "proposal", ps[0])
 	}

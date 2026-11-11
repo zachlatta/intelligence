@@ -27,7 +27,9 @@ func TestEveryPageLoadsTheSubmitKeys(t *testing.T) {
 	c := signInAs(t, h)
 	sendBatch(t, h, batch(true, "ep1", tentry(1, `{"type":"user_message","text":"go"}`)))
 	wf := createWorkflow(t, h, workflow.Starting)
+	prop := proposalForQuestion(t, h)
 	for _, path := range []string{"/", "/usage", "/resources", "/login", "/account", "/schedules", "/hosts/host-1/schedules/new", "/workflows/email", "/gmail/callback", "/workflows", "/workflows/" + wf,
+		"/workflow-proposals", "/workflow-proposals/" + prop,
 		newAgentPath, "/hosts/host-1/workspaces/new", "/hosts/host-1/agents/" + agentA1} {
 		rec := call(t, h, http.MethodGet, path, "", nil, c)
 		if rec.Code != http.StatusOK {

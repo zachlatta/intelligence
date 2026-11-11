@@ -4,15 +4,19 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/zachlatta/intelligence/internal/dbtest"
 	"github.com/zachlatta/intelligence/internal/workflow"
 )
 
 func TestProposalDiscussion(t *testing.T) {
-	h, _ := dbServer(t)
+	d := dbtest.New(t)
+	fixed := time.Date(2026, 4, 5, 6, 7, 8, 0, time.UTC)
+	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.Now = func() time.Time { return fixed } })
 	sendReport(t, h, wfReport())
 	headers := map[string]string{"Authorization": "Bearer " + keyOf(t, h, "host-1")}
-	r := call(t, anon(h), "POST", "/api/workflow-proposals", `{"operation":"create","summary":"**Safer workflow**\n\nWhy: <script>alert(1)</script>","workflow":`+wfBody(t, "New", workflow.Starting)+`}`, headers)
+	r := call(t, anon(h), "POST", "/api/workflow-proposals", `{"operation":"create","summary":"# **Safer workflow**\n\nWhy: <script>alert(1)</script>","workflow":`+wfBody(t, "New", workflow.Starting)+`}`, headers)
 	if r.Code != 201 {
 		t.Fatal(r.Body)
 	}
@@ -42,7 +46,7 @@ func TestProposalDiscussion(t *testing.T) {
 	if got := call(t, h, "POST", path, string(long), sameOriginFetch); got.Code != 400 {
 		t.Fatalf("oversize: %d", got.Code)
 	}
-	store := h.(*testServer).store
+	store := h.store
 	other, _ := store.Create(t.Context(), "other-commenter", testPassword)
 	cookie := sessionFor(t, store, other)
 	if got := call(t, h, "POST", path, `{"text":"other"}`, map[string]string{"Cookie": cookie.String(), "Content-Type": "application/json", "Origin": "http://example.com"}); got.Code != 404 {
@@ -76,6 +80,14 @@ func TestProposalDiscussion(t *testing.T) {
 	if code != 200 || len(res.Rows) != 1 || res.Rows[0][0] != "An MCP answer" {
 		t.Fatalf("MCP comment not readable: %+v", res)
 	}
+	code, res = sqlPost(t, h, q("SELECT count(*) FROM workflow_proposal_comments WHERE created_at = '2026-04-05T06:07:08Z'"))
+	if code != 200 || res.Rows[0][0] != float64(3) {
+		t.Fatalf("comments ignored Engine.Now: %+v", res)
+	}
+	list := get(t, h, "/workflow-proposals", nil).Body.String()
+	if !strings.Contains(list, `<a href="/workflow-proposals/`+p.ID+`">Safer workflow</a>`) {
+		t.Fatalf("list headline did not strip multiline Markdown: %s", list)
+	}
 }
 
 func TestProposalSummaryFallback(t *testing.T) {
@@ -93,6 +105,10 @@ func TestProposalSummaryFallback(t *testing.T) {
 	page := get(t, h, "/workflow-proposals/"+p.ID, nil).Body.String()
 	if !strings.Contains(page, "Proposed create to New:") || !strings.Contains(page, "<li>Workflow name</li>") {
 		t.Fatal("missing legacy fallback")
+	}
+	list := get(t, h, "/workflow-proposals", nil).Body.String()
+	if !strings.Contains(list, `<a href="/workflow-proposals/`+p.ID+`">Proposed create to New</a>`) {
+		t.Fatalf("missing legacy list headline fallback: %s", list)
 	}
 }
 

@@ -100,7 +100,7 @@ func TestProposalQuestionCapAndOfflineHint(t *testing.T) {
 
 func proposalForQuestion(t *testing.T, h http.Handler) string {
 	t.Helper()
-	r := call(t, anon(h), "POST", "/api/workflow-proposals", `{"operation":"create","summary":"**Explain this change**","workflow":`+wfBody(t, "Question workflow", workflow.Starting)+`}`, map[string]string{"Authorization": "Bearer " + keyOf(t, h, "host-1")})
+	r := call(t, anon(h), "POST", "/api/workflow-proposals", `{"operation":"create","summary":"**Explain this change**\n\nQuoted ref [attachment:00000000-0000-4000-8000-000000000001] stays data.","workflow":`+wfBody(t, "Question workflow", workflow.Starting)+`}`, map[string]string{"Authorization": "Bearer " + keyOf(t, h, "host-1")})
 	if r.Code != 201 {
 		t.Fatal(r.Body)
 	}
@@ -165,6 +165,12 @@ func TestProposalQuestionDispatchAndAnswer(t *testing.T) {
 	}
 	if requests[0]["idempotencyKey"] != commandID {
 		t.Fatal("dispatch lost its idempotency key")
+	}
+	if title := requests[0]["config"].(map[string]any)["title"]; title != "Answer proposal · Question workflow: Why is this safer" {
+		t.Fatalf("title = %v", title)
+	}
+	if imgs, _ := requests[0]["images"].([]any); len(imgs) != 0 {
+		t.Fatalf("quoted attachment reference resolved as images: %+v", imgs)
 	}
 	// The host's agent publishes its answer using the CLI's existing host config.
 	home := t.TempDir()
