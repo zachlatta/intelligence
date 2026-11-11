@@ -301,7 +301,7 @@ func TestTheEmailPageShowsTheMailboxAndWhatEachEmailDid(t *testing.T) {
 	fake.Add(mailMsg("s1", "t7", "someone@example.com", "Hello there", "Hi."))
 	decided(t, h, "s1")
 	page := get(t, h, "/workflows/email", nil)
-	for _, want := range []string{"bot@example.com", "Hello there", "someone@example.com", "no workflow"} {
+	for _, want := range []string{"bot@example.com", "Hello there", "someone@example.com", "no workflow", "<thead>"} {
 		if !strings.Contains(page.Body.String(), want) {
 			t.Errorf("page lacks %q", want)
 		}

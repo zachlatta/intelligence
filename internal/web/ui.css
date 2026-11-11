@@ -183,10 +183,10 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--line);
 .warn { color: var(--red); }
 .empty-state { padding: 3rem 1.25rem; text-align: center; color: var(--muted); background: var(--panel);
   border: 1px dashed var(--line-strong); border-radius: var(--radius); }
-.progress:empty, #progress:empty { display: none; }
-.progress.meta::before, #progress.meta::before { content: ""; display: inline-block; width: .5rem; height: .5rem;
+.progress:empty { display: none; }
+.progress.meta::before { content: ""; display: inline-block; width: .5rem; height: .5rem;
   border-radius: 50%; margin-right: .45rem; background: var(--accent); animation: pulse 1.2s infinite; }
-.progress.warn, #progress.warn { padding: .55rem .8rem; border-radius: var(--control-radius); border: 1px solid var(--red-line);
+.progress.warn { padding: .55rem .8rem; border-radius: var(--control-radius); border: 1px solid var(--red-line);
   background: var(--red-bg); color: var(--red); white-space: pre-wrap; font-size: 13px; }
 @keyframes pulse { 50% { opacity: .32; } }
 
@@ -216,6 +216,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 input[type=checkbox], input[type=radio] { accent-color: var(--accent); width: 1rem; height: 1rem; margin: 0; }
 textarea { min-height: 9rem; resize: vertical; }
 .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: 0 .75rem; }
+.fields[hidden] { display: none; }
 .fields label { font-size: 12.5px; color: var(--fg-2); margin: .8rem 0 .25rem; }
 fieldset { border: 1px solid var(--line); border-radius: var(--radius); margin: 1.25rem 0 0; padding: .35rem 1.1rem 1.1rem;
   background: var(--bg-subtle); }

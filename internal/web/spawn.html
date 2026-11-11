@@ -7,10 +7,6 @@
 {{template "css"}}
 <style>
   .card.form { padding: .25rem 1.25rem 1.25rem; }
-  #progress.meta::before { content: ""; display: inline-block; width: .5rem; height: .5rem; border-radius: 50%; margin-right: .45rem;
-    background: var(--accent); animation: pulse 1.2s infinite; }
-  #progress.warn { padding: .55rem .8rem; border-radius: var(--radius); border: 1px solid var(--red-line); background: var(--red-bg);
-    white-space: pre-wrap; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -33,6 +29,8 @@
     <div><label for="provider">Provider</label>
       <select id="provider" name="provider">{{range .Providers}}<option value="{{.}}"{{if eq . $.Agent.Provider}} selected{{end}}>{{.}}</option>{{else}}<option value="{{$.Agent.Provider}}">{{$.Agent.Provider}}</option>{{end}}</select></div>
     <div><label for="model">Model</label><input id="model" name="model" value="{{.Agent.Model}}" placeholder="provider default"></div>
+  </div>
+  <div class="fields">
     <div><label for="thinking">Thinking</label>
       <select id="thinking" name="thinking"><option value="">default</option>{{range .Thinking}}<option value="{{.}}"{{if eq . $.Agent.Thinking}} selected{{end}}>{{.}}</option>{{end}}</select></div>
     <div><label for="mode">Mode</label><input id="mode" name="mode" value="{{.Agent.Mode}}" placeholder="provider default"></div>
@@ -162,7 +160,7 @@ function agentArgs() {
 
 function say(text, warn) {
   out.textContent = text;
-  out.className = warn ? "warn" : "meta";
+  out.className = warn ? "progress warn" : "progress meta";
 }
 
 async function sql(query) {
@@ -225,7 +223,6 @@ form.addEventListener("submit", async (e) => {
 </script>{{end}}{{end}}
 
 {{define "agent"}}{{template "head" "New agent"}}
-<body>
 <div class="crumbs"><a href="/">Hosts</a><span class="sep">/</span>{{.Host}}<span class="sep">/</span>{{or .Workspace.Name .Workspace.ID}}</div>
 <div class="page-head"><div><h1>New agent in {{or .Workspace.Name .Workspace.ID}}</h1>
 <p class="sub"><span class="mono">{{.Workspace.Directory}}</span>{{if .Workspace.Branch}} · <span class="mono">{{.Workspace.Branch}}</span>{{end}}{{if .Workspace.Project}} · {{.Workspace.Project}}{{end}}</p></div></div>
@@ -234,7 +231,7 @@ form.addEventListener("submit", async (e) => {
   data-progress-sql="{{.ProgressSQL}}"{{if .Dictation}} data-dictation="{{.Dictation}}"{{end}}>
   {{template "agentfields" .}}
   <div class="form-actions"><button class="btn primary">Start agent</button><a class="btn" href="/">Cancel</a>{{if .Dictation}}{{template "dictationbutton"}}{{end}}</div>
-  <p id="progress"></p>
+  <p id="progress" class="progress"></p>
 </form>
 <script>
 function spawnArgs() {
@@ -246,7 +243,6 @@ function spawnArgs() {
 {{template "foot" .}}{{end}}
 
 {{define "workspace"}}{{template "head" "New workspace"}}
-<body>
 <div class="crumbs"><a href="/">Hosts</a><span class="sep">/</span>{{.Host}}</div>
 <div class="page-head"><div><h1>New workspace on {{.Host}}</h1>
 <p class="sub">A workspace with an agent in it, by default in a new git worktree.</p></div></div>
@@ -268,7 +264,7 @@ function spawnArgs() {
   {{template "agentfields" .}}
   </fieldset>
   <div class="form-actions"><button class="btn primary">Start workspace and agent</button><a class="btn" href="/">Cancel</a>{{if .Dictation}}{{template "dictationbutton"}}{{end}}</div>
-  <p id="progress"></p>
+  <p id="progress" class="progress"></p>
 </form>
 <script>
 const repo = document.getElementById("repo"), cwd = document.getElementById("cwd");

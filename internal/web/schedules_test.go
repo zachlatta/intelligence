@@ -61,7 +61,7 @@ func TestSchedulesPageListsEverySchedule(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{"host-1", "Nightly &lt;tidy&gt;", `href="/hosts/host-1/schedules/sch-nightly"`,
 		"daily at 02:00", "America/New_York", "every 30m", "paused", "failed", "ping the service",
-		`href="/hosts/host-1/schedules/new"`, `data-kind="pause_schedule"`, `data-kind="resume_schedule"`} {
+		`href="/hosts/host-1/schedules/new"`, `data-kind="pause_schedule"`, `data-kind="resume_schedule"`, "<thead>"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("schedules page misses %q", want)
 		}

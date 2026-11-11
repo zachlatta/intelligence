@@ -12,7 +12,7 @@ func TestTheStylesheetIsServed(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/css") {
 		t.Fatalf("ui.css: %d %q", rec.Code, rec.Header().Get("Content-Type"))
 	}
-	for _, want := range []string{"--accent", "--topbar-h", ".topnav", ".card", ".badge", ".btn", ".md table", ".progress.warn", "prefers-color-scheme: dark", ".btn[hidden] { display: none; }"} {
+	for _, want := range []string{"--accent", "--topbar-h", ".topnav", ".card", ".badge", ".btn", ".md table", ".progress.warn", "prefers-color-scheme: dark", ".btn[hidden] { display: none; }", ".fields[hidden] { display: none; }"} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("ui.css misses %q", want)
 		}
@@ -74,6 +74,9 @@ func TestEveryPageSharesTheStylesheetAndTopBar(t *testing.T) {
 		}
 		if strings.Count(nav, `aria-current="page"`) != 1 {
 			t.Errorf("%s should mark exactly one tab", p.path)
+		}
+		if n := strings.Count(page, "<body"); n != 1 {
+			t.Errorf("%s: %d <body> tags, want 1", p.path, n)
 		}
 	}
 }

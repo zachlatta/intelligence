@@ -9,12 +9,13 @@
   .hint { font-size: 12px; color: var(--muted); margin: .4rem 0 0; }
   .mailbox { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1rem; }
   .mailbox .addr { font-weight: 600; font-size: 15px; }
-  .owners { display: flex; gap: .5rem; align-items: center; margin-top: .9rem; }
-  .owners input { flex: 1; }
-  .paste { margin-top: 1rem; display: flex; gap: .5rem; }
+  .owners { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-top: .9rem; }
+  .owners input { flex: 1 1 14rem; min-width: 0; }
+  .paste { margin-top: 1rem; display: flex; flex-wrap: wrap; gap: .5rem; }
+  .paste input { flex: 1 1 14rem; min-width: 0; }
   .paste[hidden] { display: none; }
-  .log td.what { white-space: nowrap; }
-  .log .subj { max-width: 26rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .log td.what { min-width: 12rem; }
+  .log .subj { max-width: 18rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .log .reason { font-size: 12px; color: var(--muted); }
   .badge.purple { background: #f5f0fd; border-color: #dccdf5; color: #7b4fc4; }
   @media (prefers-color-scheme: dark) { .badge.purple { background: #251d36; border-color: #43345f; color: #b597ee; } }
@@ -61,7 +62,8 @@
 
 <h2 class="section-title">What came in</h2>
 {{if .Emails}}<div class="table-wrap"><table class="table log">
-  <tr><th>When</th><th>From</th><th>Subject</th><th>What happened</th></tr>
+  <thead><tr><th>When</th><th>From</th><th>Subject</th><th>What happened</th></tr></thead>
+  <tbody>
   {{range .Emails}}<tr>
     <td class="meta" style="white-space:nowrap">{{agoAt $.Now .ReceivedAt}}</td>
     <td>{{.Who}}<div class="reason">{{.From}}{{if not .Verified}} · not verified{{end}}</div></td>
@@ -70,6 +72,7 @@
       {{if .Run}} <a href="/workflow-runs/{{.Run}}">{{or .RunTitle .Workflow}}</a>{{else if .WorkflowID}} <a href="/workflows/{{.WorkflowID}}">{{.Workflow}}</a>{{end}}
       {{if .Reason}}<div class="reason">{{.Reason}}</div>{{end}}</td>
   </tr>{{end}}
+  </tbody>
 </table></div>{{else}}<p class="empty-state">No email yet.</p>{{end}}
 <footer title="{{.Version}}">version {{short .Version}}</footer>
 </main>

@@ -11,7 +11,9 @@
   .host-head h2 { font-size: 15px; margin: 0; }
   .host-head .grow { flex: 1; }
   .sched-name { font-weight: 500; }
-  .sched-prompt { color: var(--muted); max-width: 32rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sched-prompt { color: var(--muted); max-width: 18rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sched-meta { max-width: 18rem; overflow-wrap: anywhere; }
+  .when-col { white-space: nowrap; }
   .actions { white-space: nowrap; text-align: right; }
   .facts { display: grid; grid-template-columns: max-content 1fr; gap: .35rem 1.2rem; padding: 1rem 1.25rem; margin: 0; font-size: 13.5px; }
   .facts dt { color: var(--muted); }
@@ -19,10 +21,6 @@
   .prompt-text { white-space: pre-wrap; padding: .9rem 1.25rem; margin: 0; border-top: 1px solid var(--line); font-size: 13.5px; }
   .run-out { white-space: pre-wrap; margin: .4rem 0 0; font-size: 12.5px; max-height: 24rem; overflow: auto; }
   .run-err { color: var(--red); white-space: pre-wrap; }
-  #progress.meta::before { content: ""; display: inline-block; width: .5rem; height: .5rem; border-radius: 50%; margin-right: .45rem;
-    background: var(--accent); animation: pulse 1.2s infinite; }
-  #progress.warn { padding: .55rem .8rem; border-radius: var(--radius); border: 1px solid var(--red-line); background: var(--red-bg);
-    white-space: pre-wrap; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -50,7 +48,7 @@ const progress = document.getElementById("progress");
 function say(text, warn) {
   if (!progress) { if (warn) alert(text); return; }
   progress.textContent = text;
-  progress.className = warn ? "warn" : "meta";
+  progress.className = warn ? "progress warn" : "progress meta";
 }
 
 async function sql(query) {
@@ -158,7 +156,7 @@ document.querySelectorAll("input[type=datetime-local][data-utc]").forEach((i) =>
 <main class="container page mid">
 <div class="page-head"><div><h1>Schedules</h1>
 <p class="sub">Prompts each host's Paseo runs on a cadence, each time in a new agent.</p></div></div>
-<p id="progress"></p>
+<p id="progress" class="progress"></p>
 {{if not .Count}}<p class="empty-state">No schedules yet.{{if .Hosts}} Make one on a host below.{{end}}</p>{{end}}
 {{range .Hosts}}
 <div class="host-head" id="{{.Host.Report.Name}}">
@@ -170,19 +168,21 @@ document.querySelectorAll("input[type=datetime-local][data-utc]").forEach((i) =>
 {{if .Problem}}<p class="banner">{{.Host.Report.Name}} could not list its schedules: {{.Problem}}</p>{{end}}
 {{if .Schedules}}
 <div class="table-wrap"><table class="table">
-  <tr><th>Schedule</th><th>When</th><th>Next</th><th>Last run</th><th></th></tr>
+  <thead><tr><th>Schedule</th><th>When</th><th>Next</th><th>Last run</th><th></th></tr></thead>
+  <tbody>
   {{range .Schedules}}
   <tr>
     <td><a class="sched-name" href="/hosts/{{.Host}}/schedules/{{.ID}}">{{or .Name .Title .ID}}</a> {{template "status" .Status}}
       <div class="sched-prompt" title="{{.Prompt}}">{{.Prompt}}</div>
-      <div class="meta">{{if eq .Target "new-agent"}}{{.Provider}}{{if .Model}} · {{.Model}}{{end}} · <span class="mono">{{.Cwd}}</span>{{if eq .Isolation "worktree"}} · worktree{{end}}{{else}}in agent <span class="mono">{{.AgentID}}</span>{{end}}</div></td>
-    <td>{{cadence .Schedule}}{{if .Timezone}}<div class="meta">{{.Timezone}}</div>{{end}}</td>
-    <td>{{if eq .Status "active"}}{{until $.Now .NextRunAt}}<div class="meta">{{at .NextRunAt "weekday"}}</div>{{else}}<span class="meta">—</span>{{end}}</td>
-    <td>{{with .LastRun}}{{template "runstatus" .Status}} <span class="meta">{{ago $.Now .StartedAt}}</span>{{else}}<span class="meta">none</span>{{end}}
+      <div class="meta sched-meta">{{if eq .Target "new-agent"}}{{.Provider}}{{if .Model}} · {{.Model}}{{end}} · <span class="mono">{{.Cwd}}</span>{{if eq .Isolation "worktree"}} · worktree{{end}}{{else}}in agent <span class="mono">{{.AgentID}}</span>{{end}}</div></td>
+    <td class="when-col">{{cadence .Schedule}}{{if .Timezone}}<div class="meta">{{.Timezone}}</div>{{end}}</td>
+    <td class="when-col">{{if eq .Status "active"}}{{until $.Now .NextRunAt}}<div class="meta">{{at .NextRunAt "weekday"}}</div>{{else}}<span class="meta">—</span>{{end}}</td>
+    <td class="when-col">{{with .LastRun}}{{template "runstatus" .Status}} <span class="meta">{{ago $.Now .StartedAt}}</span>{{else}}<span class="meta">none</span>{{end}}
       <div class="meta">{{.RunCount}} run{{if ne .RunCount 1}}s{{end}}{{if .FailedRuns}}, {{.FailedRuns}} failed{{end}}</div></td>
     <td class="actions">{{template "actions" .}}</td>
   </tr>
   {{end}}
+  </tbody>
 </table></div>
 {{end}}
 {{else}}<p class="empty-state">No dev host has joined this account yet.</p>
@@ -201,7 +201,7 @@ document.querySelectorAll("input[type=datetime-local][data-utc]").forEach((i) =>
 <div class="page-head"><div><h1>{{or .S.Name .S.Title .S.ID}} {{template "status" .S.Status}}</h1>
 <p class="sub">{{cadence .S.Schedule}}{{if .S.Timezone}} ({{.S.Timezone}}){{end}}{{if eq .S.Status "active"}} · next {{until .Now .S.NextRunAt}}, {{at .S.NextRunAt "weekday"}}{{end}}</p></div>
 <div class="actions">{{template "actions" .S}}</div></div>
-<p id="progress"></p>
+<p id="progress" class="progress"></p>
 <section class="card">
   <dl class="facts">
     <dt>Host</dt><dd>{{.S.Host}}{{if not .Host.Online}} <span class="badge red">offline</span>{{end}}</dd>
@@ -224,7 +224,8 @@ document.querySelectorAll("input[type=datetime-local][data-utc]").forEach((i) =>
 <h2 class="section-title">{{.S.RunCount}} run{{if ne .S.RunCount 1}}s{{end}}</h2>
 {{if .Runs}}
 <div class="table-wrap"><table class="table">
-  <tr><th>Run</th><th>Started</th><th class="n">Took</th><th>Agent</th></tr>
+  <thead><tr><th>Run</th><th>Started</th><th class="n">Took</th><th>Agent</th></tr></thead>
+  <tbody>
   {{range .Runs}}
   <tr>
     <td>{{template "runstatus" .Status}}
@@ -235,6 +236,7 @@ document.querySelectorAll("input[type=datetime-local][data-utc]").forEach((i) =>
     <td>{{if .AgentListed}}<a href="/hosts/{{$.S.Host}}/agents/{{.AgentID}}">transcript</a>{{else if .AgentID}}<span class="meta mono" title="archived: its transcript is not kept">{{.AgentID}}</span>{{end}}</td>
   </tr>
   {{end}}
+  </tbody>
 </table></div>
 {{else}}<p class="empty-state">No runs yet.</p>{{end}}
 
@@ -253,6 +255,8 @@ document.querySelectorAll("input[type=datetime-local][data-utc]").forEach((i) =>
     <div><label for="provider">Provider</label>
       <select id="provider" name="provider">{{range .Providers}}<option value="{{.}}"{{if eq . $.S.Provider}} selected{{end}}>{{.}}</option>{{end}}</select></div>
     <div><label for="model">Model</label><input id="model" name="model" value="{{.S.Model}}" placeholder="unchanged"></div>
+  </div>
+  <div class="fields">
     <div><label for="thinking">Thinking</label>
       <select id="thinking" name="thinking"><option value="">unchanged</option>{{range .Thinking}}<option value="{{.}}"{{if eq . $.S.Thinking}} selected{{end}}>{{.}}</option>{{end}}</select></div>
     <div><label for="mode">Mode</label><input id="mode" name="mode" value="{{.S.Mode}}" placeholder="unchanged"></div>
@@ -339,7 +343,7 @@ if (edit) {
   </fieldset>
   <label class="check"><input type="checkbox" name="runNow"> run it once now, too</label>
   <div class="form-actions"><button class="btn primary" type="submit">Make schedule</button><a class="btn" href="/schedules">Cancel</a>{{if .Dictation}}{{template "dictationbutton"}}{{end}}</div>
-  <p id="progress"></p>
+  <p id="progress" class="progress"></p>
 </form>
 <footer title="{{.Version}}">version {{short .Version}}</footer>
 </main>
