@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +17,9 @@ import (
 )
 
 const maxPixels = 5
+
+// Use a common desktop browser signature, without claiming to be a mail provider's proxy.
+const pixelUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 // pixels deliberately requires image markup indicating a tiny or hidden image. A tracker host
 // alone is insufficient: trackers also serve ordinary content. Attachments are not rendered.
@@ -29,21 +33,17 @@ func (g GmailMessage) pixels() []string {
 		if len(raw) > 1<<20 {
 			return
 		}
-		z := html.NewTokenizer(strings.NewReader(raw))
-		for len(out) < maxPixels {
-			tt := z.Next()
-			if tt == html.ErrorToken {
-				break
-			}
-			if tt != html.StartTagToken && tt != html.SelfClosingTagToken {
-				continue
-			}
-			tok := z.Token()
-			if tok.Data != "img" {
-				continue
+		root, err := html.Parse(strings.NewReader(raw))
+		if err != nil {
+			return
+		}
+		var visit func(*html.Node) bool
+		visit = func(node *html.Node) bool {
+			if len(out) >= maxPixels {
+				return false
 			}
 			attrs := map[string]string{}
-			for _, a := range tok.Attr {
+			for _, a := range node.Attr {
 				if _, ok := attrs[a.Key]; !ok {
 					attrs[a.Key] = strings.ToLower(strings.TrimSpace(a.Val))
 					if a.Key == "src" {
@@ -51,19 +51,42 @@ func (g GmailMessage) pixels() []string {
 					}
 				}
 			}
-			width, height := attrs["width"], attrs["height"]
+			// Outlook places a header marker before the old message, rather than wrapping it.
+			if attrs["id"] == "divrplyfwdmsg" || attrs["id"] == "appendonsend" {
+				return false
+			}
+			if node.Data == "blockquote" {
+				return true
+			}
+			for _, class := range strings.Fields(attrs["class"]) {
+				if class == "gmail_quote" || class == "gmail_quote_container" || class == "yahoo_quoted" {
+					return true
+				}
+			}
+			if node.Type != html.ElementNode || node.Data != "img" {
+				for child := node.FirstChild; child != nil; child = child.NextSibling {
+					if !visit(child) {
+						return false
+					}
+				}
+				return true
+			}
+			width, height := tinyDimension(attrs["width"]), tinyDimension(attrs["height"])
 			hidden := false
 			for _, decl := range strings.Split(attrs["style"], ";") {
 				k, v, ok := strings.Cut(decl, ":")
 				if !ok {
 					continue
 				}
-				k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+				k, v = strings.TrimSpace(k), strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(v), "!important"))
 				switch k {
 				case "width":
-					width = v
+					width = width || tinyDimension(v)
 				case "height":
-					height = v
+					height = height || tinyDimension(v)
+				case "max-height":
+					n, ok := pixelDimension(v)
+					hidden = hidden || (ok && n == 0)
 				case "display":
 					hidden = hidden || v == "none"
 				case "visibility":
@@ -71,26 +94,43 @@ func (g GmailMessage) pixels() []string {
 				}
 			}
 			_, hasHidden := attrs["hidden"]
-			if !hidden && !hasHidden && !(tinyDimension(width) && tinyDimension(height)) {
-				continue
+			if !hidden && !hasHidden && !(width && height) {
+				return true
 			}
 			u, err := url.Parse(attrs["src"])
 			if err != nil || !validPixelURL(u) {
-				continue
+				return true
 			}
 			u.Fragment = ""
 			if s := u.String(); !slices.Contains(out, s) {
 				out = append(out, s)
 			}
+			return true
 		}
+		visit(root)
 	})
 	return out
 }
 
-func tinyDimension(s string) bool { return s == "0" || s == "1" || s == "0px" || s == "1px" }
+func pixelDimension(s string) (float64, bool) {
+	if strings.HasSuffix(s, "px") {
+		s = strings.TrimSuffix(s, "px")
+	} else {
+		s = strings.TrimSuffix(s, "pt")
+	}
+	// CSS dimensions here are unsigned decimal values; no percentages, exponents or expressions.
+	if s == "" || strings.ContainsAny(s, "+-eE") {
+		return 0, false
+	}
+	n, err := strconv.ParseFloat(s, 64)
+	return n, err == nil && n >= 0 && n <= 1
+}
+
+func tinyDimension(s string) bool { _, ok := pixelDimension(s); return ok }
 
 func validPixelURL(u *url.URL) bool {
-	return (u.Scheme == "http" || u.Scheme == "https") && u.Hostname() != "" && u.User == nil && len(u.String()) <= 8192
+	port := u.Port()
+	return ((u.Scheme == "http" && (port == "" || port == "80")) || (u.Scheme == "https" && (port == "" || port == "443"))) && u.Hostname() != "" && u.User == nil && len(u.String()) <= 8192
 }
 
 // Public IPv4 and native IPv6 only. Besides local ranges, reject transition mechanisms that
@@ -143,6 +183,7 @@ func pixelClient(lookup func(context.Context, string) ([]netip.Addr, error), all
 			return errors.New("pixel redirect refused")
 		}
 		req.Header = make(http.Header)
+		req.Header.Set("User-Agent", pixelUserAgent)
 		return nil
 	}}
 }
@@ -156,6 +197,7 @@ func fetchPixel(ctx context.Context, c *http.Client, raw string) bool {
 	if err != nil {
 		return false
 	}
+	req.Header.Set("User-Agent", pixelUserAgent)
 	res, err := c.Do(req)
 	if err != nil {
 		return false

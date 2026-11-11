@@ -592,6 +592,11 @@ ordinary images and tracker hostnames alone do not. Fetches run asynchronously, 
 checks on DNS and redirects, two-second request timeouts, a 16 KiB response cap, and no cookies or
 credentials. Failures do not affect the run. Backfill, ignored mail, sent mail, drafts, spam and
 trash do not open pixels. HTML attachments and HTML bodies over 1 MiB are skipped.
+Dimensions accept decimal values and `px`/`pt` units; inline styles support `!important`,
+and zero `max-height` qualifies as hidden. Quoted history in blockquotes and Gmail/Yahoo quote
+containers is skipped; Outlook reply markers stop scanning the rest of that HTML part.
+Requests use a common desktop Chrome User-Agent, including after redirects, without claiming to
+be a mail provider's image proxy. Only HTTP port 80 and HTTPS port 443 are allowed.
 
 `email_pixel_opens` records the email, account, candidate count, start/finish times, attempts and
 successful responses for read-only SQL. A unique email marker makes this best effort, at most once:

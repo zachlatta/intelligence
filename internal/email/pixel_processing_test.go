@@ -43,7 +43,8 @@ func TestProcessingOpensPixelsOnceAfterCommitWithoutWaiting(t *testing.T) {
 	s := Service{DB: d.Owner, pixelHTTP: pixelClient(func(context.Context, string) ([]netip.Addr, error) {
 		return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
 	}, func(netip.Addr) bool { return true })}
-	g := GmailMessage{ID: "m1", Payload: Part{MimeType: "text/html", Body: Body{Data: base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`<img width=1 height=1 src="%s">`, server.URL)))}}}
+	localURL := routeTestPixelClient(t, s.pixelHTTP, server)
+	g := GmailMessage{ID: "m1", Payload: Part{MimeType: "text/html", Body: Body{Data: base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`<img width=1 height=1 src="%s">`, localURL)))}}}
 	decide := func(pgx.Tx, workflow.Mail) (decision, error) { return decision{Decision: "started"}, nil }
 	done := make(chan error, 1)
 	go func() { done <- s.keep(ctx, 1, g, decide) }()
