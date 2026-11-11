@@ -16,6 +16,8 @@
   .st-needs, .st-sent-back, .st-asking { background: var(--orange-bg); border-color: var(--orange-line); color: var(--orange); }
   .st-needs::before, .st-sent-back::before, .st-asking::before { background: var(--orange); }
   .st-needs::before, .st-asking::before { animation: pulse 1.6s infinite; }
+  .st-queued { background: var(--orange-bg); border-color: var(--orange-line); color: var(--orange); }
+  .st-queued::before { background: var(--orange); }
   .st-done { background: var(--green-bg); border-color: var(--green-line); color: var(--green); }
   .st-done::before { background: var(--green); }
   .st-error, .st-failed { background: var(--red-bg); border-color: var(--red-line); color: var(--red); }
@@ -26,7 +28,7 @@
   .wf-card { display: flex; flex-direction: column; margin: 0; }
   .wf-card .card-body { flex: 1; }
   .wf-card h2 a { color: var(--fg); } .wf-card h2 a:hover { color: var(--accent); }
-  .card-foot { display: flex; gap: .5rem; align-items: center; padding: .6rem 1rem; border-top: 1px solid var(--line); background: var(--bg-subtle); }
+  .card-foot { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; padding: .6rem 1rem; border-top: 1px solid var(--line); background: var(--bg-subtle); }
   .strip { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; margin: .6rem 0 0; }
   .strip .arrow { color: var(--faint); font-size: 12px; }
   .chip { display: inline-flex; align-items: center; height: 1.45rem; padding: 0 .5rem; border-radius: 4px; font-size: 12px;
@@ -130,6 +132,9 @@
     font: inherit; color: var(--fg); cursor: pointer; }
   .menu button:hover { background: var(--bg-muted); }
   .menu .d { display: block; font-size: 12px; color: var(--muted); }
+  .prompt-inspection pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.6 var(--mono); margin: 0; }
+  .prompt-inspection nav { display: flex; flex-wrap: wrap; gap: .5rem 1rem; margin: 1rem 0; }
+  .prompt-inspection section { scroll-margin-top: 1rem; }
 </style>
 </head>
 <body>
@@ -183,7 +188,8 @@
     {{if eq .Definition.Trigger "email"}}<p class="hint">✉ {{emailSummary .Definition.Email}}</p>{{end}}</div>
   <div class="card-foot">{{if eq .Definition.Trigger "task"}}
     <button class="btn sm" data-default-workflow="{{.ID}}" data-default="{{if .IsDefault}}false{{else}}true{{end}}">{{if .IsDefault}}Clear default{{else}}Make default{{end}}</button>{{end}}
-    <span class="grow"></span><button class="btn sm ghost" data-delete-workflow="{{.ID}}" data-name="{{.Name}}">Delete</button><a class="btn sm" href="/workflows/{{.ID}}">Edit</a></div>
+    {{if .PendingProposals}}<a href="/workflow-proposals?workflow={{.ID}}">{{.PendingProposals}} pending proposal{{if ne .PendingProposals 1}}s{{end}}</a>{{end}}
+    <span class="grow"></span><button class="btn sm ghost" data-delete-workflow="{{.ID}}" data-name="{{.Name}}">Delete</button><a class="btn sm" href="/workflows/{{.ID}}/prompts">Prompts</a><a class="btn sm" href="/workflows/{{.ID}}">Edit</a></div>
 </section>
 {{end}}
 </div>
@@ -290,6 +296,23 @@ setInterval(async () => {
 </script>{{end}}
 {{template "wffoot" .}}{{end}}
 
+{{define "prompts"}}{{template "wfhead" (printf "Prompts · %s" .Workflow.Name)}}
+<main class="container page prompt-inspection">
+<div class="crumbs"><a href="/workflows">Workflows</a><span class="sep">/</span><a href="/workflows/{{.Workflow.ID}}">{{.Workflow.Name}}</a><span class="sep">/</span>Prompts</div>
+<div class="page-head"><div><h1>Workflow prompts</h1><p class="sub">{{.Workflow.Name}} · saved version {{.Workflow.Version}}{{with .Workflow.Definition.Host}} · on <span class="mono">{{.}}</span>{{end}}</p></div><a class="btn sm" href="/workflows/{{.Workflow.ID}}">Edit workflow</a></div>
+<p>These are the messages Intelligence composes using the same code that starts agents and hands the orchestrator each step. Saved instructions include any model-choice or usage-balancing guidance; repository visibility, shell guidance, file-delivery and deliverable-email rules are appended at runtime.</p>
+<p class="meta">This previews the saved version, including all text without truncation; unsaved edits are not included. {{if .ProjectPrompt}}Run-specific values appear as <code>{{"{{run}}"}}</code>, <code>{{"{{input}}"}}</code>, <code>{{"{{repo}}"}}</code> and <code>{{"{{branch}}"}}</code>. The project finder uses the host's current repository list; the orchestrator preview assumes a repository is chosen (a run with <code>none</code> omits the worktree clause).{{else}}<code>{{"{{repo}}"}}</code> is filled with the fixed repository <code>{{.Workflow.Definition.Project.Directory}}</code>; run-specific values appear as <code>{{"{{run}}"}}</code>, <code>{{"{{input}}"}}</code> and <code>{{"{{branch}}"}}</code>.{{end}} Moving a run with <code>intelligence workflow</code> prefixes the next step message with a one-line transition (<code>Step N is done.</code> or <code>Back to step N. What is missing, as you said: …</code>) or returns a one-line closing or waiting reply.</p>
+<p class="meta">These are Intelligence's messages, not the provider's underlying system prompt. If a never-ask-mode agent still hits a permission prompt on the host (such as a shell safety check), the host client automatically denies it with rewrite guidance. Host skills, repository instructions, attachment paths, later replies or thread emails, and worker messages written by the orchestrator are supplied separately and are not reproduced here. Any deliverable-email rule stored in the workflow's instructions appears below.</p>
+<nav aria-label="Prompt sections"><a href="#project-prompt">Project</a><a href="#orchestrator-prompt">Orchestrator</a>{{range .Steps}}<a href="#step-{{.ID}}">{{.N}}. {{.Title}}</a>{{end}}</nav>
+<section class="card" id="project-prompt"><div class="card-head"><h2>Project finder</h2></div><div class="card-body">
+{{if .ProjectPrompt}}<p class="meta">{{with .Workflow.Definition.Project}}{{.Provider}}{{with .Model}} · {{.}}{{end}}{{with .Thinking}} · thinking {{.}}{{end}}{{end}}</p><pre>{{.ProjectPrompt}}</pre>{{else}}<p>No finder message: this workflow uses the fixed repository <code>{{.Workflow.Definition.Project.Directory}}</code>.</p>{{end}}
+</div></section>
+<section class="card" id="orchestrator-prompt"><div class="card-head"><h2>Orchestrator: initial message and contract</h2></div><div class="card-body">
+<p class="meta">{{with .Workflow.Definition.Orchestrator}}{{.Provider}}{{with .Model}} · {{.}}{{end}}{{with .Thinking}} · thinking {{.}}{{end}}{{end}}. Includes the first step.</p><pre>{{.OrchestratorPrompt}}</pre>
+</div></section>
+{{range .Steps}}<section class="card" id="step-{{.ID}}"><div class="card-head"><h2>{{.N}}. {{.Title}}</h2><span class="chip k-{{.Kind}}">{{kind .Kind}}</span><span class="meta">{{.ID}}</span></div><div class="card-body"><p class="meta">Step message to the orchestrator, including runtime rules. The initial contract continues to apply.</p><pre>{{.Message}}</pre></div></section>{{end}}
+{{template "wffoot" .}}{{end}}
+
 {{define "editor"}}{{template "wfhead" .Workflow.Name}}
 <main class="container page" data-submit="#save">
 <div class="crumbs"><a href="/workflows">Workflows</a><span class="sep">/</span><span id="crumb">{{.Workflow.Name}}</span></div>
@@ -300,6 +323,7 @@ setInterval(async () => {
   </div>
   <div class="actions">
     <span class="meta" id="saved"></span>
+    <a class="btn sm" href="/workflows/{{.Workflow.ID}}/prompts">Prompts</a>
     <div class="segmented"><a href="#" id="v-vis" class="on">Visual</a><a href="#" id="v-json">JSON</a></div>
     <button class="btn sm" id="discard" disabled>Discard</button>
     <button class="btn sm" id="save" title="⌘/Ctrl Enter" disabled>Save</button>
@@ -677,15 +701,25 @@ render();
       <span><b>{{.Run.Workflow}}</b> v{{.Run.Version}}{{if .Run.WorkflowDeleted}} (deleted){{end}}</span><span>on <b class="mono">{{.Run.Host}}</b></span>
       {{if .Run.Repo}}<span><b class="mono">{{.Run.Repo}}</b> @ <span class="mono">{{.Run.Branch}}</span></span>{{end}}
       {{if .Run.WorkspaceTitle}}<span>workspace <b>{{.Run.WorkspaceTitle}}</b></span>{{end}}
-      <span>{{plural (len .Agents) "agent"}}</span><span>started {{ago .Now .Run.CreatedAt}}</span></div></div>
-  <div class="actions">{{if .Run.Live}}<button class="btn sm" id="cancel">Cancel run</button>{{end}}</div>
+      <span>{{plural (len .Agents) "agent"}}</span><span>{{if eq .Run.Status "queued"}}queued{{else}}started{{end}} {{ago .Now .Run.CreatedAt}}</span></div></div>
+  <div class="actions">{{if eq .Run.Status "queued"}}<button class="btn sm primary" id="start-now">Start now</button>{{end}}{{if .Run.Live}}<button class="btn sm" id="cancel">Cancel run</button>{{end}}</div>
 </div>
 <div class="request">{{.Run.Input}}</div>
 {{if .Emails}}<section class="card"><div class="card-head"><h2>Email thread</h2><span class="meta grow">what each email in it did</span><a class="btn sm ghost" href="/workflows/email">All email</a></div>
   <div class="card-body"><ul class="events">{{range .Emails}}<li><span class="t">{{.ReceivedAt.Format "Jan 2 15:04"}}</span><b>{{.Who}}</b> · {{or .Subject "(no subject)"}} · <span class="badge {{.Badge}}">{{.Label}}</span>{{with .Reason}} <span class="meta">{{.}}</span>{{end}}</li>{{end}}</ul></div></section>{{end}}
+{{if eq .Run.Status "queued"}}<p class="banner note">Queued, {{.Run.InLine}}: {{.Run.QueueReason}}. It starts by itself, oldest first, once the host has room; <b>Start now</b> starts it anyway.</p>{{end}}
+<p class="meta">Estimated run memory: {{memoryGiB .Run.EstimatedMemory}} GiB{{if .Run.Repo}} for <span class="mono">{{.Run.Repo}}</span>{{end}}.</p>
 {{if eq .Run.Status "failed"}}<p class="banner">{{or .Run.Error "The orchestrator marked the run failed."}}</p>{{end}}
+{{if .Run.RetryStatus}}<div class="banner note" id="start-retry" role="status">
+  <strong>{{.Run.RetryStatus}}</strong>.
+  {{if .Run.StartRetryAt}}{{if .Run.Position}}Waiting for capacity, {{.Run.InLine}}. {{with .Run.QueueReason}}{{.}}. {{end}}Retry eligible since {{else}}Next retry scheduled for {{end}}<time datetime="{{.Run.StartRetryAt.Format "2006-01-02T15:04:05Z07:00"}}">{{.Run.StartRetryAt.Format "Jan 2, 2006 15:04:05 MST"}}</time>.
+    {{if not .Run.HostOnline}}Waiting for the host to reconnect.{{else if not .Run.DaemonConnected}}Waiting for the Paseo daemon to reconnect.{{end}}
+    {{if not .Run.RetryKeys}}Waiting for the host to support retry keys.{{end}}
+    This queued retry can wait up to 24 hours, until {{.Run.RetryDeadline.Format "Jan 2, 2006 15:04:05 MST"}}.
+  {{else}}Waiting for the host's result.{{end}}
+  <div>Last start error: {{.Run.Error}}</div>
+</div>{{end}}
 {{if .ArchiveStatus}}<p class="banner{{if and (ne .ArchiveStatus "failed") (ne .ArchiveStatus "expired")}} note{{end}}">Workspace archive: {{.ArchiveStatus}}{{if .ArchiveError}} — {{.ArchiveError}}{{end}}</p>{{end}}
-{{if ne .Run.Status "finding_project"}}<p>Estimated run memory: {{memoryGiB .Run.EstimatedMemory}} GiB.{{if eq .Run.Status "queued"}} Waiting for enough free host memory; checked again when the host reports resources.{{end}}</p>{{end}}
 </div>
 <p class="banner" id="error" hidden></p>
 <div id="ask">{{if eq .Run.Status "waiting"}}
@@ -697,8 +731,8 @@ render();
 <div id="steps" class="builder">
   <div class="pipe">
     <div class="node fixed"><div class="nh"><div><div class="kind">Before the orchestrator</div><div class="ttl">Find the project</div></div>
-      <span class="grow-r">{{if eq .Run.Status "finding_project"}}<span class="status st-running">running</span>{{else}}<span class="status st-done">done</span>{{end}}</span></div>
-      <div class="nb">{{if eq .Run.Status "finding_project"}}An agent is choosing the repository.{{else if .Run.Repo}}<span class="mono">{{.Run.Repo}}</span>, worktree <span class="mono">{{.Run.Branch}}</span>{{else}}No repository: the home directory.{{end}}
+      <span class="grow-r">{{if eq .Run.Status "finding_project"}}<span class="status st-running">running</span>{{else if eq .Run.Status "queued"}}<span class="status st-queued">queued</span>{{else}}<span class="status st-done">done</span>{{end}}</span></div>
+      <div class="nb">{{if eq .Run.Status "queued"}}Waits in the queue for room on <span class="mono">{{.Run.Host}}</span>.{{else if eq .Run.Status "finding_project"}}An agent is choosing the repository.{{else if .Run.Repo}}<span class="mono">{{.Run.Repo}}</span>, worktree <span class="mono">{{.Run.Branch}}</span>{{else}}No repository: the home directory.{{end}}
         <ul class="events">{{range .Before}}<li><span class="t">{{.At.Format "15:04"}}</span><div class="md">{{markdown .Line}}</div></li>{{end}}</ul></div></div>
     <div class="link{{if .Run.Orchestrator}} done{{end}}"></div>
     <div class="node fixed"><div class="nh"><div><div class="kind">In the worktree</div><div class="ttl">Orchestrator and its sub-agents</div></div></div>
@@ -728,6 +762,10 @@ async function post(path, body) {
   if (!res.ok) throw new Error(await res.text());
 }
 function bind() {
+  if ($("#start-now")) $("#start-now").onclick = async (ev) => {
+    ev.target.disabled = true;
+    try { await post(`/api/workflow-runs/${run}/start`, {}); refresh(true); } catch (e) { err(e.message); ev.target.disabled = false; }
+  };
   if ($("#cancel")) $("#cancel").onclick = async () => {
     if (!confirm("Cancel this run? Its orchestrator is stopped; the worktree stays.")) return;
     try { await post(`/api/workflow-runs/${run}/cancel`, {}); refresh(true); } catch (e) { err(e.message); }
@@ -755,6 +793,7 @@ async function refresh(all) {
     const res = await fetch(location.href, { cache: "no-store" });
     if (!res.ok) return;
     const next = new DOMParser().parseFromString(await res.text(), "text/html");
+    document.title = next.title;
     const reply = $("#reply"), writing = reply && (reply.value || document.activeElement === reply || reply.classList.contains("listening"));
     for (const id of ["live", "steps"].concat(writing && !all ? [] : ["ask"])) {
       const n = next.getElementById(id), cur = document.getElementById(id);

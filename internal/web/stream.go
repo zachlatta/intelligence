@@ -75,9 +75,11 @@ func stream(a *app) http.HandlerFunc {
 		if err := hostclient.WriteFrame(ctx, conn, hostclient.Frame{Type: hostclient.HelloFrame, Hello: &hostclient.Hello{Cursors: cursors}}); err != nil {
 			return
 		}
+		retryReport := make(chan struct{})
+		reportedRetrySupport := false
 		go func() {
 			defer cancel()
-			if err := sendCommands(ctx, cfg, reg, changes, conn, host, id, replaced); err != nil && ctx.Err() == nil {
+			if err := sendCommands(ctx, cfg, reg, changes, conn, host, id, replaced, retryReport); err != nil && ctx.Err() == nil {
 				log.Printf("stream %s: %v", host, err)
 			}
 		}()
@@ -87,7 +89,7 @@ func stream(a *app) http.HandlerFunc {
 		defer close(transcripts)
 		go func() {
 			for f := range transcripts {
-				if err := hostclient.WriteFrame(ctx, conn, receive(ctx, a, host, f)); err != nil {
+				if err := hostclient.WriteFrame(ctx, conn, receive(ctx, a, host, id, f)); err != nil {
 					cancel()
 				}
 			}
@@ -105,8 +107,13 @@ func stream(a *app) http.HandlerFunc {
 				}
 				continue
 			}
-			if err := hostclient.WriteFrame(ctx, conn, receive(ctx, a, host, f)); err != nil {
+			ack := receive(ctx, a, host, id, f)
+			if err := hostclient.WriteFrame(ctx, conn, ack); err != nil {
 				return
+			}
+			if !reportedRetrySupport && ack.Error == "" && f.Type == hostclient.ReportFrame && f.Report != nil && f.Report.StartRetryKeys {
+				close(retryReport)
+				reportedRetrySupport = true
 			}
 		}
 	}
@@ -122,7 +129,7 @@ func newStreamID() string {
 }
 
 // receive stores one of the host's frames and says how it went.
-func receive(ctx context.Context, a *app, host string, f hostclient.Frame) hostclient.Frame {
+func receive(ctx context.Context, a *app, host, streamID string, f hostclient.Frame) hostclient.Frame {
 	cfg, reg := a.cfg, a.reg
 	ack := hostclient.Frame{Type: hostclient.AckFrame, ID: f.ID}
 	var err error
@@ -132,7 +139,7 @@ func receive(ctx context.Context, a *app, host string, f hostclient.Frame) hostc
 			err = fmt.Errorf("report for %q on %q's stream", f.Report.Name, host)
 			break
 		}
-		err = reg.Record(ctx, *f.Report, cfg.Now())
+		err = reg.RecordStream(ctx, *f.Report, cfg.Now(), streamID)
 	case f.Type == hostclient.TranscriptFrame && f.Transcript != nil:
 		b := f.Transcript
 		if b.Host != host || b.AgentID == "" || b.Epoch == "" {
@@ -152,11 +159,14 @@ func receive(ctx context.Context, a *app, host string, f hostclient.Frame) hostc
 			err = nil // nothing to record, and nothing the host can do about it
 		} else if err == nil {
 			err = a.wf.CommandUpdated(ctx, f.Update.ID) // a workflow run waiting on it moves on
+			if err == nil {
+				a.startQueued(ctx) // a run that failed to start may make room
+			}
 		}
 	case f.Type == hostclient.HostFrame && f.Host != nil:
 		err = reg.RecordHost(ctx, host, *f.Host, cfg.Now())
 		if err == nil {
-			err = a.wf.AdmitHost(ctx, host)
+			a.startQueued(ctx) // a fresh minute may show room for a queued run
 		}
 	case f.Type == hostclient.UsageFrame && f.Usage != nil:
 		err = reg.RecordUsage(ctx, host, *f.Usage, cfg.Now())
@@ -190,18 +200,19 @@ func receive(ctx context.Context, a *app, host string, f hostclient.Frame) hostc
 // It pings, so a stream whose host went away ends, and it ends the stream once a newer one has
 // taken the host (replaced).
 func sendCommands(ctx context.Context, cfg Config, reg *fleet.Registry, changes *fleet.Changes, conn *websocket.Conn,
-	host, id string, replaced <-chan struct{}) error {
+	host, id string, replaced, retryReport <-chan struct{}) error {
 	queued, stop := changes.Subscribe(fleet.CommandsTopic(host))
 	defer stop()
 	ping := time.NewTicker(streamPing)
 	defer ping.Stop()
-	unfinished := true
+	options := fleet.ClaimOptions{StreamID: id, Replay: true}
 	for {
-		cmds, err := reg.Claim(ctx, host, unfinished, cfg.Now())
+		cmds, err := reg.Claim(ctx, host, options, cfg.Now())
 		if err != nil {
 			return err
 		}
-		unfinished = false
+		options.Replay = false
+		options.ReplayRetries = false
 		for _, c := range cmds {
 			w := c.Wire()
 			if err := hostclient.WriteFrame(ctx, conn, hostclient.Frame{Type: hostclient.CommandFrame, Command: &w}); err != nil {
@@ -212,6 +223,11 @@ func sendCommands(ctx context.Context, cfg Config, reg *fleet.Registry, changes 
 		case <-ctx.Done():
 			return nil
 		case <-queued:
+			continue
+		case <-retryReport:
+			retryReport = nil
+			options.RetryReady = true
+			options.ReplayRetries = true
 			continue
 		case <-replaced:
 		case <-ping.C:

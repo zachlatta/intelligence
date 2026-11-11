@@ -1,0 +1,42 @@
+{{define "whatsnew"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What's New · Intelligence</title>
+{{template "css"}}
+<style>
+  .release { padding: 1.1rem 1.25rem 1.25rem; margin-bottom: 1rem; }
+  .release header { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .6rem; }
+  .release h2 { font-size: 1.1rem; font-weight: 600; margin: 0; }
+  .release time { color: var(--muted); font-size: 13px; }
+  .release p { margin: .55rem 0 0; color: var(--fg-2); max-width: 46rem; }
+  .release .demo { display: block; margin-top: .9rem; max-width: min(100%, 44rem); height: auto; border: 1px solid var(--line);
+    border-radius: var(--radius); }
+</style>
+</head>
+<body>
+{{template "top" "/whats-new"}}
+<main class="container page mid">
+<div class="page-head">
+  <div><h1>What's New</h1><p class="sub">Each feature as it ships, newest first.</p></div>
+</div>
+{{range .Entries}}
+<article class="card release" id="{{.ID}}"{{if .Unseen}} data-unseen="{{.ID}}"{{end}}>
+  <header>
+    <h2>{{.Title}}</h2>
+    {{if .Unseen}}<span class="badge blue">New</span>{{end}}
+    <time datetime="{{.Released.Format "2006-01-02"}}">{{.Released.Format "January 2, 2006"}}</time>
+  </header>
+  <p>{{.Summary}}</p>
+  {{if .MediaURL}}{{if .Video}}<video class="demo" src="{{.MediaURL}}" autoplay loop muted playsinline aria-label="{{.MediaAlt}}"></video>
+  {{else}}<img class="demo" src="{{.MediaURL}}" alt="{{.MediaAlt}}" loading="lazy">{{end}}{{end}}
+</article>
+{{else}}
+<p class="empty-state">Nothing yet.</p>
+{{end}}
+<footer title="{{.Version}}">version {{short .Version}}</footer>
+</main>
+</body>
+</html>
+{{end}}

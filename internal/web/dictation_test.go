@@ -140,8 +140,8 @@ func TestDictationScriptIsServed(t *testing.T) {
 }
 
 // TestEveryTaskEntryPointOffersDictation: every form that creates a task or starts agent work (a
-// workflow task, a workflow run, a reply to a waiting run, a new agent, a new workspace, a new or
-// edited schedule) offers the shared dictation button, loads the engine and wires it to that form's own text box; none does without a key.
+// workflow task, a workflow run, a reply to a waiting run, a proposal question, a new agent, a new
+// workspace, a new or edited schedule) offers the shared dictation button, loads the engine and wires it to that form's own text box; none does without a key.
 func TestEveryTaskEntryPointOffersDictation(t *testing.T) {
 	entries := []struct {
 		name, path string
@@ -166,6 +166,8 @@ func TestEveryTaskEntryPointOffersDictation(t *testing.T) {
 			`reply.classList.contains("listening")`,
 			// the bar takes its own row under the reply, so a phone keeps the reply's width while dictating
 			`.reply-host { display: flex; flex-wrap: wrap;`, `.reply-host .dictation { flex: 1 1 100%;`}, nil},
+		{"proposal question", "/workflow-proposals/{proposal}", []string{`<textarea id="comment-text"`,
+			`text: document.getElementById("comment-text")`, `send: () => form.requestSubmit()`}, nil},
 	}
 	for _, key := range []string{"k", ""} {
 		d := dbtest.New(t)
@@ -173,12 +175,13 @@ func TestEveryTaskEntryPointOffersDictation(t *testing.T) {
 		sendReport(t, h, sampleReport)
 		sendSchedules(t, h, sampleSchedules)
 		id := createWorkflow(t, h, workflow.Starting)
+		proposal := proposalForQuestion(t, h)
 		run := startRun(t, h, id, "Dictate everywhere")
 		if _, err := d.Owner.Exec(t.Context(), `UPDATE workflow_runs SET status = 'waiting', step = 4, note = 'Ship it?' WHERE id = $1`, run); err != nil {
 			t.Fatal(err)
 		}
 		for _, e := range entries {
-			rec := get(t, h, strings.NewReplacer("{id}", id, "{run}", run).Replace(e.path), nil)
+			rec := get(t, h, strings.NewReplacer("{id}", id, "{run}", run, "{proposal}", proposal).Replace(e.path), nil)
 			if rec.Code != http.StatusOK {
 				t.Fatalf("%s: %d %s", e.name, rec.Code, rec.Body)
 			}

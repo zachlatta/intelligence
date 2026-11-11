@@ -21,6 +21,66 @@ func mintMCP(t *testing.T, h http.Handler) (string, string) {
 	return tok.ID, tok.Token
 }
 
+func TestMCPProposalTokenIdentityAndApprovalBoundary(t *testing.T) {
+	h, d := dbServer(t)
+	sendReport(t, h, wfReport())
+	tokenID, token := mintMCP(t, h)
+	created := time.Date(2026, time.November, 1, 12, 30, 0, 0, time.UTC)
+	if _, err := d.Owner.Exec(t.Context(), "UPDATE mcp_tokens SET created_at=$2 WHERE id=$1", tokenID, created); err != nil {
+		t.Fatal(err)
+	}
+	_, otherToken := mintMCP(t, h)
+	def := workflow.Starting
+	def.Host = "host-1"
+	arguments, _ := json.Marshal(map[string]any{"operation": "create", "summary": "Token proposal", "workflow": map[string]any{"name": "Token workflow", "definition": def}})
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"propose_mutation","arguments":` + string(arguments) + `}}`
+	got := rpc(t, h, token, body)
+	var out struct {
+		Result struct {
+			StructuredContent struct{ ID, ApprovalURL string }
+		}
+	}
+	json.Unmarshal([]byte(got), &out)
+	id := out.Result.StructuredContent.ID
+	if id == "" || out.Result.StructuredContent.ApprovalURL == "" {
+		t.Fatalf("proposal: %s", got)
+	}
+	var proposer string
+	if err := d.Owner.QueryRow(t.Context(), "SELECT proposer FROM workflow_proposals WHERE id=$1", id).Scan(&proposer); err != nil || proposer != "mcp:"+tokenID {
+		t.Fatalf("identity: %q %v", proposer, err)
+	}
+	for _, path := range []string{"/workflow-proposals/" + id, "/workflow-proposals"} {
+		page := get(t, h, path, nil).Body.String()
+		if !strings.Contains(page, "mcp:"+tokenID) || !strings.Contains(page, "MCP token created Nov 1, 2026") {
+			t.Errorf("%s lacks readable token attribution: %s", path, page)
+		}
+	}
+	for _, action := range []string{"approve", "reject", "undo"} {
+		r := call(t, anon(h), "POST", "/api/workflow-proposals/"+id+"/"+action, `{}`, map[string]string{"Authorization": "Bearer " + token})
+		if r.Code != 401 {
+			t.Fatalf("token can %s: %d", action, r.Code)
+		}
+	}
+	withdraw := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"withdraw_mutation","arguments":{"id":"` + id + `","reason":"Changed plan"}}}`
+	if other := rpc(t, h, otherToken, withdraw); !strings.Contains(other, `"isError":true`) {
+		t.Fatal("other token withdrew proposal: " + other)
+	}
+	if own := rpc(t, h, token, withdraw); strings.Contains(own, `"isError":true`) {
+		t.Fatal(own)
+	}
+	r := call(t, h, "DELETE", "/api/mcp-tokens/"+tokenID, "", sameOriginFetch)
+	if r.Code != 204 {
+		t.Fatal(r.Body)
+	}
+	if page := get(t, h, "/workflow-proposals/"+id, nil); page.Code != 200 || !strings.Contains(page.Body.String(), "mcp:"+tokenID) {
+		t.Fatal("revocation lost proposal attribution")
+	}
+	r = call(t, anon(h), "POST", "/mcp", body, map[string]string{"Authorization": "Bearer " + token})
+	if r.Code != 401 {
+		t.Fatal("revoked token proposed")
+	}
+}
+
 func TestMCPProtocolErrorsAndOrigin(t *testing.T) {
 	h, _ := dbServer(t)
 	_, token := mintMCP(t, h)
@@ -329,5 +389,53 @@ func TestMCPTokenIsolationAndRevocation(t *testing.T) {
 	}
 	if r := call(t, anon(h), "POST", "/mcp", `{}`, map[string]string{"Authorization": "Bearer " + token}); r.Code != 401 {
 		t.Fatal("expired token works")
+	}
+}
+
+func TestMCPWorkflowProposals(t *testing.T) {
+	h, _ := dbServer(t)
+	sendReport(t, h, wfReport())
+	_, key := mintMCP(t, h)
+	headers := map[string]string{"Authorization": "Bearer " + key}
+	rpc := func(method string, params any) map[string]any {
+		b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+		r := call(t, anon(h), "POST", "/mcp", string(b), headers)
+		if r.Code != 200 {
+			t.Fatalf("%s: %d %s", method, r.Code, r.Body)
+		}
+		var result map[string]any
+		if err := json.Unmarshal(r.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	r := rpc("initialize", map[string]any{"protocolVersion": "2025-03-26"})
+	if r["result"] == nil {
+		t.Fatal(r)
+	}
+	r = rpc("tools/list", nil)
+	b, _ := json.Marshal(r)
+	if !strings.Contains(string(b), "propose_mutation") || strings.Contains(string(b), `"name":"approve`) {
+		t.Fatal(string(b))
+	}
+	d := workflow.Starting
+	d.Host = "host-1"
+	r = rpc("tools/call", map[string]any{"name": "propose_mutation", "arguments": map[string]any{"operation": "create", "summary": "Add workflow", "workflow": map[string]any{"name": "Proposed", "definition": d}}})
+	b, _ = json.Marshal(r)
+	if !strings.Contains(string(b), "approvalURL") {
+		t.Fatal(string(b))
+	}
+	r = rpc("tools/call", map[string]any{"name": "query", "arguments": map[string]any{"query": "SELECT status FROM workflow_proposals"}})
+	b, _ = json.Marshal(r)
+	if !strings.Contains(string(b), "pending") {
+		t.Fatal(string(b))
+	}
+	r = rpc("tools/call", map[string]any{"name": "approve_mutation", "arguments": map[string]any{}})
+	if r["error"] == nil {
+		t.Fatal("approval tool accepted")
+	}
+	bad := call(t, anon(h), "POST", "/mcp", `{"jsonrpc":"2.0","id":1,"method":"ping"}`, map[string]string{"Authorization": "Bearer " + key, "MCP-Protocol-Version": "unsupported"})
+	if bad.Code != 400 {
+		t.Fatalf("invalid protocol accepted: %d", bad.Code)
 	}
 }
