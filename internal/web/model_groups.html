@@ -1,7 +1,7 @@
 {{define "modelgroups"}}
 {{if eq . "dialog"}}<dialog class="model-group-manager" id="model-group-manager">{{end}}
 <section class="card model-groups" id="model-groups">
-  <div class="card-head"><h2>Model groups</h2><span class="grow"></span><select aria-label="Preview host" data-host></select><button type="button" class="btn sm" data-new>+ New group</button></div>
+  <div class="card-head"><h2>Model groups</h2><span class="grow"></span><select aria-label="Preview host" data-host></select><button type="button" class="btn sm" data-new disabled>+ New group</button></div>
   <div class="card-body"><p class="meta">Each group has its own token. Shared edits apply to future suggestions; renames keep the token.</p><div data-group-cards></div></div>
 </section>
 {{if eq . "dialog"}}<div class="form-actions"><button type="button" class="btn sm" data-model-groups-close>Close</button></div></dialog>{{end}}

@@ -58,7 +58,8 @@ function modelGroupPools(windows, provider, login) {
     windows = [],
     candidates = [],
     host = "",
-    tokenSignature;
+    tokenSignature,
+    loading;
   async function sql(query) {
     const r = await fetch("/api/sql", {
       method: "POST",
@@ -82,7 +83,17 @@ function modelGroupPools(windows, provider, login) {
     if (!r.ok) throw Error(await r.text());
     return r.status === 204 ? null : r.json();
   }
-  async function load() {
+  function load() {
+    if (!loading)
+      loading = loadData().finally(() => {
+        loading = null;
+      });
+    return loading;
+  }
+  async function loadData() {
+    root.querySelectorAll("[data-new], [data-edit]").forEach((button) => {
+      button.disabled = true;
+    });
     [groups, catalog, windows, candidates] = await Promise.all([
       sql(
         "SELECT g.id,g.name,g.token,g.revision,coalesce((SELECT jsonb_agg(to_jsonb(m) ORDER BY position) FROM model_group_members m WHERE m.group_id=g.id),'[]'::jsonb) AS members,(SELECT count(*) FROM workflows w JOIN workflow_versions v ON v.workflow_id=w.id AND v.version=w.version WHERE w.deleted_at IS NULL AND position('{{'||g.token||'}}' in v.definition::text)>0) AS used_by FROM model_groups g WHERE g.deleted_at IS NULL ORDER BY g.name,g.id",
@@ -121,6 +132,9 @@ function modelGroupPools(windows, provider, login) {
       tokenSignature = signature;
       document.dispatchEvent(new Event("modelgroupschange"));
     }
+    root.querySelectorAll("[data-new], [data-edit]").forEach((button) => {
+      button.disabled = false;
+    });
   }
 
   window.modelGroups = { groups: () => groups, open: openGroups };

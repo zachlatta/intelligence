@@ -72,6 +72,41 @@ func TestModelGroupPageMarkup(t *testing.T) {
 				t.Errorf("%s lacks server-rendered %s", path, markup)
 			}
 		}
+		if !strings.Contains(page, "data-new disabled") {
+			t.Errorf("%s allows creating a group before loading", path)
+		}
+	}
+}
+
+func TestModelGroupInitialLoadGate(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node")
+	}
+	out, err := exec.Command(node, "-e", `
+const assert=require('assert'),vm=require('vm'),fs=require('fs');
+const script=fs.readFileSync(process.argv[1],'utf8');
+async function scenario(sheet, fail) {
+ const create={disabled:false}, host={replaceChildren(){}}, cards={replaceChildren(){}}, pending=[];
+ const manager=sheet?{open:false,showModal(){this.open=true;}}:null;
+ const root={querySelector:s=>s==='[data-new]'?create:s==='[data-host]'?host:cards,querySelectorAll:()=>[create],scrollIntoView(){}};
+ const document={querySelector:s=>s==='#model-groups'?root:s==='#model-group-manager'?manager:{},querySelectorAll:()=>[],dispatchEvent(){}};
+ const window={};
+ const context=vm.createContext({document,window,fetch:()=>new Promise(resolve=>pending.push(resolve)),Event:class {}});
+ vm.runInContext(script,context);
+ assert(create.disabled,'create must stay disabled while initial SQL is pending');
+ const opened=window.modelGroups.open();
+ assert.equal(pending.length,4,'opening the manager must share the in-flight initial load');
+ if(manager)assert(!manager.open,'sheet must wait for the catalog');
+ pending.forEach(resolve=>resolve({ok:!fail,json:async()=>fail?{error:'unavailable'}:{columns:[],rows:[]}}));
+ await opened;await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(create.disabled,fail,'only a successful complete load enables creation');
+ if(manager)assert.equal(manager.open,!fail);
+}
+(async()=>{await scenario(false,false);await scenario(true,false);await scenario(false,true);await scenario(true,true);})().catch(e=>{console.error(e);process.exitCode=1;});
+`, "model-groups.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("initial model group load: %v\n%s", err, out)
 	}
 }
 
