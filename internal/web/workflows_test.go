@@ -520,8 +520,13 @@ func TestWorkflowPages(t *testing.T) {
 	if !strings.Contains(ed.Body.String(), `const allRepos = [{"directory":"/w/app","project":"example/app","hosts":["host-1"]}]`) {
 		t.Errorf("the editor should offer the hosts' repositories")
 	}
-	if rec := get(t, h, "/workflows/00000000-0000-4000-8000-000000000000", nil); rec.Code != http.StatusNotFound {
-		t.Errorf("no such workflow = %d", rec.Code)
+	for _, p := range []string{"/workflows/bad-id", "/workflows/00000000-0000-4000-8000-000000000000", "/workflows/" + wf + "/prompts"} {
+		if rec := get(t, h, p, nil); rec.Code != http.StatusNotFound {
+			t.Errorf("%s = %d, want 404", p, rec.Code)
+		}
+	}
+	if strings.Contains(list.Body.String(), "/prompts") || strings.Contains(ed.Body.String(), "/prompts") {
+		t.Error("workflow pages should not link to a prompts page")
 	}
 	if !strings.Contains(get(t, h, "/", nil).Body.String(), `href="/workflows"`) {
 		t.Error("the top bar should link to Workflows")
@@ -1264,24 +1269,5 @@ func TestDeletingAWorkflowKeepsItsRuns(t *testing.T) {
 		if !strings.Contains(page, `"DELETE"`) || !strings.Contains(page, "confirm(") || !strings.Contains(page, ">Delete<") {
 			t.Error("a workflows page lacks the Delete action")
 		}
-	}
-}
-
-// The workflow prompts page was removed: its route is gone and no page links to it.
-func TestWorkflowPromptsPageIsGone(t *testing.T) {
-	h, _ := dbServer(t)
-	sendReport(t, h, wfReport())
-	id := createWorkflow(t, h, workflow.Starting)
-	for _, page := range []string{"/workflows", "/workflows/" + id} {
-		r := get(t, h, page, nil)
-		if r.Code != http.StatusOK {
-			t.Fatalf("%s: %d %s", page, r.Code, r.Body)
-		}
-		if strings.Contains(r.Body.String(), "/prompts") {
-			t.Errorf("%s still links to the prompts page", page)
-		}
-	}
-	if r := get(t, h, "/workflows/"+id+"/prompts", nil); r.Code != http.StatusNotFound {
-		t.Errorf("GET /workflows/{id}/prompts = %d, want 404", r.Code)
 	}
 }
