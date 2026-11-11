@@ -150,6 +150,8 @@ orchestrator configuration (the proposed workflow for a create); if that host is
 another reported host of the account is used. No original proposer or active workflow run is needed.
 The agent runs unattended from the host's home directory and is instructed to analyze the proposal
 as quoted data, make no workflow or repository changes, and post only its answer.
+Only one answer may be queued, starting or answering per proposal. A second question or retry
+returns 409 while one is active, preserving the question draft rather than dispatching another agent.
 
 Agents answer at `POST /api/workflow-proposals/{id}/comments/agent` with
 `{"questionId":42,"text":"Your Markdown answer"}` and the selected host's bearer key, or through
@@ -163,8 +165,10 @@ Read the thread through SQL: `SELECT id,author,text,created_at FROM workflow_pro
 WHERE proposal_id = '<proposal UUID>' ORDER BY id`. Account isolation applies to reads and writes.
 `workflow_proposal_questions` stores the linked command and answer; `workflow_proposal_question_status`
 adds SQL-visible queued, starting, answering, answered, failed and timed_out states, errors and agent ids.
-The page refreshes the thread every four seconds without replacing the question draft. Offline
-hosts can receive queued dispatches for one hour. Command failures and missing answers (30 minutes
+The page refreshes the thread every four seconds while an answer is pending, without replacing
+the question draft, and stops polling when idle or hidden. Queued questions show an offline hint
+from `host_status.online` when their host is disconnected. Offline hosts can receive queued
+dispatches for one hour. Command failures and missing answers (30 minutes
 after startup) show a Retry answer button, which posts `{}` to
 `/api/workflow-proposals/{id}/questions/{question}/retry`. A retry queues a fresh command for the
 same question; prior commands remain readable with proposal/question labels. A question with no

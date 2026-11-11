@@ -16,9 +16,11 @@ func TestProposalRepliesRefreshWithoutLosingDraft(t *testing.T) {
 		t.Fatal("missing thread refresh script")
 	}
 	src, _, _ = strings.Cut(src, "</script>")
-	out, err := exec.Command(node, "-e", proposalRefreshHarness, "// Use the run page's"+src).CombinedOutput()
-	if err != nil {
-		t.Fatalf("refresh: %v\n%s", err, out)
+	for _, pending := range []string{"true", "false"} {
+		out, err := exec.Command(node, "-e", proposalRefreshHarness, "// Use the run page's"+src, pending).CombinedOutput()
+		if err != nil {
+			t.Fatalf("refresh (%s): %v\n%s", pending, err, out)
+		}
 	}
 }
 
@@ -27,13 +29,16 @@ const assert=require('assert');
 const text={value:'An unfinished follow-up',readOnly:false},button={disabled:false};
 const form={querySelector:sel=>sel==='button'?button:text};
 const els={'proposal-comment':form,'comment-error':{textContent:''},'thread-update':{textContent:''},discussion:{addEventListener:()=>{}}};
-function thread(html){return {innerHTML:html,replaceWith(next){els['proposal-thread']=next;}};}
-els['proposal-thread']=thread('Question');
-let interval;
-global.document={hidden:false,getElementById:id=>els[id],addEventListener:()=>{}};
+function thread(html,pending){return {innerHTML:html,dataset:{pending},replaceWith(next){els['proposal-thread']=next;}};}
+els['proposal-thread']=thread('Question',process.argv[2]);
+let timer,visibility;
+global.document={hidden:false,getElementById:id=>els[id],addEventListener:(name,fn)=>{if(name==='visibilitychange')visibility=fn;}};
 global.location={href:'https://example.com/workflow-proposals/demo'};
-global.setInterval=(fn,ms)=>{assert.strictEqual(ms,4000);interval=fn;};
-global.DOMParser=class {parseFromString(html){return {getElementById:()=>thread(html)};}};
+global.setInterval=()=>{throw new Error('unconditional polling interval');};
+global.setTimeout=(fn,ms)=>{assert.strictEqual(ms,4000);assert(!timer,'overlapping timers');timer=fn;return 1;};
+global.clearTimeout=()=>{timer=null;};
+let responsePending='false';
+global.DOMParser=class {parseFromString(html){return {getElementById:()=>thread(html,responsePending)};}};
 let gets=0,posts=0,failPost=false,release;
 global.fetch=async(url,init)=>{
  if(init.method==='POST'){posts++;return {ok:!failPost,text:async()=>'Could not dispatch'};}
@@ -41,12 +46,19 @@ global.fetch=async(url,init)=>{
  return new Promise(resolve=>{release=()=>resolve({ok:true,text:async()=>'<p>Automatic answer</p>'});});
 };
 eval(process.argv[1]);
-const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
+const tick=()=>new Promise(resolve=>setImmediate(resolve));
 (async()=>{
- const poll=interval();await tick();const again=interval();await again;
- assert.strictEqual(gets,1,'overlapping polls must not start more requests');
- release();await poll;
- assert(els['proposal-thread'].innerHTML.includes('Automatic answer'));
+ if(process.argv[2]==='true'){
+  assert(timer,'pending thread must schedule a poll');
+  const poll=timer();await tick();await refreshThread();
+  assert.strictEqual(gets,1,'overlapping polls must not start more requests');
+  release();await poll;
+  assert(els['proposal-thread'].innerHTML.includes('Automatic answer'));
+  assert(!timer,'answered thread must stop polling');
+ }else{
+  assert(!timer,'idle thread must not poll');
+  await visibility();assert.strictEqual(gets,0,'idle tab visibility must not poll');
+ }
  assert.strictEqual(text.value,'An unfinished follow-up','refresh erased draft');
  assert.strictEqual(els['proposal-comment'],form,'refresh replaced form');
  failPost=true;
@@ -56,10 +68,21 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
  assert.strictEqual(text.readOnly,false);
  assert.strictEqual(els['comment-error'].textContent,'Could not dispatch');
  failPost=false;
- const sent=form.onsubmit({preventDefault(){},currentTarget:form});await tick();release();await sent;
+ // A post can finish after the user switches tabs. It must resume on return,
+ // even if the old thread had no pending questions when the post began.
+ responsePending='true';
+ document.hidden=true;
+ await form.onsubmit({preventDefault(){},currentTarget:form});
+ assert.strictEqual(els['proposal-thread'].dataset.pending,'true','hidden post lost pending state');
+ assert(!timer,'hidden post should not start polling');
+ document.hidden=false;const sent=visibility();await tick();release();await sent;
  assert.strictEqual(text.value,'','confirmed question was not cleared');
  assert.strictEqual(posts,2);
  assert.strictEqual(els['comment-error'].textContent,'');
  assert.strictEqual(button.disabled,false);
+ assert(timer,'posting a question must restart polling');
+ document.hidden=true;await visibility();assert(!timer,'hidden tab must pause polling');
+ document.hidden=false;responsePending='false';const back=visibility();await tick();release();await back;await tick();
+ assert(!timer,'resolved question must stop polling after returning to tab');
 })().catch(error=>{console.error(error);process.exit(1);});
 `

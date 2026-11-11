@@ -110,14 +110,28 @@ type proposalView struct {
 	Comments                                                                                    []proposalComment
 }
 
+func (p proposalView) HasPendingAnswers() bool {
+	for _, c := range p.Comments {
+		if c.AnswerPending() {
+			return true
+		}
+	}
+	return false
+}
+
 type proposalComment struct {
 	ID                                          int64
 	Author, Text                                string
 	Created                                     time.Time
 	State, AnswerHost, AnswerAgent, AnswerError string
+	AnswerOnline                                bool
 }
 
 func (c proposalComment) Retryable() bool { return c.State == "failed" || c.State == "timed_out" }
+
+func (c proposalComment) AnswerPending() bool {
+	return c.State == "queued" || c.State == "starting" || c.State == "answering"
+}
 
 func readProposalViews(ctx context.Context, v viewer, id, wid string) ([]proposalView, error) {
 	rows, err := v.pool.Query(ctx, `SELECT id::text,coalesce(workflow_id::text,''),summary,operation,proposer,proposed_by,run_id,effective_status,
@@ -182,15 +196,16 @@ func proposalPage(v viewer) http.HandlerFunc {
 			http.NotFound(w, r)
 			return
 		}
-		rows, err := v.pool.Query(r.Context(), `SELECT c.id,c.author,c.text,c.created_at,coalesce(q.state,''),coalesce(q.host,''),coalesce(q.agent_id,''),coalesce(q.error,'')
- FROM workflow_proposal_comments c LEFT JOIN workflow_proposal_question_status q ON q.question_id=c.id WHERE c.proposal_id=$1 ORDER BY c.id`, id)
+		rows, err := v.pool.Query(r.Context(), `SELECT c.id,c.author,c.text,c.created_at,coalesce(q.state,''),coalesce(q.host,''),coalesce(q.agent_id,''),coalesce(q.error,''),coalesce(h.online,false)
+ FROM workflow_proposal_comments c LEFT JOIN workflow_proposal_question_status q ON q.question_id=c.id
+ LEFT JOIN host_status h ON h.name=q.host WHERE c.proposal_id=$1 ORDER BY c.id`, id)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
 		ps[0].Comments, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (proposalComment, error) {
 			var c proposalComment
-			err := row.Scan(&c.ID, &c.Author, &c.Text, &c.Created, &c.State, &c.AnswerHost, &c.AnswerAgent, &c.AnswerError)
+			err := row.Scan(&c.ID, &c.Author, &c.Text, &c.Created, &c.State, &c.AnswerHost, &c.AnswerAgent, &c.AnswerError, &c.AnswerOnline)
 			return c, err
 		})
 		if err != nil {

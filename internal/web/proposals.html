@@ -54,41 +54,62 @@
 <details><summary>Line diff</summary><div class="review-diff">{{range .Lines}}<div class="review-text {{.Kind}}">{{if eq .Kind "added"}}+ {{else if eq .Kind "removed"}}− {{else}}  {{end}}{{.Text}}</div>{{end}}</div></details></section>{{else}}<p>No editable fields changed.</p>{{end}}
 <details class="review-full"><summary>Complete workflow before and after</summary><div class="review-pair"><div><h2>Before</h2>{{template "workflow-state" .BeforeState}}</div><div><h2>After</h2>{{template "workflow-state" .AfterState}}</div></div></details>
 <details class="review-full"><summary>Raw JSON</summary><div class="review-pair"><div><h3>Before</h3><pre class="review-text">{{.RawBefore}}</pre></div><div><h3>After</h3><pre class="review-text">{{.RawAfter}}</pre></div></div></details>
-<section class="review-discussion" id="discussion"><h2>Questions &amp; discussion</h2><p class="meta">Posting a question starts an agent on the workflow's host to answer it. Replies appear automatically. Discussion never applies the proposal.</p>
-<div id="proposal-thread" aria-live="polite">{{range .Comments}}<article class="review-comment"><p class="meta"><strong>{{if eq .Author "reviewer"}}You{{else}}Agent · {{.Author}}{{end}}</strong> · {{stamp .Created}}</p>{{markdown .Text}}
+<section class="review-discussion" id="discussion"><h2>Questions &amp; discussion</h2><p class="meta">Posting a question starts an agent on the workflow's host to answer it. One answer can be in progress at a time per proposal. Replies appear automatically. Discussion never applies the proposal.</p>
+<div id="proposal-thread" data-pending="{{.HasPendingAnswers}}" aria-live="polite">{{range .Comments}}<article class="review-comment"><p class="meta"><strong>{{if eq .Author "reviewer"}}You{{else}}Agent · {{.Author}}{{end}}</strong> · {{stamp .Created}}</p>{{markdown .Text}}
 {{if .State}}<p class="meta"><span class="badge">{{.State}}</span> · {{.AnswerHost}}{{with .AnswerAgent}} · Agent: {{.}}{{end}}</p>{{end}}
+{{if .AnswerPending}}{{if not .AnswerOnline}}<p class="meta">Host offline.{{if eq .State "queued"}} Waiting for it to reconnect before the agent can start.{{end}}</p>{{end}}{{end}}
 {{with .AnswerError}}<p class="request">{{.}}</p>{{end}}{{if .Retryable}}<button type="button" class="btn" data-retry-answer="{{.ID}}">Retry answer</button>{{end}}</article>{{else}}<p class="meta">No questions yet.</p>{{end}}</div><p id="thread-update" class="meta" role="status"></p>
-<form id="proposal-comment"><label for="comment-text">Ask a question or add a comment</label><textarea id="comment-text" required maxlength="20000" placeholder="What should I know before approving?"></textarea><button class="btn primary" type="submit">Post comment</button><p id="comment-error" role="alert"></p></form></section></main>
+<form id="proposal-comment"><label for="comment-text">Ask a question</label><textarea id="comment-text" required maxlength="20000" placeholder="What should I know before approving?"></textarea><button class="btn primary" type="submit">Ask question</button><p id="comment-error" role="alert"></p></form></section></main>
 <script>
 // Use the run page's server-rendered refresh pattern. Replace only the thread,
 // leaving the form, its focus and the question being written alone.
 let refreshingThread = false;
+let threadTimer = null;
+let threadRevision = 0;
+function hasPendingAnswers() { return document.getElementById('proposal-thread').dataset.pending === 'true'; }
+function refreshAfterWrite() {
+ // Preserve pending state if the post finishes in a hidden tab or while an
+ // older refresh is still in flight. That older response must not stop polling.
+ threadRevision++;
+ document.getElementById('proposal-thread').dataset.pending = 'true';
+ return refreshThread();
+}
+function scheduleThreadRefresh() {
+ clearTimeout(threadTimer); threadTimer = null;
+ if (!document.hidden && hasPendingAnswers()) threadTimer = setTimeout(refreshThread, 4000);
+}
 async function refreshThread() {
  if (refreshingThread || document.hidden) return;
+ clearTimeout(threadTimer); threadTimer = null;
  refreshingThread = true;
+ const revision = threadRevision;
  try {
   const res = await fetch(location.href, {cache:'no-store'});
   if (!res.ok || res.redirected) throw new Error('Replies could not update. Retrying automatically.');
   const next = new DOMParser().parseFromString(await res.text(),'text/html').getElementById('proposal-thread');
   if (!next) throw new Error('Replies could not update. Retrying automatically.');
+  if (revision !== threadRevision) return;
   const current = document.getElementById('proposal-thread');
-  if (current.innerHTML !== next.innerHTML) current.replaceWith(next);
+  if (current.innerHTML !== next.innerHTML || current.dataset.pending !== next.dataset.pending) current.replaceWith(next);
   document.getElementById('thread-update').textContent = '';
  } catch(e) { document.getElementById('thread-update').textContent = 'Replies could not update. Retrying automatically.'; }
- finally { refreshingThread = false; }
+ finally { refreshingThread = false; scheduleThreadRefresh(); }
 }
-setInterval(refreshThread, 4000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshThread(); });
+scheduleThreadRefresh();
+document.addEventListener('visibilitychange', () => {
+ if (document.hidden) { clearTimeout(threadTimer); threadTimer = null; }
+ else if (hasPendingAnswers()) return refreshThread();
+});
 document.getElementById('proposal-comment').onsubmit=async event=>{
  event.preventDefault();const form=event.currentTarget,button=form.querySelector('button'),text=form.querySelector('textarea');button.disabled=true;text.readOnly=true;
  document.getElementById('comment-error').textContent='';
- try{const res=await fetch('/api/workflow-proposals/{{.ID}}/comments',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text.value})});if(!res.ok)throw new Error(await res.text());text.value='';await refreshThread();}
+ try{const res=await fetch('/api/workflow-proposals/{{.ID}}/comments',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text.value})});if(!res.ok)throw new Error(await res.text());text.value='';await refreshAfterWrite();}
  catch(e){document.getElementById('comment-error').textContent=e.message;}
  finally{button.disabled=false;text.readOnly=false;}
 };
 document.getElementById('discussion').addEventListener('click',async event=>{
  const button=event.target.closest('[data-retry-answer]');if(!button)return;button.disabled=true;
- try{const res=await fetch('/api/workflow-proposals/{{.ID}}/questions/'+button.dataset.retryAnswer+'/retry',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!res.ok)throw new Error(await res.text());await refreshThread();}
+ try{const res=await fetch('/api/workflow-proposals/{{.ID}}/questions/'+button.dataset.retryAnswer+'/retry',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!res.ok)throw new Error(await res.text());await refreshAfterWrite();}
  catch(e){document.getElementById('comment-error').textContent=e.message;button.disabled=false;}
 });
 </script>

@@ -51,12 +51,28 @@ func (e *Engine) AskProposal(ctx context.Context, account int64, id, text string
 		if err != nil {
 			return err
 		}
+		if err = checkProposalAnswerCapacity(ctx, tx, id); err != nil {
+			return err
+		}
 		if err = tx.QueryRow(ctx, `INSERT INTO workflow_proposal_comments(proposal_id,author,text) VALUES($1,'reviewer',$2) RETURNING id`, id, text).Scan(&question); err != nil {
 			return err
 		}
 		return e.queueProposalAnswer(ctx, tx, account, p, question)
 	})
 	return question, err
+}
+
+// The caller holds the proposal row lock, shared by new questions and retries.
+// Rejecting a second active job leaves its question in the browser's draft.
+func checkProposalAnswerCapacity(ctx context.Context, tx pgx.Tx, id string) error {
+	var active bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM workflow_proposal_question_status WHERE proposal_id=$1 AND state IN ('queued','starting','answering'))`, id).Scan(&active); err != nil {
+		return err
+	}
+	if active {
+		return conflict("An answer is already queued or in progress for this proposal. Wait for it to finish before asking another question.")
+	}
+	return nil
 }
 
 func (e *Engine) queueProposalAnswer(ctx context.Context, tx pgx.Tx, account int64, p questionProposal, question int64) error {
@@ -149,6 +165,11 @@ Quoted proposal context (JSON):
 // Old commands remain readable, with proposal/question labels for attribution.
 func (e *Engine) RetryProposalAnswer(ctx context.Context, account int64, id string, question int64) error {
 	return pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		// Same lock order as AskProposal: proposal first, then its question.
+		p, err := readQuestionProposal(ctx, tx, account, id)
+		if err != nil {
+			return err
+		}
 		if err := lockProposalQuestion(ctx, tx, account, id, question); err != nil {
 			return err
 		}
@@ -159,8 +180,7 @@ func (e *Engine) RetryProposalAnswer(ctx context.Context, account int64, id stri
 		if status != "failed" && status != "timed_out" {
 			return conflict("this question is already queued, answering, or answered")
 		}
-		p, err := readQuestionProposal(ctx, tx, account, id)
-		if err != nil {
+		if err = checkProposalAnswerCapacity(ctx, tx, id); err != nil {
 			return err
 		}
 		return e.queueProposalAnswer(ctx, tx, account, p, question)

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,84 @@ import (
 	"github.com/zachlatta/intelligence/internal/paseo/paseotest"
 	"github.com/zachlatta/intelligence/internal/workflow"
 )
+
+func TestProposalQuestionCapAndOfflineHint(t *testing.T) {
+	h, d := dbServer(t)
+	sendReport(t, h, wfReport())
+	id := proposalForQuestion(t, h)
+	// Concurrent requests must share the same proposal lock and admit only one.
+	var wg sync.WaitGroup
+	codes := make(chan int, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r := call(t, h, "POST", "/api/workflow-proposals/"+id+"/comments", `{"text":"Explain the tradeoff"}`, sameOriginFetch)
+			codes <- r.Code
+		}()
+	}
+	wg.Wait()
+	close(codes)
+	counts := map[int]int{}
+	for c := range codes {
+		counts[c]++
+	}
+	if counts[201] != 1 || counts[409] != 1 {
+		t.Fatalf("concurrent cap: %v", counts)
+	}
+	code, res := sqlPost(t, h, q("SELECT count(*) FROM workflow_proposal_comments WHERE author='reviewer'"))
+	if code != 200 || res.Rows[0][0] != float64(1) {
+		t.Fatalf("rejected question was saved: %+v", res)
+	}
+	var question int64
+	var command string
+	if err := d.Owner.QueryRow(t.Context(), "SELECT question_id,command_id::text FROM workflow_proposal_questions").Scan(&question, &command); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Owner.Exec(t.Context(), "UPDATE hosts SET stream_id=NULL,last_seen=now()-interval '2 minutes' WHERE name='host-1'"); err != nil {
+		t.Fatal(err)
+	}
+	page := get(t, h, "/workflow-proposals/"+id, nil).Body.String()
+	for _, want := range []string{"Host offline", `data-pending="true"`, `>Ask a question</label>`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if strings.Contains(page, "or add a comment") {
+		t.Fatal("composer still invites comments")
+	}
+	// The same cap applies while the agent is answering, not just before delivery.
+	if err := fleet.New(d.Owner).UpdateCommand(t.Context(), "host-1", hostclient.CommandUpdate{ID: command, Status: hostclient.CommandSucceeded, Result: json.RawMessage(`{"agentId":"answering-agent"}`)}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	r := call(t, h, "POST", "/api/workflow-proposals/"+id+"/comments", `{"text":"Another question"}`, sameOriginFetch)
+	if r.Code != 409 {
+		t.Fatalf("answering cap: %d %s", r.Code, r.Body)
+	}
+	body := fmt.Sprintf(`{"questionId":%d,"text":"The tradeoff is..."}`, question)
+	r = call(t, anon(h), "POST", "/api/workflow-proposals/"+id+"/comments/agent", body, map[string]string{"Authorization": "Bearer " + keyOf(t, h, "host-1")})
+	if r.Code != 201 {
+		t.Fatal(r.Body)
+	}
+	page = get(t, h, "/workflow-proposals/"+id, nil).Body.String()
+	if !strings.Contains(page, `data-pending="false"`) {
+		t.Fatal("answered thread is still polling")
+	}
+	// A new question is accepted once the previous answer is received.
+	askProposal(t, h, id, "Now what about compatibility?")
+	retry := fmt.Sprintf("/api/workflow-proposals/%s/questions/%d/retry", id, question)
+	// A failed older question cannot be retried beside the new active job.
+	if _, err := d.Owner.Exec(t.Context(), "UPDATE workflow_proposal_questions SET answer_comment_id=NULL WHERE question_id=$1", question); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Owner.Exec(t.Context(), "UPDATE commands SET status='failed',error='test failure' WHERE id=$1", command); err != nil {
+		t.Fatal(err)
+	}
+	r = call(t, h, "POST", retry, `{}`, sameOriginFetch)
+	if r.Code != 409 {
+		t.Fatalf("retry bypassed cap: %d %s", r.Code, r.Body)
+	}
+}
 
 func proposalForQuestion(t *testing.T, h http.Handler) string {
 	t.Helper()
@@ -111,7 +190,7 @@ func TestProposalQuestionDispatchAndAnswer(t *testing.T) {
 		t.Fatalf("duplicate answer: %+v", res)
 	}
 	page := get(t, h, "/workflow-proposals/"+id, nil).Body.String()
-	for _, want := range []string{"<strong>reduces risk</strong>", "answered", `id="proposal-thread"`, "setInterval(refreshThread, 4000)"} {
+	for _, want := range []string{"<strong>reduces risk</strong>", "answered", `id="proposal-thread"`, "setTimeout(refreshThread, 4000)"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("page missing %q", want)
 		}
