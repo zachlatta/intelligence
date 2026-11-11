@@ -26,11 +26,37 @@ const path = require("node:path");
         "/usage",
         "/workflows/" + process.env.MODEL_GROUP_TEST_WORKFLOW,
         "/test/model-instructions",
+        "/workflow-runs/" + process.env.MODEL_GROUP_TEST_RUN,
       ]) {
         await page.goto(process.env.MODEL_GROUP_TEST_URL + route);
-        if (route === "/usage")
+        if (route === "/usage") {
           await page.locator("#model-groups [data-edit]").first().waitFor();
-        else if (route.startsWith("/workflows/")) {
+          const group = page.locator("#model-groups section.card").filter({
+            has: page.locator("code", { hasText: "{{frontier_model}}" }),
+          });
+          await group.locator("[data-edit]").click();
+          const modal = page.locator("dialog[open]").last();
+          if (await modal.locator("[data-error]").isVisible())
+            failures.push("empty error banner visible in group editor");
+          await page.screenshot({
+            path: path.join(output, "group-editor-" + width + ".png"),
+            fullPage: true,
+          });
+          const login = modal.locator('select[data-field="login"]').first();
+          await login.selectOption("");
+          await modal
+            .getByRole("button", { name: "Save group", exact: true })
+            .click();
+          assert(
+            (await login.evaluate((el) => el.validationMessage)).includes(
+              "Choose a plan/login",
+            ),
+            "blank plan selection must show a clear validation message",
+          );
+          await modal
+            .getByRole("button", { name: "Cancel", exact: true })
+            .click();
+        } else if (route.startsWith("/workflows/")) {
           await page
             .getByRole("button", { name: "Model groups", exact: true })
             .waitFor();
@@ -39,6 +65,65 @@ const path = require("node:path");
             .locator("[data-model-token-chips] [data-token]")
             .first()
             .waitFor();
+          const card = page.locator("#pipe .node[data-id=build]");
+          if (
+            (await card
+              .locator(".var", { hasText: "{{frontier_model}}" })
+              .count()) !== 2
+          )
+            failures.push("model tokens are not highlighted");
+          const prompt = page.locator("textarea[data-s=instructions]"),
+            original = await prompt.inputValue();
+          for (const [text, count] of [
+            ["Run a worker without a group token.", 0],
+            [original, 1],
+          ]) {
+            await prompt.fill(text);
+            await page.locator("#save").click();
+            await page.waitForFunction(() =>
+              /^v\d+ · saved$/.test(
+                document.querySelector("#saved").textContent,
+              ),
+            );
+            await page
+              .getByRole("button", { name: "Model groups", exact: true })
+              .click();
+            const manager = page.locator("dialog[open]").last();
+            await manager.locator("[data-edit]").first().waitFor();
+            await manager
+              .locator("#model-groups > .card-body > section.card")
+              .filter({
+                has: page.locator("code", { hasText: "{{frontier_model}}" }),
+              })
+              .locator("[data-edit]")
+              .click();
+            const editor = page.locator("dialog[open]").last();
+            if (
+              !(await editor.innerText()).includes(`Used by ${count} workflows`)
+            )
+              failures.push(
+                "stale used-by count after workflow save, expected " + count,
+              );
+            await editor
+              .getByRole("button", { name: "Cancel", exact: true })
+              .click();
+            await manager
+              .getByRole("button", { name: "Close", exact: true })
+              .click();
+          }
+        } else if (route.startsWith("/workflow-runs/")) {
+          const text = (await page.locator(".events").allTextContents()).join(
+            "\n",
+          );
+          if (
+            !text.includes(
+              "Suggested GPT 6.1 Sol (High) on Test plan for {{frontier_model}}",
+            ) ||
+            text.includes("model_suggestion ") ||
+            text.includes("Launch settings:") ||
+            text.includes("Before another worker")
+          )
+            failures.push("run page shows raw model suggestion instructions");
         } else {
           const inline = await page.locator("#model-inline").innerText();
           const choice =
@@ -66,7 +151,9 @@ const path = require("node:path");
             ? "plans"
             : route.startsWith("/workflows/")
               ? "workflow"
-              : "inline") +
+              : route.startsWith("/workflow-runs/")
+                ? "run"
+                : "inline") +
           "-" +
           width;
         await page.screenshot({

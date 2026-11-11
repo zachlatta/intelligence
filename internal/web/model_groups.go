@@ -2,6 +2,8 @@ package web
 
 import (
 	_ "embed"
+	"errors"
+	"log"
 	"net/http"
 
 	"github.com/zachlatta/intelligence/internal/workflow"
@@ -9,6 +11,16 @@ import (
 
 //go:embed model-groups.js
 var modelGroupsJS string
+
+func modelGroupError(w http.ResponseWriter, err error) {
+	var refusal *workflow.Refusal
+	if errors.As(err, &refusal) || errors.Is(err, workflow.ErrNotFound) {
+		workflowError(w, err)
+		return
+	}
+	log.Printf("model group request: %v", err)
+	http.Error(w, "Could not complete the model group request. Please try again.", http.StatusInternalServerError)
+}
 
 func (a *app) saveModelGroup(v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -18,7 +30,7 @@ func (a *app) saveModelGroup(v viewer) http.HandlerFunc {
 		}
 		saved, err := a.wf.SaveModelGroup(r.Context(), v.acct.ID, r.PathValue("id"), g)
 		if err != nil {
-			workflowError(w, err)
+			modelGroupError(w, err)
 			return
 		}
 		if r.Method == http.MethodPost {
@@ -32,7 +44,7 @@ func (a *app) saveModelGroup(v viewer) http.HandlerFunc {
 func (a *app) deleteModelGroup(v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := a.wf.DeleteModelGroup(r.Context(), v.acct.ID, r.PathValue("id")); err != nil {
-			workflowError(w, err)
+			modelGroupError(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -43,7 +55,7 @@ func (a *app) suggestModel(w http.ResponseWriter, r *http.Request) {
 	key, _ := bearerOf(r)
 	host, err := a.store.HostOfKey(r.Context(), key)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		modelGroupError(w, err)
 		return
 	}
 	if host == "" {
@@ -59,7 +71,7 @@ func (a *app) suggestModel(w http.ResponseWriter, r *http.Request) {
 	}
 	msg, err := a.wf.SuggestModel(r.Context(), host, r.PathValue("id"), req.Token, req.Exclude)
 	if err != nil {
-		workflowError(w, err)
+		modelGroupError(w, err)
 		return
 	}
 	writeJSON(w, map[string]string{"message": msg})

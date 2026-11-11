@@ -76,7 +76,7 @@ func TestModelGroupsBrowser(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := exec.CommandContext(t.Context(), "node", driver)
-	cmd.Env = append(os.Environ(), "MODEL_GROUP_TEST_URL="+srv.URL, "MODEL_GROUP_TEST_WORKFLOW="+wf)
+	cmd.Env = append(os.Environ(), "MODEL_GROUP_TEST_URL="+srv.URL, "MODEL_GROUP_TEST_WORKFLOW="+wf, "MODEL_GROUP_TEST_RUN="+run)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("browser regression: %v\n%s", err, out)
 	} else {

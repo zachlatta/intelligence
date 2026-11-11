@@ -87,6 +87,41 @@ func TestModelGroupCanConfigureUnknownMeters(t *testing.T) {
 	}
 }
 
+func TestModelGroupRejectsBlankLoginAndHidesDatabaseErrors(t *testing.T) {
+	h, d := dbServer(t)
+	rep := wfReport()
+	rep.Paseo.Providers = []hostclient.Provider{{Name: "codex", Available: true, Models: []hostclient.Model{{ID: "sol", Thinking: []string{"high"}}}}}
+	sendReport(t, h, rep)
+	// Provider-level source rows deliberately use an empty account; they are not plan logins.
+	for _, query := range []string{
+		`INSERT INTO usage_sources(host,provider,account,ok,received_at) VALUES('host-1','codex','',true,now())`,
+		`INSERT INTO usage_accounts(provider,account,first_seen,last_seen) VALUES('codex','one',now(),now())`,
+		`INSERT INTO usage_sources(host,provider,account,ok,received_at) VALUES('host-1','codex','one',true,now())`,
+	} {
+		if _, err := d.Owner.Exec(t.Context(), query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	body := func(login string) string {
+		b, _ := json.Marshal(map[string]any{"name": "Frontier", "members": []any{map[string]any{"provider": "codex", "model": "sol", "thinking": "high", "login": login, "longWindow": "7d", "enabled": true}}})
+		return string(b)
+	}
+	for _, login := range []string{"", "   "} {
+		rec := call(t, h, "POST", "/api/model-groups", body(login), sameOriginFetch)
+		if rec.Code != 400 || !strings.Contains(rec.Body.String(), "Choose a plan/login") {
+			t.Fatalf("blank login: %d %s", rec.Code, rec.Body)
+		}
+	}
+	// A broken writer must return a safe error, not a relation name or SQLSTATE.
+	if _, err := d.Owner.Exec(t.Context(), `DROP TABLE model_group_members CASCADE`); err != nil {
+		t.Fatal(err)
+	}
+	rec := call(t, h, "POST", "/api/model-groups", body("one"), sameOriginFetch)
+	if rec.Code != 500 || strings.Contains(rec.Body.String(), "SQLSTATE") || strings.Contains(rec.Body.String(), "model_group_members") {
+		t.Fatalf("database details leaked: %d %s", rec.Code, rec.Body)
+	}
+}
+
 func TestModelGroupRankingAndWorkflowExpansion(t *testing.T) {
 	h, d := dbServer(t)
 	rep := wfReport()
@@ -140,6 +175,10 @@ func TestModelGroupRankingAndWorkflowExpansion(t *testing.T) {
 	}
 	if strings.Count(ws.Agent.Prompt, "\nModel suggestions:\n") != 1 || strings.Count(ws.Agent.Prompt, "- frontier_model:") != 1 {
 		t.Fatalf("want one appended note per group: %s", ws.Agent.Prompt)
+	}
+	page := get(t, h, "/workflow-runs/"+run, nil).Body.String()
+	if !strings.Contains(page, "Suggested Claude Opus 5.5 (Medium) on one for {{frontier_model}}") || strings.Contains(page, "model_suggestion ") || strings.Contains(page, "Before another worker") || strings.Contains(page, "Launch settings:") {
+		t.Fatalf("run page exposes worker instructions: %s", page)
 	}
 	if !strings.Contains(ws.Agent.Prompt, "--provider claude/opus --mode bypassPermissions --thinking medium") || !strings.Contains(ws.Agent.Prompt, "Literal {{frontier_model}}") {
 		t.Fatalf("prompt: %s", ws.Agent.Prompt)

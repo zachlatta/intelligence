@@ -578,8 +578,8 @@ ranking view), and `workflow_model_suggestions` (immutable inputs, group revisio
 The run's events also show each recorded suggestion. Ownership and the read-only contract
 apply to all of these relations.
 
-The optional `TestModelGroupsBrowser` regression checks Plans, the workflow editor, and resolved
-instructions in headless Chromium at 390px and 1440px. Set `MODEL_GROUP_PLAYWRIGHT` to an installed
+The optional `TestModelGroupsBrowser` regression checks Plans, form validation, the workflow editor,
+resolved instructions and run history in headless Chromium at 390px and 1440px. Set `MODEL_GROUP_PLAYWRIGHT` to an installed
 Playwright module directory and `PLAYWRIGHT_BROWSERS_PATH` to its browser cache (or set
 `MODEL_GROUP_CHROMIUM` to an existing Chromium executable), then run it with the usual test
 database. Browser dependencies and screenshots belong in `.factory-scratch/`.

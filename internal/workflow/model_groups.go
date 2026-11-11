@@ -103,6 +103,9 @@ func (e *Engine) SaveModelGroup(ctx context.Context, account int64, id string, g
 			}
 		}
 		for i, m := range g.Members {
+			if strings.TrimSpace(m.Login) == "" {
+				return bad("Choose a plan/login for each model.")
+			}
 			if !modelSetting.MatchString(m.Provider) || !modelSetting.MatchString(m.Model) || (m.Thinking != "" && !modelSetting.MatchString(m.Thinking)) {
 				return bad("invalid model launch settings")
 			}
@@ -116,6 +119,7 @@ func (e *Engine) SaveModelGroup(ctx context.Context, account int64, id string, g
 				return bad("model or thinking level is not in an owned host's catalog")
 			}
 			err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM usage_sources s JOIN host_keys k ON k.host=s.host
+      JOIN usage_accounts a ON a.provider=s.provider AND a.account=s.account
       WHERE k.account_id=$1 AND s.provider=$2 AND s.account=$3)`, account, m.Provider, m.Login).Scan(&valid)
 			if err != nil {
 				return err

@@ -22,7 +22,6 @@
   .st-error, .st-failed { background: var(--red-bg); border-color: var(--red-line); color: var(--red); }
   .st-error::before, .st-failed::before { background: var(--red); }
   @keyframes pulse { 50% { opacity: .35; } }
-  .banner[hidden] { display: none; }
   .wf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr)); gap: 1rem; }
   .wf-card { display: flex; flex-direction: column; margin: 0; }
   .wf-card .card-body { flex: 1; }
@@ -336,7 +335,7 @@ const repoLabel = (r) => `${r.project || r.directory.split("/").pop()} · ${r.di
 let wf = structuredClone(saved), sel = "__trigger", json = false, dirty = false;
 const $ = (s, el = document) => el.querySelector(s), $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const vars = (s) => esc(s).replace(/\{\{(input|repo|branch|run)\}\}/g, (m) => `<span class="var">${m}</span>`);
+const vars = (s) => esc(s).replace(/\{\{(input|repo|branch|run|[a-z][a-z0-9_]*_model)\}\}/g, (m) => `<span class="var">${m}</span>`);
 // V is a variable as instructions write it ({ { input } } without the spaces; spelled out here, as this file is a Go template)
 const V = (n) => "{" + "{" + n + "}" + "}";
 const KIND = { step: "Step", gate: "Gate", signoff: "Sign-off" };

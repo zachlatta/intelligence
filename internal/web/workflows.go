@@ -657,14 +657,25 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 			return
 		}
 		run := runs[0]
-		rows, err = v.pool.Query(ctx, "SELECT kind, step, to_step, text, at FROM workflow_run_events WHERE run_id = $1 ORDER BY id", id)
+		// Preserve detailed audit text in SQL, but use the immutable suggestion snapshot for UI copy.
+		// The ID at the end of the event links older events without rewriting their stored text.
+		rows, err = v.pool.Query(ctx, `SELECT e.kind,e.step,e.to_step,e.text,e.at,s.snapshot->'selected',s.token
+            FROM workflow_run_events e LEFT JOIN workflow_model_suggestions s
+              ON e.kind='model_suggestion' AND s.run_id=e.run_id AND s.account_id=e.account_id
+              AND s.id=substring(e.text FROM 'Suggestion ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$')::uuid
+            WHERE e.run_id=$1 ORDER BY e.id`, id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		events, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (runEvent, error) {
 			var e runEvent
-			err := row.Scan(&e.Kind, &e.Step, &e.ToStep, &e.Text, &e.At)
+			var selected []byte
+			var token *string
+			err := row.Scan(&e.Kind, &e.Step, &e.ToStep, &e.Text, &e.At, &selected, &token)
+			if err == nil && e.Kind == "model_suggestion" {
+				e.Text = modelSuggestionLine(selected, token)
+			}
 			return e, err
 		})
 		if err != nil {
@@ -714,9 +725,38 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 	}
 }
 
-// eventLine is how one event reads on the run page.
+// modelSuggestionLine uses the saved choice, including labels that may have changed since.
+func modelSuggestionLine(selected []byte, token *string) string {
+	if token == nil {
+		return "Model suggestion recorded"
+	}
+	var choice struct {
+		Model      string `json:"model"`
+		Label      string `json:"model_label"`
+		Thinking   string `json:"thinking"`
+		Login      string `json:"login"`
+		LoginLabel string `json:"login_label"`
+	}
+	if json.Unmarshal(selected, &choice) != nil || choice.Model == "" {
+		return "No eligible model for {{" + *token + "}}"
+	}
+	if choice.Label == "" {
+		choice.Label = choice.Model
+	}
+	if choice.LoginLabel == "" {
+		choice.LoginLabel = choice.Login
+	}
+	if choice.Thinking != "" {
+		choice.Label += " (" + strings.ToUpper(choice.Thinking[:1]) + choice.Thinking[1:] + ")"
+	}
+	return fmt.Sprintf("Suggested %s on %s for {{%s}}", choice.Label, choice.LoginLabel, *token)
+}
+
+// Line is how one event reads on the run page.
 func (e runEvent) Line() string {
 	switch e.Kind {
+	case "model_suggestion":
+		return e.Text
 	case "started":
 		return "Started"
 	case "project":

@@ -60,7 +60,7 @@
     sheet.style.width = "min(58rem,94vw)";
     sheet.append(root);
     document.body.append(sheet);
-    launch.onclick = () => sheet.showModal();
+    launch.onclick = openGroups;
     const close = document.createElement("button");
     close.className = "btn sm";
     close.textContent = "Close";
@@ -106,6 +106,17 @@
     render();
     chips();
   }
+  async function openGroups() {
+    try {
+      // Refresh shared membership, revisions and usage counts whenever the manager opens.
+      await load();
+      const sheet = root.closest("dialog");
+      if (sheet) sheet.showModal();
+      else root.scrollIntoView();
+    } catch {
+      root.textContent = "Could not load model groups. Please reload.";
+    }
+  }
   function chips() {
     document.querySelectorAll("[data-model-token-chips]").forEach((el) => {
       const signature = groups.map((g) => g.id + g.token + g.name).join("|");
@@ -120,11 +131,7 @@
           )
           .join("") +
         "</div>";
-      el.querySelector("[data-manage]").onclick = () => {
-        const d = root.closest("dialog");
-        if (d) d.showModal();
-        else root.scrollIntoView();
-      };
+      el.querySelector("[data-manage]").onclick = openGroups;
       el.querySelectorAll("[data-token]").forEach(
         (b) =>
           (b.onclick = () => {
@@ -267,12 +274,17 @@
           if (!m.thinking && levels.length)
             m.thinking = cat?.default_thinking || levels[0];
           const ws = quotaWindows(m).filter((w) => w.window_id.endsWith("7d"));
-          return `<fieldset data-row="${i}"><legend>Member ${i + 1}</legend><div class="fields"><div><label>Model<select data-field="model">${!cat ? `<option value="">Choose model…</option>` : ""}${models.map((c) => `<option value="${esc(c.provider + "/" + c.id)}" ${c.provider === m.provider && c.id === m.model ? "selected" : ""}>${esc(c.label || c.id)} · ${esc(c.provider)}</option>`).join("")}</select></label></div><div><label>Thinking<select data-field="thinking">${[...(levels.length ? levels : [""]), ...(m.thinking && !levels.includes(m.thinking) ? [m.thinking] : [])].map((t) => `<option value="${esc(t)}" ${t === m.thinking ? "selected" : ""}>${esc(t || (levels.length ? "Provider default" : "In model ID / default"))}</option>`).join("")}</select></label></div><div><label>Plan / login<select data-field="login"><option value="">Choose login…</option>${logins.map((l) => `<option value="${esc(l.account)}" ${l.account === m.login ? "selected" : ""}>${esc(l.label || l.account)}</option>`).join("")}</select></label></div></div><details><summary class="meta">Quota and plan options</summary><div class="fields"><label>Weekly quota pool<select data-field="longWindow"><option value="">Choose pool…</option>${ws.map((w) => `<option ${w.window_id === m.longWindow ? "selected" : ""}>${esc(w.window_id)}</option>`).join("")}</select></label><label>Short-window gates (comma separated)<input data-field="gateWindows" value="${esc((m.gateWindows || []).join(", "))}" placeholder="5h"></label></div><label>Plan ends (optional, UTC)<input type="datetime-local" data-field="eligibleUntil" value="${esc(m.eligibleUntil?.slice(0, 16) || "")}"></label><label class="check"><input type="checkbox" data-field="enabled" ${m.enabled ? "checked" : ""}>Enabled</label></details><div style="display:flex;gap:.4rem;margin-top:.7rem"><button type="button" class="btn sm" data-up ${i === 0 ? "disabled" : ""}>Move up</button><button type="button" class="btn sm" data-remove>Remove</button></div></fieldset>`;
+          return `<fieldset data-row="${i}"><legend>Member ${i + 1}</legend><div class="fields"><div><label>Model<select data-field="model">${!cat ? `<option value="">Choose model…</option>` : ""}${models.map((c) => `<option value="${esc(c.provider + "/" + c.id)}" ${c.provider === m.provider && c.id === m.model ? "selected" : ""}>${esc(c.label || c.id)} · ${esc(c.provider)}</option>`).join("")}</select></label></div><div><label>Thinking<select data-field="thinking">${[...(levels.length ? levels : [""]), ...(m.thinking && !levels.includes(m.thinking) ? [m.thinking] : [])].map((t) => `<option value="${esc(t)}" ${t === m.thinking ? "selected" : ""}>${esc(t || (levels.length ? "Provider default" : "In model ID / default"))}</option>`).join("")}</select></label></div><div><label>Plan / login<select data-field="login" required><option value="">Choose login…</option>${logins.map((l) => `<option value="${esc(l.account)}" ${l.account === m.login ? "selected" : ""}>${esc(l.label || l.account)}</option>`).join("")}</select></label></div></div><details><summary class="meta">Quota and plan options</summary><div class="fields"><label>Weekly quota pool<select data-field="longWindow"><option value="">Choose pool…</option>${ws.map((w) => `<option ${w.window_id === m.longWindow ? "selected" : ""}>${esc(w.window_id)}</option>`).join("")}</select></label><label>Short-window gates (comma separated)<input data-field="gateWindows" value="${esc((m.gateWindows || []).join(", "))}" placeholder="5h"></label></div><label>Plan ends (optional, UTC)<input type="datetime-local" data-field="eligibleUntil" value="${esc(m.eligibleUntil?.slice(0, 16) || "")}"></label><label class="check"><input type="checkbox" data-field="enabled" ${m.enabled ? "checked" : ""}>Enabled</label></details><div style="display:flex;gap:.4rem;margin-top:.7rem"><button type="button" class="btn sm" data-up ${i === 0 ? "disabled" : ""}>Move up</button><button type="button" class="btn sm" data-remove>Remove</button></div></fieldset>`;
         })
         .join("");
       dialog.querySelectorAll("[data-row]").forEach((row) => {
         const i = +row.dataset.row,
           m = g.members[i];
+        row
+          .querySelector("[data-field=login]")
+          .setCustomValidity(
+            m.login.trim() ? "" : "Choose a plan/login for this model.",
+          );
         row.querySelectorAll("[data-field]").forEach(
           (el) =>
             (el.onchange = () => {
@@ -360,6 +372,10 @@
       };
     form.onsubmit = async (e) => {
       e.preventDefault();
+      if (g.members.some((m) => !m.login.trim())) {
+        showError(new Error("Choose a plan/login for each model."));
+        return;
+      }
       const save = form.querySelector('[type="submit"]');
       save.disabled = true;
       try {
