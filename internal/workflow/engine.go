@@ -455,7 +455,7 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		if err != nil {
 			return err
 		}
-		why, err := e.queueReason(ctx, tx, host, "", repo, estimate)
+		why, err := e.room(ctx, tx, host, "", repo, estimate)
 		if err != nil {
 			return err
 		}

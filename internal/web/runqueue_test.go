@@ -94,6 +94,9 @@ func TestABusyHostQueuesNewRunsAndStartsThemInOrder(t *testing.T) {
 	if s := runField(t, h, first, "status"); s != "starting" {
 		t.Fatalf("the first queued run should start first: %v", s)
 	}
+	if reason := runField(t, h, first, "queue_reason"); reason != "" {
+		t.Errorf("dequeued run retains stale reason: %v", reason)
+	}
 	if ws := runField(t, h, first, "workspace_title").(string); !strings.Contains(ws, runHex(first)) {
 		t.Errorf("workspace = %q", ws)
 	}

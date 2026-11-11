@@ -185,19 +185,6 @@ func runsWord(n int) string {
 	return fmt.Sprintf("%d runs", n)
 }
 
-// queueReason is why a new run on host waits, or "" when it can start now: the host has no room,
-// or runs queued before it go first.
-func (e *Engine) queueReason(ctx context.Context, tx pgx.Tx, host, candidate, repo string, memory int64) (string, error) {
-	var ahead int
-	if err := tx.QueryRow(ctx, "SELECT count(*) FROM workflow_run_queue WHERE host = $1", host).Scan(&ahead); err != nil {
-		return "", err
-	}
-	if ahead > 0 {
-		return fmt.Sprintf("%s queued on %s ahead of it", runsWord(ahead), host), nil
-	}
-	return e.room(ctx, tx, host, candidate, repo, memory)
-}
-
 // StartQueued starts, on each host with a queue, its queued runs in order while the host has room (room).
 func (e *Engine) StartQueued(ctx context.Context) error {
 	rows, err := e.p.Query(ctx, "SELECT DISTINCT host FROM workflow_run_queue")
@@ -271,7 +258,7 @@ func (e *Engine) recordDequeue(ctx context.Context, tx pgx.Tx, r run, why string
 	if err := e.event(ctx, tx, r, "dequeued", nil, nil, why); err != nil {
 		return err
 	}
-	_, err := tx.Exec(ctx, "UPDATE workflow_runs SET dequeued_at = $2, updated_at = $2 WHERE id = $1", r.ID, e.Now())
+	_, err := tx.Exec(ctx, "UPDATE workflow_runs SET queue_reason = '', dequeued_at = $2, updated_at = $2 WHERE id = $1", r.ID, e.Now())
 	return err
 }
 
