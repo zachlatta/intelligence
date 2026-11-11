@@ -1441,6 +1441,37 @@ Notes, step reports and transcripts render file-share images inline; other image
 paths remain placeholders. Existing local-path notes must be republished by an agent on the host
 that still holds the files; the server cannot recover them from a path alone.
 
+## Test capacity
+
+`make test` holds one of two host-wide leases for its entire suite, including `go vet` and the
+throwaway Postgres. Direct `scripts/with-test-postgres` calls use the same lease; nested calls
+share it. To run a full suite against an existing test database, use `make test` with
+`TEST_DATABASE_URL` set, or `scripts/with-test-capacity go test -race -timeout=30m ./...`.
+Reviewers use these leased entry points too. The entire web package is heavy; run
+`scripts/with-test-capacity go test -race -timeout=30m ./internal/web` for it.
+Narrow tests with `-run` can run directly during iteration. `make test` sets a 30-minute
+package timeout so a slow shared host does not hit Go's ten-minute default.
+
+`scripts/with-test-capacity` uses standard-library Go advisory file locks in `/var/lock`, shared
+across users and worktrees. Existing files open without `O_CREATE`, so Linux
+`protected_regular` does not reject another user's lease in the shared sticky directory.
+Missing files use exclusive creation and readable permissions. It prints **waiting for test capacity (2 host-wide slots)** while
+blocked, then **test capacity acquired**. These messages are visible in terminal output and
+agent transcripts. The wrapper and suite inherit the lock descriptor; exiting or crashing releases
+it when the last holder exits. It never evicts another suite. Lock files must not be deleted while
+suites run. These local process leases are independent of workflow admission and application state.
+They supplement the existing CPU, memory and load admission limits; they do not alter those
+thresholds, FIFO reservations or startup retry limits, and do not start an admission-waiting run.
+Test subprocesses inherit the agent environment, so normal host resource reports still charge
+their work to that agent and admission continues to observe that load.
+
+Every checkout must use this entry point to participate. Direct unwrapped `go test` calls and
+container builds with separate filesystems cannot share a host-local lock. For another operating
+system or container, provision one shared, readable lock directory and set
+`INTELLIGENCE_TEST_CAPACITY_DIR` consistently for every runner, mounting it into containers if
+needed. The directory must already exist. `INTELLIGENCE_TEST_CAPACITY_HELD` is an internal marker
+for nested entry points; do not set it yourself.
+
 ## Configuration
 
 ### Voice memo workflow triggers
