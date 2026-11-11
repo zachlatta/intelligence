@@ -37,19 +37,24 @@ func readVoiceMemoStatus(ctx context.Context, cfg Config, v viewer) (voiceMemoSt
 
 type voiceMemoRow struct {
 	ID, Source, Account, Title, Preview, Decision, Reason, Run string
+	WorkflowID, Workflow                                       string
+	ShowRunLink                                                bool
 	RecordedAt                                                 *time.Time
 	DecidedAt                                                  time.Time
 }
 
 func readVoiceMemos(ctx context.Context, p *pgxpool.Pool, run string) ([]voiceMemoRow, error) {
-	rows, err := p.Query(ctx, `SELECT recording_id,source,pdw_account,title,preview,decision,reason,coalesce(run_id::text,''),recorded_at,decided_at
- FROM voice_memos WHERE $1='' OR run_id::text=$1 ORDER BY decided_at DESC,source,pdw_account,recording_id LIMIT 200`, run)
+	rows, err := p.Query(ctx, `SELECT m.recording_id,m.source,m.pdw_account,m.title,m.preview,m.decision,m.reason,coalesce(m.run_id::text,''),m.recorded_at,m.decided_at,
+ coalesce(m.workflow_id::text,''),coalesce(w.name,'')
+ FROM voice_memos m LEFT JOIN workflows w ON w.id=m.workflow_id
+ WHERE $1='' OR m.run_id::text=$1 ORDER BY m.decided_at DESC,m.source,m.pdw_account,m.recording_id LIMIT 200`, run)
 	if err != nil {
 		return nil, err
 	}
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (voiceMemoRow, error) {
 		var m voiceMemoRow
-		err := r.Scan(&m.ID, &m.Source, &m.Account, &m.Title, &m.Preview, &m.Decision, &m.Reason, &m.Run, &m.RecordedAt, &m.DecidedAt)
+		err := r.Scan(&m.ID, &m.Source, &m.Account, &m.Title, &m.Preview, &m.Decision, &m.Reason, &m.Run, &m.RecordedAt, &m.DecidedAt, &m.WorkflowID, &m.Workflow)
+		m.ShowRunLink = m.Run != "" && m.Run != run
 		return m, err
 	})
 }

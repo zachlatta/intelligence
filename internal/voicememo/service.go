@@ -131,7 +131,8 @@ func (s *Service) poll(ctx context.Context, account int64, cursor *string, initi
 	}
 }
 
-// keep commits the receipt and run together; a failure leaves both retryable.
+// keep commits the receipt and run together. Workflow refusals are final ignored receipts;
+// unexpected failures leave both retryable.
 func (s *Service) keep(ctx context.Context, account int64, m workflow.VoiceMemo, start bool) error {
 	return pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
 		reason := "No workflow matched"
@@ -146,19 +147,19 @@ func (s *Service) keep(ctx context.Context, account int64, m workflow.VoiceMemo,
 		if !start {
 			return nil
 		}
-		rows, err := tx.Query(ctx, `SELECT w.id::text,v.definition FROM workflows w JOIN workflow_versions v ON v.workflow_id=w.id AND v.version=w.version
+		rows, err := tx.Query(ctx, `SELECT w.id::text,w.name,v.definition FROM workflows w JOIN workflow_versions v ON v.workflow_id=w.id AND v.version=w.version
  WHERE w.account_id=$1 AND w.deleted_at IS NULL AND v.definition->>'trigger'='voice_memo' ORDER BY w.created_at,w.id`, account)
 		if err != nil {
 			return err
 		}
 		type candidate struct {
-			id  string
-			def workflow.Definition
+			id, name string
+			def      workflow.Definition
 		}
 		candidates, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (candidate, error) {
 			var c candidate
 			var raw []byte
-			err := r.Scan(&c.id, &raw)
+			err := r.Scan(&c.id, &c.name, &raw)
 			if err == nil {
 				err = json.Unmarshal(raw, &c.def)
 			}
@@ -167,22 +168,34 @@ func (s *Service) keep(ctx context.Context, account int64, m workflow.VoiceMemo,
 		if err != nil {
 			return err
 		}
-		best := ""
+		var best *candidate
 		score := -1
 		for _, c := range candidates {
 			if f := c.def.VoiceMemo; f != nil && f.Match(m) && f.Specificity() > score {
-				best = c.id
+				picked := c
+				best = &picked
 				score = f.Specificity()
 			}
 		}
-		if best == "" {
+		if best == nil {
 			return nil
 		}
-		run, err := s.Engine.StartRunTx(ctx, tx, account, best, m.Input())
+		var run string
+		err = pgx.BeginFunc(ctx, tx, func(sp pgx.Tx) error {
+			var startErr error
+			run, startErr = s.Engine.StartRunTx(ctx, sp, account, best.id, m.Input())
+			return startErr
+		})
 		if err != nil {
+			var refusal *workflow.Refusal
+			if !errors.As(err, &refusal) && !errors.Is(err, workflow.ErrNotFound) {
+				return err
+			}
+			reason := fmt.Sprintf("could not start “%s”: %v", best.name, err)
+			_, err = tx.Exec(ctx, `UPDATE voice_memos SET workflow_id=$5,reason=$6 WHERE account_id=$1 AND source=$2 AND pdw_account=$3 AND recording_id=$4`, account, m.Source, m.Account, m.ID, best.id, reason)
 			return err
 		}
-		_, err = tx.Exec(ctx, `UPDATE voice_memos SET decision='started',workflow_id=$5,run_id=$6::uuid,reason='Started run ' || $6::uuid::text WHERE account_id=$1 AND source=$2 AND pdw_account=$3 AND recording_id=$4`, account, m.Source, m.Account, m.ID, best, run)
+		_, err = tx.Exec(ctx, `UPDATE voice_memos SET decision='started',workflow_id=$5,run_id=$6::uuid,reason='Started run ' || $6::uuid::text WHERE account_id=$1 AND source=$2 AND pdw_account=$3 AND recording_id=$4`, account, m.Source, m.Account, m.ID, best.id, run)
 		return err
 	})
 }

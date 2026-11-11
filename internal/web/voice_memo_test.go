@@ -82,12 +82,18 @@ func TestVoiceMemoAPIStartsOnceAndIsAccountScoped(t *testing.T) {
 	if page := get(t, h, "/workflow-runs/"+runID, nil); !strings.Contains(page.Body.String(), "Voice memo that started this run") || !strings.Contains(page.Body.String(), "new-memo") || !strings.Contains(page.Body.String(), "Nov 11, 2026") {
 		t.Fatal("run lacks memo attribution")
 	}
+	if page := get(t, h, "/workflow-runs/"+runID, nil); strings.Contains(page.Body.String(), `href="/workflow-runs/`+runID+`"`) || !strings.Contains(page.Body.String(), `<span class="grow"></span><a class="btn sm ghost" href="/workflows/voice-memos"`) {
+		t.Fatal("run attribution links/layout are incorrect")
+	}
 	m.ID, m.Title = "unmatched", "Something else"
 	if err := s.Poll(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if page := get(t, h, "/workflows/voice-memos", nil); !strings.Contains(page.Body.String(), "No workflow matched") || !strings.Contains(page.Body.String(), "Started run "+runID) {
 		t.Fatal("history lacks decisions")
+	}
+	if page := get(t, h, "/workflows/voice-memos", nil); strings.Contains(page.Body.String(), `href="/workflows/voice-memos"`) || !strings.Contains(page.Body.String(), `href="/workflows/`+wf+`">Task from Intelligence</a>`) {
+		t.Fatal("history has a self-link or lacks workflow attribution")
 	}
 	// A failed page must leave the cursor retryable and expose the failure through SQL.
 	s.URL = "http://invalid.invalid"
@@ -135,7 +141,132 @@ func TestVoiceMemoAPIStartsOnceAndIsAccountScoped(t *testing.T) {
 	}
 }
 
+func TestVoiceMemoRefusalDoesNotBlockLaterRecordings(t *testing.T) {
+	for _, removed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unreported host", true: "removed host"}[removed], func(t *testing.T) {
+			d := dbtest.New(t)
+			h := newServer(t, d, d.Owner, "v")
+			sendReport(t, h, wfReport())
+			joinHost(t, h.store, h.acct, "stale-host")
+			stale := workflow.Starting
+			stale.Host = "stale-host"
+			stale.Trigger = workflow.TriggerVoiceMemo
+			stale.VoiceMemo = &workflow.VoiceMemoFilter{Title: "Stale"}
+			staleID := createWorkflow(t, h, stale)
+			if removed {
+				rec := call(t, h, http.MethodDelete, "/api/hosts/stale-host", "", sameOriginFetch)
+				if rec.Code != http.StatusNoContent {
+					t.Fatal(rec.Code, rec.Body)
+				}
+			}
+			healthy := workflow.Starting
+			healthy.Trigger = workflow.TriggerVoiceMemo
+			healthy.VoiceMemo = &workflow.VoiceMemoFilter{Title: "Healthy"}
+			healthyID := createWorkflow(t, h, healthy)
+			memos := []workflow.VoiceMemo{}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				next := "MA"
+				if len(memos) > 0 {
+					next = "Mg"
+				}
+				json.NewEncoder(w).Encode(map[string]any{"feed": "feed:voice-memos", "next_cursor": next, "recordings": memos, "has_more": false})
+			}))
+			defer srv.Close()
+			s := voicememo.Service{DB: d.Owner, Engine: workflow.NewEngine(d.Owner, nil), URL: srv.URL, Key: "test", Username: h.acct.Username}
+			if err := s.Poll(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			memos = []workflow.VoiceMemo{{Source: "apple_voice_memos", Account: "owner", ID: "stale-memo", Title: "Stale", Transcript: "first"}, {Source: "apple_voice_memos", Account: "owner", ID: "healthy-memo", Title: "Healthy", Transcript: "second"}}
+			for i := 0; i < 2; i++ {
+				if err := s.Poll(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, receipts := sqlPost(t, h, q("SELECT recording_id,decision,reason,workflow_id::text,coalesce(run_id::text,'') FROM voice_memos ORDER BY recording_id DESC"))
+			if len(receipts.Rows) != 2 {
+				_, state := sqlPost(t, h, q("SELECT cursor,error FROM voice_memo_polling"))
+				t.Fatalf("receipts: %+v; poll: %+v", receipts, state)
+			}
+			refusal := "has not reported yet"
+			if removed {
+				refusal = "not one of this account"
+			}
+			if receipts.Rows[0][1] != "ignored" || receipts.Rows[0][3] != staleID || receipts.Rows[0][4] != "" || !strings.Contains(receipts.Rows[0][2].(string), "could not start “Task from Intelligence”") || !strings.Contains(receipts.Rows[0][2].(string), refusal) {
+				t.Fatalf("refusal receipt: %+v", receipts.Rows[0])
+			}
+			if receipts.Rows[1][1] != "started" || receipts.Rows[1][3] != healthyID || receipts.Rows[1][4] == "" {
+				t.Fatalf("healthy receipt: %+v", receipts.Rows[1])
+			}
+			_, runs := sqlPost(t, h, q("SELECT workflow_id::text FROM workflow_runs"))
+			if len(runs.Rows) != 1 || runs.Rows[0][0] != healthyID {
+				t.Fatalf("refused run leaked: %+v", runs)
+			}
+			_, state := sqlPost(t, h, q("SELECT cursor,error FROM voice_memo_polling"))
+			if state.Rows[0][0] != "Mg" || state.Rows[0][1] != "" {
+				t.Fatalf("poll wedged: %+v", state)
+			}
+		})
+	}
+}
+
 type voiceMemoFailTransport struct{}
+
+func TestVoiceMemoUnexpectedStartFailureRemainsRetryable(t *testing.T) {
+	d := dbtest.New(t)
+	h := newServer(t, d, d.Owner, "v")
+	sendReport(t, h, wfReport())
+	def := workflow.Starting
+	def.Trigger = workflow.TriggerVoiceMemo
+	def.VoiceMemo = &workflow.VoiceMemoFilter{}
+	createWorkflow(t, h, def)
+	memos := []workflow.VoiceMemo{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next := "MA"
+		if len(memos) > 0 {
+			next = "MQ"
+		}
+		json.NewEncoder(w).Encode(map[string]any{"feed": "feed:voice-memos", "next_cursor": next, "recordings": memos, "has_more": false})
+	}))
+	defer srv.Close()
+	s := voicememo.Service{DB: d.Owner, Engine: workflow.NewEngine(d.Owner, nil), URL: srv.URL, Key: "test", Username: h.acct.Username}
+	if err := s.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// Fail after the run insert, so both the partial run and its receipt must be rolled back.
+	_, err := d.Owner.Exec(t.Context(), `CREATE FUNCTION reject_voice_run() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'simulated start failure'; END $$;
+ CREATE TRIGGER reject_voice_run BEFORE INSERT ON workflow_run_events FOR EACH ROW EXECUTE FUNCTION reject_voice_run()`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memos = []workflow.VoiceMemo{{Source: "apple_voice_memos", Account: "owner", ID: "retry-memo", Title: "Retry", Transcript: "hello"}}
+	if err := s.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"voice_memos", "workflow_runs"} {
+		_, rows := sqlPost(t, h, q("SELECT * FROM "+table))
+		if len(rows.Rows) != 0 {
+			t.Fatalf("partial %s leaked: %+v", table, rows)
+		}
+	}
+	_, state := sqlPost(t, h, q("SELECT cursor,error FROM voice_memo_polling"))
+	if state.Rows[0][0] != "MA" || !strings.Contains(state.Rows[0][1].(string), "simulated start failure") {
+		t.Fatalf("error lost: %+v", state)
+	}
+	if _, err := d.Owner.Exec(t.Context(), "DROP TRIGGER reject_voice_run ON workflow_run_events; DROP FUNCTION reject_voice_run()"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	_, receipts := sqlPost(t, h, q("SELECT decision FROM voice_memos"))
+	if len(receipts.Rows) != 1 || receipts.Rows[0][0] != "started" {
+		t.Fatalf("retry failed: %+v", receipts)
+	}
+	_, state = sqlPost(t, h, q("SELECT cursor,error FROM voice_memo_polling"))
+	if state.Rows[0][0] != "MQ" || state.Rows[0][1] != "" {
+		t.Fatalf("cursor not advanced: %+v", state)
+	}
+}
 
 func (voiceMemoFailTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	return nil, context.DeadlineExceeded

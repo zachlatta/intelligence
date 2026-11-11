@@ -308,7 +308,7 @@ setInterval(async () => {
   </div>
 </div>
 <p class="banner" id="error" hidden></p>
-<template id="voice-poll-status">{{template "voice-status" .VoiceStatus}}</template>
+<template id="voice-poll-status">{{template "voice-status" .VoiceStatus}}<p class="hint"><a href="/workflows/voice-memos">Recent voice memos and polling status</a></p></template>
 <div id="editor"></div>
 <div id="menu" class="menu" hidden></div>
 <dialog id="start">
@@ -688,7 +688,7 @@ render();
   <div class="actions">{{if .Run.Live}}<button class="btn sm" id="cancel">Cancel run</button>{{end}}</div>
 </div>
 <div class="request">{{.Run.Input}}</div>
-{{if .VoiceMemos}}<section class="card"><div class="card-head"><h2>Voice memo that started this run</h2><a href="/workflows/voice-memos">All voice memos</a></div><div class="card-body">{{template "voice-memo-rows" .VoiceMemos}}</div></section>{{end}}
+{{if .VoiceMemos}}<section class="card"><div class="card-head"><h2>Voice memo that started this run</h2><span class="grow"></span><a class="btn sm ghost" href="/workflows/voice-memos">All voice memos</a></div><div class="card-body">{{template "voice-memo-rows" .VoiceMemos}}</div></section>{{end}}
 {{if .Emails}}<section class="card"><div class="card-head"><h2>Email thread</h2><span class="meta grow">what each email in it did</span><a class="btn sm ghost" href="/workflows/email">All email</a></div>
   <div class="card-body"><ul class="events">{{range .Emails}}<li><span class="t">{{.ReceivedAt.Format "Jan 2 15:04"}}</span><b>{{.Who}}</b> · {{or .Subject "(no subject)"}} · <span class="badge {{.Badge}}">{{.Label}}</span>{{with .Reason}} <span class="meta">{{.}}</span>{{end}}</li>{{end}}</ul></div></section>{{end}}
 {{if eq .Run.Status "failed"}}<p class="banner">{{or .Run.Error "The orchestrator marked the run failed."}}</p>{{end}}
@@ -779,13 +779,12 @@ setInterval(refresh, 4000);
 <p role="status">{{.Message}}</p>
 <p class="hint">Last check: {{with .CheckedAt}}{{.Format "Jan 2, 2006 15:04:05 MST"}}{{else}}not checked yet{{end}} · {{if .Initialized}}Baseline complete{{else}}Waiting for the first complete scan{{end}}</p>
 {{with .Error}}<p class="banner" role="alert">Last poll error: {{.}}</p>{{end}}
-<p class="hint"><a href="/workflows/voice-memos">Recent voice memos and polling status</a></p>
 {{end}}
 
 {{define "voice-memo-rows"}}
 <ul class="events">{{range .}}<li><b>{{or .Title "Untitled voice memo"}}</b>
 <div class="meta">Recorded: {{with .RecordedAt}}{{.Format "Jan 2, 2006 15:04:05 MST"}}{{else}}unknown{{end}} · ID: {{.ID}} · {{.Source}} / {{.Account}}</div>
-<div><span class="badge">{{.Decision}}</span> · {{.Reason}}{{with .Run}} · <a href="/workflow-runs/{{.}}">Open run</a>{{end}}</div>
+<div><span class="badge">{{.Decision}}</span> · {{.Reason}}{{if .WorkflowID}} · <a href="/workflows/{{.WorkflowID}}">{{or .Workflow "Workflow"}}</a>{{end}}{{if .ShowRunLink}} · <a href="/workflow-runs/{{.Run}}">Open run</a>{{end}}</div>
 <details><summary>Transcript preview</summary><p style="white-space:pre-wrap">{{.Preview}}</p></details>
 </li>{{else}}<li>No voice memos received yet.</li>{{end}}</ul>
 {{end}}
