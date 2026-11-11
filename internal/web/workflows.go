@@ -686,12 +686,9 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 			return
 		}
 		run := runs[0]
-		// Preserve detailed audit text in SQL, but use the immutable suggestion snapshot for UI copy.
-		// The ID at the end of the event links older events without rewriting their stored text.
+		// A model suggestion reads as its saved choice; its full text stays in SQL.
 		rows, err = v.pool.Query(ctx, `SELECT e.kind,e.step,e.to_step,e.text,e.at,s.snapshot->'selected',s.token
-            FROM workflow_run_events e LEFT JOIN workflow_model_suggestions s
-              ON e.kind='model_suggestion' AND s.run_id=e.run_id AND s.account_id=e.account_id
-              AND s.id=substring(e.text FROM 'Suggestion ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$')::uuid
+            FROM workflow_run_events e LEFT JOIN workflow_model_suggestions s ON s.id=e.suggestion_id
             WHERE e.run_id=$1 ORDER BY e.id`, id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

@@ -1,6 +1,7 @@
 "use strict";
 
-// Models are assigned to observed quota pools explicitly; IDs do not encode billing policy.
+// The pools a login can be assigned to: each pool's longest observed window. IDs do not encode
+// billing policy; the server checks a pool's shorter windows live.
 function modelGroupPools(windows, provider, login) {
   const pool = (id) => id.slice(0, id.lastIndexOf("/") + 1);
   const rows = windows.filter(
@@ -16,16 +17,7 @@ function modelGroupPools(windows, provider, login) {
             other.window_seconds > w.window_seconds,
         ),
     )
-    .map((w) => ({
-      id: w.window_id,
-      gates: rows
-        .filter(
-          (short) =>
-            pool(short.window_id) === pool(w.window_id) &&
-            short.window_seconds < w.window_seconds,
-        )
-        .map((short) => short.window_id),
-    }));
+    .map((w) => w.window_id);
 }
 
 // Shared editor behavior. The owning pages supply the controls and templates.
@@ -117,7 +109,6 @@ function modelGroupPools(windows, provider, login) {
         thinking: m.thinking,
         login: m.login,
         longWindow: m.long_window,
-        gateWindows: m.gate_windows,
         eligibleUntil: m.eligible_until,
         enabled: m.enabled,
       })),
@@ -357,7 +348,7 @@ function modelGroupPools(windows, provider, login) {
           !m.login
             ? "Choose a plan/login to see its observed quota pools."
             : pools.length
-              ? "Pool and gates come from observed usage."
+              ? "Pools come from observed usage; their shorter windows are checked too."
               : "No quota windows observed. Keep this entry disabled until usage is available.",
         );
         options(
@@ -392,10 +383,9 @@ function modelGroupPools(windows, provider, login) {
         );
         options(
           field("longWindow"),
-          [["", "Choose observed pool…"], ...pools.map((p) => [p.id, p.id])],
+          [["", "Choose observed pool…"], ...pools.map((p) => [p, p])],
           m.longWindow,
         );
-        field("gateWindows").value = (m.gateWindows || []).join(", ");
         field("enabled").checked = m.enabled;
         field("eligibleUntil").value = m.eligibleUntil
           ? new Date(m.eligibleUntil).toISOString().slice(0, 16)
@@ -415,28 +405,18 @@ function modelGroupPools(windows, provider, login) {
                     thinking: c.default_thinking || "",
                     login: "",
                     longWindow: "",
-                    gateWindows: [],
                   });
                 rows();
               } else if (key === "login") {
                 m.login = el.value;
                 const available = modelGroupPools(windows, m.provider, m.login);
-                m.longWindow = available.length === 1 ? available[0].id : "";
-                m.gateWindows =
-                  available.length === 1 ? available[0].gates : [];
+                m.longWindow = available.length === 1 ? available[0] : "";
                 if (!available.length) m.enabled = false;
                 rows();
               } else if (key === "longWindow") {
                 m.longWindow = el.value;
-                m.gateWindows =
-                  pools.find((p) => p.id === el.value)?.gates || [];
                 rows();
-              } else if (key === "gateWindows")
-                m.gateWindows = el.value
-                  .split(",")
-                  .map((s) => s.trim())
-                  .filter(Boolean);
-              else if (key === "enabled") m.enabled = el.checked;
+              } else if (key === "enabled") m.enabled = el.checked;
               else if (key === "eligibleUntil")
                 m.eligibleUntil = el.value
                   ? new Date(el.value + "Z").toISOString()
@@ -464,7 +444,6 @@ function modelGroupPools(windows, provider, login) {
         thinking: "",
         login: "",
         longWindow: "",
-        gateWindows: [],
         eligibleUntil: null,
         enabled: true,
       });

@@ -27,7 +27,6 @@ type ModelMember struct {
 	Thinking      string     `json:"thinking"`
 	Login         string     `json:"login"`
 	LongWindow    string     `json:"longWindow"`
-	GateWindows   []string   `json:"gateWindows"`
 	EligibleUntil *time.Time `json:"eligibleUntil"`
 	Enabled       bool       `json:"enabled"`
 }
@@ -134,13 +133,13 @@ func (e *Engine) SaveModelGroup(ctx context.Context, account int64, id string, g
 			if !valid {
 				return bad("plan login is not one of this account's observed logins")
 			}
-			if err := deriveQuotaWindows(ctx, tx, &m); err != nil {
+			if err := checkQuotaPool(ctx, tx, &m); err != nil {
 				return err
 			}
 			g.Members[i] = m
 
-			if _, err := tx.Exec(ctx, `INSERT INTO model_group_members(account_id,group_id,position,provider,model,thinking,usage_provider,login,long_window,gate_windows,eligible_until,enabled)
-     VALUES($1,$2,$3,$4,$5,$6,$4,$7,$8,$9,$10,$11)`, account, g.ID, i, m.Provider, m.Model, m.Thinking, m.Login, m.LongWindow, m.GateWindows, m.EligibleUntil, m.Enabled); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO model_group_members(account_id,group_id,position,provider,model,thinking,login,long_window,eligible_until,enabled)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, account, g.ID, i, m.Provider, m.Model, m.Thinking, m.Login, m.LongWindow, m.EligibleUntil, m.Enabled); err != nil {
 				return err
 			}
 		}
@@ -149,11 +148,12 @@ func (e *Engine) SaveModelGroup(ctx context.Context, account int64, id string, g
 	return g, err
 }
 
-// Window names and durations come from usage, not model-name conventions. The user
-// chooses a pool explicitly; every observed shorter window in it is a gate.
-func deriveQuotaWindows(ctx context.Context, tx pgx.Tx, m *ModelMember) error {
+// checkQuotaPool checks m's pool against usage, not model-name conventions: the user chooses the
+// longest observed window of a pool, and the candidates view reads its shorter windows live.
+// A disabled entry with no observed window is kept without one until usage is available.
+func checkQuotaPool(ctx context.Context, tx pgx.Tx, m *ModelMember) error {
 	rows, err := tx.Query(ctx, `SELECT window_id,coalesce(window_seconds,0) FROM usage_current
-        WHERE provider=$1 AND account=$2 ORDER BY window_id`, m.Provider, m.Login)
+        WHERE provider=$1 AND account=$2`, m.Provider, m.Login)
 	if err != nil {
 		return err
 	}
@@ -169,49 +169,25 @@ func deriveQuotaWindows(ctx context.Context, tx pgx.Tx, m *ModelMember) error {
 	if err != nil {
 		return err
 	}
-	if !m.Enabled && m.LongWindow == "" && len(m.GateWindows) == 0 {
-		m.GateWindows = []string{}
-		return nil
-	}
-	pool := func(id string) string { return id[:strings.LastIndexByte(id, '/')+1] }
 	seconds := 0
 	for _, w := range windows {
 		if w.ID == m.LongWindow {
 			seconds = w.Seconds
 		}
 	}
-	if !m.Enabled && seconds <= 0 {
-		m.LongWindow = ""
-		m.GateWindows = []string{}
-		return nil
-	}
 	if seconds <= 0 {
+		if !m.Enabled {
+			m.LongWindow = ""
+			return nil
+		}
 		return bad("Choose an observed quota pool, or disable this entry until usage is available.")
 	}
+	pool := func(id string) string { return id[:strings.LastIndexByte(id, '/')+1] }
 	for _, w := range windows {
 		if pool(w.ID) == pool(m.LongWindow) && w.Seconds > seconds {
 			return bad("Choose the longest observed window in this quota pool.")
 		}
 	}
-	gates := []string{}
-	for _, w := range windows {
-		if pool(w.ID) == pool(m.LongWindow) && w.Seconds > 0 && w.Seconds < seconds {
-			gates = append(gates, w.ID)
-		}
-	}
-	for _, id := range m.GateWindows {
-		found := false
-		for _, gate := range gates {
-			if id == gate {
-				found = true
-				break
-			}
-		}
-		if !found && m.Enabled {
-			return bad("Choose observed shorter windows from the selected quota pool.")
-		}
-	}
-	m.GateWindows = gates
 	return nil
 }
 
@@ -310,7 +286,7 @@ func (e *Engine) suggestModel(ctx context.Context, tx pgx.Tx, r run, step int, t
         'model_label',coalesce(nullif(p.label,''),c.model), 'login_label',coalesce(nullif(a.label,''),c.login))
         FROM model_group_candidates c
         LEFT JOIN provider_models p ON p.host=c.host AND p.provider=c.provider AND p.id=c.model
-        LEFT JOIN usage_accounts a ON a.provider=c.usage_provider AND a.account=c.login
+        LEFT JOIN usage_accounts a ON a.provider=c.provider AND a.account=c.login
         WHERE c.account_id=$1 AND c.group_id=$2 AND c.host=$3
         ORDER BY c.eligible DESC,c.score DESC NULLS LAST,c.position,c.id`, r.Account, group, r.Host)
 	if err != nil {
@@ -368,11 +344,12 @@ func (e *Engine) suggestModel(ctx context.Context, tx pgx.Tx, r run, step int, t
 	}
 	snapshot, _ := json.Marshal(map[string]any{"candidates": candidates, "selected": chosen, "excluded": exclude})
 	var id string
-	if err := tx.QueryRow(ctx, `INSERT INTO workflow_model_suggestions(account_id,run_id,step,group_id,token,revision,usage_provider,login,long_window,snapshot,message)
+	if err := tx.QueryRow(ctx, `INSERT INTO workflow_model_suggestions(account_id,run_id,step,group_id,token,revision,provider,login,long_window,snapshot,message)
    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id::text`, r.Account, r.ID, step, group, token, revision, provider, login, window, snapshot, msg).Scan(&id); err != nil {
 		return modelSuggestion{}, err
 	}
-	if err := e.event(ctx, tx, r, "model_suggestion", ptr(step), nil, msg+" Suggestion "+id); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO workflow_run_events (run_id, account_id, at, kind, step, text, suggestion_id)
+		VALUES ($1, $2, $3, 'model_suggestion', $4, $5, $6)`, r.ID, r.Account, e.Now(), step, msg, id); err != nil {
 		return modelSuggestion{}, err
 	}
 	return modelSuggestion{Inline: inline, Note: msg + " Suggestion " + id + ". Before another worker, refresh with intelligence workflow suggest --run " + r.ID + " " + token + "."}, nil

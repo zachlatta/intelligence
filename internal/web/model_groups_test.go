@@ -124,8 +124,7 @@ const windows=[
  {provider:'p',account:'one',window_id:'capacity/burst',window_seconds:50},
  {provider:'p',account:'one',window_id:'other/cycle',window_seconds:800},
  {provider:'p',account:'two',window_id:'private/cycle',window_seconds:9000}];
-assert.deepEqual(modelGroupPools(windows,'p','one'),[
- {id:'capacity/cycle',gates:['capacity/burst']},{id:'other/cycle',gates:[]}]);
+assert.deepEqual(modelGroupPools(windows,'p','one'),['capacity/cycle','other/cycle']);
 assert.deepEqual(modelGroupPools([], 'p','one'),[]);
 assert.deepEqual(modelGroupPools([{provider:'p',account:'one',window_id:'unknown',window_seconds:null}],'p','one'),[]);
 `, "model-groups.js").CombinedOutput()
@@ -190,26 +189,39 @@ func TestModelGroupUsesObservedQuotaPools(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	request := func(long string, gates []string) *httptest.ResponseRecorder {
-		b, _ := json.Marshal(map[string]any{"name": long + strings.Join(gates, " "), "members": []any{map[string]any{"provider": "antigravity", "model": "new-model", "thinking": "high", "login": "default", "longWindow": long, "gateWindows": gates, "enabled": true}}})
+	request := func(long string) *httptest.ResponseRecorder {
+		b, _ := json.Marshal(map[string]any{"name": long, "members": []any{map[string]any{"provider": "antigravity", "model": "new-model", "thinking": "high", "login": "default", "longWindow": long, "enabled": true}}})
 		return call(t, h, "POST", "/api/model-groups", string(b), sameOriginFetch)
 	}
-	rec := request("new-pool/month", nil)
-	if rec.Code != 201 {
+	if rec := request("new-pool/month"); rec.Code != 201 {
 		t.Fatalf("observed pool rejected: %d %s", rec.Code, rec.Body)
 	}
-	var group workflow.ModelGroup
-	json.Unmarshal(rec.Body.Bytes(), &group)
-	if len(group.Members[0].GateWindows) != 1 || group.Members[0].GateWindows[0] != "new-pool/day" {
-		t.Errorf("short gates not derived: %s", rec.Body)
-	}
-	for _, test := range []struct {
-		long  string
-		gates []string
-	}{{"new-pool/day", nil}, {"invented/month", nil}, {"new-pool/month", []string{"other/month"}}} {
-		if rec := request(test.long, test.gates); rec.Code != 400 {
-			t.Errorf("invalid pool: %d %s", rec.Code, rec.Body)
+	for _, long := range []string{"new-pool/day", "invented/month"} {
+		if rec := request(long); rec.Code != 400 {
+			t.Errorf("invalid pool %s: %d %s", long, rec.Code, rec.Body)
 		}
+	}
+}
+
+// Members keep only what the editor chooses: the provider is the plan's provider, and shorter
+// windows in a pool are read live from usage, so neither is stored a second time.
+func TestModelGroupSchemaStoresNoDerivedCopies(t *testing.T) {
+	_, d := dbServer(t)
+	var cols []string
+	rows, err := d.Owner.Query(t.Context(), `SELECT table_name||'.'||column_name FROM information_schema.columns
+		WHERE table_schema='public' AND column_name IN ('usage_provider','gate_windows','suggestion_id') ORDER BY 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			t.Fatal(err)
+		}
+		cols = append(cols, c)
+	}
+	if strings.Join(cols, " ") != "workflow_run_events.suggestion_id" {
+		t.Errorf("columns: %v", cols)
 	}
 }
 
@@ -285,11 +297,11 @@ func TestModelGroupCanConfigureUnknownMeters(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	rec := call(t, h, "POST", "/api/model-groups", `{"name":"Unknown capacity","members":[{"provider":"muse","model":"wonder","thinking":"high","login":"default","longWindow":"","gateWindows":[],"enabled":true}]}`, sameOriginFetch)
+	rec := call(t, h, "POST", "/api/model-groups", `{"name":"Unknown capacity","members":[{"provider":"muse","model":"wonder","thinking":"high","login":"default","longWindow":"","enabled":true}]}`, sameOriginFetch)
 	if rec.Code != 400 {
 		t.Fatalf("unobserved quota enabled: %d %s", rec.Code, rec.Body)
 	}
-	rec = call(t, h, "POST", "/api/model-groups", `{"name":"Unknown capacity","members":[{"provider":"muse","model":"wonder","thinking":"high","login":"default","longWindow":"","gateWindows":[],"enabled":false}]}`, sameOriginFetch)
+	rec = call(t, h, "POST", "/api/model-groups", `{"name":"Unknown capacity","members":[{"provider":"muse","model":"wonder","thinking":"high","login":"default","longWindow":"","enabled":false}]}`, sameOriginFetch)
 	if rec.Code != 201 {
 		t.Fatalf("configure unknown meter: %d %s", rec.Code, rec.Body)
 	}
@@ -298,12 +310,12 @@ func TestModelGroupCanConfigureUnknownMeters(t *testing.T) {
 		t.Fatalf("unknown was capacity: %+v", r)
 	}
 	// Older saved entries could name guessed windows. Disabling them must remain possible.
-	rec = call(t, h, "POST", "/api/model-groups", `{"name":"Legacy unknown","members":[{"provider":"muse","model":"wonder","thinking":"high","login":"default","longWindow":"old-pool/week","gateWindows":["old-pool/session"],"enabled":false}]}`, sameOriginFetch)
+	rec = call(t, h, "POST", "/api/model-groups", `{"name":"Legacy unknown","members":[{"provider":"muse","model":"wonder","thinking":"high","login":"default","longWindow":"old-pool/week","enabled":false}]}`, sameOriginFetch)
 	var legacy workflow.ModelGroup
-	if rec.Code != 201 || json.Unmarshal(rec.Body.Bytes(), &legacy) != nil || len(legacy.Members) != 1 || legacy.Members[0].LongWindow != "" || len(legacy.Members[0].GateWindows) != 0 {
+	if rec.Code != 201 || json.Unmarshal(rec.Body.Bytes(), &legacy) != nil || len(legacy.Members) != 1 || legacy.Members[0].LongWindow != "" {
 		t.Fatalf("disabled unknown mapping: %d %s", rec.Code, rec.Body)
 	}
-	rec = call(t, h, "POST", "/api/model-groups", `{"name":"Missing effort","members":[{"provider":"muse","model":"wonder","thinking":"","login":"default","longWindow":"7d","gateWindows":[],"enabled":true}]}`, sameOriginFetch)
+	rec = call(t, h, "POST", "/api/model-groups", `{"name":"Missing effort","members":[{"provider":"muse","model":"wonder","thinking":"","login":"default","longWindow":"7d","enabled":true}]}`, sameOriginFetch)
 	if rec.Code != 400 {
 		t.Fatalf("implicit thinking default accepted: %d %s", rec.Code, rec.Body)
 	}
@@ -368,7 +380,7 @@ func TestModelGroupRankingAndWorkflowExpansion(t *testing.T) {
 		exec(`INSERT INTO usage_active(host,provider,account,since,until) VALUES('host-1',$1,'one',now(),now())`, p)
 	}
 	member := func(p, model, think, login string) map[string]any {
-		return map[string]any{"provider": p, "model": model, "thinking": think, "login": login, "longWindow": "7d", "gateWindows": []string{}, "enabled": true}
+		return map[string]any{"provider": p, "model": model, "thinking": think, "login": login, "longWindow": "7d", "enabled": true}
 	}
 	body, _ := json.Marshal(map[string]any{"name": "Frontier", "members": []any{member("claude", "opus", "medium", "one"), member("claude", "opus", "medium", "two"), member("codex", "sol", "high", "one")}})
 	rec := call(t, h, "POST", "/api/model-groups", string(body), sameOriginFetch)
@@ -409,6 +421,12 @@ func TestModelGroupRankingAndWorkflowExpansion(t *testing.T) {
 	code, r = sqlPost(t, h, q(`SELECT count(*) FROM workflow_model_suggestions`))
 	if code != 200 || r.Rows[0][0] != float64(1) {
 		t.Fatalf("duplicate token allocations: %+v", r)
+	}
+	// The event links its suggestion by id, so its text need not carry it.
+	code, r = sqlPost(t, h, q(`SELECT count(*) FROM workflow_run_events e JOIN workflow_model_suggestions s ON s.id=e.suggestion_id
+		WHERE e.kind='model_suggestion' AND e.text NOT LIKE '%Suggestion %'`))
+	if code != 200 || r.Rows[0][0] != float64(1) {
+		t.Fatalf("suggestion events not linked by id: %d %+v", code, r)
 	}
 	// The first allocation lowers the shared Claude pool score, so the next goes to Codex.
 	succeed(t, stream, cmd, `{"workspaceId":"work","agentId":"orch"}`)
