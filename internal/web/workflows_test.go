@@ -1266,3 +1266,22 @@ func TestDeletingAWorkflowKeepsItsRuns(t *testing.T) {
 		}
 	}
 }
+
+// The workflow prompts page was removed: its route is gone and no page links to it.
+func TestWorkflowPromptsPageIsGone(t *testing.T) {
+	h, _ := dbServer(t)
+	sendReport(t, h, wfReport())
+	id := createWorkflow(t, h, workflow.Starting)
+	for _, page := range []string{"/workflows", "/workflows/" + id} {
+		r := get(t, h, page, nil)
+		if r.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", page, r.Code, r.Body)
+		}
+		if strings.Contains(r.Body.String(), "/prompts") {
+			t.Errorf("%s still links to the prompts page", page)
+		}
+	}
+	if r := get(t, h, "/workflows/"+id+"/prompts", nil); r.Code != http.StatusNotFound {
+		t.Errorf("GET /workflows/{id}/prompts = %d, want 404", r.Code)
+	}
+}

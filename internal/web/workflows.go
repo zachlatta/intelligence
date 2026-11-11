@@ -725,48 +725,6 @@ func workflowPage(cfg Config, a *app, v viewer) http.HandlerFunc {
 	}
 }
 
-// workflowPromptsPage previews the current saved version using the runtime prompt builders.
-// Definition and repository data are read through the account's SQL role. Run-specific values
-// remain visible placeholders; this preview neither starts a run nor persists new state.
-func workflowPromptsPage(cfg Config, v viewer) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		wf, ok := readWorkflow(w, r, v.pool)
-		if !ok {
-			return
-		}
-		d := wf.Definition
-		vars := workflow.Vars{Run: "{{run}}", Input: "{{input}}", Repo: "{{repo}}", Branch: "{{branch}}"}
-		if d.Project.Mode == workflow.ProjectFixed {
-			vars.Repo = d.Project.Directory
-		}
-		var project string
-		if d.Project.Mode == workflow.ProjectMatch {
-			repos, err := workflow.Repositories(r.Context(), v.pool, d.Host)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			project = workflow.ProjectPrompt(vars.Run, d, vars.Input, repos)
-		}
-		type promptStep struct {
-			workflow.Step
-			N       int
-			Message string
-		}
-		steps := make([]promptStep, len(d.Steps))
-		for i, s := range d.Steps {
-			steps[i] = promptStep{Step: s, N: i + 1, Message: workflow.StepMessage(d, i, vars)}
-		}
-		// Old definitions are decoded as the editor decodes them, rather than revalidated.
-		var orchestrator string
-		if len(d.Steps) > 0 {
-			orchestrator = workflow.OrchestratorPrompt(wf.Name, d, vars)
-		}
-		renderWorkflows(w, "prompts", map[string]any{"Version": cfg.Version, "Workflow": wf,
-			"ProjectPrompt": project, "OrchestratorPrompt": orchestrator, "Steps": steps})
-	}
-}
-
 // runPage: GET /workflow-runs/{id}: a run's steps, agents and what happened, and the note it waits on.
 func runPage(cfg Config, v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
