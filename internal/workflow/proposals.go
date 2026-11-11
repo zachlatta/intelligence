@@ -70,29 +70,31 @@ func (e *Engine) Propose(ctx context.Context, account int64, proposer string, r 
 	if strings.TrimSpace(r.Summary) == "" || len(r.Summary) > 2000 {
 		return "", bad("summary is required (up to 2000 characters)")
 	}
-	if r.Operation != "create" && r.Operation != "update" && r.Operation != "delete" && r.Operation != "run" {
-		return "", bad("operation must be create, update, delete or run")
-	}
-	if r.Operation == "run" {
-		if !uuidRe.MatchString(r.WorkflowID) || r.BaseVersion < 0 || r.Workflow != nil {
-			return "", bad("run requires workflowId and takes no workflow; baseVersion is optional")
+	switch r.Operation {
+	case "create":
+		if r.WorkflowID != "" || r.BaseVersion != 0 {
+			return "", bad("create takes no workflowId or baseVersion")
+		}
+	case "update", "delete":
+		if !uuidRe.MatchString(r.WorkflowID) || r.BaseVersion < 1 {
+			return "", bad("workflowId and baseVersion are required")
+		}
+	case "run": // baseVersion is an optional drift guard; the current state is snapshotted.
+		if !uuidRe.MatchString(r.WorkflowID) || r.BaseVersion < 0 {
+			return "", bad("run requires workflowId; baseVersion is optional")
 		}
 		if strings.TrimSpace(r.Input) == "" || len(r.Input) > 1<<20 {
 			return "", bad("run input must contain 1 to 1048576 bytes")
 		}
-	} else if r.Input != "" {
-		return "", bad("input is only supported for run proposals")
+	default:
+		return "", bad("operation must be create, update, delete or run")
 	}
-	if r.Operation == "create" {
-		if r.WorkflowID != "" || r.BaseVersion != 0 {
-			return "", bad("create takes no workflowId or baseVersion")
-		}
-	} else if r.Operation != "run" && (!uuidRe.MatchString(r.WorkflowID) || r.BaseVersion < 1) {
-		return "", bad("workflowId and baseVersion are required")
+	if r.Operation != "run" && r.Input != "" {
+		return "", bad("input is only supported for run proposals")
 	}
 	if r.Operation == "delete" || r.Operation == "run" {
 		if r.Workflow != nil {
-			return "", bad("delete takes no workflow")
+			return "", bad("%s takes no workflow", r.Operation)
 		}
 	} else {
 		if r.Workflow == nil {
@@ -136,7 +138,18 @@ func (e *Engine) Propose(ctx context.Context, account int64, proposer string, r 
 				return err
 			}
 		}
-		if r.Operation == "run" {
+		// Store the exact target, including automatic revision/default changes.
+		switch r.Operation {
+		case "create":
+			r.Workflow.Version = 1
+		case "update":
+			r.Workflow.Version = before.Version + 1
+			r.Workflow.IsDefault = before.IsDefault && r.Workflow.Definition.Trigger == TriggerTask
+		case "delete":
+			copy := *before
+			r.Workflow = &copy
+			r.Workflow.Deleted, r.Workflow.IsDefault = true, false
+		case "run": // The reviewed workflow is unchanged; approval refuses drift from it.
 			if before.Definition.Host == "" {
 				return bad("workflow must name a host before proposing a run")
 			}
@@ -145,24 +158,6 @@ func (e *Engine) Propose(ctx context.Context, account int64, proposer string, r 
 			}
 			copy := *before
 			r.Workflow = &copy
-		}
-		// Store the exact target, including automatic revision/default changes.
-		if r.Operation == "delete" {
-			copy := *before
-			r.Workflow = &copy
-			r.Workflow.Deleted, r.Workflow.IsDefault = true, false
-		}
-		if r.Operation != "run" {
-			r.Workflow.Version = 1
-			if before != nil {
-				r.Workflow.Version = before.Version + 1
-				if r.Operation == "delete" {
-					r.Workflow.Version = before.Version
-				}
-				if r.Operation == "update" {
-					r.Workflow.IsDefault = before.IsDefault && r.Workflow.Definition.Trigger == TriggerTask
-				}
-			}
 		}
 		b, _ := json.Marshal(before)
 		p, _ := json.Marshal(r.Workflow)
