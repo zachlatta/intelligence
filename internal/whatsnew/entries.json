@@ -1,5 +1,13 @@
 [
   {
+    "id": "plans-older-weeks",
+    "released": "2026-11-12",
+    "title": "Plans shows the last four weekly peaks",
+    "summary": "Each login on the Plans tab now lists its four latest weekly peaks. Older weeks are folded under Show older weeks, one click away, so the page is about a third shorter.",
+    "media": "plans-older-weeks.gif",
+    "mediaAlt": "A login's weekly peaks on Plans: four rows, then Show 10 older weeks, which opens to list the rest"
+  },
+  {
     "id": "hosts-workspace-details",
     "released": "2026-11-12",
     "title": "Branches, diff sizes and sub-agents on Hosts",

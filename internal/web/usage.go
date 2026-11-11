@@ -73,9 +73,10 @@ func usagePage(cfg Config, reg *fleet.Registry) http.HandlerFunc {
 		}
 		type card struct {
 			fleet.Plan
-			Chart  template.HTML
-			Legend []legend
-			Peaks  []fleet.Cycle
+			Chart       template.HTML
+			Legend      []legend
+			RecentPeaks []fleet.Cycle // the four newest weeks; the page folds the rest
+			OlderPeaks  []fleet.Cycle
 		}
 		var cards []card
 		for _, p := range plans.Plans {
@@ -92,11 +93,13 @@ func usagePage(cfg Config, reg *fleet.Registry) http.HandlerFunc {
 					c.Legend = append(c.Legend, legend{Window: s.Window, Color: chartColors[i%len(chartColors)]})
 				}
 			}
+			var own []fleet.Cycle
 			for _, pk := range peaks {
 				if pk.Provider == p.Provider && pk.Account == p.Account {
-					c.Peaks = append(c.Peaks, pk)
+					own = append(own, pk)
 				}
 			}
+			c.RecentPeaks, c.OlderPeaks = own[:min(4, len(own))], own[min(4, len(own)):]
 			cards = append(cards, c)
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -120,7 +123,7 @@ func usageAPI(reg *fleet.Registry) http.HandlerFunc {
 
 type legend struct{ Window, Color string }
 
-var chartColors = []string{"#4b70cc", "#e0803a", "#1f9d63", "#8a63d2", "#d04841", "#8e8b8a"}
+var chartColors = []string{"#78716c", "#d97706", "#3f8f5f", "#b4536a", "#5b7db8", "#a8a29e"}
 
 // The chart's geometry: the plot is plotW by plotH at (chartLeft, chartTop), in a 640x150 host.
 const (

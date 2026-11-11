@@ -1371,7 +1371,7 @@ the account and enrollment routes, the host binaries and the streams (with a hos
   The prompt takes dictation as the new agent form does.
   Each of these pages sends its commands to the commands API and follows them through `/api/sql`.
 - `GET /usage?days=7` (1 to 365): every login with a chart of each window's used % over the days,
-  and its weekly peaks.
+  and its weekly peaks (the four newest, with older weeks folded).
 - `GET /api/usage`: the logins and their windows, as JSON.
 - `GET /resources?hours=1` (1 to 2160; it was `/hosts`, which sends here), the Host monitoring tab: each host's CPU, memory,
   load, disk busy time and disk throughput charts, its load averages, disk I/O now and filesystems

@@ -6,9 +6,12 @@
 <title>Host monitoring · Intelligence</title>
 {{template "css"}}
 <style>
+  .card-head h2 { white-space: nowrap; }
   .card-head .meta { margin-left: auto; text-align: right; }
   .facts { display: flex; flex-wrap: wrap; gap: .4rem; margin: 0 0 .4rem; }
-  .card .table-wrap { margin-top: .3rem; }
+  .chart-grid { display: grid; gap: .5rem; margin-top: .6rem; }
+  .chart-box h3 { margin-top: 0; }
+  .card .table-wrap { margin-top: .35rem; border: 1px solid var(--line); border-radius: var(--radius); }
 </style>
 </head>
 <body>
@@ -26,24 +29,26 @@
   {{with .DiskReadBps}}<span class="badge">read {{mbps .}}</span>{{end}}{{with .DiskWriteBps}}<span class="badge">write {{mbps .}}</span>{{end}}{{with .DiskIOPS}}<span class="badge">{{whole .}} IOPS</span>{{end}}{{with .DiskBusyAvgPct}}<span class="badge" title="the busiest disk's share of the minute with I/O in flight; near 100% it is saturated">disk busy {{whole .}}%</span>{{end}}{{end}}
   {{with .Now.Probe}}{{if .Running}}<span class="badge green" title="following {{.Tracked}} processes; CPU per agent is exact">eBPF probe {{.Version | printf "%.7s"}}</span>{{end}}{{end}}</div>
   {{with .Now.Probe}}{{if not .Running}}<p class="banner">eBPF probe not running ({{.Error}}): CPU per agent counts only processes alive every 15 seconds</p>{{end}}{{end}}
-  {{if .CPU}}<h3>CPU</h3>{{.CPU}}<div class="legend"><span><i style="background: #4b70cc"></i>average</span><span><i style="background: #e0803a"></i>peak</span></div>{{end}}
-  {{if .Mem}}<h3>Memory</h3>{{.Mem}}<div class="legend"><span><i style="background: #4b70cc"></i>used</span><span><i style="background: #e0803a"></i>Paseo and its agents</span></div>{{end}}
-  {{if .Load}}<h3>Load</h3>{{.Load}}<div class="legend"><span><i style="background: #4b70cc"></i>1-minute load</span><span><i style="background: #e0803a"></i>15-minute load</span><span>top line: {{with .Now.Minute}}{{.CPUs}} CPUs or the highest load{{end}}</span></div>{{end}}
-  {{if .Busy}}<h3>Disk I/O</h3>{{.Busy}}<div class="legend"><span><i style="background: #4b70cc"></i>busiest disk busy, average</span><span><i style="background: #e0803a"></i>peak</span></div>{{end}}
-  {{if .Rate}}<h3>Disk throughput, MB/s</h3>{{.Rate}}<div class="legend"><span><i style="background: #4b70cc"></i>read</span><span><i style="background: #e0803a"></i>written</span></div>{{end}}
+  {{if or .CPU .Mem .Load .Busy .Rate}}<div class="chart-grid">
+    {{if .CPU}}<div class="chart-box"><h3>CPU</h3>{{.CPU}}<div class="legend"><span><i style="background: #78716c"></i>average</span><span><i style="background: #d97706"></i>peak</span></div></div>{{end}}
+    {{if .Mem}}<div class="chart-box"><h3>Memory</h3>{{.Mem}}<div class="legend"><span><i style="background: #78716c"></i>used</span><span><i style="background: #d97706"></i>Paseo and its agents</span></div></div>{{end}}
+    {{if .Load}}<div class="chart-box"><h3>Load</h3>{{.Load}}<div class="legend"><span><i style="background: #78716c"></i>1-minute load</span><span><i style="background: #d97706"></i>15-minute load</span><span>top line: {{with .Now.Minute}}{{.CPUs}} CPUs or the highest load{{end}}</span></div></div>{{end}}
+    {{if .Busy}}<div class="chart-box"><h3>Disk I/O</h3>{{.Busy}}<div class="legend"><span><i style="background: #78716c"></i>busiest disk busy, average</span><span><i style="background: #d97706"></i>peak</span></div></div>{{end}}
+    {{if .Rate}}<div class="chart-box"><h3>Disk throughput, MB/s</h3>{{.Rate}}<div class="legend"><span><i style="background: #78716c"></i>read</span><span><i style="background: #d97706"></i>written</span></div></div>{{end}}
+  </div>{{end}}
   {{with .Now.Filesystems}}<h3>Filesystems</h3>
-  <div class="table-wrap"><table class="table"><tr><th>Mounted at</th><th>Type</th><th class="n">Used</th><th class="n">Free</th><th class="n">Total</th><th class="n">Full</th></tr>
-  {{range .}}<tr><td class="mono" title="{{.Device}}">{{.Mount}}</td><td>{{.Type}}</td><td class="n">{{fsUsed .}}</td><td class="n">{{gb .Available}}</td><td class="n">{{gb .Total}}</td><td class="n">{{pct .UsedFrac}}</td></tr>{{end}}
+  <div class="table-wrap"><table class="table"><thead><tr><th>Mounted at</th><th>Type</th><th class="n">Used</th><th class="n">Free</th><th class="n">Total</th><th class="n">Full</th></tr></thead>
+  <tbody>{{range .}}<tr><td class="mono" title="{{.Device}}">{{.Mount}}</td><td>{{.Type}}</td><td class="n">{{fsUsed .}}</td><td class="n">{{gb .Available}}</td><td class="n">{{gb .Total}}</td><td class="n">{{pct .UsedFrac}}</td></tr>{{end}}</tbody>
   </table></div>{{end}}
   {{if .OOMs}}<h3 class="warn">OOM kills</h3>
-  <div class="table-wrap"><table class="table"><tr><th>When</th><th>Process</th><th class="n">Memory</th><th>Agent</th></tr>
-  {{range .OOMs}}<tr><td>{{at .At "seconds"}}</td><td><span class="mono">{{.Comm}}</span> ({{.PID}})</td><td class="n">{{gb .AnonRSS}}</td>
-    <td>{{if .AgentID}}<a href="/hosts/{{$host}}/agents/{{.AgentID}}">{{or .Title .AgentID}}</a>{{else}}<span class="meta">no agent</span>{{end}}</td></tr>{{end}}</table></div>{{end}}
+  <div class="table-wrap"><table class="table"><thead><tr><th>When</th><th>Process</th><th class="n">Memory</th><th>Agent</th></tr></thead>
+  <tbody>{{range .OOMs}}<tr><td>{{at .At "seconds"}}</td><td><span class="mono">{{.Comm}}</span> ({{.PID}})</td><td class="n">{{gb .AnonRSS}}</td>
+    <td>{{if .AgentID}}<a href="/hosts/{{$host}}/agents/{{.AgentID}}">{{or .Title .AgentID}}</a>{{else}}<span class="meta">no agent</span>{{end}}</td></tr>{{end}}</tbody></table></div>{{end}}
   {{if .Agents}}<h3>Agents</h3>
-  <div class="table-wrap"><table class="table"><tr><th>Agent</th><th class="n">CPU</th><th class="n">Most memory</th><th class="n">Commands</th><th>Last seen</th></tr>
-  {{range .Agents}}<tr><td><a href="/hosts/{{$host}}/agents/{{.AgentID}}">{{or .Title .AgentID}}</a></td><td class="n">{{dur .CPUSeconds}}</td>
+  <div class="table-wrap"><table class="table"><thead><tr><th>Agent</th><th class="n">CPU</th><th class="n">Most memory</th><th class="n">Commands</th><th>Last seen</th></tr></thead>
+  <tbody>{{range .Agents}}<tr><td><a href="/hosts/{{$host}}/agents/{{.AgentID}}">{{or .Title .AgentID}}</a></td><td class="n">{{dur .CPUSeconds}}</td>
     <td class="n">{{gb .MemMax}}</td><td class="n">{{if eq .CPUSource "ebpf"}}{{.Execs}} commands{{else}}<span class="meta">n/a</span>{{end}}</td><td class="meta">{{ago $.Now .LastSeen}}</td></tr>{{end}}
-  </table></div>{{end}}
+  </tbody></table></div>{{end}}
   </div>
 </section>
 {{else}}

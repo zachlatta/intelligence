@@ -65,7 +65,7 @@ func TestResourcesPageChartsEachHostAndRanksAgents(t *testing.T) {
 		"eBPF probe v", "Paseo",
 		// load, disk I/O and every filesystem
 		"<h3>Load</h3>", "load 2.0 · 1.5 · 1.0", "0.08 per CPU", "<h3>Disk I/O</h3>", "<h3>Disk throughput, MB/s</h3>", ">12</text>", "read 12.0 MB/s",
-		"write 3.0 MB/s", "250 IOPS", "disk busy 62%", "<h3>Filesystems</h3>", "/srv/data", "xfs", "500.0 GB", "1500.0 GB", "25%"} {
+		"write 3.0 MB/s", "250 IOPS", "disk busy 62%", "<h3>Filesystems</h3>", "/srv/data", "xfs", "500.0 GB", "1500.0 GB", "25%", `class="chart-grid"`, "<thead>"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("resources page misses %q", want)
 		}

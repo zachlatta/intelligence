@@ -7,9 +7,16 @@
 <script src="/model-groups.js" defer></script>
 {{template "css"}}
 <style>
-  .card .plan-wrap { padding: .9rem 1rem .6rem; }
-  .card .chart-wrap { padding: 0 1rem .8rem; }
-  .card .table { border-top: 1px solid var(--line); }
+  .card .plan-wrap { padding: .95rem 1.1rem .65rem; }
+  .card .chart-wrap { padding: 0 1.1rem .9rem; }
+  .card > .table { border-top: 1px solid var(--line); }
+  .peaks-table th:nth-child(2), .peaks-table td:nth-child(2) { width: 7.5rem; }
+  .peaks-table th:nth-child(3), .peaks-table td:nth-child(3) { width: 7rem; }
+  .more-peaks { border-top: 1px solid var(--line); }
+  .more-peaks > summary { padding: .5rem .85rem; font-size: 12.5px; font-weight: 500; color: var(--muted);
+    background: var(--bg-subtle); cursor: pointer; user-select: none; }
+  .more-peaks > summary:hover { color: var(--fg); }
+  .more-peaks[open] > summary { border-bottom: 1px solid var(--line); }
 </style>
 </head>
 <body>
@@ -30,11 +37,19 @@
   <div class="legend">{{range .Legend}}<span><i style="background: {{.Color}}"></i>{{.Window}} used</span>{{end}}</div>
   </div>
   {{end}}
-  {{if .Peaks}}
-  <table class="table">
-    <tr><th>Weekly peaks: week to</th><th>Window</th><th class="n">Most used</th></tr>
-    {{range .Peaks}}<tr><td>{{at .ResetsAt "weekday"}}</td><td><span class="mono">{{.Window}}</span></td><td class="n">{{pct .Peak}}</td></tr>{{end}}
+  {{if .RecentPeaks}}
+  <table class="table peaks-table">
+    <thead><tr><th>Weekly peaks: week to</th><th>Window</th><th class="n">Most used</th></tr></thead>
+    <tbody>{{range .RecentPeaks}}<tr><td>{{at .ResetsAt "weekday"}}</td><td><span class="mono">{{.Window}}</span></td><td class="n">{{pct .Peak}}</td></tr>{{end}}</tbody>
   </table>
+  {{if .OlderPeaks}}
+  <details class="more-peaks">
+    <summary>Show {{len .OlderPeaks}} older week{{if ne (len .OlderPeaks) 1}}s{{end}}</summary>
+    <table class="table peaks-table">
+      <tbody>{{range .OlderPeaks}}<tr><td>{{at .ResetsAt "weekday"}}</td><td><span class="mono">{{.Window}}</span></td><td class="n">{{pct .Peak}}</td></tr>{{end}}</tbody>
+    </table>
+  </details>
+  {{end}}
   {{end}}
 </section>
 {{else}}
