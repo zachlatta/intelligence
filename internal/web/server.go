@@ -140,6 +140,11 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /attachments.js", attachmentsScript)
 	mux.HandleFunc("POST /api/attachments", a.write(a.uploadAttachment))
 	mux.HandleFunc("GET /submitkeys.js", submitKeysScript)
+	// What's New: the release notes (whatsnew), and which of them the account has seen
+	mux.HandleFunc("GET /whatsnew.js", whatsNewScript)
+	mux.HandleFunc("GET /whats-new/media/{name}", whatsNewMedia())
+	mux.HandleFunc("GET /whats-new", a.page(func(v viewer) http.HandlerFunc { return whatsNewPage(cfg, v) }))
+	mux.HandleFunc("POST /api/whats-new/seen", a.write(a.markWhatsNewSeen))
 	mux.HandleFunc("GET /account", a.page(func(v viewer) http.HandlerFunc { return accountPage(cfg, v) }))
 	// hosts: joining an account, and their streams
 	mux.HandleFunc("POST /api/host-enrollments", a.enroll)
@@ -221,6 +226,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /gmail/callback", gmailCallback)
 	mux.HandleFunc("GET /workflows/email", a.page(func(v viewer) http.HandlerFunc { return emailPage(cfg, a, v) }))
 	mux.HandleFunc("GET /workflows/{id}", a.page(func(v viewer) http.HandlerFunc { return workflowPage(cfg, a, v) }))
+	mux.HandleFunc("GET /workflows/{id}/prompts", a.page(func(v viewer) http.HandlerFunc { return workflowPromptsPage(cfg, v) }))
 	mux.HandleFunc("GET /workflow-runs/{id}", a.page(func(v viewer) http.HandlerFunc { return runPage(cfg, v) }))
 	mux.HandleFunc("GET /usage", a.page(func(v viewer) http.HandlerFunc { return usagePage(cfg, v.reg) }))
 	mux.HandleFunc("GET /resources", a.page(func(v viewer) http.HandlerFunc { return hostResourcesPage(cfg, v.reg) }))

@@ -262,7 +262,9 @@ func (a *app) moveRun(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"message": msg})
 		return
 	}
-	a.startQueued(r.Context()) // a run that ended may make room for a queued one
+	if m.Move != "summarize" { // labeling a run must not start it or another queued run
+		a.startQueued(r.Context()) // a run that ended may make room for a queued one
+	}
 	writeJSON(w, map[string]string{"message": msg})
 }
 
@@ -313,7 +315,7 @@ type runRow struct {
 	HostOnline, DaemonConnected, RetryKeys                               bool
 }
 
-const runRowSelect = `SELECT r.id::text, r.title, r.input, r.status, r.host, r.repo, r.branch, w.name, r.workflow_id::text, r.workspace_id, r.workspace_title,
+const runRowSelect = `SELECT r.id::text, coalesce(nullif(r.task_summary, ''), r.title), r.input, r.status, r.host, r.repo, r.branch, w.name, r.workflow_id::text, r.workspace_id, r.workspace_title,
 	r.orchestrator_id, r.project_agent_id, r.note, r.error, r.step, r.version, v.definition -> 'steps', r.created_at, r.updated_at, r.finished_at,
 	w.deleted_at IS NOT NULL, r.start_retries, r.start_retry_at,
 	COALESCE((SELECT online FROM host_status WHERE name=r.host),false),
@@ -661,21 +663,29 @@ func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 	}
 }
 
+func readWorkflow(w http.ResponseWriter, r *http.Request, p *pgxpool.Pool) (workflowRow, bool) {
+	id := r.PathValue("id")
+	if !workflowIDRe.MatchString(id) {
+		http.NotFound(w, r)
+		return workflowRow{}, false
+	}
+	wfs, err := readWorkflows(r.Context(), p, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return workflowRow{}, false
+	}
+	if len(wfs) == 0 {
+		http.NotFound(w, r)
+		return workflowRow{}, false
+	}
+	return wfs[0], true
+}
+
 // workflowPage: GET /workflows/{id}: the editor.
 func workflowPage(cfg Config, a *app, v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		if !workflowIDRe.MatchString(id) {
-			http.NotFound(w, r)
-			return
-		}
-		wfs, err := readWorkflows(r.Context(), v.pool, id)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if len(wfs) == 0 {
-			http.NotFound(w, r)
+		wf, ok := readWorkflow(w, r, v.pool)
+		if !ok {
 			return
 		}
 		hosts, err := readHosts(r.Context(), v.pool)
@@ -705,13 +715,55 @@ func workflowPage(cfg Config, a *app, v viewer) http.HandlerFunc {
 		}
 		others := []workflowRow{} // the other workflows email starts: the preview says which email they would take
 		for _, o := range all {
-			if o.ID != id && o.Definition.Trigger == workflow.TriggerEmail && o.Definition.Email != nil {
+			if o.ID != wf.ID && o.Definition.Trigger == workflow.TriggerEmail && o.Definition.Email != nil {
 				others = append(others, o)
 			}
 		}
-		renderWorkflows(w, "editor", map[string]any{"Version": cfg.Version, "Workflow": wfs[0], "Hosts": hosts, "Repos": repos,
+		renderWorkflows(w, "editor", map[string]any{"Version": cfg.Version, "Workflow": wf, "Hosts": hosts, "Repos": repos,
 			"EmailOn": a.mail != nil, "Mailbox": mb.Address, "Emails": previews(emails), "Others": others,
 			"Dictation": dictationPath(cfg), "Providers": workflow.Providers()})
+	}
+}
+
+// workflowPromptsPage previews the current saved version using the runtime prompt builders.
+// Definition and repository data are read through the account's SQL role. Run-specific values
+// remain visible placeholders; this preview neither starts a run nor persists new state.
+func workflowPromptsPage(cfg Config, v viewer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		wf, ok := readWorkflow(w, r, v.pool)
+		if !ok {
+			return
+		}
+		d := wf.Definition
+		vars := workflow.Vars{Run: "{{run}}", Input: "{{input}}", Repo: "{{repo}}", Branch: "{{branch}}"}
+		if d.Project.Mode == workflow.ProjectFixed {
+			vars.Repo = d.Project.Directory
+		}
+		var project string
+		if d.Project.Mode == workflow.ProjectMatch {
+			repos, err := workflow.Repositories(r.Context(), v.pool, d.Host)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			project = workflow.ProjectPrompt(vars.Run, d, vars.Input, repos)
+		}
+		type promptStep struct {
+			workflow.Step
+			N       int
+			Message string
+		}
+		steps := make([]promptStep, len(d.Steps))
+		for i, s := range d.Steps {
+			steps[i] = promptStep{Step: s, N: i + 1, Message: workflow.StepMessage(d, i, vars)}
+		}
+		// Old definitions are decoded as the editor decodes them, rather than revalidated.
+		var orchestrator string
+		if len(d.Steps) > 0 {
+			orchestrator = workflow.OrchestratorPrompt(wf.Name, d, vars)
+		}
+		renderWorkflows(w, "prompts", map[string]any{"Version": cfg.Version, "Workflow": wf,
+			"ProjectPrompt": project, "OrchestratorPrompt": orchestrator, "Steps": steps})
 	}
 }
 
@@ -788,7 +840,7 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 		}
 		var before []runEvent // what happened before the steps: the start and the project
 		for _, e := range events {
-			if e.Step == nil && e.Kind != "cancel" {
+			if e.Step == nil && e.Kind != "cancel" && e.Kind != "summarize" {
 				before = append(before, e)
 			}
 		}
@@ -808,6 +860,8 @@ func (e runEvent) Line() string {
 	switch e.Kind {
 	case "started":
 		return "Started"
+	case "summarize":
+		return "Task summary: " + e.Text
 	case "submitted": // the start of a run that was queued
 		return "Submitted"
 	case "queued":

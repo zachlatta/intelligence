@@ -33,6 +33,7 @@ narrow the query. When truncated, continue with a stable key cursor, not an unbo
 | Commands and their results | `commands` |
 | Schedules and their runs | `schedule_status`, `schedule_runs` |
 | Resources, usage, diffs | `host_current`, `agent_days`, `usage_current`, `workspace_diff_files` |
+| Released features (What's New) and which this account has not seen | `whats_new`, `whats_new_unseen` |
 
 Host and agent IDs form a composite key: join on both, never agent ID alone. Run `step`
 is a zero-based index into the saved `workflow_versions.definition` JSON's `steps` array.
@@ -65,7 +66,7 @@ List recent runs (add `WHERE status = 'waiting'` for ones awaiting a reply). Kee
 `input` out of lists; fetch it explicitly for one run.
 
 ```sql
-SELECT id, workflow_id, version, host, title, status, step, orchestrator_id,
+SELECT id, workflow_id, version, host, coalesce(nullif(task_summary, ''), title) AS title, status, step, orchestrator_id,
        note, error, created_at, finished_at
 FROM workflow_runs
 ORDER BY created_at DESC, id DESC LIMIT 50
@@ -74,7 +75,7 @@ ORDER BY created_at DESC, id DESC LIMIT 50
 Read one run, even if it has no events:
 
 ```sql
-SELECT id, title, input, status, step, note, error, host, orchestrator_id, workspace_id
+SELECT id, coalesce(nullif(task_summary, ''), title) AS title, task_summary, input, status, step, note, error, host, orchestrator_id, workspace_id
 FROM workflow_runs WHERE id = '00000000-0000-4000-8000-000000000001' LIMIT 1
 ```
 

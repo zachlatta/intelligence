@@ -28,7 +28,7 @@
   .wf-card { display: flex; flex-direction: column; margin: 0; }
   .wf-card .card-body { flex: 1; }
   .wf-card h2 a { color: var(--fg); } .wf-card h2 a:hover { color: var(--accent); }
-  .card-foot { display: flex; gap: .5rem; align-items: center; padding: .6rem 1rem; border-top: 1px solid var(--line); background: var(--bg-subtle); }
+  .card-foot { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; padding: .6rem 1rem; border-top: 1px solid var(--line); background: var(--bg-subtle); }
   .strip { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; margin: .6rem 0 0; }
   .strip .arrow { color: var(--faint); font-size: 12px; }
   .chip { display: inline-flex; align-items: center; height: 1.45rem; padding: 0 .5rem; border-radius: 4px; font-size: 12px;
@@ -132,6 +132,9 @@
     font: inherit; color: var(--fg); cursor: pointer; }
   .menu button:hover { background: var(--bg-muted); }
   .menu .d { display: block; font-size: 12px; color: var(--muted); }
+  .prompt-inspection pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.6 var(--mono); margin: 0; }
+  .prompt-inspection nav { display: flex; flex-wrap: wrap; gap: .5rem 1rem; margin: 1rem 0; }
+  .prompt-inspection section { scroll-margin-top: 1rem; }
 </style>
 </head>
 <body>
@@ -186,7 +189,7 @@
   <div class="card-foot">{{if eq .Definition.Trigger "task"}}
     <button class="btn sm" data-default-workflow="{{.ID}}" data-default="{{if .IsDefault}}false{{else}}true{{end}}">{{if .IsDefault}}Clear default{{else}}Make default{{end}}</button>{{end}}
     {{if .PendingProposals}}<a href="/workflow-proposals?workflow={{.ID}}">{{.PendingProposals}} pending proposal{{if ne .PendingProposals 1}}s{{end}}</a>{{end}}
-    <span class="grow"></span><button class="btn sm ghost" data-delete-workflow="{{.ID}}" data-name="{{.Name}}">Delete</button><a class="btn sm" href="/workflows/{{.ID}}">Edit</a></div>
+    <span class="grow"></span><button class="btn sm ghost" data-delete-workflow="{{.ID}}" data-name="{{.Name}}">Delete</button><a class="btn sm" href="/workflows/{{.ID}}/prompts">Prompts</a><a class="btn sm" href="/workflows/{{.ID}}">Edit</a></div>
 </section>
 {{end}}
 </div>
@@ -293,6 +296,23 @@ setInterval(async () => {
 </script>{{end}}
 {{template "wffoot" .}}{{end}}
 
+{{define "prompts"}}{{template "wfhead" (printf "Prompts · %s" .Workflow.Name)}}
+<main class="container page prompt-inspection">
+<div class="crumbs"><a href="/workflows">Workflows</a><span class="sep">/</span><a href="/workflows/{{.Workflow.ID}}">{{.Workflow.Name}}</a><span class="sep">/</span>Prompts</div>
+<div class="page-head"><div><h1>Workflow prompts</h1><p class="sub">{{.Workflow.Name}} · saved version {{.Workflow.Version}}{{with .Workflow.Definition.Host}} · on <span class="mono">{{.}}</span>{{end}}</p></div><a class="btn sm" href="/workflows/{{.Workflow.ID}}">Edit workflow</a></div>
+<p>These are the messages Intelligence composes using the same code that starts agents and hands the orchestrator each step. Saved instructions include any model-choice or usage-balancing guidance; repository visibility, shell guidance, file-delivery and deliverable-email rules are appended at runtime.</p>
+<p class="meta">This previews the saved version, including all text without truncation; unsaved edits are not included. {{if .ProjectPrompt}}Run-specific values appear as <code>{{"{{run}}"}}</code>, <code>{{"{{input}}"}}</code>, <code>{{"{{repo}}"}}</code> and <code>{{"{{branch}}"}}</code>. The project finder uses the host's current repository list; the orchestrator preview assumes a repository is chosen (a run with <code>none</code> omits the worktree clause).{{else}}<code>{{"{{repo}}"}}</code> is filled with the fixed repository <code>{{.Workflow.Definition.Project.Directory}}</code>; run-specific values appear as <code>{{"{{run}}"}}</code>, <code>{{"{{input}}"}}</code> and <code>{{"{{branch}}"}}</code>.{{end}} Moving a run with <code>intelligence workflow</code> prefixes the next step message with a one-line transition (<code>Step N is done.</code> or <code>Back to step N. What is missing, as you said: …</code>) or returns a one-line closing or waiting reply.</p>
+<p class="meta">These are Intelligence's messages, not the provider's underlying system prompt. If a never-ask-mode agent still hits a permission prompt on the host (such as a shell safety check), the host client automatically denies it with rewrite guidance. Host skills, repository instructions, attachment paths, later replies or thread emails, and worker messages written by the orchestrator are supplied separately and are not reproduced here. Any deliverable-email rule stored in the workflow's instructions appears below.</p>
+<nav aria-label="Prompt sections"><a href="#project-prompt">Project</a><a href="#orchestrator-prompt">Orchestrator</a>{{range .Steps}}<a href="#step-{{.ID}}">{{.N}}. {{.Title}}</a>{{end}}</nav>
+<section class="card" id="project-prompt"><div class="card-head"><h2>Project finder</h2></div><div class="card-body">
+{{if .ProjectPrompt}}<p class="meta">{{with .Workflow.Definition.Project}}{{.Provider}}{{with .Model}} · {{.}}{{end}}{{with .Thinking}} · thinking {{.}}{{end}}{{end}}</p><pre>{{.ProjectPrompt}}</pre>{{else}}<p>No finder message: this workflow uses the fixed repository <code>{{.Workflow.Definition.Project.Directory}}</code>.</p>{{end}}
+</div></section>
+<section class="card" id="orchestrator-prompt"><div class="card-head"><h2>Orchestrator: initial message and contract</h2></div><div class="card-body">
+<p class="meta">{{with .Workflow.Definition.Orchestrator}}{{.Provider}}{{with .Model}} · {{.}}{{end}}{{with .Thinking}} · thinking {{.}}{{end}}{{end}}. Includes the first step.</p><pre>{{.OrchestratorPrompt}}</pre>
+</div></section>
+{{range .Steps}}<section class="card" id="step-{{.ID}}"><div class="card-head"><h2>{{.N}}. {{.Title}}</h2><span class="chip k-{{.Kind}}">{{kind .Kind}}</span><span class="meta">{{.ID}}</span></div><div class="card-body"><p class="meta">Step message to the orchestrator, including runtime rules. The initial contract continues to apply.</p><pre>{{.Message}}</pre></div></section>{{end}}
+{{template "wffoot" .}}{{end}}
+
 {{define "editor"}}{{template "wfhead" .Workflow.Name}}
 <main class="container page" data-submit="#save">
 <div class="crumbs"><a href="/workflows">Workflows</a><span class="sep">/</span><span id="crumb">{{.Workflow.Name}}</span></div>
@@ -303,6 +323,7 @@ setInterval(async () => {
   </div>
   <div class="actions">
     <span class="meta" id="saved"></span>
+    <a class="btn sm" href="/workflows/{{.Workflow.ID}}/prompts">Prompts</a>
     <div class="segmented"><a href="#" id="v-vis" class="on">Visual</a><a href="#" id="v-json">JSON</a></div>
     <button class="btn sm" id="discard" disabled>Discard</button>
     <button class="btn sm" id="save" title="⌘/Ctrl Enter" disabled>Save</button>
@@ -771,6 +792,7 @@ async function refresh(all) {
     const res = await fetch(location.href, { cache: "no-store" });
     if (!res.ok) return;
     const next = new DOMParser().parseFromString(await res.text(), "text/html");
+    document.title = next.title;
     const reply = $("#reply"), writing = reply && (reply.value || document.activeElement === reply || reply.classList.contains("listening"));
     for (const id of ["live", "steps"].concat(writing && !all ? [] : ["ask"])) {
       const n = next.getElementById(id), cur = document.getElementById(id);

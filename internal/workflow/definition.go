@@ -235,7 +235,9 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 		fmt.Fprintf(&b, ", in a worktree of %s on branch %s", v.Repo, v.Branch)
 	}
 	b.WriteString(".\n\nBefore starting workers, find this agent's workspace ID with Paseo's workspace listing. Pass --workspace <id> explicitly to every worker so it uses this workspace's working directory; --cwd alone can inherit the parent's workspace. Verify each worker with paseo inspect before it edits files. Stop a misplaced worker and relaunch it in the correct workspace. Do not create a replacement worktree in another repository or fall back to a main checkout; if the task names a repository that differs from this run's project, ask Zach before proceeding")
-	fmt.Fprintf(&b, ".\n\nWhat started it:\n\n%s\n\nIts steps:\n\n", strings.TrimSpace(v.Input))
+	fmt.Fprintf(&b, ".\n\nWhat started it:\n\n%s\n\n", strings.TrimSpace(v.Input))
+	fmt.Fprintf(&b, "Before starting work, summarize the whole task above as a concise action title (3–8 words, at most 80 characters). Describe the requested outcome, not just the prompt's opening words. Preserve important constraints and negations. For example: \"Summarize workflow run titles\". Save it with:\n\n  intelligence workflow summarize --run %s --summary \"<short task summary>\"\n\nUse proper shell quoting for your text. This only labels the run and does not advance a step. If saving the summary fails, continue with the workflow; do not block the task on it.\n\n", v.Run)
+	b.WriteString("Its steps:\n\n")
 	for i, s := range d.Steps {
 		fmt.Fprintf(&b, "%d. %s (%s, id %s)\n", i+1, s.Title, s.Kind, s.ID)
 	}
