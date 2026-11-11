@@ -224,7 +224,7 @@ func previews(list []emailRow) []previewEmail {
 func readEmails(ctx context.Context, p *pgxpool.Pool, run string, limit int) ([]emailRow, error) {
 	rows, err := p.Query(ctx, `SELECT e.gmail_id, e.thread_id, e.received_at, e.from_name, e.from_address, e.to_addresses, e.subject,
 		left(e.body, 4000), e.attachments, e.verified, e.bulk, e.decision, e.reason, coalesce(w.name, ''), coalesce(e.workflow_id::text, ''),
-		coalesce(e.run_id::text, ''), coalesce(r.title, '')
+		coalesce(e.run_id::text, ''), coalesce(nullif(r.task_summary, ''), r.title, '')
 		FROM emails e LEFT JOIN workflows w ON w.id = e.workflow_id LEFT JOIN workflow_runs r ON r.id = e.run_id
 		WHERE $1 = '' OR e.run_id::text = $1 ORDER BY e.received_at DESC, e.id DESC LIMIT $2`, run, limit)
 	if err != nil {

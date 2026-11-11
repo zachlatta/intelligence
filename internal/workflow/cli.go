@@ -21,19 +21,38 @@ const CLIUsage = `usage: intelligence workflow <move> --run <id> [...]
 
 The agents of a workflow run move it with these, on the run's host:
 
-  project --run <id> <directory>|none    the project finder's answer
-  next    --run <id> [--summary <text>]  this step is done; prints the next step (after the last, finishes the run)
-  back    --run <id> <step id> --why <text>
-  skip    --run <id> --why <text>
-  ask     --run <id> --note <file>|-      ask Zach (Markdown); his reply comes as your next message
-  done    --run <id> [--summary <text>]  finish the run now
-  fail    --run <id> --why <text>
+  project   --run <id> <directory>|none   the project finder's answer
+  summarize --run <id> --summary <text>   save a short task summary without moving the run
+  next      --run <id> [--summary <text>]  this step is done; prints the next step (after the last, finishes the run)
+  back      --run <id> <step id> --why <text>
+  skip      --run <id> --why <text>
+  ask       --run <id> --note <file>|-     ask Zach (Markdown); his reply comes as your next message
+  done      --run <id> [--summary <text>]  finish the run now
+  fail      --run <id> --why <text>
+
+  propose <file.json>|-                propose a workflow change; prints its approval URL
+  withdraw <id> --reason <text>        withdraw your pending proposal with a reason
+  answer-proposal --proposal <id> --question <id> --note <file>|-
+                                      post a dispatched question's Markdown answer
 
 It reaches the server with this host's key (HOST_SERVER and the key, as the host client has them).`
 
 // CLI runs `intelligence workflow args...` and returns its exit code.
 func CLI(ctx context.Context, args []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer, client *http.Client) int {
-	m, run, err := parseCLI(args, stdin)
+	var body []byte
+	var path string
+	var err error
+	if len(args) > 0 && args[0] == "answer-proposal" {
+		path, body, err = parseAnswerProposalCLI(args[1:], stdin)
+	} else if len(args) > 0 && (args[0] == "propose" || args[0] == "withdraw") {
+		path, body, err = parseProposalCLI(args, stdin)
+	} else {
+		var m Move
+		var run string
+		m, run, err = parseCLI(args, stdin)
+		body, _ = json.Marshal(m)
+		path = "/api/workflow-runs/" + run + "/moves"
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "%v\n\n%s\n", err, CLIUsage)
 		return 2
@@ -43,10 +62,9 @@ func CLI(ctx context.Context, args []string, getenv func(string) string, stdin i
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	body, _ := json.Marshal(m)
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(server, "/")+"/api/workflow-runs/"+run+"/moves", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(server, "/")+path, bytes.NewReader(body))
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -72,6 +90,88 @@ func CLI(ctx context.Context, args []string, getenv func(string) string, stdin i
 	}
 	fmt.Fprintln(stdout, out.Message)
 	return 0
+}
+
+func parseAnswerProposalCLI(args []string, stdin io.Reader) (string, []byte, error) {
+	fs := flag.NewFlagSet("answer-proposal", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	proposal := fs.String("proposal", "", "")
+	question := fs.Int64("question", 0, "")
+	note := fs.String("note", "", "")
+	if err := fs.Parse(args); err != nil {
+		return "", nil, err
+	}
+	if fs.NArg() != 0 || !uuidRe.MatchString(*proposal) || *question <= 0 || *note == "" {
+		return "", nil, errors.New("answer-proposal needs --proposal <UUID> --question <positive id> --note <file>|-")
+	}
+	source := stdin
+	if *note != "-" {
+		f, err := os.Open(*note)
+		if err != nil {
+			return "", nil, err
+		}
+		defer f.Close()
+		source = f
+	}
+	text, err := io.ReadAll(io.LimitReader(source, 20001))
+	if err != nil {
+		return "", nil, err
+	}
+	if len(text) > 20000 || strings.TrimSpace(string(text)) == "" {
+		return "", nil, errors.New("answer must contain 1 to 20000 bytes")
+	}
+	body, _ := json.Marshal(map[string]any{"questionId": *question, "text": string(text)})
+	return "/api/workflow-proposals/" + *proposal + "/comments/agent", body, nil
+}
+
+func parseProposalCLI(args []string, stdin io.Reader) (string, []byte, error) {
+	if args[0] == "propose" {
+		if len(args) != 2 {
+			return "", nil, errors.New("propose needs <file.json> (or - for standard input)")
+		}
+		var b []byte
+		var err error
+		if args[1] == "-" {
+			b, err = io.ReadAll(io.LimitReader(stdin, 1<<20+1))
+		} else {
+			var f *os.File
+			f, err = os.Open(args[1])
+			if err == nil {
+				defer f.Close()
+				b, err = io.ReadAll(io.LimitReader(f, 1<<20+1))
+			}
+		}
+		if err != nil {
+			return "", nil, err
+		}
+		if len(b) > 1<<20 || !json.Valid(b) {
+			return "", nil, errors.New("proposal must be JSON, at most 1 MiB")
+		}
+		return "/api/workflow-proposals", b, nil
+	}
+	var id, reason string
+	fs := flag.NewFlagSet("withdraw", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&reason, "reason", "", "")
+	rest := args[1:]
+	for {
+		if err := fs.Parse(rest); err != nil {
+			return "", nil, err
+		}
+		if fs.NArg() == 0 {
+			break
+		}
+		if id != "" {
+			return "", nil, errors.New("withdraw takes one proposal id")
+		}
+		id = fs.Arg(0)
+		rest = fs.Args()[1:]
+	}
+	if id == "" || strings.ContainsAny(id, "/?#") || strings.TrimSpace(reason) == "" {
+		return "", nil, errors.New("withdraw needs <id> --reason <text>")
+	}
+	b, _ := json.Marshal(map[string]string{"reason": reason})
+	return "/api/workflow-proposals/" + id + "/withdraw", b, nil
 }
 
 // parseCLI reads a move and its run from args; flags may come before or after the positional argument.
@@ -113,6 +213,10 @@ func parseCLI(args []string, stdin io.Reader) (Move, string, error) {
 		m.Directory, err = one("a directory, or none")
 	case "back":
 		m.Step, err = one("the step's id")
+	case "summarize":
+		if strings.TrimSpace(m.Summary) == "" {
+			err = errors.New("summarize needs --summary <text>")
+		}
 	case "ask":
 		switch *note {
 		case "":

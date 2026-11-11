@@ -13,7 +13,7 @@ import (
 func (r *Registry) Attach(ctx context.Context, host, stream string, at time.Time) error {
 	return pgx.BeginFunc(ctx, r.p, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `INSERT INTO hosts (name, last_seen, stream_id) VALUES ($1, $2, $3)
-			ON CONFLICT (name) DO UPDATE SET last_seen = EXCLUDED.last_seen, stream_id = EXCLUDED.stream_id`,
+			ON CONFLICT (name) DO UPDATE SET last_seen = EXCLUDED.last_seen, stream_id = EXCLUDED.stream_id, start_retry_keys = false`,
 			host, at, stream); err != nil {
 			return err
 		}
@@ -31,7 +31,7 @@ func (r *Registry) Seen(ctx context.Context, host, stream string, at time.Time) 
 
 // Detach records that stream ended: if it was still host's stream, the host is offline.
 func (r *Registry) Detach(ctx context.Context, host, stream string) error {
-	_, err := r.p.Exec(ctx, "UPDATE hosts SET stream_id = NULL WHERE name = $1 AND stream_id = $2", host, stream)
+	_, err := r.p.Exec(ctx, "UPDATE hosts SET stream_id = NULL, start_retry_keys = false WHERE name = $1 AND stream_id = $2", host, stream)
 	return err
 }
 

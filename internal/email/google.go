@@ -214,10 +214,10 @@ func (g *Google) token(ctx context.Context, form url.Values) (tokenResponse, err
 	defer res.Body.Close()
 	var t tokenResponse
 	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&t); err != nil {
-		return t, fmt.Errorf("Google's token endpoint: %s", res.Status)
+		return t, responseError(res, fmt.Sprintf("Google's token endpoint: %s", res.Status), false)
 	}
 	if res.StatusCode != http.StatusOK || t.AccessToken == "" {
-		return t, fmt.Errorf("Google refused: %s %s", t.Error, t.Description)
+		return t, responseError(res, fmt.Sprintf("Google refused: %s %s", t.Error, t.Description), false)
 	}
 	return t, nil
 }
@@ -265,6 +265,20 @@ func (m *Mailbox) accessToken(ctx context.Context) (string, error) {
 }
 
 func (m *Mailbox) get(ctx context.Context, path string, q url.Values, out any) error {
+	if p, ok := ctx.Value(paceKey{}).(*pacer); ok {
+		units := 1
+		switch {
+		case path == "history":
+			units = 2
+		case path == "messages":
+			units = 5
+		case strings.HasPrefix(path, "messages/"):
+			units = 60
+		}
+		if err := p.Wait(ctx, units); err != nil {
+			return err
+		}
+	}
 	tok, err := m.accessToken(ctx)
 	if err != nil {
 		return err
@@ -288,7 +302,21 @@ func (m *Mailbox) get(ctx context.Context, path string, q url.Values, out any) e
 	}
 	if res.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 2048))
-		return fmt.Errorf("Gmail %s: %s %s", path, res.Status, strings.TrimSpace(string(b)))
+		var detail struct {
+			Error struct {
+				Errors []struct {
+					Reason string `json:"reason"`
+				} `json:"errors"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal(b, &detail)
+		limited := false
+		for _, e := range detail.Error.Errors {
+			if e.Reason == "rateLimitExceeded" || e.Reason == "userRateLimitExceeded" {
+				limited = true
+			}
+		}
+		return responseError(res, fmt.Sprintf("Gmail %s: %s %s", path, res.Status, strings.TrimSpace(string(b))), limited)
 	}
 	return json.NewDecoder(io.LimitReader(res.Body, 64<<20)).Decode(out)
 }

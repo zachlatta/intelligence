@@ -211,6 +211,63 @@ func TestVoiceMemoRefusalDoesNotBlockLaterRecordings(t *testing.T) {
 
 type voiceMemoFailTransport struct{}
 
+func TestProposalsShowVoiceMemoFilterChanges(t *testing.T) {
+	for _, filters := range [][2]*workflow.VoiceMemoFilter{
+		{nil, {Title: "Ideas"}},
+		{{Title: "Ideas"}, {Title: "Projects", Words: "workshop", Without: "private"}},
+		{{Title: "Ideas"}, nil},
+	} {
+		before := &workflow.WorkflowState{Definition: workflow.Definition{VoiceMemo: filters[0]}}
+		after := &workflow.WorkflowState{Definition: workflow.Definition{VoiceMemo: filters[1]}}
+		changes := proposalChanges(before, after)
+		if len(changes) != 1 || changes[0].Label != "Voice memo filter" || changes[0].Before != prettyProposal(filters[0]) || changes[0].After != prettyProposal(filters[1]) {
+			t.Fatalf("proposal hides voice memo filter changes: %+v", changes)
+		}
+	}
+}
+
+func TestVoiceMemoRunsUseTheHostCapacityQueue(t *testing.T) {
+	d := dbtest.New(t)
+	h := newServer(t, d, d.Owner, "v")
+	sendReport(t, h, wfReport())
+	lastMinute(t, d, 0, 99)
+	def := workflow.Starting
+	def.Trigger = workflow.TriggerVoiceMemo
+	def.VoiceMemo = &workflow.VoiceMemoFilter{}
+	createWorkflow(t, h, def)
+	memos := []workflow.VoiceMemo{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"feed": "feed:voice-memos", "next_cursor": "MQ", "recordings": memos, "has_more": false})
+	}))
+	defer srv.Close()
+	engine := workflow.NewEngine(d.Owner, nil)
+	s := voicememo.Service{DB: d.Owner, Engine: engine, URL: srv.URL, Key: "test", Username: h.acct.Username}
+	if err := s.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	memos = []workflow.VoiceMemo{{Source: "apple_voice_memos", Account: "demo", ID: "capacity-memo", Title: "Ideas", Transcript: "Build a workshop"}}
+	if err := s.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	_, rows := sqlPost(t, h, q("SELECT m.decision,r.status FROM voice_memos m JOIN workflow_runs r ON r.id=m.run_id"))
+	if len(rows.Rows) != 1 || rows.Rows[0][0] != "started" || rows.Rows[0][1] != workflow.Queued {
+		t.Fatalf("voice memo bypassed queue: %+v", rows)
+	}
+	if _, err := d.Owner.Exec(t.Context(), "UPDATE host_minutes SET cpu_avg_pct=0,load1=0,mem_available_min=100 WHERE host='host-1'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.StartQueued(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	_, rows = sqlPost(t, h, q("SELECT status FROM workflow_runs"))
+	if len(rows.Rows) != 1 || rows.Rows[0][0] != workflow.FindingProject {
+		t.Fatalf("queued memo did not launch once: %+v", rows)
+	}
+}
+
 // A recording PDW sends with no transcript yet must not wedge the feed: it gets an ignored
 // receipt, and the recordings after it are still read.
 func TestVoiceMemoEmptyTranscriptIsIgnoredNotRetried(t *testing.T) {
