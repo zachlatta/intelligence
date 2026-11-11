@@ -147,7 +147,7 @@ func (a *app) mcp(w http.ResponseWriter, r *http.Request) {
 			mcpError(w, id, -32602, "tool name required")
 			return
 		}
-		if p.Name == "propose_mutation" || p.Name == "withdraw_mutation" || p.Name == "propose_mutation_help" {
+		if p.Name == "propose_mutation" || p.Name == "withdraw_mutation" || p.Name == "propose_mutation_help" || p.Name == "comment_proposal" {
 			a.mcpProposalCall(w, r, id, acct, "mcp:"+tokenID, p.Name, p.Arguments)
 			return
 		}

@@ -107,6 +107,12 @@ type proposalView struct {
 	BaseVersion, ResultVersion                                                                  int
 	Pending, Applied                                                                            bool
 	Changes                                                                                     []proposalChange
+	Comments                                                                                    []proposalComment
+}
+
+type proposalComment struct {
+	Author, Text string
+	Created      time.Time
 }
 
 func readProposalViews(ctx context.Context, v viewer, id, wid string) ([]proposalView, error) {
@@ -172,6 +178,20 @@ func proposalPage(v viewer) http.HandlerFunc {
 			http.NotFound(w, r)
 			return
 		}
+		rows, err := v.pool.Query(r.Context(), `SELECT author,text,created_at FROM workflow_proposal_comments WHERE proposal_id=$1 ORDER BY id`, id)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		ps[0].Comments, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (proposalComment, error) {
+			var c proposalComment
+			err := row.Scan(&c.Author, &c.Text, &c.Created)
+			return c, err
+		})
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_ = proposalTmpl.ExecuteTemplate(w, "proposal", ps[0])
 	}
@@ -225,4 +245,4 @@ func workflowVersionPage(v viewer) http.HandlerFunc {
 
 //go:embed proposals.html
 var proposalsHTML string
-var proposalTmpl = template.Must(template.New("proposals").Funcs(template.FuncMap{"stamp": func(t time.Time) string { return t.Format("Jan 2, 2006 · 15:04 MST") }}).Parse(proposalsHTML + layoutHTML))
+var proposalTmpl = template.Must(template.New("proposals").Funcs(template.FuncMap{"markdown": markdown, "inlineDiff": proposalInlineDiff, "stamp": func(t time.Time) string { return t.Format("Jan 2, 2006 · 15:04 MST") }}).Parse(proposalsHTML + layoutHTML))

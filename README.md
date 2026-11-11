@@ -132,9 +132,25 @@ Workflow start retries additionally reconcile finished startup commands every fi
 
 Agents can propose a workflow creation, replacement or deletion without applying it. A proposal
 returns an `approvalURL`: the account owner signs in there, reviews complete before/after snapshots
-and a line diff, then approves or rejects. The Proposals tab lists the latest 200 proposals.
+and visible word-level changes, then approves or rejects. Full before/after text and a line diff
+are also available. The Proposals tab lists the latest 200 proposals.
 Opening a link never applies it. Approval, rejection and undo require a same-origin browser-session
 JSON request; a host key cannot make these decisions.
+
+`summary` is rendered as safe Markdown at the top of the review. Explain **what changes and why**,
+including tradeoffs or risks, in up to 2000 bytes. Raw HTML is escaped and unsafe links are dropped.
+Existing plain-text summaries still work; an empty legacy summary falls back to a changed-field list.
+
+The review page has a persistent discussion thread. Browser sessions post `{"text":"Your question"}`
+to `POST /api/workflow-proposals/{id}/comments`. Agents can answer with the same JSON at
+`POST /api/workflow-proposals/{id}/comments/agent` using an enrolled host's bearer key, or with
+the account MCP tool `comment_proposal` using `{"id":"<proposal UUID>","text":"Your answer"}`.
+Authors are recorded from the credential, not supplied by callers. Comments accept up to 20000
+bytes, use the same safe Markdown renderer, and remain available after a decision.
+Read the thread through SQL: `SELECT id,author,text,created_at FROM workflow_proposal_comments
+WHERE proposal_id = '<proposal UUID>' ORDER BY id`. Account isolation applies to reads and writes.
+Posting does **not** dispatch or resume an agent. An agent must explicitly read and answer the
+thread; refresh the page to see new answers. Discussion never applies a workflow change.
 
 `POST /api/workflow-proposals` accepts a host's bearer key and JSON:
 
@@ -260,8 +276,8 @@ No SDK or additional service is needed on the server.
 Authentication is `Authorization: Bearer <MCP token>` on every request. Browser cookies, browser
 session tokens and host keys are not accepted at `/mcp`. MCP tokens work only there; they cannot
 sign in to a browser or authorize a write API. Each reads through its account's own Postgres login
-role and the same read-only transaction, timeout and row limits as `/api/sql`. The two proposal
-write tools may create/withdraw proposal rows through the engine; only a browser-session approval
+role and the same read-only transaction, timeout and row limits as `/api/sql`. The proposal
+write tools may create/withdraw proposal rows or post discussion comments through the engine; only a browser-session approval
 can apply them. MCP tokens never authorize approval, rejection, undo or direct write APIs. Cross-origin requests are refused, with no CORS support. Set `PUBLIC_URL` to the
 external HTTPS origin when a proxy terminates TLS, so an Origin header can be checked against it;
 server-to-server clients normally send no Origin.
@@ -295,6 +311,8 @@ Read tools (annotated read-only):
 The proposal tools are annotated as writes to review state: `propose_mutation` returns id and
 approvalURL, `withdraw_mutation` takes id and a required reason, and `propose_mutation_help`
 returns the schema and an example. They also return JSON text and `structuredContent`.
+`comment_proposal` is also a write to review state: it takes `id` and `text` and posts a discussion
+reply under the authenticated MCP token. It cannot approve or resume a workflow.
 
 The guide returns Markdown text. The three SQL tools return `columns`, `rows`, `rowCount`, `truncated`, as both JSON text and
 MCP `structuredContent`. The default is 1000 rows, maximum 10000, with the SQL timeout (5 seconds

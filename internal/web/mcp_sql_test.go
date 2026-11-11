@@ -15,12 +15,12 @@ func qlimit(query string, limit int) string {
 
 func TestMCPOnlySQLReadSurface(t *testing.T) {
 	want := map[string]bool{"readme": true, "schema_overview": true, "describe_table": true, "query": true,
-		"propose_mutation": true, "withdraw_mutation": true, "propose_mutation_help": true}
+		"propose_mutation": true, "withdraw_mutation": true, "propose_mutation_help": true, "comment_proposal": true}
 	for _, tool := range mcpTools() {
 		if !want[tool.Name] {
 			t.Errorf("unexpected tool %s", tool.Name)
 		}
-		readOnly := tool.Name != "propose_mutation" && tool.Name != "withdraw_mutation"
+		readOnly := tool.Name != "propose_mutation" && tool.Name != "withdraw_mutation" && tool.Name != "comment_proposal"
 		if tool.Annotations["readOnlyHint"] != readOnly {
 			t.Errorf("wrong read-only annotation for %s", tool.Name)
 		}

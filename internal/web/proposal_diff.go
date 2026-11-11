@@ -1,6 +1,58 @@
 package web
 
-import "strings"
+import (
+	"html/template"
+	"strings"
+	"unicode"
+)
+
+// Diff whitespace-preserving word tokens with the same bounded edit algorithm as
+// lines. Escape each fragment before adding the only trusted markup: ins/del.
+func proposalInlineDiff(before, after string) template.HTML {
+	tokens := func(s string) []string {
+		var out []string
+		start := 0
+		space := false
+		for i, r := range s {
+			next := unicode.IsSpace(r)
+			if i > start && next != space {
+				out = append(out, s[start:i])
+				start = i
+			}
+			space = next
+		}
+		if start < len(s) {
+			out = append(out, s[start:])
+		}
+		return out
+	}
+	a, b := tokens(before), tokens(after)
+	var out strings.Builder
+	kind := ""
+	closeTag := func() {
+		switch kind {
+		case "added":
+			out.WriteString("</ins>")
+		case "removed":
+			out.WriteString("</del>")
+		}
+	}
+	for _, part := range proposalTokenDiff(a, b) {
+		if kind != part.Kind {
+			closeTag()
+			kind = part.Kind
+			switch kind {
+			case "added":
+				out.WriteString("<ins>")
+			case "removed":
+				out.WriteString("<del>")
+			}
+		}
+		out.WriteString(template.HTMLEscapeString(part.Text))
+	}
+	closeTag()
+	return template.HTML(out.String()) // Only escaped input and fixed tags.
+}
 
 type proposalDiffLine struct{ Kind, Text string }
 
@@ -8,6 +60,10 @@ type proposalDiffLine struct{ Kind, Text string }
 // distance for unrelated, very large prompts so review cannot exhaust the server.
 func proposalLineDiff(before, after string) []proposalDiffLine {
 	a, b := strings.Split(before, "\n"), strings.Split(after, "\n")
+	return proposalTokenDiff(a, b)
+}
+
+func proposalTokenDiff(a, b []string) []proposalDiffLine {
 	v := map[int]int{1: 0}
 	trace := []map[int]int{}
 	for d := 0; d <= len(a)+len(b) && d <= 512; d++ {

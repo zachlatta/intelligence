@@ -193,6 +193,8 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /hosts/{host}/schedules/{id}", a.page(func(v viewer) http.HandlerFunc { return schedulePage(cfg, v.reg) }))
 	// workflows: written through the API, read through the account's role; a host's agents move runs with its key
 	mux.HandleFunc("POST /api/workflow-proposals", a.hostWrite(a.proposeWorkflow))
+	mux.HandleFunc("POST /api/workflow-proposals/{id}/comments", a.write(a.reviewerComment))
+	mux.HandleFunc("POST /api/workflow-proposals/{id}/comments/agent", a.hostWrite(a.agentComment))
 	mux.HandleFunc("POST /api/workflow-proposals/{id}/withdraw", a.hostWrite(a.withdrawProposal))
 	for _, action := range []string{"approve", "reject", "undo"} {
 		mux.HandleFunc("POST /api/workflow-proposals/{id}/"+action, a.write(a.decideProposal(action)))
