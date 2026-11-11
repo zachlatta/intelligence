@@ -98,6 +98,10 @@ func (g GmailMessage) pixels() []string {
 				return true
 			}
 			u, err := url.Parse(attrs["src"])
+			// Email has no document scheme; prefer HTTPS for protocol-relative images.
+			if err == nil && u.Scheme == "" && u.Host != "" {
+				u.Scheme = "https"
+			}
 			if err != nil || !validPixelURL(u) {
 				return true
 			}

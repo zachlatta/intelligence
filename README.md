@@ -596,7 +596,8 @@ Dimensions accept decimal values and `px`/`pt` units; inline styles support `!im
 and zero `max-height` qualifies as hidden. Quoted history in blockquotes and Gmail/Yahoo quote
 containers is skipped; Outlook reply markers stop scanning the rest of that HTML part.
 Requests use a common desktop Chrome User-Agent, including after redirects, without claiming to
-be a mail provider's image proxy. Only HTTP port 80 and HTTPS port 443 are allowed.
+be a mail provider's image proxy. Protocol-relative image URLs use HTTPS.
+Only HTTP port 80 and HTTPS port 443 are allowed.
 
 `email_pixel_opens` records the email, account, candidate count, start/finish times, attempts and
 successful responses for read-only SQL. A unique email marker makes this best effort, at most once:

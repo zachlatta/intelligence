@@ -25,6 +25,7 @@ func TestPixelDetection(t *testing.T) {
 		`<img style="max-height:0px!important;overflow:hidden" src="https://example.com/p">`,
 		`<img width="1.0pt" height="0.0pt" src="https://example.com/p">`,
 		`<img width="1.0" height="0.0" src="https://example.com/p">`,
+		`<img width=1 height=1 src="//example.com/p">`,
 	} {
 		g := GmailMessage{Payload: Part{MimeType: "text/html", Body: Body{Data: base64.RawURLEncoding.EncodeToString([]byte(markup))}}}
 		if got := g.pixels(); !reflect.DeepEqual(got, []string{"https://example.com/p"}) {
