@@ -42,6 +42,11 @@ type Config struct {
 	EmailKey      *email.Keyring
 	EmailInterval time.Duration
 	PublicURL     string // PUBLIC_URL: the server's origin for Google's redirect; default the request's
+	// QueueLimits are when a host is too busy to start another workflow run, which then queues;
+	// default workflow.DefaultLimits. Queued runs are checked every QueueInterval (default
+	// workflow.QueueEvery), on every host minute and whenever a run ends.
+	QueueLimits   *workflow.Limits
+	QueueInterval time.Duration
 }
 
 // app is the server's shared parts.
@@ -92,6 +97,14 @@ func New(cfg Config) http.Handler {
 	context.AfterFunc(cfg.Context, roles.Close)
 	store := accounts.New(cfg.DB, roles)
 	a := &app{cfg: cfg, store: store, reg: reg, changes: changes, wf: workflow.NewEngine(cfg.DB, cfg.Now)}
+	if cfg.QueueLimits != nil {
+		a.wf.Limits = *cfg.QueueLimits
+	}
+	if cfg.QueueInterval == 0 {
+		cfg.QueueInterval = workflow.QueueEvery
+	}
+	go a.wf.RunQueue(cfg.Context, cfg.QueueInterval)
+	go a.wf.RunStartRetries(cfg.Context)
 	if cfg.Google != nil && cfg.EmailKey != nil {
 		a.mail = &email.Service{DB: cfg.DB, Engine: a.wf, Google: cfg.Google, Key: cfg.EmailKey, Now: cfg.Now}
 		interval := cfg.EmailInterval
@@ -179,6 +192,14 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /hosts/{host}/schedules/new", a.page(func(v viewer) http.HandlerFunc { return newSchedulePage(cfg, v.reg) }))
 	mux.HandleFunc("GET /hosts/{host}/schedules/{id}", a.page(func(v viewer) http.HandlerFunc { return schedulePage(cfg, v.reg) }))
 	// workflows: written through the API, read through the account's role; a host's agents move runs with its key
+	mux.HandleFunc("POST /api/workflow-proposals", a.hostWrite(a.proposeWorkflow))
+	mux.HandleFunc("POST /api/workflow-proposals/{id}/withdraw", a.hostWrite(a.withdrawProposal))
+	for _, action := range []string{"approve", "reject", "undo"} {
+		mux.HandleFunc("POST /api/workflow-proposals/{id}/"+action, a.write(a.decideProposal(action)))
+	}
+	mux.HandleFunc("GET /workflow-proposals", a.page(proposalsPage))
+	mux.HandleFunc("GET /workflow-proposals/{id}", a.page(proposalPage))
+	mux.HandleFunc("GET /workflows/{id}/versions/{version}", a.page(workflowVersionPage))
 	mux.HandleFunc("POST /api/workflows", a.write(a.createWorkflow))
 	mux.HandleFunc("PUT /api/workflows/{id}", a.write(a.updateWorkflow))
 	mux.HandleFunc("PUT /api/workflows/{id}/default", a.write(a.setDefaultWorkflow))
@@ -186,6 +207,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("POST /api/workflow-runs", a.write(a.startRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/reply", a.write(a.replyToRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/cancel", a.write(a.cancelRun))
+	mux.HandleFunc("POST /api/workflow-runs/{id}/start", a.write(a.startQueuedRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/moves", a.moveRun)
 	mux.HandleFunc("GET /workflows", a.page(func(v viewer) http.HandlerFunc { return workflowsPage(cfg, v) }))
 	// email triggers: the account's Gmail mailbox, connected through Google's sign-in

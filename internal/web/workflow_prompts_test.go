@@ -38,6 +38,7 @@ func TestWorkflowPromptsPage(t *testing.T) {
 		"Step N is done.",
 		"Back to step N",
 		"automatically denies",
+		"repository visibility, shell guidance, file-delivery and deliverable-email rules are appended at runtime",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("prompts page missing %q", want)

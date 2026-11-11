@@ -128,6 +128,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--line);
 .banner { display: block; margin: .5rem 0; padding: .55rem .8rem; border-radius: var(--radius); font-size: 13px;
   border: 1px solid var(--red-line); background: var(--red-bg); color: var(--red); white-space: pre-wrap; overflow-wrap: anywhere; }
 .banner.note { border-color: var(--line); background: var(--bg-subtle); color: var(--fg-2); }
+#start-retry { white-space: normal; }
 .warn { color: var(--red); }
 .empty-state { padding: 3rem 1rem; text-align: center; color: var(--muted); border: 1px dashed var(--line-strong);
   border-radius: var(--radius); }

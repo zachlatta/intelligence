@@ -23,6 +23,8 @@ type Engine struct {
 	p   *pgxpool.Pool
 	reg *fleet.Registry
 	Now func() time.Time
+	// Limits are when a host is too busy to start another run: a new run queues (queue.go).
+	Limits Limits
 }
 
 // NewEngine keeps workflows in p's database.
@@ -30,7 +32,7 @@ func NewEngine(p *pgxpool.Pool, now func() time.Time) *Engine {
 	if now == nil {
 		now = time.Now
 	}
-	return &Engine{p: p, reg: fleet.New(p), Now: now}
+	return &Engine{p: p, reg: fleet.New(p), Now: now, Limits: DefaultLimits()}
 }
 
 // ErrNotFound: no such workflow or run in the account (or for the host).
@@ -52,6 +54,7 @@ func conflict(format string, a ...any) error {
 
 // Run statuses.
 const (
+	Queued               = "queued" // waits for its host to have room (queue_reason says why; queue.go)
 	FindingProject       = "finding_project"
 	StartingOrchestrator = "starting"
 	Running              = "running"
@@ -78,31 +81,42 @@ func checkName(name string) (string, error) {
 	return name, nil
 }
 
+// WorkflowState is the complete editable state captured for review and undo.
+// Version is the monotonic definition revision; deletion preserves it, restores increment it.
+type WorkflowState struct {
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	Definition  Definition `json:"definition"`
+	Version     int        `json:"version"`
+	IsDefault   bool       `json:"isDefault"`
+	Deleted     bool       `json:"deleted"`
+}
+
+func workflowState(ctx context.Context, tx pgx.Tx, account int64, id string) (*WorkflowState, error) {
+	var s WorkflowState
+	var def []byte
+	err := tx.QueryRow(ctx, `SELECT w.name,w.description,w.version,w.is_default,w.deleted_at IS NOT NULL,v.definition
+ FROM workflows w JOIN workflow_versions v ON v.workflow_id=w.id AND v.version=w.version
+ WHERE w.id=$1 AND w.account_id=$2 FOR UPDATE OF w`, id, account).Scan(&s.Name, &s.Description, &s.Version, &s.IsDefault, &s.Deleted, &def)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	err = json.Unmarshal(def, &s.Definition)
+	return &s, err
+}
+
 // CreateWorkflow saves a new workflow for account, as version 1.
 func (e *Engine) CreateWorkflow(ctx context.Context, account int64, name, description string, d Definition) (string, error) {
-	name, err := checkName(name)
-	if err != nil {
-		return "", err
-	}
-	if err := d.Validate(); err != nil {
-		return "", bad("%s", err)
-	}
-	def, _ := json.Marshal(d)
-	at := e.Now()
 	var id string
-	err = pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
-		if err := ownsHost(ctx, tx, account, d.Host); err != nil {
+	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		if err := lockWorkflowAccount(ctx, tx, account); err != nil {
 			return err
 		}
-		if err := uniqueEmailTrigger(ctx, tx, account, "", d); err != nil {
-			return err
-		}
-		if err := tx.QueryRow(ctx, `INSERT INTO workflows (account_id, name, description, version, created_at, updated_at)
-			VALUES ($1, $2, $3, 1, $4, $4) RETURNING id::text`, account, name, strings.TrimSpace(description), at).Scan(&id); err != nil {
-			return err
-		}
-		_, err := tx.Exec(ctx, `INSERT INTO workflow_versions (workflow_id, version, account_id, definition, created_at)
-			VALUES ($1, 1, $2, $3, $4)`, id, account, def, at)
+		var err error
+		id, _, err = e.applyWorkflowState(ctx, tx, account, "", nil, &WorkflowState{Name: name, Description: description, Definition: d})
 		return err
 	})
 	return id, err
@@ -145,44 +159,26 @@ func (e *Engine) SetDefault(ctx context.Context, account int64, id string, chose
 // UpdateWorkflow saves d as the next version of account's workflow id, and returns that version.
 // Runs keep the version they started with.
 func (e *Engine) UpdateWorkflow(ctx context.Context, account int64, id, name, description string, d Definition) (int, error) {
-	name, err := checkName(name)
-	if err != nil {
-		return 0, err
-	}
-	if err := d.Validate(); err != nil {
-		return 0, bad("%s", err)
-	}
 	if !uuidRe.MatchString(id) {
 		return 0, ErrNotFound
 	}
-	def, _ := json.Marshal(d)
-	at := e.Now()
 	var version int
-	err = pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
-		var mine bool
-		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM workflows WHERE id = $1 AND account_id = $2 AND deleted_at IS NULL)", id, account).Scan(&mine); err != nil {
+	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		if err := lockWorkflowAccount(ctx, tx, account); err != nil {
 			return err
 		}
-		if !mine {
-			return ErrNotFound
-		}
-		if err := ownsHost(ctx, tx, account, d.Host); err != nil {
-			return err
-		}
-		if err := uniqueEmailTrigger(ctx, tx, account, id, d); err != nil {
-			return err
-		}
-		err := tx.QueryRow(ctx, `UPDATE workflows SET name = $3, description = $4, version = version + 1, updated_at = $5,
-			is_default = is_default AND $6
-			WHERE id = $1 AND account_id = $2 AND deleted_at IS NULL RETURNING version`, id, account, name, strings.TrimSpace(description), at, d.Trigger == TriggerTask).Scan(&version)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
+		current, err := workflowState(ctx, tx, account, id)
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO workflow_versions (workflow_id, version, account_id, definition, created_at)
-			VALUES ($1, $2, $3, $4, $5)`, id, version, account, def, at)
+		if current.Deleted {
+			return ErrNotFound
+		}
+		target := &WorkflowState{Name: name, Description: description, Definition: d, IsDefault: current.IsDefault && d.Trigger == TriggerTask}
+		_, applied, err := e.applyWorkflowState(ctx, tx, account, id, current, target)
+		if err == nil {
+			version = applied.Version
+		}
 		return err
 	})
 	return version, err
@@ -196,27 +192,95 @@ func (e *Engine) DeleteWorkflow(ctx context.Context, account int64, id string) e
 		return ErrNotFound
 	}
 	return pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
-		// the lock waits out a run being started, which holds the workflow FOR SHARE
-		var found bool
-		err := tx.QueryRow(ctx, "SELECT true FROM workflows WHERE id = $1 AND account_id = $2 AND deleted_at IS NULL FOR UPDATE",
-			id, account).Scan(&found)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
+		if err := lockWorkflowAccount(ctx, tx, account); err != nil {
+			return err
 		}
+		current, err := workflowState(ctx, tx, account, id)
 		if err != nil {
 			return err
 		}
-		var live int
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM workflow_runs WHERE workflow_id = $1 AND status NOT IN ($2, $3, $4)`,
-			id, Succeeded, Failed, Canceled).Scan(&live); err != nil {
-			return err
+		if current.Deleted {
+			return ErrNotFound
 		}
-		if live > 0 {
-			return conflict("this workflow has runs still going (%d): cancel them or let them finish first", live)
-		}
-		_, err = tx.Exec(ctx, "UPDATE workflows SET deleted_at = $3, is_default = false WHERE id = $1 AND account_id = $2", id, account, e.Now())
+		target := *current
+		target.Deleted = true
+		_, _, err = e.applyWorkflowState(ctx, tx, account, id, current, &target)
 		return err
 	})
+}
+
+// Lock the account before workflows/proposals, including email/default validation.
+func lockWorkflowAccount(ctx context.Context, tx pgx.Tx, account int64) error {
+	_, err := tx.Exec(ctx, "SELECT id FROM accounts WHERE id=$1 FOR NO KEY UPDATE", account)
+	return err
+}
+
+// applyWorkflowState is the sole workflow persistence path for direct writes and
+// reviewed approval/undo. The caller holds the account and current workflow locks.
+// Deletion preserves the definition version; creates, updates and restores save a
+// new immutable definition. All deletion paths use terminal status, not timestamps.
+func (e *Engine) applyWorkflowState(ctx context.Context, tx pgx.Tx, account int64, id string, current, target *WorkflowState) (string, *WorkflowState, error) {
+	s := *target
+	at := e.Now()
+	if s.Deleted {
+		if current == nil || current.Deleted {
+			return "", nil, ErrNotFound
+		}
+		var live int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM workflow_runs WHERE workflow_id=$1 AND status NOT IN ($2,$3,$4)`, id, Succeeded, Failed, Canceled).Scan(&live); err != nil {
+			return "", nil, err
+		}
+		if live > 0 {
+			return "", nil, conflict("this workflow has runs still going (%d): cancel them or let them finish first", live)
+		}
+		s = *current
+		s.Deleted = true
+		s.IsDefault = false
+		_, err := tx.Exec(ctx, "UPDATE workflows SET deleted_at=$2,is_default=false,updated_at=$2 WHERE id=$1", id, at)
+		return id, &s, err
+	}
+	name, err := checkName(s.Name)
+	if err != nil {
+		return "", nil, err
+	}
+	s.Name = name
+	s.Description = strings.TrimSpace(s.Description)
+	if err := s.Definition.Validate(); err != nil {
+		return "", nil, bad("%s", err)
+	}
+	if err := ownsHost(ctx, tx, account, s.Definition.Host); err != nil {
+		return "", nil, err
+	}
+	if err := uniqueEmailTrigger(ctx, tx, account, id, s.Definition); err != nil {
+		return "", nil, err
+	}
+	if s.IsDefault {
+		if s.Definition.Trigger != TriggerTask {
+			return "", nil, bad("only a task workflow can be the default")
+		}
+		var other bool
+		if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM workflows WHERE account_id=$1 AND is_default AND id::text<>$2)", account, id).Scan(&other); err != nil {
+			return "", nil, err
+		}
+		if other {
+			return "", nil, conflict("another workflow is now the default; cannot restore the previous default")
+		}
+	}
+	s.Version = 1
+	if current != nil {
+		s.Version = current.Version + 1
+	}
+	if current == nil {
+		err = tx.QueryRow(ctx, `INSERT INTO workflows(account_id,name,description,version,created_at,updated_at) VALUES($1,$2,$3,1,$4,$4) RETURNING id::text`, account, s.Name, s.Description, at).Scan(&id)
+	} else {
+		_, err = tx.Exec(ctx, `UPDATE workflows SET name=$2,description=$3,version=$4,is_default=$5,deleted_at=NULL,updated_at=$6 WHERE id=$1`, id, s.Name, s.Description, s.Version, s.IsDefault, at)
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	def, _ := json.Marshal(s.Definition)
+	_, err = tx.Exec(ctx, "INSERT INTO workflow_versions(workflow_id,version,account_id,definition,created_at) VALUES($1,$2,$3,$4,$5)", id, s.Version, account, def, at)
+	return id, &s, err
 }
 
 // uniqueEmailTrigger refuses an email trigger that another of account's workflows (not id) has
@@ -295,6 +359,8 @@ type run struct {
 	Step                                         int
 	WorkspaceID, ProjectAgent, Orchestrator      string
 	ProjectCommand                               *string
+	StartRetryAt                                 *time.Time
+	StartRetries                                 int
 	Name                                         string
 	Def                                          Definition
 }
@@ -302,14 +368,14 @@ type run struct {
 func (r run) vars() Vars { return Vars{Run: r.ID, Input: r.Input, Repo: r.Repo, Branch: r.Branch} }
 
 const runSelect = `SELECT r.id::text, r.host, r.title, r.input, r.status, r.repo, r.branch, r.account_id, r.step, r.workspace_id,
-	r.project_agent_id, r.orchestrator_id, r.project_command::text, w.name, v.definition
+	r.project_agent_id, r.orchestrator_id, r.project_command::text, w.name, v.definition, r.start_retry_at, r.start_retries
 	FROM workflow_runs r JOIN workflow_versions v USING (workflow_id, version) JOIN workflows w ON w.id = r.workflow_id `
 
 func scanRun(row pgx.Row) (run, error) {
 	var r run
 	var def []byte
 	err := row.Scan(&r.ID, &r.Host, &r.Title, &r.Input, &r.Status, &r.Repo, &r.Branch, &r.Account, &r.Step, &r.WorkspaceID,
-		&r.ProjectAgent, &r.Orchestrator, &r.ProjectCommand, &r.Name, &def)
+		&r.ProjectAgent, &r.Orchestrator, &r.ProjectCommand, &r.Name, &def, &r.StartRetryAt, &r.StartRetries)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, ErrNotFound
 	}
@@ -347,7 +413,6 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 	if !uuidRe.MatchString(workflowID) {
 		return "", ErrNotFound
 	}
-	at := e.Now()
 	var id, host string
 	err := func() error {
 		var version int
@@ -371,9 +436,20 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		if err := ownsHost(ctx, tx, account, host); err != nil {
 			return err
 		}
-		if err := tx.QueryRow(ctx, `INSERT INTO workflow_runs (account_id, workflow_id, version, host, title, input, status, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8) RETURNING id::text`, account, workflowID, version, host, taskName(input), input,
-			FindingProject, at).Scan(&id); err != nil {
+		if err := lockQueue(ctx, tx, host); err != nil {
+			return err
+		}
+		why, err := e.queueReason(ctx, tx, host)
+		if err != nil {
+			return err
+		}
+		status := FindingProject
+		if why != "" {
+			status = Queued
+		}
+		if err := tx.QueryRow(ctx, `INSERT INTO workflow_runs (account_id, workflow_id, version, host, title, input, status, queue_reason, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9) RETURNING id::text`, account, workflowID, version, host, taskName(input), input,
+			status, why, e.Now()).Scan(&id); err != nil { // now, holding the lock: the queue's order is the order decided
 			return err
 		}
 		r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id = $1", id))
@@ -383,28 +459,44 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		if err := e.event(ctx, tx, r, "started", nil, nil, input); err != nil {
 			return err
 		}
-		if r.Def.Project.Mode == ProjectFixed {
-			return e.startOrchestrator(ctx, tx, r, r.Def.Project.Directory)
+		if why != "" {
+			return e.event(ctx, tx, r, "queued", nil, nil, why)
 		}
-		repos, err := Repositories(ctx, tx, host)
-		if err != nil {
-			return err
-		}
-		p := r.Def.Project
-		args, _ := json.Marshal(hostclient.CreateAgentArgs{Cwd: "~", Provider: p.Provider, Model: p.Model, Thinking: p.Thinking,
-			Mode: agentMode(p.Provider), Title: agentTitle("Find the project", r.Name, r.Title), Prompt: ProjectPrompt(id, r.Def, input, repos),
-			Labels: map[string]string{"intelligence.run": id, "intelligence.role": "project"}})
-		c, err := fleet.EnqueueTx(ctx, tx, host, hostclient.CreateAgentKind, args, commandTTL, at)
-		if err != nil {
-			return err
-		}
-		_, err = tx.Exec(ctx, "UPDATE workflow_runs SET pending_command = $2, project_command = $2 WHERE id = $1", id, c.ID)
-		return err
+		return e.launch(ctx, tx, r)
 	}()
 	if errors.Is(err, fleet.ErrUnknownHost) {
 		return "", bad("host %s has not reported yet", host)
 	}
 	return id, err
+}
+
+// launch starts run r: its project finder, or for a fixed project the orchestrator at once. It
+// records when (launched_at) and the command that starts it (launch_command), which reserve the
+// run's footprint in its host's projected load until the host has carried it out (queue.go).
+func (e *Engine) launch(ctx context.Context, tx pgx.Tx, r run) error {
+	if err := e.startFirst(ctx, tx, r); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, "UPDATE workflow_runs SET launched_at = $2, launch_command = pending_command WHERE id = $1", r.ID, e.Now())
+	return err
+}
+
+// startFirst queues the command that starts run r, its pending_command.
+func (e *Engine) startFirst(ctx context.Context, tx pgx.Tx, r run) error {
+	if r.Def.Project.Mode == ProjectFixed {
+		return e.startOrchestrator(ctx, tx, r, r.Def.Project.Directory)
+	}
+	args, err := projectStartArgs(ctx, tx, r)
+	if err != nil {
+		return err
+	}
+	c, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.CreateAgentKind, args, commandTTL, e.Now())
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, "UPDATE workflow_runs SET status = $2, pending_command = $3, project_command = $3, updated_at = $4 WHERE id = $1",
+		r.ID, FindingProject, c.ID, e.Now())
+	return err
 }
 
 // Repositories lists host's git repositories, including registered projects without workspaces and workspace roots as fallback.
@@ -418,6 +510,32 @@ func Repositories(ctx context.Context, q interface {
 	return pgx.CollectRows(rows, pgx.RowTo[string])
 }
 
+// Rebuild starts from the run's unresolved input. Reusing commands.args would both
+// replay a stale repository catalog and try to resolve already-delivered images twice.
+func projectStartArgs(ctx context.Context, tx pgx.Tx, r run) (json.RawMessage, error) {
+	repos, err := Repositories(ctx, tx, r.Host)
+	if err != nil {
+		return nil, err
+	}
+	p := r.Def.Project
+	return json.Marshal(hostclient.CreateAgentArgs{Cwd: "~", Provider: p.Provider, Model: p.Model, Thinking: p.Thinking,
+		Mode: agentMode(p.Provider), Title: agentTitle("Find the project", r.Name, r.Title), Prompt: ProjectPrompt(r.ID, r.Def, r.Input, repos),
+		Labels: map[string]string{"intelligence.run": r.ID, "intelligence.role": "project"}})
+}
+
+func orchestratorStartArgs(r run) (json.RawMessage, error) {
+	wsTitle, _ := runNames(r.ID, r.Name, r.Title)
+	o := r.Def.Orchestrator
+	agent := &hostclient.CreateAgentArgs{Provider: o.Provider, Model: o.Model, Thinking: o.Thinking, Mode: agentMode(o.Provider),
+		Title: agentTitle("Orchestrator", r.Name, r.Title), Prompt: OrchestratorPrompt(r.Name, r.Def, r.vars()),
+		Labels: map[string]string{"intelligence.run": r.ID, "intelligence.role": "orchestrator"}}
+	ws := hostclient.CreateWorkspaceArgs{Cwd: "~", Title: wsTitle, Agent: agent}
+	if r.Repo != "" {
+		ws = hostclient.CreateWorkspaceArgs{Cwd: r.Repo, Worktree: true, Branch: r.Branch, Title: wsTitle, Agent: agent}
+	}
+	return json.Marshal(ws)
+}
+
 // startOrchestrator records r's project (repo, or "" for none) and queues the workspace with the
 // orchestrator in it: a worktree of repo on the run's branch, or the home directory.
 func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo string) error {
@@ -428,15 +546,10 @@ func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo s
 	if repo != "" {
 		r.Branch = branch
 	}
-	o := r.Def.Orchestrator
-	agent := &hostclient.CreateAgentArgs{Provider: o.Provider, Model: o.Model, Thinking: o.Thinking, Mode: agentMode(o.Provider),
-		Title: agentTitle("Orchestrator", r.Name, r.Title), Prompt: OrchestratorPrompt(r.Name, r.Def, r.vars()),
-		Labels: map[string]string{"intelligence.run": r.ID, "intelligence.role": "orchestrator"}}
-	ws := hostclient.CreateWorkspaceArgs{Cwd: "~", Title: wsTitle, Agent: agent}
-	if repo != "" {
-		ws = hostclient.CreateWorkspaceArgs{Cwd: repo, Worktree: true, Branch: r.Branch, Title: wsTitle, Agent: agent}
+	args, err := orchestratorStartArgs(r)
+	if err != nil {
+		return err
 	}
-	args, _ := json.Marshal(ws)
 	c, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.CreateWorkspaceKind, args, commandTTL, e.Now())
 	if err != nil {
 		return err
@@ -448,7 +561,10 @@ func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo s
 	if err := e.event(ctx, tx, r, "project", nil, nil, text); err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, repo = $3, branch = $4, workspace_title = $5, pending_command = $6, updated_at = $7,
+	// the workspace becomes the command that starts the run (launch_command): a run whose finder ran
+	// keeps its place in its host's projected load until the host has made its orchestrator too
+	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, repo = $3, branch = $4, workspace_title = $5, pending_command = $6, launch_command = $6, updated_at = $7,
+		start_retries=0, start_retry_at=NULL, start_retry_queued=false, error='',
 		title = $8 WHERE id = $1`, r.ID, StartingOrchestrator, repo, r.Branch, wsTitle, c.ID, e.Now(), r.Title)
 	return err
 }
@@ -468,6 +584,11 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 		_ = json.Unmarshal(c.Result, &res)
 	}
 	return pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		// Queue admission and retry eligibility share this lock. Take it
+		// before the run row, in the same order as startNext.
+		if err := lockQueue(ctx, tx, c.Host); err != nil {
+			return err
+		}
 		r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.pending_command = $1 FOR UPDATE OF r", commandID))
 		if errors.Is(err, ErrNotFound) {
 			return nil
@@ -482,10 +603,19 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 				what = "could not start the orchestrator"
 			}
 			msg := what + ": " + c.Error
+			if res.WorkspaceID == "" {
+				res.WorkspaceID = r.WorkspaceID
+			}
+			if r.Status == FindingProject || r.Status == StartingOrchestrator {
+				var handled bool
+				if handled, msg, err = e.retryStart(ctx, tx, r, c, msg, res.WorkspaceID, at); handled || err != nil {
+					return err
+				}
+			}
 			if err := e.event(ctx, tx, r, "error", nil, nil, msg); err != nil {
 				return err
 			}
-			_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, error = $3, pending_command = NULL, workspace_id = $4,
+			_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, error = $3, pending_command = NULL, start_retry_at=NULL, start_retry_queued=false, workspace_id = $4,
 				updated_at = $5, finished_at = $5 WHERE id = $1`, r.ID, Failed, msg, res.WorkspaceID, at)
 			if err != nil {
 				return err
@@ -494,7 +624,7 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 			return e.archiveRun(ctx, tx, r)
 		}
 		if r.Status == FindingProject {
-			_, err := tx.Exec(ctx, "UPDATE workflow_runs SET project_agent_id = $2, pending_command = NULL, updated_at = $3 WHERE id = $1",
+			_, err := tx.Exec(ctx, "UPDATE workflow_runs SET project_agent_id = $2, pending_command = NULL, error='', start_retries=0, start_retry_at=NULL, start_retry_queued=false, updated_at = $3 WHERE id = $1",
 				r.ID, res.AgentID, at)
 			return err
 		}
@@ -502,7 +632,7 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 			return err
 		}
 		_, err = tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, step = 0, workspace_id = $3, orchestrator_id = $4,
-			pending_command = NULL, updated_at = $5 WHERE id = $1`, r.ID, Running, res.WorkspaceID, res.AgentID, at)
+			pending_command = NULL, error='', start_retry_at=NULL, start_retry_queued=false, updated_at = $5 WHERE id = $1`, r.ID, Running, res.WorkspaceID, res.AgentID, at)
 		return err
 	})
 }
@@ -544,6 +674,8 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		return "", conflict("Zach canceled this run. Stop: do nothing more for it.")
 	case Succeeded, Failed:
 		return "", conflict("This run is over (%s). Do nothing more for it.", r.Status)
+	case Queued:
+		return "", conflict("This run is queued for room on its host: it has no agents yet. Do nothing for it.")
 	}
 	if m.Move == "project" {
 		if r.Status != FindingProject {
@@ -715,7 +847,7 @@ func (e *Engine) ReplyTx(ctx context.Context, tx pgx.Tx, account int64, runID, t
 }
 
 // MessageTx gives account's live run more to go on: what arrived later in the thread that started
-// it (an email). While its project is being found, it joins the run's input, which the orchestrator
+// it (an email). While it is queued or its project is being found, it joins the run's input, which the orchestrator
 // starts with; once the orchestrator runs, it goes to it as a message. It cannot reach an
 // orchestrator that is being started, and refuses a run that is over.
 func (e *Engine) MessageTx(ctx context.Context, tx pgx.Tx, account int64, runID, what, text string) error {
@@ -728,7 +860,7 @@ func (e *Engine) MessageTx(ctx context.Context, tx pgx.Tx, account int64, runID,
 		return conflict("the run is over (%s)", r.Status)
 	case StartingOrchestrator:
 		return conflict("the run's orchestrator was still starting")
-	case FindingProject:
+	case FindingProject, Queued:
 		if _, err := tx.Exec(ctx, "UPDATE workflow_runs SET input = input || $2, updated_at = $3 WHERE id = $1",
 			r.ID, "\n\n"+what+":\n\n"+text, e.Now()); err != nil {
 			return err
@@ -785,7 +917,7 @@ func (e *Engine) Cancel(ctx context.Context, account int64, runID string) error 
 		if err := e.event(ctx, tx, r, "cancel", nil, nil, ""); err != nil {
 			return err
 		}
-		_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, pending_command = NULL, updated_at = $3, finished_at = $3 WHERE id = $1`,
+		_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, pending_command = NULL, start_retry_at=NULL, start_retry_queued=false, updated_at = $3, finished_at = $3 WHERE id = $1`,
 			r.ID, Canceled, e.Now())
 		return err
 	})

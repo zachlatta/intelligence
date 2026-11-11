@@ -9,8 +9,11 @@ import (
 	"io/fs"
 	"net/netip"
 	"os"
+	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -90,8 +93,59 @@ func Scan(path string, data []byte) []Finding {
 
 func isDigit(b byte) bool { return '0' <= b && b <= '9' }
 
+// outputDirs are top-level folders agents keep their output in; dataExt are data files. Neither
+// belongs in a public repository: reports, metrics and exports would be published.
+var (
+	outputDirs = map[string]bool{"work": true, "scratch": true, ".factory-scratch": true, ".factory-evidence": true}
+	dataExt    = map[string]bool{".csv": true, ".tsv": true, ".xlsx": true, ".xls": true, ".parquet": true,
+		".duckdb": true, ".sqlite": true, ".sqlite3": true, ".jsonl": true, ".ndjson": true}
+)
+
+// TrackedOutput lists the files git tracks under root that are agent output (work/, scratch/,
+// .factory-scratch/, .factory-evidence/) or data files (CSV, spreadsheets, Parquet, DuckDB,
+// SQLite, JSON Lines), sorted. Ignored, untracked files there are fine: they are never pushed.
+func TrackedOutput(root string) ([]string, error) {
+	out, err := exec.Command("git", "-C", root, "ls-files", "-z").Output()
+	if err != nil {
+		return nil, fmt.Errorf("git ls-files: %w", err)
+	}
+	return outputPaths(strings.Split(string(out), "\x00")), nil
+}
+
+// OutgoingOutput lists the agent output and data files that any commit in base..HEAD adds, merge
+// commits included, sorted
+// and once each. A file added and deleted again before a push is still in the pushed history, so
+// the final tree alone (TrackedOutput) does not show it.
+func OutgoingOutput(root, base string) ([]string, error) {
+	// -m: merge commits' diffs too (against each parent); git log leaves them out by default.
+	out, err := exec.Command("git", "-C", root, "log", "-m", "--no-renames", "--diff-filter=A", "--name-only",
+		"--format=", "-z", base+"..HEAD").Output()
+	if err != nil {
+		return nil, fmt.Errorf("git log %s..HEAD: %w", base, err)
+	}
+	return outputPaths(strings.FieldsFunc(string(out), func(r rune) bool { return r == 0 || r == '\n' })), nil
+}
+
+// outputPaths keeps the paths that are agent output or data files, sorted and once each.
+func outputPaths(paths []string) []string {
+	seen := map[string]bool{}
+	var found []string
+	for _, p := range paths {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		first, _, _ := strings.Cut(p, "/")
+		if (outputDirs[first] && first != p) || dataExt[strings.ToLower(path.Ext(p))] {
+			found = append(found, p)
+		}
+	}
+	sort.Strings(found)
+	return found
+}
+
 // skipped holds directories that are not part of the repository's contents: git's own, the
-// git-ignored scratch and work directories.
+// git-ignored scratch and work directories (TrackedOutput checks nothing in them is tracked).
 var skipped = map[string]bool{".git": true, ".factory-scratch": true, "work": true}
 
 // ScanTree scans every text file under root, except skipped directories and the built binary.
