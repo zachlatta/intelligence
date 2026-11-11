@@ -404,7 +404,22 @@ version it started with. A run:
    workspace choice takes precedence. The server adds this guidance to every match prompt,
    including saved definitions; without `desk` or another suitable candidate, the finder answers
    `none`.
-2. **Starts the orchestrator in the worktree.** The server archives the finder and queues
+2. **Waits for host memory, then starts the orchestrator in the worktree.** After repository
+   selection, a run is durably `queued` until its estimated RAM fits. The estimate is the largest
+   observed completed-run peak for that account, host and repository root, plus 25%, with a 1 GiB
+   floor; without history (including `none`) it is 4 GiB. Each run's peak sums all its recorded
+   agents in each minute before taking the maximum. Samples expire after 90 days. Estimates are
+   fixed when the repository is selected and readable as `workflow_runs.estimated_memory_bytes`;
+   `workflow_run_memory` and `workflow_repository_memory` expose their evidence through SQL.
+   The gate leaves 10% of host RAM (at least 1 GiB) free, and reserves each active run's estimate
+   less the memory already counted in the newest host minute. Admissions serialize per host
+   across servers. Smaller jobs can pass a queued job that does not fit. Each host resource frame
+   retries the queue, so it survives restarts. Samples older than 3 minutes or without total RAM
+   hold new runs; hosts that have never reported resources retain immediate starts for compatibility.
+   This is a RAM estimate, not a hard memory limit: short spikes between samples and processes
+   outside recorded agent trees can be missed. Project finders run before this gate.
+
+   The server archives the finder and queues
    `create_workspace`: a git worktree of the repository (or the home directory, for none) with the
    orchestrator in it. Its names say which workflow runs, what for and which run: the workspace is
    `<workflow>: <task> · <run>` and the branch `wf-<workflow>-<task>-<run>`. The task is the

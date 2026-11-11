@@ -28,7 +28,8 @@ import (
 var workflowsHTML string
 
 var workflowsTmpl = template.Must(template.New("workflows").Funcs(template.FuncMap{
-	"short": short, "ago": ago, "markdown": markdown, "plural": plural, "emailSummary": emailSummary,
+	"memoryGiB": func(b int64) string { return fmt.Sprintf("%.1f", float64(b)/(1<<30)) },
+	"short":     short, "ago": ago, "markdown": markdown, "plural": plural, "emailSummary": emailSummary,
 	"json": func(v any) (template.JS, error) {
 		b, err := json.Marshal(v)
 		return template.JS(b), err //nolint:gosec // JSON from the server's own values, in a script
@@ -284,6 +285,7 @@ type runRow struct {
 	WorkspaceID, WorkspaceTitle, Orchestrator, ProjectAgent, Note, Error string
 	Step, Version                                                        int
 	WorkflowDeleted                                                      bool
+	EstimatedMemory                                                      int64
 	Steps                                                                []workflow.Step
 	CreatedAt, UpdatedAt                                                 time.Time
 	FinishedAt                                                           *time.Time
@@ -291,14 +293,14 @@ type runRow struct {
 
 const runRowSelect = `SELECT r.id::text, r.title, r.input, r.status, r.host, r.repo, r.branch, w.name, r.workflow_id::text, r.workspace_id, r.workspace_title,
 	r.orchestrator_id, r.project_agent_id, r.note, r.error, r.step, r.version, v.definition -> 'steps', r.created_at, r.updated_at, r.finished_at,
-	w.deleted_at IS NOT NULL
+	w.deleted_at IS NOT NULL, r.estimated_memory_bytes
 	FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id JOIN workflow_versions v ON v.workflow_id = r.workflow_id AND v.version = r.version `
 
 func scanRunRow(row pgx.CollectableRow) (runRow, error) {
 	var r runRow
 	var steps []byte
 	err := row.Scan(&r.ID, &r.Title, &r.Input, &r.Status, &r.Host, &r.Repo, &r.Branch, &r.Workflow, &r.WorkflowID, &r.WorkspaceID, &r.WorkspaceTitle,
-		&r.Orchestrator, &r.ProjectAgent, &r.Note, &r.Error, &r.Step, &r.Version, &steps, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt, &r.WorkflowDeleted)
+		&r.Orchestrator, &r.ProjectAgent, &r.Note, &r.Error, &r.Step, &r.Version, &steps, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt, &r.WorkflowDeleted, &r.EstimatedMemory)
 	if err == nil {
 		err = json.Unmarshal(steps, &r.Steps)
 	}
@@ -308,6 +310,8 @@ func scanRunRow(row pgx.CollectableRow) (runRow, error) {
 // Where reads as: what a run is doing now.
 func (r runRow) Where() string {
 	switch r.Status {
+	case workflow.Queued:
+		return "waiting for host memory capacity"
 	case workflow.FindingProject:
 		return "finding the project"
 	case workflow.StartingOrchestrator:

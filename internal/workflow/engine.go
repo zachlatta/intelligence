@@ -53,6 +53,7 @@ func conflict(format string, a ...any) error {
 // Run statuses.
 const (
 	FindingProject       = "finding_project"
+	Queued               = "queued"
 	StartingOrchestrator = "starting"
 	Running              = "running"
 	Waiting              = "waiting"
@@ -419,7 +420,20 @@ func repositories(ctx context.Context, tx pgx.Tx, host string) ([]string, error)
 // startOrchestrator records r's project (repo, or "" for none) and queues the workspace with the
 // orchestrator in it: a worktree of repo on the run's branch, or the home directory.
 func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo string) error {
-	r.Repo = repo
+	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = 'queued', repo = $2, pending_command = NULL,
+		estimated_memory_bytes = COALESCE((SELECT estimated_memory_bytes FROM workflow_repository_memory
+		WHERE account_id = $3 AND host = $4 AND repo = $2), 4294967296), updated_at = $5 WHERE id = $1`,
+		r.ID, repo, r.Account, r.Host, e.Now()); err != nil {
+		return err
+	}
+	if err := e.event(ctx, tx, r, "project", nil, nil, orNone(repo)); err != nil {
+		return err
+	}
+	return e.admitHost(ctx, tx, r.Host)
+}
+
+func (e *Engine) launchOrchestrator(ctx context.Context, tx pgx.Tx, r run) error {
+	repo := r.Repo
 	// the title again from the input: a run started before titles were the task has its first line
 	r.Title = taskName(r.Input)
 	wsTitle, branch := runNames(r.ID, r.Name, r.Title)
@@ -437,13 +451,6 @@ func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo s
 	args, _ := json.Marshal(ws)
 	c, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.CreateWorkspaceKind, args, commandTTL, e.Now())
 	if err != nil {
-		return err
-	}
-	text := repo
-	if text == "" {
-		text = "none"
-	}
-	if err := e.event(ctx, tx, r, "project", nil, nil, text); err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, repo = $3, branch = $4, workspace_title = $5, pending_command = $6, updated_at = $7,
@@ -568,7 +575,7 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		return fmt.Sprintf("Thanks: the project is %s. The orchestrator takes it from here. Stop now.", orNone(repo)), nil
 	}
 	switch r.Status {
-	case FindingProject, StartingOrchestrator:
+	case FindingProject, Queued, StartingOrchestrator:
 		return "", conflict("This run has no orchestrator yet (%s).", strings.ReplaceAll(r.Status, "_", " "))
 	case Waiting:
 		return "", conflict("Zach has not replied yet. End your turn: his reply comes as your next message.")
@@ -726,7 +733,7 @@ func (e *Engine) MessageTx(ctx context.Context, tx pgx.Tx, account int64, runID,
 		return conflict("the run is over (%s)", r.Status)
 	case StartingOrchestrator:
 		return conflict("the run's orchestrator was still starting")
-	case FindingProject:
+	case FindingProject, Queued:
 		if _, err := tx.Exec(ctx, "UPDATE workflow_runs SET input = input || $2, updated_at = $3 WHERE id = $1",
 			r.ID, "\n\n"+what+":\n\n"+text, e.Now()); err != nil {
 			return err
