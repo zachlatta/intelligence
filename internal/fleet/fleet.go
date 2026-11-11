@@ -133,6 +133,11 @@ func (r *Registry) record(ctx context.Context, rep hostclient.Report, at time.Ti
 			"updated_at", "last_user_message_at"}, pgx.CopyFromRows(arows)); err != nil {
 			return err
 		}
+		// Preserve departing agents before replacement, and capture newly reported
+		// workers now so their resource samples reduce reservations immediately.
+		if err := CaptureWorkflowAgents(ctx, tx, rep.Name, "", at); err != nil {
+			return err
+		}
 		if !ps.Connected {
 			return nil // a host that lost its daemon keeps its transcripts and diffs until it can say what is gone
 		}

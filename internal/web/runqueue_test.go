@@ -124,7 +124,7 @@ func TestABusyHostQueuesNewRunsAndStartsThemInOrder(t *testing.T) {
 	for _, row := range r.Rows {
 		kinds = append(kinds, row[0].(string))
 	}
-	if strings.Join(kinds, ",") != "started,queued,dequeued,project" {
+	if strings.Join(kinds, ",") != "started,project,queued,dequeued" {
 		t.Errorf("events = %v", kinds)
 	}
 }

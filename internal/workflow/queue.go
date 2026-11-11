@@ -59,6 +59,17 @@ type minute struct {
 // Unmonitored (its monitoring stopped). One away that long keeps holding: its runs would all reach
 // it at once when it came back. Call it holding the host's queue lock (lockQueue).
 func (e *Engine) room(ctx context.Context, tx pgx.Tx, host, candidate, repo string, memory int64) (string, error) {
+	// Project selection can call room directly after Start now bypassed the FIFO.
+	// Honor older queued runs and ready retries on every admission path.
+	var ahead int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM workflow_run_queue q
+		WHERE q.host=$1 AND q.run_id::text<>$2 AND ($2='' OR EXISTS (
+			SELECT 1 FROM workflow_runs c WHERE c.id::text=$2 AND (q.queued_at,q.run_id)<(c.created_at,c.id)))`, host, candidate).Scan(&ahead); err != nil {
+		return "", err
+	}
+	if ahead > 0 {
+		return fmt.Sprintf("%s queued on %s ahead of it", runsWord(ahead), host), nil
+	}
 	l, now := e.Limits, e.Now()
 	var m minute
 	err := tx.QueryRow(ctx, `SELECT minute, cpus, cpu_avg_pct, load1, mem_total, mem_available_min FROM host_minutes
@@ -129,11 +140,11 @@ func (e *Engine) room(ctx context.Context, tx pgx.Tx, host, candidate, repo stri
 	}
 	if l.MemPct > 0 && m.MemTotal > 0 {
 		used := 100 * (1 - float64(m.MemMin)/float64(m.MemTotal))
-		// An estimate larger than the host's remaining idle budget must not deadlock
-		// its FIFO (including RAM used by the OS). Let the head run alone, provided
-		// measured memory is below the limit. Keep the
+		// Only a genuinely oversized estimate can bypass the RAM projection, and
+		// only at the FIFO head with no other active workflow. Ordinary estimates
+		// must fit alongside memory used by non-workflow processes. Keep the
 		// full estimate: no following job fits until this one releases its reservation.
-		solo := active == 0 && used < l.MemPct
+		solo := active == 0 && used < l.MemPct && float64(memory) > float64(m.MemTotal)*l.MemPct/100
 		if p := used + 100*(float64(reservedMemory)+float64(memory))/float64(m.MemTotal); p >= l.MemPct && !solo {
 			project := repo
 			if project == "" {

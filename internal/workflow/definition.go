@@ -81,7 +81,17 @@ func Parse(b []byte) (Definition, error) {
 	if err := dec.Decode(&d); err != nil {
 		return d, fmt.Errorf("bad workflow: %w", err)
 	}
-	return d, d.Validate()
+	if err := d.Validate(); err != nil {
+		return d, err
+	}
+	return d.normalized(), nil
+}
+
+func (d Definition) normalized() Definition {
+	if d.Project.Mode == ProjectFixed && d.Project.Directory != "" {
+		d.Project.Directory = path.Clean(d.Project.Directory)
+	}
+	return d
 }
 
 // Validate says what in d cannot run.

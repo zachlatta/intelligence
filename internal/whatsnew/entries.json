@@ -3,7 +3,7 @@
     "id": "repository-memory-admission",
     "released": "2026-11-11",
     "title": "Queue runs by repository memory needs",
-    "summary": "The host queue now estimates RAM from completed runs of the selected repository, with headroom and a default for repositories without history. The run page shows the estimate. Large builds wait for enough memory, and startup retries use the same estimate and queue.",
+    "summary": "The host queue estimates RAM from successful runs of the selected repository, with headroom and a default for repositories without history. The run page shows the estimate. Active runs keep unused memory reserved, and startup retries use the same estimate and FIFO queue.",
     "media": "repository-memory.png",
     "mediaAlt": "A queued application build showing its 10 GiB repository memory estimate and the host memory capacity reason"
   },

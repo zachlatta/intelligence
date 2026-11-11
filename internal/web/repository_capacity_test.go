@@ -51,9 +51,6 @@ func TestRepositoryEstimateGatesExistingQueue(t *testing.T) {
 	b := sendReport(t, h, wfReport())
 	heavy := repositoryHistory(t, h, d, "/w/app")
 	b.command() // historical workspace
-	otherDef := workflow.Starting
-	otherDef.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/other"}
-	other := startRun(t, h, createWorkflow(t, h, otherDef), "another active run")
 	repositoryMinute(t, b, 7<<30)
 	id := startRun(t, h, heavy, "large build")
 	if got := runField(t, h, id, "status"); got != "queued" {
@@ -66,9 +63,6 @@ func TestRepositoryEstimateGatesExistingQueue(t *testing.T) {
 		t.Fatal("page hides repository estimate")
 	}
 	if rec := call(t, h, http.MethodPost, "/api/workflow-runs/"+id+"/cancel", `{}`, sameOriginFetch); rec.Code != http.StatusNoContent {
-		t.Fatal(rec.Body)
-	}
-	if rec := call(t, h, http.MethodPost, "/api/workflow-runs/"+other+"/cancel", `{}`, sameOriginFetch); rec.Code != http.StatusNoContent {
 		t.Fatal(rec.Body)
 	}
 	def := workflow.Starting
@@ -98,9 +92,6 @@ func TestRepositoryMemoryEstimateHoldsStartRetry(t *testing.T) {
 	if ack := b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{ID: cmd.ID, Status: hostclient.CommandFailed, Error: "temporary failure"}}); ack.Error != "" {
 		t.Fatal(ack.Error)
 	}
-	otherDef := workflow.Starting
-	otherDef.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/other"}
-	startRun(t, h, createWorkflow(t, h, otherDef), "another active run")
 	clock.Add(16 * time.Second)
 	if err := workflow.NewEngine(d.Owner, clock.Now).RetryStarts(t.Context()); err != nil {
 		t.Fatal(err)
@@ -124,9 +115,6 @@ func TestMatchedRepositoryReentersExistingQueue(t *testing.T) {
 	b.command()
 	id := startRun(t, h, createWorkflow(t, h, workflow.Starting), "choose project")
 	succeed(t, b, b.command(), `{"agentId":"finder"}`)
-	otherDef := workflow.Starting
-	otherDef.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/other"}
-	startRun(t, h, createWorkflow(t, h, otherDef), "another active run")
 	repositoryMinute(t, b, 7<<30)
 	if code, msg := move(t, h, keyOf(t, h, "host-1"), id, map[string]string{"move": "project", "directory": "/w/app"}); code != http.StatusOK {
 		t.Fatalf("project: %d %s", code, msg)
@@ -179,8 +167,8 @@ func TestOversizedRepositoryRunsAloneWithoutBlockingFIFOForever(t *testing.T) {
 	}
 	repositoryMinute(t, b, 7<<30)
 	baseline := startRun(t, h, wf, "build alongside OS baseline")
-	if got := runField(t, h, baseline, "status"); got != "starting" {
-		t.Fatalf("OS baseline blocked a solo run forever: %v", got)
+	if got := runField(t, h, baseline, "status"); got != "queued" {
+		t.Fatalf("ordinary estimate bypassed the memory gate: %v", got)
 	}
 }
 

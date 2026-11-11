@@ -772,7 +772,8 @@ agents and descendants. Known creation times exclude agents started after the ru
 finished run without snapshots also falls back to its live agent tree, so legacy links remain
 available. This cannot recover metadata or transcripts already removed before the upgrade.
 
-Report-time capture runs once, before replacing live rows, and uses only unfinished runs with a listed workspace or live project finder,
+Report-time capture runs before and after replacing live rows, preserving departing agents and
+including new workers immediately. It uses only unfinished runs with a listed workspace or live project finder,
 with an index on unfinished runs. It takes a final snapshot when a run ends, then freezes membership
 and stops recapturing it. Agents started later in a failed or canceled run's retained workspace
 belong to later work, not that ended run's history. The history follows its run and host when
@@ -815,7 +816,7 @@ capacity: CPU 70% now, about 90% with 1 run starting and this one (queues at 85%
 
 A run's memory estimate is learned from its selected repository on that host, within its account.
 `workflow_run_memory` sums the recorded agents' memory in each minute, then takes the run's peak.
-`workflow_repository_memory` takes the largest completed-run peak for that repository root,
+`workflow_repository_memory` takes the largest successful-run peak for that selected, non-empty repository root,
 adds 25% headroom, and applies a 1 GiB floor. Without history the estimate is 4 GiB, including
 while a finder has not selected a project. Agent samples expire after 90 days, so older history
 eventually falls back. These views and `workflow_runs.estimated_memory_bytes` expose the evidence
@@ -826,16 +827,24 @@ is the sum for that run's known agents in the exact newest host minute; without 
 its full estimate stays reserved. This prevents a run's quiet phase from admitting another heavy
 run, without counting its resident memory twice. The existing memory percentage limit supplies
 host headroom. Memory queue reasons name the repository estimate, measured free RAM and reservations.
-To prevent an estimate from permanently blocking the FIFO, the oldest run may start alone when
-there are no other active or starting runs and measured memory is below the limit, even when its
-estimate exceeds the remaining idle budget (including the OS baseline). CPU, load and
+To prevent a genuinely oversized estimate from permanently blocking the FIFO, the oldest run
+may start alone only when its estimate exceeds the memory limit's share of total host RAM,
+there are no other active or starting runs, and measured memory is below the limit. The FIFO
+head check also applies during project selection, including older ready start retries.
+An ordinary estimate must fit alongside non-workflow memory use; an OS baseline is not an
+exception. CPU, load and
 telemetry checks still apply. Its full estimate stays reserved until it ends, so it cannot block
 the queue forever solely because the estimate exceeds host RAM. This is an advisory estimate,
 not a guarantee that an oversized workload will fit or avoid an OOM kill.
+Failed, canceled, finder-only and empty-repository runs do not teach the estimator; without a
+successful run for a selected non-empty repository, it keeps the 4 GiB fallback.
 After a finder selects a repository, admission replaces its reservation with that estimate,
 without counting the finder twice. If it no longer fits, the same run re-enters the existing FIFO
 and resumes with its selected repository when room returns; it never repeats project finding.
 `project_selected` distinguishes a selected `none` from a finder still to run.
+Project selection is recorded before a capacity wait. `queued_at_creation` distinguishes an
+initial submission from a run that already started finding its project and later requeued;
+its initial Started event is only shown as Submitted for an initial queue.
 
 CPU and load footprints remain learned per host (`host_run_footprint`, readable with SQL): over the host's
 last 3 days, each minute's CPU and load per CPU against how many runs were going then

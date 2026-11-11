@@ -247,6 +247,7 @@ func (e *Engine) applyWorkflowState(ctx context.Context, tx pgx.Tx, account int6
 	}
 	s.Name = name
 	s.Description = strings.TrimSpace(s.Description)
+	s.Definition = s.Definition.normalized()
 	if err := s.Definition.Validate(); err != nil {
 		return "", nil, bad("%s", err)
 	}
@@ -434,6 +435,7 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		if err := json.Unmarshal(def, &d); err != nil {
 			return err
 		}
+		d = d.normalized()
 		host = d.Host
 		if host == "" {
 			return bad("this workflow does not say which host it runs on: pick one in its editor, and save")
@@ -462,9 +464,9 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 			status = Queued
 		}
 		if err := tx.QueryRow(ctx, `INSERT INTO workflow_runs (account_id, workflow_id, version, host, title, input, status, queue_reason, created_at, updated_at,
-			repo, project_selected, estimated_memory_bytes)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12) RETURNING id::text`, account, workflowID, version, host, taskName(input), input,
-			status, why, e.Now(), repo, selected, estimate).Scan(&id); err != nil { // now, holding the lock: the queue's order is the order decided
+			repo, project_selected, estimated_memory_bytes, queued_at_creation)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13) RETURNING id::text`, account, workflowID, version, host, taskName(input), input,
+			status, why, e.Now(), repo, selected, estimate, why != "").Scan(&id); err != nil { // now, holding the lock: the queue's order is the order decided
 			return err
 		}
 		r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id = $1", id))
@@ -473,6 +475,11 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		}
 		if err := e.event(ctx, tx, r, "started", nil, nil, input); err != nil {
 			return err
+		}
+		if selected {
+			if err := e.recordProject(ctx, tx, r, repo); err != nil {
+				return err
+			}
 		}
 		if why != "" {
 			return e.event(ctx, tx, r, "queued", nil, nil, why)
@@ -569,11 +576,7 @@ func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo s
 	if err != nil {
 		return err
 	}
-	text := repo
-	if text == "" {
-		text = "none"
-	}
-	if err := e.event(ctx, tx, r, "project", nil, nil, text); err != nil {
+	if err := e.recordProject(ctx, tx, r, repo); err != nil {
 		return err
 	}
 	// the workspace becomes the command that starts the run (launch_command): a run whose finder ran
@@ -581,6 +584,15 @@ func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo s
 	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, repo = $3, branch = $4, workspace_title = $5, pending_command = $6, launch_command = $6, updated_at = $7,
 		start_retries=0, start_retry_at=NULL, start_retry_queued=false, error='',
 		title = $8 WHERE id = $1`, r.ID, StartingOrchestrator, repo, r.Branch, wsTitle, c.ID, e.Now(), r.Title)
+	return err
+}
+
+// The selection event precedes any capacity wait. Legacy queued selections may
+// lack it, so launch also calls this without duplicating a recorded choice.
+func (e *Engine) recordProject(ctx context.Context, tx pgx.Tx, r run, repo string) error {
+	_, err := tx.Exec(ctx, `INSERT INTO workflow_run_events (run_id,account_id,at,kind,text)
+		SELECT $1,$2,$3,'project',$4 WHERE NOT EXISTS
+		(SELECT 1 FROM workflow_run_events WHERE run_id=$1 AND kind='project')`, r.ID, r.Account, e.Now(), orNone(repo))
 	return err
 }
 
@@ -734,6 +746,9 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		}
 		r.Repo, r.ProjectSelected, r.EstimatedMemory = repo, true, estimate
 		if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET repo=$2, project_selected=true, estimated_memory_bytes=$3 WHERE id=$1`, r.ID, repo, estimate); err != nil {
+			return "", err
+		}
+		if err := e.recordProject(ctx, tx, r, repo); err != nil {
 			return "", err
 		}
 		// This run already holds a startup reservation. Replace it with the selected
