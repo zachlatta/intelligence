@@ -111,9 +111,13 @@ type proposalView struct {
 }
 
 type proposalComment struct {
-	Author, Text string
-	Created      time.Time
+	ID                                          int64
+	Author, Text                                string
+	Created                                     time.Time
+	State, AnswerHost, AnswerAgent, AnswerError string
 }
+
+func (c proposalComment) Retryable() bool { return c.State == "failed" || c.State == "timed_out" }
 
 func readProposalViews(ctx context.Context, v viewer, id, wid string) ([]proposalView, error) {
 	rows, err := v.pool.Query(ctx, `SELECT id::text,coalesce(workflow_id::text,''),summary,operation,proposer,proposed_by,run_id,effective_status,
@@ -178,14 +182,15 @@ func proposalPage(v viewer) http.HandlerFunc {
 			http.NotFound(w, r)
 			return
 		}
-		rows, err := v.pool.Query(r.Context(), `SELECT author,text,created_at FROM workflow_proposal_comments WHERE proposal_id=$1 ORDER BY id`, id)
+		rows, err := v.pool.Query(r.Context(), `SELECT c.id,c.author,c.text,c.created_at,coalesce(q.state,''),coalesce(q.host,''),coalesce(q.agent_id,''),coalesce(q.error,'')
+ FROM workflow_proposal_comments c LEFT JOIN workflow_proposal_question_status q ON q.question_id=c.id WHERE c.proposal_id=$1 ORDER BY c.id`, id)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
 		ps[0].Comments, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (proposalComment, error) {
 			var c proposalComment
-			err := row.Scan(&c.Author, &c.Text, &c.Created)
+			err := row.Scan(&c.ID, &c.Author, &c.Text, &c.Created, &c.State, &c.AnswerHost, &c.AnswerAgent, &c.AnswerError)
 			return c, err
 		})
 		if err != nil {

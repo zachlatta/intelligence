@@ -31,6 +31,8 @@ The agents of a workflow run move it with these, on the run's host:
 
   propose <file.json>|-                propose a workflow change; prints its approval URL
   withdraw <id> --reason <text>        withdraw your pending proposal with a reason
+  answer-proposal --proposal <id> --question <id> --note <file>|-
+                                      post a dispatched question's Markdown answer
 
 It reaches the server with this host's key (HOST_SERVER and the key, as the host client has them).`
 
@@ -39,7 +41,9 @@ func CLI(ctx context.Context, args []string, getenv func(string) string, stdin i
 	var body []byte
 	var path string
 	var err error
-	if len(args) > 0 && (args[0] == "propose" || args[0] == "withdraw") {
+	if len(args) > 0 && args[0] == "answer-proposal" {
+		path, body, err = parseAnswerProposalCLI(args[1:], stdin)
+	} else if len(args) > 0 && (args[0] == "propose" || args[0] == "withdraw") {
 		path, body, err = parseProposalCLI(args, stdin)
 	} else {
 		var m Move
@@ -85,6 +89,38 @@ func CLI(ctx context.Context, args []string, getenv func(string) string, stdin i
 	}
 	fmt.Fprintln(stdout, out.Message)
 	return 0
+}
+
+func parseAnswerProposalCLI(args []string, stdin io.Reader) (string, []byte, error) {
+	fs := flag.NewFlagSet("answer-proposal", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	proposal := fs.String("proposal", "", "")
+	question := fs.Int64("question", 0, "")
+	note := fs.String("note", "", "")
+	if err := fs.Parse(args); err != nil {
+		return "", nil, err
+	}
+	if fs.NArg() != 0 || !uuidRe.MatchString(*proposal) || *question <= 0 || *note == "" {
+		return "", nil, errors.New("answer-proposal needs --proposal <UUID> --question <positive id> --note <file>|-")
+	}
+	source := stdin
+	if *note != "-" {
+		f, err := os.Open(*note)
+		if err != nil {
+			return "", nil, err
+		}
+		defer f.Close()
+		source = f
+	}
+	text, err := io.ReadAll(io.LimitReader(source, 20001))
+	if err != nil {
+		return "", nil, err
+	}
+	if len(text) > 20000 || strings.TrimSpace(string(text)) == "" {
+		return "", nil, errors.New("answer must contain 1 to 20000 bytes")
+	}
+	body, _ := json.Marshal(map[string]any{"questionId": *question, "text": string(text)})
+	return "/api/workflow-proposals/" + *proposal + "/comments/agent", body, nil
 }
 
 func parseProposalCLI(args []string, stdin io.Reader) (string, []byte, error) {

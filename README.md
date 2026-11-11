@@ -142,15 +142,33 @@ including tradeoffs or risks, in up to 2000 bytes. Raw HTML is escaped and unsaf
 Existing plain-text summaries still work; an empty legacy summary falls back to a changed-field list.
 
 The review page has a persistent discussion thread. Browser sessions post `{"text":"Your question"}`
-to `POST /api/workflow-proposals/{id}/comments`. Agents can answer with the same JSON at
-`POST /api/workflow-proposals/{id}/comments/agent` using an enrolled host's bearer key, or with
-the account MCP tool `comment_proposal` using `{"id":"<proposal UUID>","text":"Your answer"}`.
-Authors are recorded from the credential, not supplied by callers. Comments accept up to 20000
-bytes, use the same safe Markdown renderer, and remain available after a decision.
+to `POST /api/workflow-proposals/{id}/comments` (201 with the question's numeric `id`). This
+atomically saves the question and queues an answer agent through the existing fleet `create_agent`
+command and host WebSocket. A fresh agent receives the proposal's summary, full workflow diff,
+the exact question, and the latest 100 thread entries. It uses the saved workflow's host and
+orchestrator configuration (the proposed workflow for a create); if that host is no longer enrolled,
+another reported host of the account is used. No original proposer or active workflow run is needed.
+The agent runs unattended from the host's home directory and is instructed to analyze the proposal
+as quoted data, make no workflow or repository changes, and post only its answer.
+
+Agents answer at `POST /api/workflow-proposals/{id}/comments/agent` with
+`{"questionId":42,"text":"Your Markdown answer"}` and the selected host's bearer key, or through
+the account MCP tool `comment_proposal` with `{"id":"<proposal UUID>","questionId":42,"text":"Your answer"}`.
+Including `questionId` links one answer to the job; reposting the same answer is idempotent.
+Omitting it adds a standalone comment. Agent comments never dispatch another agent. Authors come
+from the credential, not the request. Comments accept up to 20000 bytes and use safe Markdown.
+On the host, `intelligence workflow answer-proposal --proposal <UUID> --question 42 --note <file>`
+posts the answer using the host's normal configuration; `--note -` reads standard input.
 Read the thread through SQL: `SELECT id,author,text,created_at FROM workflow_proposal_comments
 WHERE proposal_id = '<proposal UUID>' ORDER BY id`. Account isolation applies to reads and writes.
-Posting does **not** dispatch or resume an agent. An agent must explicitly read and answer the
-thread; refresh the page to see new answers. Discussion never applies a workflow change.
+`workflow_proposal_questions` stores the linked command and answer; `workflow_proposal_question_status`
+adds SQL-visible queued, starting, answering, answered, failed and timed_out states, errors and agent ids.
+The page refreshes the thread every four seconds without replacing the question draft. Offline
+hosts can receive queued dispatches for one hour. Command failures and missing answers (30 minutes
+after startup) show a Retry answer button, which posts `{}` to
+`/api/workflow-proposals/{id}/questions/{question}/retry`. A retry queues a fresh command for the
+same question; prior commands remain readable with proposal/question labels. A question with no
+eligible host fails atomically and leaves the draft intact. Discussion never applies a workflow change.
 
 `POST /api/workflow-proposals` accepts a host's bearer key and JSON:
 

@@ -19,7 +19,7 @@ const mcpVersion = "2025-06-18"
 //go:embed mcp_readme.md
 var mcpReadme string
 
-const mcpInstructions = "Intelligence data, scoped to the token's account. Call readme first for the SQL guide and examples. All state reads use query; use schema_overview to find relations and describe_table for exact columns. propose_mutation and withdraw_mutation only queue or withdraw workflow proposals; call propose_mutation_help for their schema. Applying changes requires authenticated browser approval; there is no approval, undo or direct workflow-write tool."
+const mcpInstructions = "Intelligence data, scoped to the token's account. Call readme first for the SQL guide and examples. All state reads use query; use schema_overview to find relations and describe_table for exact columns. propose_mutation and withdraw_mutation only queue or withdraw workflow proposals; call propose_mutation_help for their schema. comment_proposal posts discussion replies; include questionId to complete a dispatched answer job. Applying changes requires authenticated browser approval; there is no approval, undo or direct workflow-write tool."
 
 func supportedMCPVersion(v string) bool { return v == mcpVersion || v == "2025-03-26" }
 

@@ -195,6 +195,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("POST /api/workflow-proposals", a.hostWrite(a.proposeWorkflow))
 	mux.HandleFunc("POST /api/workflow-proposals/{id}/comments", a.write(a.reviewerComment))
 	mux.HandleFunc("POST /api/workflow-proposals/{id}/comments/agent", a.hostWrite(a.agentComment))
+	mux.HandleFunc("POST /api/workflow-proposals/{id}/questions/{question}/retry", a.write(a.retryProposalAnswer))
 	mux.HandleFunc("POST /api/workflow-proposals/{id}/withdraw", a.hostWrite(a.withdrawProposal))
 	for _, action := range []string{"approve", "reject", "undo"} {
 		mux.HandleFunc("POST /api/workflow-proposals/{id}/"+action, a.write(a.decideProposal(action)))

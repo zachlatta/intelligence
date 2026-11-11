@@ -11,6 +11,29 @@ import (
 	"testing"
 )
 
+func TestProposalAnswerCLIValidation(t *testing.T) {
+	id := "11111111-1111-4111-8111-111111111111"
+	path, body, err := parseAnswerProposalCLI([]string{"--proposal", id, "--question", "42", "--note", "-"}, strings.NewReader("## Answer\nBecause."))
+	if err != nil || path != "/api/workflow-proposals/"+id+"/comments/agent" {
+		t.Fatalf("path: %s %v", path, err)
+	}
+	var got struct {
+		Text       string
+		QuestionID int64
+	}
+	if err = json.Unmarshal(body, &got); err != nil || got.QuestionID != 42 || got.Text != "## Answer\nBecause." {
+		t.Fatalf("body: %s %v", body, err)
+	}
+	for _, args := range [][]string{{"--proposal", id, "--question", "0", "--note", "-"}, {"--proposal", "../other", "--question", "1", "--note", "-"}, {"--proposal", id, "--question", "1"}} {
+		if _, _, err := parseAnswerProposalCLI(args, strings.NewReader("text")); err == nil {
+			t.Fatalf("accepted %v", args)
+		}
+	}
+	if _, _, err := parseAnswerProposalCLI([]string{"--proposal", id, "--question", "42", "--note", "-"}, strings.NewReader(strings.Repeat("a", 20001))); err == nil {
+		t.Fatal("accepted oversized answer")
+	}
+}
+
 func TestProposalCLIUsesHostConfiguration(t *testing.T) {
 	var paths []string
 	var bodies []map[string]any

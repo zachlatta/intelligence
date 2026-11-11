@@ -56,7 +56,7 @@ func TestProposalDiscussion(t *testing.T) {
 		t.Fatalf("SQL: %d %+v", code, res)
 	}
 	page := get(t, h, "/workflow-proposals/"+p.ID, nil).Body.String()
-	for _, want := range []string{"<strong>Safer workflow</strong>", "Why this change?", "<strong>reduces risk</strong>", "does not automatically wake", `id="proposal-comment"`, `class="review-inline"`} {
+	for _, want := range []string{"<strong>Safer workflow</strong>", "Why this change?", "<strong>reduces risk</strong>", "Replies appear automatically", `id="proposal-comment"`, `class="review-inline"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("missing %q", want)
 		}
