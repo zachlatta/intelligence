@@ -58,7 +58,8 @@
     .wf-grid { grid-template-columns: minmax(0, 1fr); }
   }
   .builder { display: grid; grid-template-columns: minmax(0, 1fr) 24rem; gap: 1.5rem; align-items: start; }
-  @media (max-width: 62rem) { .builder { grid-template-columns: 1fr; } }
+  .builder > * { min-width: 0; }
+  @media (max-width: 62rem) { .builder { grid-template-columns: minmax(0, 1fr); } }
   .pipe { max-width: 36rem; }
   .node { position: relative; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: var(--shadow); }
   .node.click { cursor: pointer; } .node.click:hover { border-color: var(--faint); }
@@ -67,7 +68,7 @@
   .node .nh { display: flex; align-items: center; gap: .6rem; padding: .65rem .8rem; }
   .node .kind { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--faint); font-weight: 600; }
   .node .ttl { font-weight: 600; overflow-wrap: anywhere; }
-  .node .nb { padding: 0 .8rem .65rem; font-size: 12.5px; color: var(--muted); }
+  .node .nb { padding: 0 .8rem .65rem; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
   .node .instr { color: var(--fg-2); white-space: pre-wrap; overflow: hidden; display: -webkit-host; -webkit-line-clamp: 3; -webkit-host-orient: vertical; }
   .node.sel .instr { -webkit-line-clamp: unset; }
   .node.k-gate { border-left: 3px solid var(--orange-line); } .node.k-signoff { border-left: 3px solid var(--accent-line); }

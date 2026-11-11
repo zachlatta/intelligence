@@ -91,7 +91,7 @@ func TestModelGroupRankingAndWorkflowExpansion(t *testing.T) {
 	h, d := dbServer(t)
 	rep := wfReport()
 	rep.Paseo.Providers = []hostclient.Provider{
-		{Name: "claude", Available: true, Models: []hostclient.Model{{ID: "opus", Thinking: []string{"medium"}}}},
+		{Name: "claude", Available: true, Models: []hostclient.Model{{ID: "opus", Label: "Claude Opus 5.5", Thinking: []string{"medium"}}}},
 		{Name: "codex", Available: true, Models: []hostclient.Model{{ID: "sol", Thinking: []string{"high"}}}},
 	}
 	sendReport(t, h, rep)
@@ -126,7 +126,7 @@ func TestModelGroupRankingAndWorkflowExpansion(t *testing.T) {
 	def := workflow.Starting
 	def.Steps = append([]workflow.Step(nil), def.Steps...)
 	def.Project = workflow.Project{Mode: "fixed", Directory: "/w/app"}
-	def.Steps[0].Instructions = "Use {{frontier_model}} twice: {{frontier_model}}. Task: {{input}}"
+	def.Steps[0].Instructions = "Launch the builder with {{frontier_model}} and a second opinion with {{frontier_model}}. Task: {{input}}"
 	def.Steps[1].Instructions = "Check using {{frontier_model}}."
 	wf := createWorkflow(t, h, def)
 	stream := openStream(t, h, "host-1")
@@ -134,6 +134,13 @@ func TestModelGroupRankingAndWorkflowExpansion(t *testing.T) {
 	cmd := stream.command()
 	var ws hostclient.CreateWorkspaceArgs
 	json.Unmarshal(cmd.Args, &ws)
+	inline := "Claude Opus 5.5 (Medium) via claude/opus --thinking medium on one"
+	if !strings.Contains(ws.Agent.Prompt, "Launch the builder with "+inline+" and a second opinion with "+inline+".") {
+		t.Fatalf("model expansion interrupts sentence: %s", ws.Agent.Prompt)
+	}
+	if strings.Count(ws.Agent.Prompt, "\nModel suggestions:\n") != 1 || strings.Count(ws.Agent.Prompt, "- frontier_model:") != 1 {
+		t.Fatalf("want one appended note per group: %s", ws.Agent.Prompt)
+	}
 	if !strings.Contains(ws.Agent.Prompt, "--provider claude/opus --mode bypassPermissions --thinking medium") || !strings.Contains(ws.Agent.Prompt, "Literal {{frontier_model}}") {
 		t.Fatalf("prompt: %s", ws.Agent.Prompt)
 	}

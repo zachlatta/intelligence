@@ -217,6 +217,7 @@ func (e *Engine) fillModels(ctx context.Context, tx pgx.Tx, r run, step int) (De
 	d.Steps = append([]Step(nil), d.Steps...)
 	text := d.Steps[step].Instructions
 	seen := map[string]bool{}
+	var notes []string
 	for _, m := range groupToken.FindAllStringSubmatch(text, -1) {
 		if seen[m[1]] {
 			continue
@@ -226,36 +227,48 @@ func (e *Engine) fillModels(ctx context.Context, tx pgx.Tx, r run, step int) (De
 		if err != nil {
 			return d, err
 		}
-		text = strings.ReplaceAll(text, m[0], msg)
+		text = strings.ReplaceAll(text, m[0], msg.Inline)
+		notes = append(notes, "- "+m[1]+": "+msg.Note)
+	}
+	if len(notes) > 0 {
+		text += "\n\nModel suggestions:\n" + strings.Join(notes, "\n")
 	}
 	d.Steps[step].Instructions = text
 	return d, nil
 }
 
-func (e *Engine) suggestModel(ctx context.Context, tx pgx.Tx, r run, step int, token string, exclude []string) (string, error) {
+type modelSuggestion struct{ Inline, Note string }
+
+func (e *Engine) suggestModel(ctx context.Context, tx pgx.Tx, r run, step int, token string, exclude []string) (modelSuggestion, error) {
 	if err := lockModels(ctx, tx, r.Account); err != nil {
-		return "", err
+		return modelSuggestion{}, err
 	}
 	var group string
 	var revision int
 	if err := tx.QueryRow(ctx, "SELECT id::text,revision FROM model_groups WHERE account_id=$1 AND token=$2 AND deleted_at IS NULL", r.Account, token).Scan(&group, &revision); errors.Is(err, pgx.ErrNoRows) {
-		return "", bad("unknown model token %s", token)
+		return modelSuggestion{}, bad("unknown model token %s", token)
 	} else if err != nil {
-		return "", err
+		return modelSuggestion{}, err
 	}
-	rows, err := tx.Query(ctx, `SELECT to_jsonb(c) FROM model_group_candidates c WHERE account_id=$1 AND group_id=$2 AND host=$3 ORDER BY eligible DESC,score DESC NULLS LAST,position,id`, r.Account, group, r.Host)
+	rows, err := tx.Query(ctx, `SELECT to_jsonb(c) || jsonb_build_object(
+        'model_label',coalesce(nullif(p.label,''),c.model), 'login_label',coalesce(nullif(a.label,''),c.login))
+        FROM model_group_candidates c
+        LEFT JOIN provider_models p ON p.host=c.host AND p.provider=c.provider AND p.id=c.model
+        LEFT JOIN usage_accounts a ON a.provider=c.usage_provider AND a.account=c.login
+        WHERE c.account_id=$1 AND c.group_id=$2 AND c.host=$3
+        ORDER BY c.eligible DESC,c.score DESC NULLS LAST,c.position,c.id`, r.Account, group, r.Host)
 	if err != nil {
-		return "", err
+		return modelSuggestion{}, err
 	}
 	candidates, err := pgx.CollectRows(rows, pgx.RowTo[json.RawMessage])
 	if err != nil {
-		return "", err
+		return modelSuggestion{}, err
 	}
 	var chosen map[string]any
 	for _, raw := range candidates {
 		var c map[string]any
 		if err := json.Unmarshal(raw, &c); err != nil {
-			return "", err
+			return modelSuggestion{}, err
 		}
 		skip := false
 		for _, x := range exclude {
@@ -269,11 +282,21 @@ func (e *Engine) suggestModel(ctx context.Context, tx pgx.Tx, r run, step int, t
 		}
 	}
 	msg := "No eligible model in " + token + ". Wait for a fresh meter or reset, or ask for an explicit model. Do not launch a worker on this suggestion."
+	inline := "no eligible model in " + token
 	var provider, login, window any
 	if chosen != nil {
 		p := chosen["provider"].(string)
 		model := chosen["model"].(string)
 		thinking := chosen["thinking"].(string)
+		inline = chosen["model_label"].(string)
+		if thinking != "" {
+			inline += " (" + strings.ToUpper(thinking[:1]) + thinking[1:] + ")"
+		}
+		inline += " via " + p + "/" + model
+		if thinking != "" {
+			inline += " --thinking " + thinking
+		}
+		inline += " on " + chosen["login_label"].(string)
 		msg = fmt.Sprintf("%s/%s", p, model)
 		if thinking != "" {
 			msg += " (" + thinking + ")"
@@ -291,12 +314,12 @@ func (e *Engine) suggestModel(ctx context.Context, tx pgx.Tx, r run, step int, t
 	var id string
 	if err := tx.QueryRow(ctx, `INSERT INTO workflow_model_suggestions(account_id,run_id,step,group_id,token,revision,usage_provider,login,long_window,snapshot,message)
    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id::text`, r.Account, r.ID, step, group, token, revision, provider, login, window, snapshot, msg).Scan(&id); err != nil {
-		return "", err
+		return modelSuggestion{}, err
 	}
 	if err := e.event(ctx, tx, r, "model_suggestion", ptr(step), nil, msg+" Suggestion "+id); err != nil {
-		return "", err
+		return modelSuggestion{}, err
 	}
-	return msg + " Suggestion " + id + ". Before another worker, refresh with intelligence workflow suggest --run " + r.ID + " " + token + ".", nil
+	return modelSuggestion{Inline: inline, Note: msg + " Suggestion " + id + ". Before another worker, refresh with intelligence workflow suggest --run " + r.ID + " " + token + "."}, nil
 }
 
 // SuggestModel records a new allocation without advancing the step.
@@ -313,7 +336,8 @@ func (e *Engine) SuggestModel(ctx context.Context, host, id, token string, exclu
 		if r.Status != Running {
 			return conflict("run is not running")
 		}
-		msg, err = e.suggestModel(ctx, tx, r, r.Step, token, exclude)
+		value, err := e.suggestModel(ctx, tx, r, r.Step, token, exclude)
+		msg = value.Inline + "\n\n" + value.Note
 		return err
 	})
 	return msg, err

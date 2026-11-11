@@ -543,8 +543,10 @@ require reloading rather than overwriting another editor's save. Deleting a grou
 while its token is referenced by a current workflow or an unfinished run.
 
 Tokens expand on first-step entry and `next`, `skip`, or `back`, before task input is filled.
-Each expansion supplies exact provider/model, thinking and unattended mode settings, or says
-there is no eligible model. Repeated uses of one token in a step share one suggestion. The
+Each inline expansion supplies a compact model/effort/plan value, including the exact provider/model
+and thinking flag, or says there is no eligible model. One appended note per group supplies launch
+settings (including unattended mode), reason, meter time, suggestion ID and refresh command, so
+tokens can be used mid-sentence. Repeated uses of one token in a step share one suggestion. The
 preview on Plans reads SQL without allocating capacity; select the host to see its candidates,
 meter age and exclusion reasons. Existing workflows opt in by inserting tokens; their static
 instructions are not rewritten automatically. Explicit task model requirements take precedence.
@@ -575,6 +577,12 @@ All reads use SQL: `model_groups`, `model_group_members`, `model_group_candidate
 ranking view), and `workflow_model_suggestions` (immutable inputs, group revision and result).
 The run's events also show each recorded suggestion. Ownership and the read-only contract
 apply to all of these relations.
+
+The optional `TestModelGroupsBrowser` regression checks Plans, the workflow editor, and resolved
+instructions in headless Chromium at 390px and 1440px. Set `MODEL_GROUP_PLAYWRIGHT` to an installed
+Playwright module directory and `PLAYWRIGHT_BROWSERS_PATH` to its browser cache (or set
+`MODEL_GROUP_CHROMIUM` to an existing Chromium executable), then run it with the usual test
+database. Browser dependencies and screenshots belong in `.factory-scratch/`.
 
 The starting workflow spreads frontier work across Claude Opus 5.5, Codex and Gemini 4 Carbon
 (`antigravity/gemini-4-carbon-high`). Antigravity encodes effort in the model ID; Carbon also has
