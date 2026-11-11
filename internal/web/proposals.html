@@ -1,24 +1,25 @@
 {{define "proposal-head"}}<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.}} · Intelligence</title>{{template "css"}}
 <style>
-.review-meta { display:flex; gap:.6rem 1.4rem; flex-wrap:wrap; color:var(--muted); margin:.75rem 0 1.25rem; }
+.review-meta { display:flex; gap:.6rem 1.4rem; flex-wrap:wrap; color:var(--muted); margin:.75rem 0 1.25rem; font-size:13px; }
+.page-head + .review-meta { margin-top:-.75rem; }
 .review-text { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; margin:.3rem 0; }
 .review-pair { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem; }
-.review-pair > div { min-width:0; padding:.8rem; background:var(--bg-subtle); border-radius:var(--radius); }
+.review-pair > div { min-width:0; padding:.8rem; background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); }
 .review-change { margin:1.2rem 0; }
-.review-change h3 { margin-bottom:.5rem; font-size:15px; }
+.review-change h3 { margin-bottom:.5rem; font-size:14px; font-weight:600; }
 .review-diff { padding:.7rem; border:1px solid var(--line); border-radius:var(--radius); margin:.7rem 0; font-family:var(--mono); font-size:12px; }
 .review-diff .same { color:var(--muted); }.review-diff .added { background:var(--green-bg);color:var(--green); }.review-diff .removed {background:var(--red-bg);color:var(--red);}
-.proposal-item { padding:1rem; border:1px solid var(--line);border-radius:var(--radius);margin:.7rem 0;background:var(--panel); }
-.proposal-item.pending { border-left:4px solid var(--accent); background:var(--accent-bg); }
-.proposal-item h2 {font-size:17px;margin:0 0 .5rem;}.proposal-item .review-meta{margin:.5rem 0 0;font-size:12px;}
-.review-actions {display:flex;gap:.6rem;margin:1rem 0;} details.review-full {margin:1rem 0;padding:1rem;border:1px solid var(--line);border-radius:var(--radius);}
+.proposal-item { padding:.9rem 1.1rem; border:1px solid var(--line);border-radius:var(--radius);margin:.6rem 0;background:var(--panel); box-shadow:var(--shadow); }
+.proposal-item.pending { border-left:3px solid var(--accent); }
+.proposal-item p { margin:.25rem 0 0; color:var(--fg-2); font-size:13px; }
+.proposal-item h2 {font-size:14.5px;font-weight:600;margin:0;} .proposal-item h2 a { color:var(--fg); } .proposal-item h2 a:hover { color:var(--accent); }.proposal-item .review-meta{margin:.5rem 0 0;font-size:12px;}
+.review-actions {display:flex;gap:.6rem;margin:1rem 0;} details.review-full {margin:1rem 0;padding:.75rem 1rem;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);}
 .review-step {border-top:1px solid var(--line);margin-top:1rem;padding-top:.6rem;} .review-step h4{margin:.3rem 0;}
-.review-header h1 {font-size:1.65rem;margin:.5rem 0;overflow-wrap:anywhere;}
 .review-summary, .review-discussion {padding:1.2rem 1.4rem;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);margin:1.5rem 0;overflow-wrap:anywhere;}
 .review-summary {border-left:3px solid var(--accent);}
 .review-summary h2,.review-discussion h2 {font-size:1.1rem;margin:0 0 .8rem;}
 .review-summary p:last-child {margin-bottom:0;}
-.review-toolbar {position:sticky;top:0;z-index:2;background:var(--bg);border-block:1px solid var(--line);padding:.5rem 0;}
+.review-toolbar {position:sticky;top:var(--topbar-h);z-index:2;background:var(--bg);border-block:1px solid var(--line);padding:.5rem 0;}
 .review-toolbar .review-actions {margin:.4rem 0;flex-wrap:wrap;}
 .review-toolbar p {margin:.3rem 0;font-size:12px;}
 .review-inline {white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.8;padding:1rem 1.2rem;background:var(--bg-subtle);border:1px solid var(--line);border-radius:var(--radius);}
@@ -42,8 +43,8 @@
 {{range .Definition.Steps}}<section class="review-step"><h4>{{.Title}}</h4><p class="meta">{{.Kind}} · {{.ID}}</p><pre class="review-text">{{.Instructions}}</pre></section>{{end}}
 {{else}}<p>No workflow yet.</p>{{end}}{{end}}
 
-{{define "proposal"}}{{template "proposal-head" "Review workflow proposal"}}<main class="container page">
-<header class="review-header"><p><a href="/workflow-proposals">All proposals</a></p><h1>Review {{.Target}}</h1></header>
+{{define "proposal"}}{{template "proposal-head" "Review workflow proposal"}}<main class="container page mid">
+<div class="crumbs"><a href="/workflow-proposals">Proposals</a><span class="sep">/</span>Review</div><div class="page-head"><div><h1>Review {{.Target}}</h1></div></div>
 <div class="review-meta"><strong>{{.Status}} · {{.Operation}}</strong><span>{{.Target}}{{if .BaseVersion}} · based on v{{.BaseVersion}}{{else}} · new workflow{{end}}</span><span>Created {{at .Created "minute"}}</span>{{if not .Decided}}<span>Expires {{at .Expiry "minute"}}</span>{{end}}
 {{with .Decided}}<span>Decided {{at . "minute"}}</span>{{end}}{{with .Undone}}<span>Undone {{at . "minute"}}</span>{{end}}</div>
 <p class="meta">Proposed from {{.Proposer}}{{with .TokenCreated}} · MCP token created {{at . "minute"}}{{end}}{{with .ProposedBy}} · Agent: {{.}}{{end}}{{with .RunID}} · Run: {{.}}{{end}}</p>
@@ -53,9 +54,9 @@
 {{if eq .Status "stale"}}<p class="request">The workflow changed after this was proposed. Read its latest state and propose again.</p>{{end}}
 <section class="review-summary"><h2>Summary</h2>{{if .Summary}}{{markdown .Summary}}{{else}}<p>Proposed {{.Operation}} to {{.Target}}:</p><ul>{{range .Changes}}<li>{{.Label}}</li>{{else}}<li>No editable fields changed.</li>{{end}}</ul>{{end}}</section>
 <div class="review-toolbar"><div class="review-actions">{{if .Pending}}<button class="btn primary" data-action="approve">{{if eq .Operation "run"}}Approve run{{else}}Approve change{{end}}</button><button class="btn" data-action="reject">Reject</button>{{end}}{{if .Applied}}<button class="btn" data-action="undo">Undo change</button>{{end}}<a class="btn" href="#discussion">Ask a question</a></div><p id="error" role="alert"></p><p class="meta">{{if eq .Operation "run"}}Approval starts one run with the full task below. No run starts before approval. Workflow changes require a fresh proposal. A started run cannot be undone here; use its run page to cancel it.{{else}}Approval applies the reviewed change. Undo restores the saved prior workflow state. Later workflow edits prevent approval or undo.{{end}}</p></div>
-{{if eq .Operation "run"}}<section class="review-change"><h2>Full task input</h2><p class="meta">Quoted task data for the proposed run of {{.Target}} · v{{.BaseVersion}}.</p><blockquote><pre class="review-text">{{.Input}}</pre></blockquote></section>
+{{if eq .Operation "run"}}<section class="review-change"><h2 class="section-title">Full task input</h2><p class="meta">Quoted task data for the proposed run of {{.Target}} · v{{.BaseVersion}}.</p><blockquote><pre class="review-text">{{.Input}}</pre></blockquote></section>
 <details class="review-full"><summary>Workflow to run</summary>{{template "workflow-state" .BeforeState}}</details>
-{{else}}<h2>Changed fields</h2><p class="meta">Review each change below. Unchanged fields and automatic version numbers are omitted. Setting the default workflow is not proposable.</p>
+{{else}}<h2 class="section-title">Changed fields</h2><p class="meta">Review each change below. Unchanged fields and automatic version numbers are omitted. Setting the default workflow is not proposable.</p>
 <p class="review-legend"><span>+ Underlined: added</span><span>− Struck through: removed</span></p>
 {{range .Changes}}<section class="review-change"><h3>{{.Label}}</h3><div class="review-inline">{{inlineDiff .Before .After}}</div><details><summary>Compare before and after</summary><div class="review-pair"><div><strong>Before</strong><pre class="review-text">{{.Before}}</pre></div><div><strong>After</strong><pre class="review-text">{{.After}}</pre></div></div></details>
 <details><summary>Line diff</summary><div class="review-diff">{{range .Lines}}<div class="review-text {{.Kind}}">{{if eq .Kind "added"}}+ {{else if eq .Kind "removed"}}− {{else}}  {{end}}{{.Text}}</div>{{end}}</div></details></section>{{else}}<p>No editable fields changed.</p>{{end}}
@@ -139,8 +140,8 @@ document.getElementById('discussion').addEventListener('click',async event=>{
 </script>{{end}}
 <script>document.querySelectorAll('[data-action]').forEach(button=>button.onclick=async()=>{document.querySelectorAll('[data-action]').forEach(b=>b.disabled=true);document.querySelector('#error').textContent='';try{const res=await fetch('/api/workflow-proposals/{{.ID}}/'+button.dataset.action,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!res.ok)throw new Error(await res.text());location.reload();}catch(e){document.querySelector('#error').textContent=e.message;document.querySelectorAll('[data-action]').forEach(b=>b.disabled=false);}});</script></body></html>{{end}}
 
-{{define "proposals"}}{{template "proposal-head" "Workflow proposals"}}<main class="container page"><h1>Workflow proposals</h1><p class="meta">Pending proposals appear first. Each link opens a review; no change is applied by opening it.</p>
+{{define "proposals"}}{{template "proposal-head" "Workflow proposals"}}<main class="container page mid"><div class="page-head"><div><h1>Workflow proposals</h1><p class="sub">Pending proposals appear first. Each link opens a review; no change is applied by opening it.</p></div></div>
 {{range .}}<article class="proposal-item {{if .Pending}}pending{{end}}"><h2><a href="/workflow-proposals/{{.ID}}">{{.Headline}}</a></h2><p>{{.Status}} · {{.Operation}} · {{.Target}}{{if .BaseVersion}} · v{{.BaseVersion}}{{else}} · new workflow{{end}}{{with .StartedRunID}} → <a href="/workflow-runs/{{.}}">Run</a>{{end}}{{if .ResultVersion}} → <a href="/workflows/{{.WorkflowID}}/versions/{{.ResultVersion}}">v{{.ResultVersion}}</a>{{end}}</p>
-<div class="review-meta"><span>Created {{at .Created "minute"}}</span>{{if not .Decided}}<span>Expires {{at .Expiry "minute"}}</span>{{else}}<span>Decided {{at .Decided "minute"}}</span>{{end}}{{with .Undone}}<span>Undone {{at . "minute"}}</span>{{end}}<span>{{.Proposer}}{{with .TokenCreated}} · MCP token created {{at . "minute"}}{{end}}{{with .ProposedBy}} · {{.}}{{end}}{{with .RunID}} · {{.}}{{end}}</span></div></article>{{else}}<p>No proposals yet.</p>{{end}}</main></body></html>{{end}}
+<div class="review-meta"><span>Created {{at .Created "minute"}}</span>{{if not .Decided}}<span>Expires {{at .Expiry "minute"}}</span>{{else}}<span>Decided {{at .Decided "minute"}}</span>{{end}}{{with .Undone}}<span>Undone {{at . "minute"}}</span>{{end}}<span>{{.Proposer}}{{with .TokenCreated}} · MCP token created {{at . "minute"}}{{end}}{{with .ProposedBy}} · {{.}}{{end}}{{with .RunID}} · {{.}}{{end}}</span></div></article>{{else}}<p class="empty-state">No proposals yet.</p>{{end}}</main></body></html>{{end}}
 
-{{define "workflow-version"}}{{template "proposal-head" "Workflow version"}}<main class="container page"><p><a href="/workflows">Workflows</a> · <a href="/workflow-proposals">Proposals</a></p><h1>Saved workflow definition · v{{.Version}}</h1>{{template "workflow-state" .}}</main></body></html>{{end}}
+{{define "workflow-version"}}{{template "proposal-head" "Workflow version"}}<main class="container page mid"><div class="crumbs"><a href="/workflows">Workflows</a><span class="sep">/</span><a href="/workflow-proposals">Proposals</a><span class="sep">/</span>v{{.Version}}</div><div class="page-head"><div><h1>Saved workflow definition · v{{.Version}}</h1></div></div>{{template "workflow-state" .}}</main></body></html>{{end}}

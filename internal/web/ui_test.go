@@ -12,7 +12,7 @@ func TestTheStylesheetIsServed(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/css") {
 		t.Fatalf("ui.css: %d %q", rec.Code, rec.Header().Get("Content-Type"))
 	}
-	for _, want := range []string{"--accent", ".topnav", ".card", ".badge", ".btn", "prefers-color-scheme: dark", ".btn[hidden] { display: none; }"} {
+	for _, want := range []string{"--accent", "--topbar-h", ".topnav", ".card", ".badge", ".btn", ".md table", ".progress.warn", "prefers-color-scheme: dark", ".btn[hidden] { display: none; }"} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("ui.css misses %q", want)
 		}
@@ -42,8 +42,12 @@ func TestEveryPageSharesTheStylesheetAndTopBar(t *testing.T) {
 	sendBatch(t, h, batch(true, "ep1", tentry(1, `{"type":"user_message","text":"go"}`)))
 	pages := []struct{ path, tab string }{
 		{"/", `href="/" aria-current="page"`},
+		{"/workflows", `href="/workflows" aria-current="page"`},
+		{"/workflows/email", `href="/workflows" aria-current="page"`},
+		{"/schedules", `href="/schedules" aria-current="page"`},
 		{"/usage", `href="/usage" aria-current="page"`},
 		{"/resources", `href="/resources" aria-current="page"`},
+		{"/account", `href="/account" aria-current="page"`},
 		{"/login", `href="/" aria-current="page"`},
 		{newAgentPath, `href="/" aria-current="page"`},
 		{"/hosts/host-1/workspaces/new", `href="/" aria-current="page"`},

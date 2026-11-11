@@ -3,11 +3,9 @@
 <script src="/whatsnew.js" defer></script>
 <script src="/localtime.js" defer></script>{{end}}
 {{define "top"}}{{/* the top bar, with the tab whose path is . marked */}}
-<header class="topbar"><div class="container">
-  <div class="brand-row">
-    <a class="brand" href="/"><svg viewBox="0 0 20 20" aria-hidden="true"><rect width="20" height="20" rx="5" fill="currentColor"/><path d="M6 13.5 10 6l4 7.5" fill="none" stroke="var(--bg)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Intelligence</a>
-  </div>
-  <nav class="topnav">
+<header class="topbar"><div class="container topbar-inner">
+  <a class="brand" href="/"><svg viewBox="0 0 20 20" aria-hidden="true"><rect width="20" height="20" rx="5" fill="currentColor"/><path d="M6 13.5 10 6l4 7.5" fill="none" stroke="var(--panel)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Intelligence</a>
+  <nav class="topnav" aria-label="Primary">
     <a href="/"{{if eq . "/"}} aria-current="page"{{end}}>Hosts</a>
     <a href="/workflows"{{if eq . "/workflows"}} aria-current="page"{{end}}>Workflows</a>
     <a href="/workflow-proposals" id="proposals-nav"{{if eq . "/workflow-proposals"}} aria-current="page"{{end}}>Proposals<span id="proposals-count"></span></a>

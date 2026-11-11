@@ -32,7 +32,6 @@
   .pill.attn { background: var(--orange-bg); border-color: var(--orange-line); color: var(--orange); }
   .dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--muted); display: inline-block; }
   .dot.running { background: var(--run); } .dot.live { background: var(--add); animation: pulse 1.6s infinite; }
-  @keyframes pulse { 50% { opacity: .3; } }
   .spinner { width: .7rem; height: .7rem; border-radius: 50%; display: inline-block; flex: none;
     border: 2px solid color-mix(in srgb, currentColor 25%, transparent); border-top-color: currentColor; animation: spin .8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -201,8 +200,8 @@
   .chatbar button { height: 1.95rem; padding: 0 .8rem; border-radius: var(--radius); border: 1px solid var(--line-strong);
     background: var(--panel); color: var(--fg); font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer; box-shadow: var(--shadow); }
   .chatbar button:hover { background: var(--bg-subtle); }
-  .chatbar button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .chatbar button.primary:hover { background: var(--accent-hover); }
+  .chatbar button.primary { background: var(--link); border-color: var(--link); color: #fff; }
+  .chatbar button.primary:hover { background: var(--link-hover); border-color: var(--link-hover); }
   .chatbar button:disabled { opacity: .5; cursor: default; }
   .pending { list-style: none; margin: 0 0 .45rem; padding: 0; display: flex; flex-direction: column; gap: .25rem; }
   .pending li { display: flex; gap: .45rem; align-items: baseline; font-size: .8rem; padding: .2rem .55rem; border-radius: .45rem;
