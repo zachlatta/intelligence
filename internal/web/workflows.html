@@ -369,33 +369,6 @@ const vars = (s) => esc(s).replace(/\{\{(input|repo|branch|run|[a-z][a-z0-9_]*_m
 function modelTokenChips(groups) {
   return `<div class="model-token-chips" data-model-token-chips><p class="meta">Model groups · <button type="button" class="btn sm" data-model-groups-open>Edit groups</button></p><div class="vars">${groups.map(g => `<button type="button" data-var="${esc(V(g.token))}" title="${esc(g.name)}">${esc(V(g.token))}</button>`).join("")}</div></div>`;
 }
-// stepModelFields picks what a step's sub-agents run on: the orchestrator's choice, a model group
-// (its token, resolved to the group's current pick when the run enters the step) or one of the
-// host's catalog models with its thinking.
-function stepModelFields(s) {
-  const mg = window.modelGroups, cur = s.model || "", isGroup = /^\{\{[a-z][a-z0-9_]*_model\}\}$/.test(cur);
-  const groups = (mg?.groups() || []).map((g) => [V(g.token), `${g.name}${g.members.length ? "" : " (empty)"} · ${V(g.token)}`]);
-  const catalog = (mg?.catalog() || []).filter((c) => c.host === def().host);
-  const models = [...new Map(catalog.map((c) => [c.provider + "/" + c.id, c])).values()]
-    .map((c) => [c.provider + "/" + c.id, `${c.label || c.id} · ${c.provider}/${c.id}`]);
-  const known = !cur || groups.some(([v]) => v === cur) || models.some(([v]) => v === cur);
-  const levels = [...new Set(catalog.filter((c) => c.provider + "/" + c.id === cur).flatMap((c) => c.thinking || []))];
-  return `<div class="fields"><div><label>Model for this step</label><select data-step-model>
-      ${opts([["", "Orchestrator chooses"]], cur)}${known ? "" : opts([[cur, cur + (isGroup ? " (no such model group)" : " (not in the host's catalog)")]], cur)}
-      ${groups.length ? `<optgroup label="Model groups">${opts(groups, cur)}</optgroup>` : ""}
-      ${models.length ? `<optgroup label="Models">${opts(models, cur)}</optgroup>` : ""}</select></div>
-    ${cur && !isGroup ? `<div><label>Thinking</label><select data-step-thinking>${opts((levels.length ? ["", ...levels] : THINKING).map((t) => [t, t || "default"]), s.thinking || "")}</select></div>` : ""}</div>
-    <p class="hint">${isGroup ? "When the run enters this step, the group picks its model from plan usage and the orchestrator is told to start this step's sub-agents with it."
-      : cur ? "The orchestrator is told to start this step's sub-agents with this model." : "The orchestrator picks the model, from its standing instructions and any model group token below."}</p>`;
-}
-// stepModelLabel is the step card's model line: a group by its name (its token as the tooltip),
-// a group not loaded or gone by its token, an explicit model with its thinking.
-function stepModelLabel(s) {
-  if (!s.model) return "";
-  const g = (window.modelGroups?.groups() || []).find((g) => V(g.token) === s.model);
-  const label = g ? `<span title="${esc(s.model)}">${esc(g.name)}</span>` : vars(s.model);
-  return `<div class="meta">Model: ${label}${s.thinking ? " · " + esc(s.thinking) : ""}</div>`;
-}
 // V is a variable as instructions write it ({ { input } } without the spaces; spelled out here, as this file is a Go template)
 const V = (n) => "{" + "{" + n + "}" + "}";
 const KIND = { step: "Step", gate: "Gate", signoff: "Sign-off" };
@@ -439,7 +412,7 @@ function stepCards() {
   return def().steps.map((s, i) => `<div class="node click k-${s.kind}${sel === s.id ? " sel" : ""}" data-id="${esc(s.id)}" draggable="true">
       <div class="nh"><span class="grip" title="Drag to reorder">⋮⋮</span><div style="min-width:0"><div class="kind">${KIND[s.kind] || s.kind} ${i + 1}</div><div class="ttl">${esc(s.title)}</div></div>
       <span class="grow-r"><button class="btn ghost sm" data-del="${esc(s.id)}" title="Remove">✕</button></span></div>
-      <div class="nb">${stepModelLabel(s)}<div class="instr">${vars(s.instructions)}</div></div></div>
+      <div class="nb"><div class="instr">${vars(s.instructions)}</div></div></div>
     ${i < def().steps.length - 1 ? `<div class="link"><button class="add" data-insert="${i + 1}" title="Add a step here">+</button></div>` : ""}`).join("") +
     `<p class="hint" style="margin:.8rem 0 0 .2rem">After the last step, <code>next</code> finishes the run.</p>
     <div style="margin-top:.6rem;display:flex;gap:.4rem">${Object.keys(KIND).map((k) => `<button class="btn sm ghost" data-append="${k}">+ ${KIND[k]}</button>`).join("")}</div>`;
@@ -578,7 +551,6 @@ function inspector() {
   return panel(`${KIND[s.kind]} ${i + 1}`, KIND_DESC[s.kind], `<label>Title</label><input data-s="title" value="${esc(s.title)}">
     <p class="hint mono">id: ${esc(s.id)} · <code>intelligence workflow back ${esc(s.id)}</code> returns here</p>
     <label>Kind</label><select data-s="kind">${opts(Object.entries(KIND), s.kind)}</select>
-    ${stepModelFields(s)}
     <label>Instructions to the orchestrator</label><textarea data-s="instructions" class="prompt">${esc(s.instructions)}</textarea>${chips}${modelTokenChips(window.modelGroups?.groups() || [])}
     <p class="hint">${s.kind === "gate" ? "Say what to check and which step to send work back to." : s.kind === "signoff" ? "Say when to skip it, and what the note should hold. Zach replies on the run's page; his reply goes to the orchestrator." : "Say when the step is done."}</p>`);
 }
@@ -647,19 +619,6 @@ function bind() {
       if (card) { $(".ttl", card).textContent = s.title; $(".instr", card).innerHTML = vars(s.instructions); }
     });
   });
-  const stepModel = $("#inspector [data-step-model]"), stepThinking = $("#inspector [data-step-thinking]");
-  const step = () => def().steps.find((x) => x.id === sel);
-  if (stepModel) stepModel.onchange = () => {
-    const s = step();
-    if (stepModel.value) s.model = stepModel.value; else delete s.model;
-    delete s.thinking; // a group sets its own; a new model starts at its default
-    markDirty(true);
-  };
-  if (stepThinking) stepThinking.onchange = () => {
-    const s = step();
-    if (stepThinking.value) s.thinking = stepThinking.value; else delete s.thinking;
-    markDirty(true);
-  };
   const pick = $("#repo-pick");
   if (pick) pick.onchange = () => {
     typingDir = pick.value === "__other";

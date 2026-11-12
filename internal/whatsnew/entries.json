@@ -16,14 +16,6 @@
     "mediaAlt": "Host monitoring for a demo host: load, disk busy and disk throughput charts, and a filesystems table with used, free and total space"
   },
   {
-    "id": "workflow-step-model",
-    "released": "2026-11-11",
-    "title": "Pick a model group as a step's model",
-    "summary": "In the workflow editor, each step now has Model for this step: leave it to the orchestrator, pick one of your model groups, or pick a model from the host's catalog with its thinking. A group is resolved to its current pick from plan usage when the run enters the step, and the orchestrator is told to start that step's sub-agents with it.",
-    "media": "step-model-groups.png",
-    "mediaAlt": "The workflow editor with step 1 selected and Model for this step set to the Frontier models group, which also shows on the step's card"
-  },
-  {
     "id": "workflow-stall-recovery",
     "released": "2026-11-11",
     "title": "Recover stalled workflow runs",
