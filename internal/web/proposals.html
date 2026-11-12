@@ -44,9 +44,9 @@
 
 {{define "proposal"}}{{template "proposal-head" "Review workflow proposal"}}<main class="container page">
 <header class="review-header"><p><a href="/workflow-proposals">All proposals</a></p><h1>Review {{.Target}}</h1></header>
-<div class="review-meta"><strong>{{.Status}} · {{.Operation}}</strong><span>{{.Target}}{{if .BaseVersion}} · based on v{{.BaseVersion}}{{else}} · new workflow{{end}}</span><span>Created {{stamp .Created}}</span>{{if not .Decided}}<span>Expires {{stamp .Expiry}}</span>{{end}}
-{{with .Decided}}<span>Decided {{stamp .}}</span>{{end}}{{with .Undone}}<span>Undone {{stamp .}}</span>{{end}}</div>
-<p class="meta">Proposed from {{.Proposer}}{{with .TokenCreated}} · MCP token created {{stamp .}}{{end}}{{with .ProposedBy}} · Agent: {{.}}{{end}}{{with .RunID}} · Run: {{.}}{{end}}</p>
+<div class="review-meta"><strong>{{.Status}} · {{.Operation}}</strong><span>{{.Target}}{{if .BaseVersion}} · based on v{{.BaseVersion}}{{else}} · new workflow{{end}}</span><span>Created {{at .Created "minute"}}</span>{{if not .Decided}}<span>Expires {{at .Expiry "minute"}}</span>{{end}}
+{{with .Decided}}<span>Decided {{at . "minute"}}</span>{{end}}{{with .Undone}}<span>Undone {{at . "minute"}}</span>{{end}}</div>
+<p class="meta">Proposed from {{.Proposer}}{{with .TokenCreated}} · MCP token created {{at . "minute"}}{{end}}{{with .ProposedBy}} · Agent: {{.}}{{end}}{{with .RunID}} · Run: {{.}}{{end}}</p>
 {{with .Reason}}<p class="request"><strong>Withdrawal reason:</strong> {{.}}</p>{{end}}{{with .ReplacesID}}<p>Replaces <a href="/workflow-proposals/{{.}}">an earlier proposal</a>, which was withdrawn.</p>{{end}}
 {{with .StartedRunID}}<p>Approved run: <a href="/workflow-runs/{{.}}">View workflow run</a></p>{{end}}
 {{if .ResultVersion}}<p><a href="/workflows/{{.WorkflowID}}/versions/{{.ResultVersion}}">View resulting workflow version v{{.ResultVersion}}</a>{{if .UndoState}} · Undo restored the prior workflow state.{{end}}</p>{{end}}
@@ -63,7 +63,7 @@
 <details class="review-full"><summary>Raw JSON</summary><div class="review-pair"><div><h3>Before</h3><pre class="review-text">{{.RawBefore}}</pre></div><div><h3>After</h3><pre class="review-text">{{.RawAfter}}</pre></div></div></details>
 {{end}}
 <section class="review-discussion" id="discussion"><h2>Questions &amp; discussion</h2><p class="meta">Posting a question starts an agent in a cataloged desk checkout to answer it. Online hosts with desk are preferred, then the workflow's host. One answer can be in progress at a time per proposal. Replies appear automatically. Discussion never applies the proposal.</p>
-<div id="proposal-thread" data-pending="{{.HasPendingAnswers}}" aria-live="polite">{{range .Comments}}<article class="review-comment"><p class="meta"><strong>{{if eq .Author "reviewer"}}You{{else}}Agent · {{.Author}}{{end}}</strong> · {{stamp .Created}}</p>{{markdown .Text}}
+<div id="proposal-thread" data-pending="{{.HasPendingAnswers}}" aria-live="polite">{{range .Comments}}<article class="review-comment"><p class="meta"><strong>{{if eq .Author "reviewer"}}You{{else}}Agent · {{.Author}}{{end}}</strong> · {{at .Created "minute"}}</p>{{markdown .Text}}
 {{if .State}}<p class="meta"><span class="badge">{{.State}}</span> · {{.AnswerHost}}{{with .AnswerAgent}} · Agent: {{.}}{{end}}</p>{{end}}
 {{if eq .AnswerLocation "desk"}}<p class="meta">Answer location: desk repository (read-only).</p>{{else if eq .AnswerLocation "home_fallback"}}<p class="request">No desk repository was found in enrolled host catalogs. Using the host's home directory for this answer.</p>{{end}}
 {{if .AnswerPending}}{{if not .AnswerOnline}}<p class="meta">Host offline.{{if eq .State "queued"}} Waiting for it to reconnect before the agent can start.{{end}}</p>{{end}}{{end}}
@@ -98,6 +98,7 @@ async function refreshThread() {
   const next = new DOMParser().parseFromString(await res.text(),'text/html').getElementById('proposal-thread');
   if (!next) throw new Error('Replies could not update. Retrying automatically.');
   if (revision !== threadRevision) return;
+  globalThis.localTime?.scan(next); // as the page shows it, so an unchanged thread compares equal
   const current = document.getElementById('proposal-thread');
   if (current.innerHTML !== next.innerHTML || current.dataset.pending !== next.dataset.pending) current.replaceWith(next);
   if (!hasPendingAnswers()) document.getElementById('comment-error').textContent = '';
@@ -140,6 +141,6 @@ document.getElementById('discussion').addEventListener('click',async event=>{
 
 {{define "proposals"}}{{template "proposal-head" "Workflow proposals"}}<main class="container page"><h1>Workflow proposals</h1><p class="meta">Pending proposals appear first. Each link opens a review; no change is applied by opening it.</p>
 {{range .}}<article class="proposal-item {{if .Pending}}pending{{end}}"><h2><a href="/workflow-proposals/{{.ID}}">{{.Headline}}</a></h2><p>{{.Status}} · {{.Operation}} · {{.Target}}{{if .BaseVersion}} · v{{.BaseVersion}}{{else}} · new workflow{{end}}{{with .StartedRunID}} → <a href="/workflow-runs/{{.}}">Run</a>{{end}}{{if .ResultVersion}} → <a href="/workflows/{{.WorkflowID}}/versions/{{.ResultVersion}}">v{{.ResultVersion}}</a>{{end}}</p>
-<div class="review-meta"><span>Created {{stamp .Created}}</span>{{if not .Decided}}<span>Expires {{stamp .Expiry}}</span>{{else}}<span>Decided {{stamp .Decided}}</span>{{end}}{{with .Undone}}<span>Undone {{stamp .}}</span>{{end}}<span>{{.Proposer}}{{with .TokenCreated}} · MCP token created {{stamp .}}{{end}}{{with .ProposedBy}} · {{.}}{{end}}{{with .RunID}} · {{.}}{{end}}</span></div></article>{{else}}<p>No proposals yet.</p>{{end}}</main></body></html>{{end}}
+<div class="review-meta"><span>Created {{at .Created "minute"}}</span>{{if not .Decided}}<span>Expires {{at .Expiry "minute"}}</span>{{else}}<span>Decided {{at .Decided "minute"}}</span>{{end}}{{with .Undone}}<span>Undone {{at . "minute"}}</span>{{end}}<span>{{.Proposer}}{{with .TokenCreated}} · MCP token created {{at . "minute"}}{{end}}{{with .ProposedBy}} · {{.}}{{end}}{{with .RunID}} · {{.}}{{end}}</span></div></article>{{else}}<p>No proposals yet.</p>{{end}}</main></body></html>{{end}}
 
 {{define "workflow-version"}}{{template "proposal-head" "Workflow version"}}<main class="container page"><p><a href="/workflows">Workflows</a> · <a href="/workflow-proposals">Proposals</a></p><h1>Saved workflow definition · v{{.Version}}</h1>{{template "workflow-state" .}}</main></body></html>{{end}}

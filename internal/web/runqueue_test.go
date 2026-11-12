@@ -522,7 +522,7 @@ func TestAHostAwayForLongKeepsItsQueue(t *testing.T) {
 		t.Fatalf("%d of 5 queued, want all", queued)
 	}
 	code, r := sqlPost(t, h, q("SELECT queue_reason FROM workflow_run_queue WHERE position = 1"))
-	want := "host-1 has no room yet: waiting for host-1 to report again (last measured " + m.Format("15:04 MST") + ")"
+	want := "host-1 has no room yet: waiting for host-1 to report again (last measured " + m.UTC().Format(time.RFC3339) + ")"
 	if code != http.StatusOK || r.Rows[0][0] != want {
 		t.Errorf("reason = %+v, want %q", r, want)
 	}

@@ -178,7 +178,7 @@ document.querySelectorAll("input[type=datetime-local][data-utc]").forEach((i) =>
       <div class="sched-prompt" title="{{.Prompt}}">{{.Prompt}}</div>
       <div class="meta">{{if eq .Target "new-agent"}}{{.Provider}}{{if .Model}} · {{.Model}}{{end}} · <span class="mono">{{.Cwd}}</span>{{if eq .Isolation "worktree"}} · worktree{{end}}{{else}}in agent <span class="mono">{{.AgentID}}</span>{{end}}</div></td>
     <td>{{cadence .Schedule}}{{if .Timezone}}<div class="meta">{{.Timezone}}</div>{{end}}</td>
-    <td>{{if eq .Status "active"}}{{until $.Now .NextRunAt}}<div class="meta">{{inZone .NextRunAt .Timezone}}</div>{{else}}<span class="meta">—</span>{{end}}</td>
+    <td>{{if eq .Status "active"}}{{until $.Now .NextRunAt}}<div class="meta">{{at .NextRunAt "weekday"}}</div>{{else}}<span class="meta">—</span>{{end}}</td>
     <td>{{with .LastRun}}{{template "runstatus" .Status}} <span class="meta">{{ago $.Now .StartedAt}}</span>{{else}}<span class="meta">none</span>{{end}}
       <div class="meta">{{.RunCount}} run{{if ne .RunCount 1}}s{{end}}{{if .FailedRuns}}, {{.FailedRuns}} failed{{end}}</div></td>
     <td class="actions">{{template "actions" .}}</td>
@@ -200,7 +200,7 @@ document.querySelectorAll("input[type=datetime-local][data-utc]").forEach((i) =>
 <main class="container page mid">
 <div class="crumbs"><a href="/schedules">Schedules</a><span class="sep">/</span><a href="/schedules#{{.S.Host}}">{{.S.Host}}</a></div>
 <div class="page-head"><div><h1>{{or .S.Name .S.Title .S.ID}} {{template "status" .S.Status}}</h1>
-<p class="sub">{{cadence .S.Schedule}}{{if .S.Timezone}} ({{.S.Timezone}}){{end}}{{if eq .S.Status "active"}} · next {{until .Now .S.NextRunAt}}, {{inZone .S.NextRunAt .S.Timezone}}{{end}}</p></div>
+<p class="sub">{{cadence .S.Schedule}}{{if .S.Timezone}} ({{.S.Timezone}}){{end}}{{if eq .S.Status "active"}} · next {{until .Now .S.NextRunAt}}, {{at .S.NextRunAt "weekday"}}{{end}}</p></div>
 <div class="actions">{{template "actions" .S}}</div></div>
 <p id="progress"></p>
 <section class="card">
@@ -214,7 +214,7 @@ document.querySelectorAll("input[type=datetime-local][data-utc]").forEach((i) =>
     {{end}}
     <dt>Cadence</dt><dd>{{if .S.Cron}}<span class="mono">{{.S.Cron}}</span>{{else}}every {{everyText .S.EveryMs}}{{end}}</dd>
     {{if .S.MaxRuns}}<dt>Limit</dt><dd>{{.S.MaxRuns}} runs</dd>{{end}}
-    {{if not .S.ExpiresAt.IsZero}}<dt>Until</dt><dd>{{inZone .S.ExpiresAt .S.Timezone}}</dd>{{end}}
+    {{if not .S.ExpiresAt.IsZero}}<dt>Until</dt><dd>{{at .S.ExpiresAt "weekday"}}</dd>{{end}}
     {{if not .S.PausedAt.IsZero}}<dt>Paused</dt><dd>{{ago .Now .S.PausedAt}}</dd>{{end}}
     <dt>Made</dt><dd>{{ago .Now .S.CreatedAt}}{{if not .S.UpdatedAt.IsZero}}, changed {{ago .Now .S.UpdatedAt}}{{end}}</dd>
     <dt>ID</dt><dd class="mono">{{.S.ID}}</dd>
@@ -231,7 +231,7 @@ document.querySelectorAll("input[type=datetime-local][data-utc]").forEach((i) =>
     <td>{{template "runstatus" .Status}}
       {{if .Error}}<div class="run-err">{{.Error}}</div>{{end}}
       {{if .Output}}<details><summary class="meta">output</summary><pre class="run-out">{{.Output}}</pre></details>{{end}}</td>
-    <td>{{inZone .StartedAt $.S.Timezone}}<div class="meta">{{ago $.Now .StartedAt}}</div></td>
+    <td>{{at .StartedAt "weekday"}}<div class="meta">{{ago $.Now .StartedAt}}</div></td>
     <td class="n">{{dur $.Now .ScheduleRun}}</td>
     <td>{{if .AgentListed}}<a href="/hosts/{{$.S.Host}}/agents/{{.AgentID}}">transcript</a>{{else if .AgentID}}<span class="meta mono" title="archived: its transcript is not kept">{{.AgentID}}</span>{{end}}</td>
   </tr>

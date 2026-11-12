@@ -28,7 +28,7 @@ import (
 //go:embed workflows.html
 var workflowsHTML string
 
-var workflowsTmpl = template.Must(template.New("workflows").Funcs(template.FuncMap{
+var workflowsTmpl = template.Must(template.New("workflows").Funcs(localFuncs).Funcs(template.FuncMap{
 	"memoryGiB": func(b int64) string { return fmt.Sprintf("%.1f", float64(b)/(1<<30)) },
 	"short":     short, "ago": ago, "markdown": markdown, "plural": plural, "emailSummary": emailSummary, "voiceMemoSummary": voiceMemoSummary,
 	"json": func(v any) (template.JS, error) {

@@ -28,8 +28,8 @@ const scheduleCommandSQL = `SELECT status, error, coalesce(result ->> 'scheduleI
 //go:embed schedules.html
 var schedulesHTML string
 
-var schedulesTmpl = template.Must(template.New("schedules").Funcs(template.FuncMap{
-	"short": short, "ago": ago, "until": nextIn, "cadence": cadence, "inZone": inZone, "dur": runDuration,
+var schedulesTmpl = template.Must(template.New("schedules").Funcs(localFuncs).Funcs(template.FuncMap{
+	"short": short, "ago": ago, "until": nextIn, "cadence": cadence, "dur": runDuration,
 	"localInput": localInput, "everyText": everyText,
 }).Parse(spawnHTML + layoutHTML + schedulesHTML))
 
@@ -199,18 +199,6 @@ func everyText(ms int64) string {
 		s = strings.TrimSuffix(s, "0m")
 	}
 	return s
-}
-
-// inZone is t in zone (a schedule's own; "" or one that does not load is UTC).
-func inZone(t time.Time, zone string) string {
-	if t.IsZero() {
-		return ""
-	}
-	loc, err := time.LoadLocation(zone)
-	if err != nil || zone == "" {
-		loc = time.UTC
-	}
-	return t.In(loc).Format("Mon Jan 2 15:04 MST")
 }
 
 // runDuration is how long a run took, or has taken so far.

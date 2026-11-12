@@ -63,7 +63,7 @@
 {{if .Emails}}<div class="table-wrap"><table class="table log">
   <tr><th>When</th><th>From</th><th>Subject</th><th>What happened</th></tr>
   {{range .Emails}}<tr>
-    <td class="meta" style="white-space:nowrap" title="{{.ReceivedAt.Format "2006-01-02 15:04"}}">{{ago $.Now .ReceivedAt}}</td>
+    <td class="meta" style="white-space:nowrap">{{agoAt $.Now .ReceivedAt}}</td>
     <td>{{.Who}}<div class="reason">{{.From}}{{if not .Verified}} · not verified{{end}}</div></td>
     <td class="subj" title="{{.Subject}}">{{or .Subject "(no subject)"}}</td>
     <td class="what"><span class="badge {{.Badge}}">{{.Label}}</span>

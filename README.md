@@ -1036,7 +1036,8 @@ Without fresh telemetry the server cannot know the host's capacity:
   from host-1”), so a host whose monitoring stops does not release its queue on no evidence;
 - a host that has sent none for 30 minutes and is away (not connected: no stream seen in the last
   minute, as `host_status.online`) keeps holding, however long it is gone (“waiting for host-1 to
-  report again (last measured 14:05 UTC)”): a host that went quiet because it was overloaded, or
+  report again (last measured 2026-11-12T14:05:00Z)”, an instant the run page shows in the
+  reader's own time): a host that went quiet because it was overloaded, or
   rebooted, or lost its network, would otherwise get every queued run at once when it came back;
 - a host that never sent its resources, or one connected now that has sent none for 30 minutes
   (its monitoring stopped), gives no sign of being near capacity, so its runs start.
@@ -1454,6 +1455,14 @@ origin (another site's request is refused with 403), and those with a body must 
 - `GET /whatsnew.js`: loaded by every page with its stylesheet: the unseen count on the What's New
   tab and the note under the top bar.
 - `GET /whats-new/media/{name}`: an entry's demo, built into the binary; no sign-in needed.
+- `GET /localtime.js`: loaded by every page with its stylesheet. Pages show every time in the
+  reader's own time zone and locale: the server writes each as an instant
+  (`<time datetime="<RFC 3339, UTC>" data-format="…">`, with the time in UTC as its text for a
+  browser that runs no script, or `data-datetime` on a chart's SVG label) through `localTime`
+  (`internal/web/localtime.go`), and the script rewrites it with the browser's
+  `Intl.DateTimeFormat`, titling each `<time>` with the full local instant (relative times such as
+  "5m ago" keep their words), also in content a page adds later. No page formats a clock time on
+  the server (`TestNoServerFormattedClockTimes`); API and SQL values stay as they are.
 - `GET /ui.css`: the one stylesheet every page shares, with the top bar (`layout.html`) that links the
   pages.
 - `GET /workflows`: a new task (for workflows triggered by a task: pick the workflow, which names

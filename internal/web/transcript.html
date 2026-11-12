@@ -622,9 +622,8 @@ const isWorking = st => st === 'running' || st === 'initializing';
   const nearBottom = () => window.innerHeight + window.scrollY > document.body.scrollHeight - 200;
   const toBottom = () => window.scrollTo({ top: document.body.scrollHeight });
 
-  // Times in the reader's zone, on hover.
-  const localize = root => root.querySelectorAll('time[datetime]').forEach(t => { t.title = new Date(t.dateTime).toLocaleString(); });
-  localize(document);
+  // Times in the reader's zone (localtime.js, which also catches what is added later).
+  const localize = root => globalThis.localTime?.scan(root);
 
   // Thinking and tool toggles, remembered.
   document.querySelectorAll('[data-toggle]').forEach(b => {

@@ -65,7 +65,7 @@ type app struct {
 //go:embed index.html
 var indexHTML string
 
-var indexTmpl = template.Must(template.Must(template.New("index").Funcs(template.FuncMap{
+var indexTmpl = template.Must(template.Must(template.New("index").Funcs(localFuncs).Funcs(template.FuncMap{
 	"ago":            ago,
 	"agents":         agentSummary,
 	"short":          short,
@@ -163,6 +163,7 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	mux.HandleFunc("GET /submitkeys.js", submitKeysScript)
 	// What's New: the release notes (whatsnew), and which of them the account has seen
 	mux.HandleFunc("GET /whatsnew.js", whatsNewScript)
+	mux.HandleFunc("GET /localtime.js", localTimeScript)
 	mux.HandleFunc("GET /whats-new/media/{name}", whatsNewMedia())
 	mux.HandleFunc("GET /whats-new", a.page(func(v viewer) http.HandlerFunc { return whatsNewPage(cfg, v) }))
 	mux.HandleFunc("POST /api/whats-new/seen", a.write(a.markWhatsNewSeen))

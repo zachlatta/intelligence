@@ -91,11 +91,11 @@ func (e *Engine) room(ctx context.Context, tx pgx.Tx, host, candidate, repo stri
 			return "", nil
 		}
 		return fmt.Sprintf("%s has no room yet: waiting for %s to report again (last measured %s)",
-			host, host, m.At.UTC().Format("15:04 MST")), nil
+			host, host, m.At.UTC().Format(time.RFC3339)), nil
 	}
 	if m.At.Before(now.Add(-l.Fresh)) {
 		return fmt.Sprintf("%s has no room yet: waiting for a fresh measurement from %s (its newest is from %s)",
-			host, host, m.At.UTC().Format("15:04 MST")), nil
+			host, host, m.At.UTC().Format(time.RFC3339)), nil
 	}
 	var cpuRun, loadRun float64
 	if err := tx.QueryRow(ctx, `SELECT cpu_pct_per_run, load_per_cpu_per_run FROM host_run_footprint WHERE host = $1`,

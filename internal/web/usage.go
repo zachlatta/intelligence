@@ -39,7 +39,7 @@ var usageFuncs = template.FuncMap{
 	"list":      func(xs ...int) []int { return xs },
 }
 
-var usageTmpl = template.Must(template.Must(template.New("usage").Funcs(usageFuncs).Parse(usageHTML)).Parse(planHTML + layoutHTML + modelGroupsHTML))
+var usageTmpl = template.Must(template.Must(template.New("usage").Funcs(localFuncs).Funcs(usageFuncs).Parse(usageHTML)).Parse(planHTML + layoutHTML + modelGroupsHTML))
 
 // usagePage shows every login's plan, a chart of each over the last ?days= (default 7), and how
 // much of each week each login used.
@@ -130,12 +130,12 @@ const (
 
 // usageChart draws each series' used % from from to to: 0% at the bottom, 100% at the top.
 func usageChart(series []fleet.Series, from, to time.Time) template.HTML {
-	return valueChart(series, from, to, 100, func(v float64) string { return fmt.Sprintf("%.0f%%", v) }, from.UTC().Format("Jan 2"), "now")
+	return valueChart(series, from, to, 100, func(v float64) string { return fmt.Sprintf("%.0f%%", v) }, labelAt(from, "day"), labelText("now"))
 }
 
 // valueChart draws each series from from to to, 0 at the bottom and top at the top, the axis
 // labelled by label, its start by fromLabel and its end by toLabel.
-func valueChart(series []fleet.Series, from, to time.Time, top float64, label func(float64) string, fromLabel, toLabel string) template.HTML {
+func valueChart(series []fleet.Series, from, to time.Time, top float64, label func(float64) string, fromLabel, toLabel chartLabel) template.HTML {
 	span := to.Sub(from).Seconds()
 	if span <= 0 {
 		span = 1
@@ -156,8 +156,10 @@ func valueChart(series []fleet.Series, from, to time.Time, top float64, label fu
 		fmt.Fprintf(&b, `<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" class="grid"/><text x="%.1f" y="%.1f" class="axis" text-anchor="end">%s</text>`,
 			chartLeft, chartLeft+plotW, y(g), y(g), chartLeft-4, y(g)+4, template.HTMLEscapeString(label(g)))
 	}
-	fmt.Fprintf(&b, `<text x="%.1f" y="146" class="axis">%s</text><text x="%.1f" y="146" class="axis" text-anchor="end">%s</text>`,
-		chartLeft, template.HTMLEscapeString(fromLabel), chartLeft+plotW, template.HTMLEscapeString(toLabel))
+	fromAttrs, fromText := fromLabel.svg()
+	toAttrs, toText := toLabel.svg()
+	fmt.Fprintf(&b, `<text x="%.1f" y="146" class="axis"%s>%s</text><text x="%.1f" y="146" class="axis" text-anchor="end"%s>%s</text>`,
+		chartLeft, fromAttrs, fromText, chartLeft+plotW, toAttrs, toText)
 	for i, s := range series {
 		pts := make([]string, 0, len(s.Points))
 		for _, p := range s.Points {

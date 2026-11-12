@@ -329,4 +329,4 @@ func workflowVersionPage(v viewer) http.HandlerFunc {
 
 //go:embed proposals.html
 var proposalsHTML string
-var proposalTmpl = template.Must(template.New("proposals").Funcs(template.FuncMap{"markdown": markdown, "inlineDiff": proposalInlineDiff, "stamp": func(t time.Time) string { return t.Format("Jan 2, 2006 · 15:04 MST") }}).Parse(proposalsHTML + layoutHTML))
+var proposalTmpl = template.Must(template.New("proposals").Funcs(localFuncs).Funcs(template.FuncMap{"markdown": markdown, "inlineDiff": proposalInlineDiff}).Parse(proposalsHTML + layoutHTML))

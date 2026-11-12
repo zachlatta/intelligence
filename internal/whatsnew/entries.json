@@ -1,5 +1,13 @@
 [
   {
+    "id": "local-times",
+    "released": "2026-11-12",
+    "title": "Times in your own time zone",
+    "summary": "Every time Intelligence shows, on run timelines, schedules, plans, host monitoring, proposals, email and account pages, now reads in your browser's own time zone and format. Hover a time to see the full date, time and zone. Relative times such as 5m ago are unchanged.",
+    "media": "local-times.png",
+    "mediaAlt": "A workflow run page whose step and What happened timelines show times such as Nov 11, 6:34 PM in the browser's time zone"
+  },
+  {
     "id": "workflow-answer-tracking",
     "released": "2026-11-12",
     "title": "See when workflow requests get answered",

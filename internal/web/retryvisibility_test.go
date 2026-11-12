@@ -46,7 +46,7 @@ func TestRetryPageShowsProgressAndRecoveryWait(t *testing.T) {
 			}
 		}
 	}
-	check("Retry 1 of 3 queued", due.Format("Jan 2, 2006 15:04:05 MST"), "daemon &lt;unavailable&gt;", "Start failed; retry queued:")
+	check("Retry 1 of 3 queued", string(localTime(due, "full")), `<span class="t"><time datetime=`, "daemon &lt;unavailable&gt;", "Start failed; retry queued:")
 	rep.Paseo.Connected = false
 	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
 		t.Fatal(ack.Error)

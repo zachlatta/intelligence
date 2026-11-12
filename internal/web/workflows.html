@@ -730,17 +730,17 @@ render();
 <div class="request">{{.Run.Input}}</div>
 {{if .VoiceMemos}}<section class="card"><div class="card-head"><h2>Voice memo that started this run</h2><span class="grow"></span><a class="btn sm ghost" href="/workflows/voice-memos">All voice memos</a></div><div class="card-body">{{template "voice-memo-rows" .VoiceMemos}}</div></section>{{end}}
 {{if .Emails}}<section class="card"><div class="card-head"><h2>Email thread</h2><span class="meta grow">what each email in it did</span><a class="btn sm ghost" href="/workflows/email">All email</a></div>
-  <div class="card-body"><ul class="events">{{range .Emails}}<li><span class="t">{{.ReceivedAt.Format "Jan 2 15:04"}}</span><b>{{.Who}}</b> · {{or .Subject "(no subject)"}} · <span class="badge {{.Badge}}">{{.Label}}</span>{{with .Reason}} <span class="meta">{{.}}</span>{{end}}</li>{{end}}</ul></div></section>{{end}}
-{{if eq .Run.Status "queued"}}<p class="banner note">Queued, {{.Run.InLine}}: {{.Run.QueueReason}}. It starts by itself once the host has room, immediate-priority runs first, then oldest first; <b>Start now</b> starts it anyway.</p>{{end}}
+  <div class="card-body"><ul class="events">{{range .Emails}}<li><span class="t">{{at .ReceivedAt "short"}}</span><b>{{.Who}}</b> · {{or .Subject "(no subject)"}} · <span class="badge {{.Badge}}">{{.Label}}</span>{{with .Reason}} <span class="meta">{{.}}</span>{{end}}</li>{{end}}</ul></div></section>{{end}}
+{{if eq .Run.Status "queued"}}<p class="banner note">Queued, {{.Run.InLine}}: {{localText .Run.QueueReason}}. It starts by itself once the host has room, immediate-priority runs first, then oldest first; <b>Start now</b> starts it anyway.</p>{{end}}
 <p class="meta">Estimated run memory: {{memoryGiB .Run.EstimatedMemory}} GiB{{if .Run.Repo}} for <span class="mono">{{.Run.Repo}}</span>{{end}}.</p>
 {{if eq .Run.Status "stalled"}}<p class="banner">{{.Run.Error}}</p>{{end}}
 {{if eq .Run.Status "failed"}}<p class="banner">{{or .Run.Error "The orchestrator marked the run failed."}}</p>{{end}}
 {{if .Run.RetryStatus}}<div class="banner note" id="start-retry" role="status">
   <strong>{{.Run.RetryStatus}}</strong>.
-  {{if .Run.StartRetryAt}}{{if .Run.Position}}Waiting for capacity, {{.Run.InLine}}. {{with .Run.QueueReason}}{{.}}. {{end}}Retry eligible since {{else}}Next retry scheduled for {{end}}<time datetime="{{.Run.StartRetryAt.Format "2006-01-02T15:04:05Z07:00"}}">{{.Run.StartRetryAt.Format "Jan 2, 2006 15:04:05 MST"}}</time>.
+  {{if .Run.StartRetryAt}}{{if .Run.Position}}Waiting for capacity, {{.Run.InLine}}. {{with .Run.QueueReason}}{{localText .}}. {{end}}Retry eligible since {{else}}Next retry scheduled for {{end}}{{at .Run.StartRetryAt "full"}}.
     {{if not .Run.HostOnline}}Waiting for the host to reconnect.{{else if not .Run.DaemonConnected}}Waiting for the Paseo daemon to reconnect.{{end}}
     {{if not .Run.RetryKeys}}Waiting for the host to support retry keys.{{end}}
-    This queued retry can wait up to 24 hours, until {{.Run.RetryDeadline.Format "Jan 2, 2006 15:04:05 MST"}}.
+    This queued retry can wait up to 24 hours, until {{at .Run.RetryDeadline "full"}}.
     {{if .Run.RetryInQueue}}<b>Start retry now</b> sends it anyway, ahead of the queue.{{end}}
   {{else}}Waiting for the host's result.{{end}}
   <div>Last start error: {{.Run.Error}}</div>
@@ -759,7 +759,7 @@ render();
     <div class="node fixed"><div class="nh"><div><div class="kind">Before the orchestrator</div><div class="ttl">Find the project</div></div>
       <span class="grow-r">{{if .Run.ProjectSelected}}<span class="status st-done">done</span>{{else if eq .Run.Status "finding_project"}}<span class="status st-running">running</span>{{else if eq .Run.Status "queued"}}<span class="status st-queued">queued</span>{{else}}<span class="status st-done">done</span>{{end}}</span></div>
       <div class="nb">{{if .Run.ProjectSelected}}{{if .Run.Repo}}<span class="mono">{{.Run.Repo}}</span>{{if .Run.Branch}}, worktree <span class="mono">{{.Run.Branch}}</span>{{end}}{{else}}No repository: the home directory.{{end}}{{else if eq .Run.Status "queued"}}Waits in the queue for room on <span class="mono">{{.Run.Host}}</span>.{{else if eq .Run.Status "finding_project"}}An agent is choosing the repository.{{else}}Project selection did not finish.{{end}}
-        <ul class="events">{{range .Before}}<li><span class="t">{{.At.Format "15:04"}}</span><div class="md">{{markdown .Line}}</div></li>{{end}}</ul></div></div>
+        <ul class="events">{{range .Before}}<li><span class="t">{{at .At "time"}}</span><div class="md">{{localMarkdown .Line}}</div></li>{{end}}</ul></div></div>
     <div class="link{{if .Run.Orchestrator}} done{{end}}"></div>
     <div class="node fixed"><div class="nh"><div><div class="kind">In the worktree</div><div class="ttl">Orchestrator and its sub-agents</div></div></div>
       <div class="nb">{{if and .Run.ProjectSelected (eq .Run.Status "queued")}}<p>Orchestrator is waiting for host capacity.</p>{{end}}{{if .Agents}}<div class="tree">{{range .Agents}}<div class="ag" style="padding-left:{{.Depth}}.2rem"><span class="status{{if eq .Status "running"}} st-running{{end}}">{{.Status}}</span>
@@ -770,12 +770,12 @@ render();
     <div class="node k-{{.Kind}} r-{{.State}}"><div class="nh"><div style="min-width:0"><div class="kind">{{kind .Kind}} {{.N}}</div><div class="ttl">{{.Title}}</div></div>
       <span class="grow-r">{{with .SpentLabel}}<span class="spent" title="{{$s.SpentDetail}}">{{.}}</span>{{end}}{{if gt (len .Visits) 1}}<span class="meta">{{len .Visits}} times</span>{{end}}<span class="status st-{{.State}}">{{.Label}}</span></span></div>
       <div class="nb"><details><summary class="meta">Instructions</summary><div class="instr" style="-webkit-line-clamp:unset">{{.Instructions}}</div></details>
-        {{if .Events}}<ul class="events">{{range .Events}}<li><span class="t">{{.At.Format "15:04"}}</span><div class="md">{{markdown .Line}}</div></li>{{end}}</ul>{{end}}</div></div>
+        {{if .Events}}<ul class="events">{{range .Events}}<li><span class="t">{{at .At "time"}}</span><div class="md">{{localMarkdown .Line}}</div></li>{{end}}</ul>{{end}}</div></div>
     {{if lt (add $i 1) (len $.Steps)}}<div class="link{{if eq .State "done" "skipped"}} done{{end}}"></div>{{end}}
     {{end}}
   </div>
   <aside class="card"><div class="card-head"><h2>What happened</h2></div><div class="card-body">
-    <ul class="events">{{range .Events}}<li><span class="t">{{.At.Format "Jan 2 15:04"}}</span>{{with .Step}}<b>{{add . 1}}.</b> {{end}}<div class="md">{{markdown .Line}}</div></li>{{end}}</ul></div></aside>
+    <ul class="events">{{range .Events}}<li><span class="t">{{at .At "short"}}</span>{{with .Step}}<b>{{add . 1}}.</b> {{end}}<div class="md">{{localMarkdown .Line}}</div></li>{{end}}</ul></div></aside>
 </div>
 {{if .Dictation}}<script src="/dictation.js"></script>
 {{end}}<script>
@@ -827,6 +827,7 @@ async function refresh(all) {
     const res = await fetch(location.href, { cache: "no-store" });
     if (!res.ok) return;
     const next = new DOMParser().parseFromString(await res.text(), "text/html");
+    globalThis.localTime?.scan(next); // as the page shows it, so an unchanged section compares equal
     document.title = next.title;
     const reply = $("#reply"), writing = reply && (reply.value || document.activeElement === reply || reply.classList.contains("listening"));
     for (const id of ["live", "steps"].concat(writing && !all ? [] : ["ask"])) {
@@ -843,13 +844,13 @@ setInterval(refresh, 4000);
 
 {{define "voice-status"}}
 <p role="status">{{.Message}}</p>
-<p class="hint">Last check: {{with .CheckedAt}}{{.Format "Jan 2, 2006 15:04:05 MST"}}{{else}}not checked yet{{end}} · {{if .Initialized}}Baseline complete{{else}}Waiting for the first complete scan{{end}}</p>
+<p class="hint">Last check: {{with .CheckedAt}}{{at . "full"}}{{else}}not checked yet{{end}} · {{if .Initialized}}Baseline complete{{else}}Waiting for the first complete scan{{end}}</p>
 {{with .Error}}<p class="banner" role="alert">Last poll error: {{.}}</p>{{end}}
 {{end}}
 
 {{define "voice-memo-rows"}}
 <ul class="events">{{range .}}<li><b>{{or .Title "Untitled voice memo"}}</b>
-<div class="meta">Recorded: {{with .RecordedAt}}{{.Format "Jan 2, 2006 15:04:05 MST"}}{{else}}unknown{{end}} · ID: {{.ID}} · {{.Source}} / {{.Account}}</div>
+<div class="meta">Recorded: {{with .RecordedAt}}{{at . "full"}}{{else}}unknown{{end}} · ID: {{.ID}} · {{.Source}} / {{.Account}}</div>
 <div><span class="badge">{{.Decision}}</span> · {{.Reason}}{{if .WorkflowID}} · <a href="/workflows/{{.WorkflowID}}">{{or .Workflow "Workflow"}}</a>{{end}}{{if .ShowRunLink}} · <a href="/workflow-runs/{{.Run}}">Open run</a>{{end}}</div>
 <details><summary>Transcript preview</summary><p style="white-space:pre-wrap">{{.Preview}}</p></details>
 </li>{{else}}<li>No voice memos received yet.</li>{{end}}</ul>

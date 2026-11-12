@@ -37,7 +37,7 @@
   </table></div>{{end}}
   {{if .OOMs}}<h3 class="warn">OOM kills</h3>
   <div class="table-wrap"><table class="table"><tr><th>When</th><th>Process</th><th class="n">Memory</th><th>Agent</th></tr>
-  {{range .OOMs}}<tr><td>{{.At.Format "Jan 2 15:04:05 MST"}}</td><td><span class="mono">{{.Comm}}</span> ({{.PID}})</td><td class="n">{{gb .AnonRSS}}</td>
+  {{range .OOMs}}<tr><td>{{at .At "seconds"}}</td><td><span class="mono">{{.Comm}}</span> ({{.PID}})</td><td class="n">{{gb .AnonRSS}}</td>
     <td>{{if .AgentID}}<a href="/hosts/{{$host}}/agents/{{.AgentID}}">{{or .Title .AgentID}}</a>{{else}}<span class="meta">no agent</span>{{end}}</td></tr>{{end}}</table></div>{{end}}
   {{if .Agents}}<h3>Agents</h3>
   <div class="table-wrap"><table class="table"><tr><th>Agent</th><th class="n">CPU</th><th class="n">Most memory</th><th class="n">Commands</th><th>Last seen</th></tr>

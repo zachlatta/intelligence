@@ -76,8 +76,8 @@ for (const [id, path] of [["login", "/api/session"], ["signup", "/api/accounts"]
 <div class="card"><table class="table">
   <thead><tr><th>Token ID</th><th>Created</th><th>Expires</th><th>Status</th><th></th></tr></thead>
   <tbody id="mcp-tokens">{{range .MCPTokens}}<tr data-token-id="{{.ID}}">
-    <td><code>{{.ID}}</code></td><td class="meta">{{.Created.Format "2006-01-02 15:04 UTC"}}</td>
-    <td class="meta">{{.Expires.Format "2006-01-02 15:04 UTC"}}</td><td>{{if .Active}}active{{else}}expired{{end}}</td>
+    <td><code>{{.ID}}</code></td><td class="meta">{{at .Created "minute"}}</td>
+    <td class="meta">{{at .Expires "minute"}}</td><td>{{if .Active}}active{{else}}expired{{end}}</td>
     <td><button type="button" class="btn ghost sm mcp-revoke" data-token-id="{{.ID}}">Revoke</button></td>
   </tr>{{else}}<tr><td colspan="5" class="meta">No MCP tokens yet.</td></tr>{{end}}</tbody>
 </table></div>
@@ -120,8 +120,13 @@ async function refreshMCPTokens() {
   mcpTokens.replaceChildren();
   for (const [id, created, expires, active] of data.rows) {
     const row = document.createElement("tr"); row.dataset.tokenId = id;
-    for (const text of [id, new Date(created).toISOString().replace("T", " "), new Date(expires).toISOString().replace("T", " "), active ? "active" : "expired"]) {
-      const cell = document.createElement("td"); cell.textContent = text; row.append(cell);
+    for (const [text, at] of [[id], ["", created], ["", expires], [active ? "active" : "expired"]]) {
+      const cell = document.createElement("td");
+      if (at) { // a time, in the reader's zone (localtime.js)
+        const t = document.createElement("time"); t.dateTime = new Date(at).toISOString(); t.dataset.format = "minute";
+        t.textContent = t.dateTime; cell.className = "meta"; cell.append(t); globalThis.localTime?.scan(t);
+      } else cell.textContent = text;
+      row.append(cell);
     }
     const cell = document.createElement("td"), button = document.createElement("button");
     button.type = "button"; button.className = "btn ghost sm mcp-revoke";

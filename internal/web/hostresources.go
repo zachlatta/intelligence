@@ -35,7 +35,7 @@ var hostFuncs = template.FuncMap{
 	"div":    func(a, b int) int { return a / b },
 }
 
-var hostResourcesTmpl = template.Must(template.New("hostresources").Funcs(hostFuncs).Parse(hostResourcesHTML + layoutHTML))
+var hostResourcesTmpl = template.Must(template.New("hostresources").Funcs(localFuncs).Funcs(hostFuncs).Parse(hostResourcesHTML + layoutHTML))
 
 // gb is bytes in GB, one decimal.
 func gb(b int64) string { return fmt.Sprintf("%.1f GB", float64(b)/(1<<30)) }
@@ -60,7 +60,7 @@ func perCPU(m *fleet.HostMinute) string {
 }
 
 // hostLine is a host's newest minute in a line: CPU, load, memory, disk, pressure.
-func hostLine(h *fleet.HostNow) string {
+func hostLine(h *fleet.HostNow) template.HTML {
 	if h == nil || h.Minute == nil {
 		return ""
 	}
@@ -84,9 +84,9 @@ func hostLine(h *fleet.HostNow) string {
 	if m.PSIMemSome != nil && *m.PSIMemSome >= 1 {
 		parts = append(parts, fmt.Sprintf("memory pressure %.0f%%", *m.PSIMemSome))
 	}
-	s := strings.Join(parts, " · ")
+	s := template.HTML(template.HTMLEscapeString(strings.Join(parts, " · ")))
 	if !h.Fresh {
-		s += " · as of " + m.Minute.Format("Jan 2 15:04 MST")
+		s += " · as of " + localTime(m.Minute, "short")
 	}
 	return s
 }
@@ -216,15 +216,15 @@ func loadAndDiskCharts(hist []fleet.HostMinute, from, now time.Time) (load, busy
 			rateTop = max(rateTop, r, w)
 		}
 	}
-	fromLabel := from.UTC().Format("Jan 2")
+	fromLabel := labelAt(from, "day")
 	if s := nonEmpty(l1, l15); len(s) > 0 {
-		load = valueChart(s, from, now, loadTop, func(v float64) string { return fmt.Sprintf("%.1f", v) }, fromLabel, "now")
+		load = valueChart(s, from, now, loadTop, func(v float64) string { return fmt.Sprintf("%.1f", v) }, fromLabel, labelText("now"))
 	}
 	if s := nonEmpty(busyAvg, busyMax); len(s) > 0 {
 		busy = usageChart(s, from, now)
 	}
 	if s := nonEmpty(read, write); len(s) > 0 {
-		rate = valueChart(s, from, now, rateTop, func(v float64) string { return fmt.Sprintf("%.0f", v) }, fromLabel, "now")
+		rate = valueChart(s, from, now, rateTop, func(v float64) string { return fmt.Sprintf("%.0f", v) }, fromLabel, labelText("now"))
 	}
 	return load, busy, rate
 }

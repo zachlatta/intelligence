@@ -33,7 +33,7 @@
   {{if .Peaks}}
   <table class="table">
     <tr><th>Weekly peaks: week to</th><th>Window</th><th class="n">Most used</th></tr>
-    {{range .Peaks}}<tr><td>{{.ResetsAt.Format "Mon Jan 2 15:04 MST"}}</td><td><span class="mono">{{.Window}}</span></td><td class="n">{{pct .Peak}}</td></tr>{{end}}
+    {{range .Peaks}}<tr><td>{{at .ResetsAt "weekday"}}</td><td><span class="mono">{{.Window}}</span></td><td class="n">{{pct .Peak}}</td></tr>{{end}}
   </table>
   {{end}}
 </section>

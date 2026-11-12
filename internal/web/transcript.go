@@ -25,7 +25,7 @@ var blocksHTML string
 // pairOf carries two values into a nested template.
 type pairOf struct{ A, B any }
 
-var transcriptTmpl = template.Must(template.New("transcript").Funcs(template.FuncMap{
+var transcriptTmpl = template.Must(template.New("transcript").Funcs(localFuncs).Funcs(template.FuncMap{
 	"ago":      ago,
 	"plural":   plural,
 	"shortID":  func(id string) string { return id[:min(7, len(id))] },
