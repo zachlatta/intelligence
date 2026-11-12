@@ -158,7 +158,8 @@ func parseDarwinDf(text string) []Filesystem {
 		path := strings.Join(f[5:], " ")
 		if path == "/System/Volumes/Data" {
 			hasData = true
-		} else if strings.HasPrefix(path, "/System/Volumes/") {
+		} else if strings.HasPrefix(path, "/System/Volumes/") || strings.HasPrefix(path, "/Library/Developer/CoreSimulator/") {
+			// the system's volumes, and Xcode's read-only simulator runtime images (always full)
 			continue
 		}
 		out = append(out, Filesystem{Mount: path, Device: f[0], Total: total << 10, Available: avail << 10})

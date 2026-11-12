@@ -587,13 +587,14 @@ Every host measures itself (`internal/resources`) and sends each finished minute
   `vm_stat`, `iostat`).
 - Disk I/O, every 5 seconds: across the physical disks (`/proc/diskstats`, keeping the devices
   `/sys/block` gives a `device`, so partitions, device mapper, RAID and loop devices are not
-  counted twice), bytes read and written a second, operations a second, and the busiest disk's
+  counted twice, and leaving out optical drives), bytes read and written a second, operations a second, and the busiest disk's
   share of the time it had I/O in flight (Linux's %util: near 100% the disk is saturated). A minute
   keeps the averages, the fastest read and write, and the average and peak busy time
   (`host_minutes.disk_*`). macOS reports bytes and operations (`ioreg`), not busy time.
 - Filesystems, once a minute: each local filesystem's total and available space (Linux:
   `/proc/self/mounts`, each device once, a ZFS pool once, network filesystems left out, as statfs
-  on one whose server is gone can hang; macOS: `df -kPl`, its Data volume and external volumes).
+  on one whose server is gone can hang; macOS: `df -kPl`, its Data volume and external volumes,
+  not Xcode's read-only simulator images).
   The newest reading replaces the host's rows in `host_filesystems` (`used_frac` is how full).
 - Each agent, every 15 seconds: its processes are those whose environment names it
   (`PASEO_AGENT_ID`, which commands inherit); a minute keeps their most memory (proportional set

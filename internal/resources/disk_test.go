@@ -87,7 +87,9 @@ func TestParseDarwinDf(t *testing.T) {
 		"devfs                  200       200         0   100%    /dev\n" +
 		"/dev/disk3s6     971350180   2000000 500000000     1%    /System/Volumes/VM\n" +
 		"/dev/disk3s5     971350180 400000000 500000000    45%    /System/Volumes/Data\n" +
-		"/dev/disk5s1     100000000  50000000  50000000    50%    /Volumes/Backup Drive\n"
+		"/dev/disk5s1     100000000  50000000  50000000    50%    /Volumes/Backup Drive\n" +
+		// a read-only simulator runtime image: always nearly full, not storage
+		"/dev/disk7s1      16000000  15900000    100000   100%    /Library/Developer/CoreSimulator/Volumes/iOS_22A3351\n"
 	got := parseDarwinDf(text)
 	want := []Filesystem{
 		{Mount: "/System/Volumes/Data", Device: "/dev/disk3s5", Total: 971350180 << 10, Available: 500000000 << 10},
@@ -121,8 +123,10 @@ func TestParseDarwinIoreg(t *testing.T) {
 func TestLinuxSampleReadsDiskIOAndFilesystems(t *testing.T) {
 	proc, sys := fakeProc(t), t.TempDir()
 	write(t, sys, "block/sda/device/vendor", "x\n")
-	write(t, sys, "block/loop0/size", "0\n") // no device: not a physical disk
-	write(t, proc, "diskstats", diskstatsLine("sda", 0, 0, 0, 0, 0)+diskstatsLine("sda1", 0, 0, 0, 0, 0)+diskstatsLine("loop0", 0, 0, 0, 0, 0))
+	write(t, sys, "block/loop0/size", "0\n")        // no device: not a physical disk
+	write(t, sys, "block/sr0/device/vendor", "x\n") // an optical drive: not storage
+	write(t, proc, "diskstats", diskstatsLine("sda", 0, 0, 0, 0, 0)+diskstatsLine("sda1", 0, 0, 0, 0, 0)+diskstatsLine("loop0", 0, 0, 0, 0, 0)+
+		diskstatsLine("sr0", 0, 0, 0, 0, 0))
 	home := t.TempDir()
 	write(t, proc, "self/mounts", "/dev/sda1 "+home+" ext4 rw 0 0\nproc /proc proc rw 0 0\n")
 	r := &Reader{Proc: proc, Sys: sys, Home: home}
@@ -133,9 +137,9 @@ func TestLinuxSampleReadsDiskIOAndFilesystems(t *testing.T) {
 	if len(s.Filesystems) != 1 || s.Filesystems[0].Mount != home || s.Filesystems[0].Total == 0 || s.Filesystems[0].Type != "ext4" {
 		t.Errorf("filesystems = %+v", s.Filesystems)
 	}
-	// 5 seconds later sda read 10 MiB and wrote 5 MiB in 100 operations, busy 2.5s; loop0's I/O does not count
+	// 5 seconds later sda read 10 MiB and wrote 5 MiB in 100 operations, busy 2.5s; loop0's and sr0's I/O do not count
 	write(t, proc, "diskstats", diskstatsLine("sda", 60, 20480, 40, 10240, 2500)+diskstatsLine("sda1", 60, 20480, 40, 10240, 2500)+
-		diskstatsLine("loop0", 1000, 1<<20, 0, 0, 5000))
+		diskstatsLine("loop0", 1000, 1<<20, 0, 0, 5000)+diskstatsLine("sr0", 1000, 1<<20, 0, 0, 5000))
 	s = r.Sample(time.Unix(105, 0))
 	if s.DiskReadBps == nil || *s.DiskReadBps != 2<<20 || *s.DiskWriteBps != 1<<20 || *s.DiskIOPS != 20 || s.DiskBusyPct == nil || *s.DiskBusyPct != 50 {
 		t.Errorf("disk = read %v write %v iops %v busy %v", s.DiskReadBps, s.DiskWriteBps, s.DiskIOPS, s.DiskBusyPct)

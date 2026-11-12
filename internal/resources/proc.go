@@ -48,13 +48,13 @@ func (r *Reader) filesystemsDue(now time.Time) bool {
 }
 
 // wholeDisk says whether a block device is a physical disk (it has a device behind it), not a
-// partition, loop, RAM, mapper or RAID device built on the disks.
+// partition, loop, RAM, mapper or RAID device built on the disks, nor an optical drive (sr).
 func (r *Reader) wholeDisk(name string) bool {
 	root := r.Sys
 	if root == "" {
 		root = "/sys"
 	}
-	if strings.ContainsAny(name, "/.") {
+	if strings.ContainsAny(name, "/.") || strings.HasPrefix(name, "sr") {
 		return false
 	}
 	_, err := os.Stat(filepath.Join(root, "block", name, "device"))
