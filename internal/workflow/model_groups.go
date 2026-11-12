@@ -253,26 +253,19 @@ func (e *Engine) fillModels(ctx context.Context, tx pgx.Tx, r run, step int) (De
 	d := r.Def
 	d.Steps = append([]Step(nil), d.Steps...)
 	text := d.Steps[step].Instructions
-	seen := map[string]modelSuggestion{}
+	seen := map[string]bool{}
 	var notes []string
-	suggest := func(token string) (modelSuggestion, error) {
-		if msg, ok := seen[token]; ok {
-			return msg, nil
-		}
-		msg, err := e.suggestModel(ctx, tx, r, step, token, nil)
-		if err != nil {
-			return msg, err
-		}
-		seen[token] = msg
-		notes = append(notes, "- "+token+": "+msg.Note)
-		return msg, nil
-	}
 	for _, m := range groupToken.FindAllStringSubmatch(text, -1) {
-		msg, err := suggest(m[1])
+		if seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		msg, err := e.suggestModel(ctx, tx, r, step, m[1], nil)
 		if err != nil {
 			return d, err
 		}
 		text = strings.ReplaceAll(text, m[0], msg.Inline)
+		notes = append(notes, "- "+m[1]+": "+msg.Note)
 	}
 	if len(notes) > 0 {
 		text += "\n\nModel suggestions:\n" + strings.Join(notes, "\n")

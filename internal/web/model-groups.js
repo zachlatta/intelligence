@@ -128,10 +128,7 @@ function modelGroupPools(windows, provider, login) {
     });
   }
 
-  window.modelGroups = {
-    groups: () => groups,
-    open: openGroups,
-  };
+  window.modelGroups = { groups: () => groups, open: openGroups };
   document
     .querySelectorAll("[data-model-groups-open]")
     .forEach((button) => (button.onclick = openGroups));

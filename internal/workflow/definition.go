@@ -148,7 +148,6 @@ func (d Definition) Validate() error {
 			return fmt.Errorf("step %d needs a title", n)
 		case blank(s.Instructions):
 			return fmt.Errorf("step %d (%s) needs instructions", n, s.Title)
-
 		}
 		seen[s.ID] = true
 	}

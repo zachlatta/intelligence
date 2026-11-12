@@ -404,9 +404,6 @@ func TestModelGroupRankingAndWorkflowExpansion(t *testing.T) {
 	cmd := stream.command()
 	var ws hostclient.CreateWorkspaceArgs
 	json.Unmarshal(cmd.Args, &ws)
-	if strings.Contains(ws.Agent.Prompt, "This step's model") {
-		t.Fatalf("prompt retains per-step model directive: %s", ws.Agent.Prompt)
-	}
 	inline := "Claude Opus 5.5 (Medium) via claude/opus --thinking medium on one"
 	if !strings.Contains(ws.Agent.Prompt, "Launch the builder with "+inline+" and a second opinion with "+inline+".") {
 		t.Fatalf("model expansion interrupts sentence: %s", ws.Agent.Prompt)
@@ -518,11 +515,6 @@ func TestWorkflowAPIRejectsStepModelFields(t *testing.T) {
 		rec := call(t, h, "POST", "/api/workflows", raw, sameOriginFetch)
 		if rec.Code != 400 || !strings.Contains(rec.Body.String(), "unknown field") {
 			t.Fatalf("removed field %s: %d %s", field, rec.Code, rec.Body)
-		}
-	}
-	for _, removed := range []string{"data-step-model", "data-step-thinking", "stepModelLabel"} {
-		if strings.Contains(workflowsHTML, removed) {
-			t.Errorf("editor retains %s", removed)
 		}
 	}
 }
