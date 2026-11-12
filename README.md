@@ -1462,7 +1462,9 @@ origin (another site's request is refused with 403), and those with a body must 
   (`internal/web/localtime.go`), and the script rewrites it with the browser's
   `Intl.DateTimeFormat`, titling each `<time>` with the full local instant (relative times such as
   "5m ago" keep their words), also in content a page adds later. No page formats a clock time on
-  the server (`TestNoServerFormattedClockTimes`); API and SQL values stay as they are.
+  the server (`TestNoServerFormattedClockTimes`, which reads every package): text stored for a page
+  to show (a queued run's reason, a mailbox's error) names its instant in RFC 3339, UTC, which the
+  page shows locally. Other API and SQL values stay as they are.
 - `GET /ui.css`: the one stylesheet every page shares, with the top bar (`layout.html`) that links the
   pages.
 - `GET /workflows`: a new task (for workflows triggered by a task: pick the workflow, which names

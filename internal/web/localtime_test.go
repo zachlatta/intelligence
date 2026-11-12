@@ -77,26 +77,44 @@ func TestChartLabelsAreLocal(t *testing.T) {
 }
 
 // No page formats a clock time on the server: every one goes through localTime, so it shows in the
-// reader's zone. A new template or handler that formats one fails here.
+// reader's zone. Text other packages store or return for pages to show (an error, a reason) names
+// an instant in RFC 3339, UTC, which localText shows locally. A new template, handler or package
+// that formats a clock time fails here.
 func TestNoServerFormattedClockTimes(t *testing.T) {
-	clock := regexp.MustCompile(`15:04|"Mon Jan|"Jan 2|\bMST\b|toISOString\(\)\.replace\("T"|toISOString\(\)\.slice\(0, 16\)`)
-	files, err := filepath.Glob("*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, f := range files {
-		if strings.HasSuffix(f, "_test.go") || f == "localtime.go" ||
-			!(strings.HasSuffix(f, ".go") || strings.HasSuffix(f, ".html") || strings.HasSuffix(f, ".js")) {
-			continue
-		}
-		b, err := os.ReadFile(f)
+	clock := regexp.MustCompile(`15:04|"Mon Jan|"Jan 2|\bMST\b|time\.(DateTime|Kitchen|Stamp\w*|ANSIC|UnixDate|RubyDate|RFC822\w*|RFC850|RFC1123\w*)\b|` +
+		`toISOString\(\)\.replace\("T"|toISOString\(\)\.slice\(0, 16\)`)
+	// what is never shown on a page: localtime.go holds the fallback layouts, and the host client's
+	// enrollment code is logged on the host itself, in that host's zone
+	allowed := map[string]bool{"localtime.go": true, filepath.Join("..", "hostclient", "keys.go"): true}
+	for _, root := range []string{".", "..", filepath.Join("..", "..", "cmd")} {
+		err := filepath.WalkDir(root, func(f string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				if root == ".." && f == filepath.Join("..", "web") { // walked as "."
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if strings.HasSuffix(f, "_test.go") || allowed[f] ||
+				!(strings.HasSuffix(f, ".go") || strings.HasSuffix(f, ".html") || strings.HasSuffix(f, ".js")) {
+				return nil
+			}
+			b, err := os.ReadFile(f)
+			if err != nil {
+				return err
+			}
+			for i, line := range strings.Split(string(b), "\n") {
+				if clock.MatchString(line) {
+					t.Errorf("%s:%d formats a clock time on the server; use localTime (internal/web/localtime.go), or RFC 3339 in UTC for text a page shows: %s",
+						f, i+1, strings.TrimSpace(line))
+				}
+			}
+			return nil
+		})
 		if err != nil {
 			t.Fatal(err)
-		}
-		for i, line := range strings.Split(string(b), "\n") {
-			if clock.MatchString(line) {
-				t.Errorf("%s:%d formats a time on the server or in UTC; use localTime (localtime.go): %s", f, i+1, strings.TrimSpace(line))
-			}
 		}
 	}
 }

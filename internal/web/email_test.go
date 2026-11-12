@@ -306,6 +306,14 @@ func TestTheEmailPageShowsTheMailboxAndWhatEachEmailDid(t *testing.T) {
 			t.Errorf("page lacks %q", want)
 		}
 	}
+	// a mailbox error's instant shows in the reader's own zone (localtime.js)
+	if _, err := h.d.Owner.Exec(t.Context(), `UPDATE gmail_connections SET error = 'the mailbox was not read for too long: email from before 2026-11-11T23:57:05Z was skipped'`); err != nil {
+		t.Fatal(err)
+	}
+	page = get(t, h, "/workflows/email", nil)
+	if want := `<p class="banner">the mailbox was not read for too long: email from before <time datetime="2026-11-11T23:57:05Z" data-format="short"`; !strings.Contains(page.Body.String(), want) {
+		t.Errorf("mailbox error not shown locally; want %s in\n%s", want, page.Body)
+	}
 	editor := get(t, h, "/workflows", nil)
 	if !strings.Contains(editor.Body.String(), "christina@example.com") {
 		t.Error("the workflows page does not say what email starts the workflow")

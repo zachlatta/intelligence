@@ -41,7 +41,7 @@
     <button class="btn sm" id="connect">Connect again</button>
     <button class="btn sm ghost" id="disconnect">Disconnect</button>
   </div>
-  {{if .Mailbox.Error}}<p class="banner">{{.Mailbox.Error}}</p>{{end}}
+  {{if .Mailbox.Error}}<p class="banner">{{localText .Mailbox.Error}}</p>{{end}}
   <div class="owners" data-submit="#save-owners">
     <label for="owners" style="margin:0;white-space:nowrap">Your addresses</label>
     <input id="owners" value="{{range $i, $o := .Mailbox.Owners}}{{if $i}}, {{end}}{{$o}}{{end}}" placeholder="you@example.com, you@example.org">

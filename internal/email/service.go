@@ -284,7 +284,7 @@ func (s *Service) read(ctx context.Context, account int64, owners []string, toke
 			return perr
 		}
 		*history = now
-		return errors.New("the mailbox was not read for too long: email from before " + s.now().Format(time.DateTime) + " was skipped")
+		return historySkipped(s.now())
 	}
 	if err != nil {
 		return err
@@ -576,4 +576,10 @@ func TrimQuoted(text string) string {
 		lines = lines[:len(lines)-1]
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// historySkipped says mail from before at was skipped, naming at in RFC 3339, UTC, which pages show
+// in their reader's own zone.
+func historySkipped(at time.Time) error {
+	return errors.New("the mailbox was not read for too long: email from before " + at.UTC().Format(time.RFC3339) + " was skipped")
 }

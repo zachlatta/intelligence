@@ -743,7 +743,7 @@ render();
     This queued retry can wait up to 24 hours, until {{at .Run.RetryDeadline "full"}}.
     {{if .Run.RetryInQueue}}<b>Start retry now</b> sends it anyway, ahead of the queue.{{end}}
   {{else}}Waiting for the host's result.{{end}}
-  <div>Last start error: {{.Run.Error}}</div>
+  <div>Last start error: {{localText .Run.Error}}</div>
 </div>{{end}}
 {{if .ArchiveStatus}}<p class="banner{{if and (ne .ArchiveStatus "failed") (ne .ArchiveStatus "expired")}} note{{end}}">Workspace archive: {{.ArchiveStatus}}{{if .ArchiveError}} — {{.ArchiveError}}{{end}}</p>{{end}}
 </div>
@@ -845,7 +845,7 @@ setInterval(refresh, 4000);
 {{define "voice-status"}}
 <p role="status">{{.Message}}</p>
 <p class="hint">Last check: {{with .CheckedAt}}{{at . "full"}}{{else}}not checked yet{{end}} · {{if .Initialized}}Baseline complete{{else}}Waiting for the first complete scan{{end}}</p>
-{{with .Error}}<p class="banner" role="alert">Last poll error: {{.}}</p>{{end}}
+{{with .Error}}<p class="banner" role="alert">Last poll error: {{localText .}}</p>{{end}}
 {{end}}
 
 {{define "voice-memo-rows"}}
