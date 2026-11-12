@@ -62,11 +62,6 @@ func TestParseRefusesWhatCannotRun(t *testing.T) {
 		"no orchestrator":    {func(d *Definition) { d.Orchestrator.Provider = "" }, "provider"},
 		"no project agent":   {func(d *Definition) { d.Project.Provider = "" }, "provider"},
 		"orchestrator blank": {func(d *Definition) { d.Orchestrator.Instructions = "" }, "instructions"},
-		"step model unknown": {func(d *Definition) { d.Steps[0].Model = "opus" }, "model"},
-		"step model token":   {func(d *Definition) { d.Steps[0].Model = "{{frontier}}" }, "model"},
-		"group thinking":     {func(d *Definition) { d.Steps[0].Model = "{{frontier_model}}"; d.Steps[0].Thinking = "high" }, "thinking"},
-		"thinking no model":  {func(d *Definition) { d.Steps[0].Thinking = "high" }, "thinking"},
-		"bad thinking":       {func(d *Definition) { d.Steps[0].Model = "codex/sol"; d.Steps[0].Thinking = "very high" }, "thinking"},
 	} {
 		d := ok()
 		c.mod(&d)
@@ -83,15 +78,6 @@ func TestParseRefusesWhatCannotRun(t *testing.T) {
 	b, _ := json.Marshal(fixed)
 	if _, err := Parse(b); err != nil {
 		t.Errorf("a fixed project needs no agent: %v", err)
-	}
-	// A step's model is a model group's token or an explicit provider/model with its thinking.
-	models := ok()
-	models.Steps[0].Model = "{{frontier_model}}"
-	models.Steps[1].Model = "codex/gpt-5.5"
-	models.Steps[1].Thinking = "high"
-	b, _ = json.Marshal(models)
-	if _, err := Parse(b); err != nil {
-		t.Errorf("step models: %v", err)
 	}
 }
 
@@ -434,6 +420,16 @@ func TestOrchestratorLifecycleForEveryDefinition(t *testing.T) {
 			if !strings.Contains(p, want) {
 				t.Errorf("missing lifecycle rule %q", want)
 			}
+		}
+	}
+}
+
+func TestParseRejectsRemovedStepModelFields(t *testing.T) {
+	b, _ := json.Marshal(onHost(clone(Starting)))
+	for _, field := range []string{`"model":"{{frontier_model}}"`, `"model":"codex/sol"`, `"thinking":"high"`} {
+		raw := strings.Replace(string(b), `"steps":[{`, `"steps":[{`+field+",", 1)
+		if _, err := Parse([]byte(raw)); err == nil || !strings.Contains(err.Error(), "unknown field") {
+			t.Errorf("removed step field %s: %v", field, err)
 		}
 	}
 }

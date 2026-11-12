@@ -130,7 +130,6 @@ function modelGroupPools(windows, provider, login) {
 
   window.modelGroups = {
     groups: () => groups,
-    catalog: () => catalog,
     open: openGroups,
   };
   document

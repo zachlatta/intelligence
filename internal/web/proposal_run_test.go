@@ -216,7 +216,7 @@ func TestRunProposalToolSchema(t *testing.T) {
 	if !found || schema.Properties["input"].Type != "string" {
 		t.Fatal("run proposal not advertised")
 	}
-	for _, term := range []string{"operation=run", "started_run_id", "browser approval", "optional model", "{{frontier_model}}"} {
+	for _, term := range []string{"operation=run", "started_run_id", "browser approval", "insert model group tokens", "{{frontier_model}}"} {
 		if !strings.Contains(proposalHelp, term) {
 			t.Errorf("help missing %s", term)
 		}
