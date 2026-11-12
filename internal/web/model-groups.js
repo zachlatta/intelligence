@@ -128,7 +128,11 @@ function modelGroupPools(windows, provider, login) {
     });
   }
 
-  window.modelGroups = { groups: () => groups, open: openGroups };
+  window.modelGroups = {
+    groups: () => groups,
+    catalog: () => catalog,
+    open: openGroups,
+  };
   document
     .querySelectorAll("[data-model-groups-open]")
     .forEach((button) => (button.onclick = openGroups));

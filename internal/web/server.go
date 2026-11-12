@@ -81,6 +81,11 @@ var indexTmpl = template.Must(template.Must(template.New("index").Funcs(template
 
 // New returns the app's HTTP handler.
 func New(cfg Config) http.Handler {
+	return newHandler(cfg, true)
+}
+
+// newHandler can leave workers to a synchronous test driver. New always starts them.
+func newHandler(cfg Config, workers bool) http.Handler {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
@@ -95,7 +100,9 @@ func New(cfg Config) http.Handler {
 	}
 	reg := fleet.New(cfg.DB)
 	changes := fleet.NewChanges(cfg.DB)
-	go changes.Run(cfg.Context)
+	if workers {
+		go changes.Run(cfg.Context)
+	}
 	roles := db.NewAccountRoles(cfg.DB, cfg.Readonly)
 	context.AfterFunc(cfg.Context, roles.Close)
 	store := accounts.New(cfg.DB, roles)
@@ -106,11 +113,16 @@ func New(cfg Config) http.Handler {
 	if cfg.QueueInterval == 0 {
 		cfg.QueueInterval = workflow.QueueEvery
 	}
-	go a.wf.RunQueue(cfg.Context, cfg.QueueInterval)
-	go a.wf.RunStartRetries(cfg.Context)
+	if workers {
+		go a.wf.RunQueue(cfg.Context, cfg.QueueInterval)
+		go a.wf.RunStartRetries(cfg.Context)
+		go a.wf.RunStallWatchdog(cfg.Context)
+	}
 	if cfg.PDWURL != "" && cfg.PDWKey != "" && cfg.PDWAccount != "" {
 		voice := &voicememo.Service{DB: cfg.DB, Engine: a.wf, URL: cfg.PDWURL, Key: cfg.PDWKey, Username: cfg.PDWAccount}
-		go voice.Run(cfg.Context)
+		if workers {
+			go voice.Run(cfg.Context)
+		}
 	}
 	if cfg.Google != nil && cfg.EmailKey != nil {
 		a.mail = &email.Service{DB: cfg.DB, Engine: a.wf, Google: cfg.Google, Key: cfg.EmailKey, Now: cfg.Now}
@@ -118,7 +130,9 @@ func New(cfg Config) http.Handler {
 		if interval == 0 {
 			interval = email.Interval
 		}
-		go a.mail.Run(cfg.Context, interval)
+		if workers {
+			go a.mail.Run(cfg.Context, interval)
+		}
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -228,6 +242,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("POST /api/workflow-runs/{id}/reply", a.write(a.replyToRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/cancel", a.write(a.cancelRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/start", a.write(a.startQueuedRun))
+	mux.HandleFunc("POST /api/workflow-runs/{id}/resume", a.write(a.resumeRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/moves", a.moveRun)
 	mux.HandleFunc("GET /workflows", a.page(func(v viewer) http.HandlerFunc { return workflowsPage(cfg, v) }))
 	// email triggers: the account's Gmail mailbox, connected through Google's sign-in

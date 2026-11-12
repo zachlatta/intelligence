@@ -25,9 +25,14 @@ var hostFuncs = template.FuncMap{
 		}
 		return gb(h.AgentMem[id])
 	},
-	"ago":  ago,
-	"list": func(xs ...int) []int { return xs },
-	"div":  func(a, b int) int { return a / b },
+	"ago":    ago,
+	"mbps":   mbps,
+	"whole":  func(v float64) string { return fmt.Sprintf("%.0f", v) },
+	"perCPU": perCPU,
+	"pct":    func(f float64) string { return fmt.Sprintf("%.0f%%", 100*f) },
+	"fsUsed": func(f fleet.FilesystemRow) string { return gb(f.Total - f.Available) },
+	"list":   func(xs ...int) []int { return xs },
+	"div":    func(a, b int) int { return a / b },
 }
 
 var hostResourcesTmpl = template.Must(template.New("hostresources").Funcs(hostFuncs).Parse(hostResourcesHTML + layoutHTML))
@@ -43,7 +48,18 @@ func dur(secs float64) string {
 	return humanDuration(time.Duration(secs * float64(time.Second)))
 }
 
-// hostLine is a host's newest minute in a line: CPU, memory, disk, pressure.
+// mbps is bytes a second in MB/s, one decimal.
+func mbps(b float64) string { return fmt.Sprintf("%.1f MB/s", b/(1<<20)) }
+
+// perCPU is a minute's 1-minute load per CPU, as text ("" without CPUs).
+func perCPU(m *fleet.HostMinute) string {
+	if m == nil || m.CPUs <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%.2f per CPU", m.Load1/float64(m.CPUs))
+}
+
+// hostLine is a host's newest minute in a line: CPU, load, memory, disk, pressure.
 func hostLine(h *fleet.HostNow) string {
 	if h == nil || h.Minute == nil {
 		return ""
@@ -53,11 +69,17 @@ func hostLine(h *fleet.HostNow) string {
 	if m.CPUAvgPct != nil {
 		parts = append(parts, fmt.Sprintf("CPU %.0f%%", *m.CPUAvgPct))
 	}
+	if m.CPUs > 0 {
+		parts = append(parts, fmt.Sprintf("load %.1f", m.Load1))
+	}
 	if m.MemTotal > 0 {
 		parts = append(parts, fmt.Sprintf("RAM %.1f/%s", float64(m.MemTotal-m.MemAvailableMin)/(1<<30), gb(m.MemTotal)))
 	}
 	if m.DiskTotal > 0 {
-		parts = append(parts, fmt.Sprintf("disk %.0f%%", 100*h.DiskUsedFrac))
+		parts = append(parts, fmt.Sprintf("disk %.0f%% (%s free)", 100*h.DiskUsedFrac, gb(m.DiskAvailableMin)))
+	}
+	if m.DiskBusyAvgPct != nil && *m.DiskBusyAvgPct >= 50 {
+		parts = append(parts, fmt.Sprintf("disk busy %.0f%%", *m.DiskBusyAvgPct))
 	}
 	if m.PSIMemSome != nil && *m.PSIMemSome >= 1 {
 		parts = append(parts, fmt.Sprintf("memory pressure %.0f%%", *m.PSIMemSome))
@@ -70,11 +92,11 @@ func hostLine(h *fleet.HostNow) string {
 }
 
 type hostCard struct {
-	Host     string
-	Now      *fleet.HostNow
-	CPU, Mem template.HTML
-	Agents   []fleet.AgentTotal
-	OOMs     []fleet.OOMKill
+	Host                       string
+	Now                        *fleet.HostNow
+	CPU, Mem, Load, Busy, Rate template.HTML
+	Agents                     []fleet.AgentTotal
+	OOMs                       []fleet.OOMKill
 }
 
 // hostResourcesPage charts each host over the last ?hours= (default 1) and ranks its agents.
@@ -148,6 +170,7 @@ func hostResourcesPage(cfg Config, reg *fleet.Registry) http.HandlerFunc {
 			if len(hist) > 0 {
 				c.CPU = usageChart(nonEmpty(cpuAvg, cpuMax), from, now)
 				c.Mem = usageChart(nonEmpty(mem, paseo), from, now)
+				c.Load, c.Busy, c.Rate = loadAndDiskCharts(hist, from, now)
 			}
 			if c.Agents, err = reg.TopAgents(r.Context(), host, from); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -164,6 +187,46 @@ func hostResourcesPage(cfg Config, reg *fleet.Registry) http.HandlerFunc {
 		_ = hostResourcesTmpl.Execute(w, map[string]any{"Version": cfg.Version, "Short": short(cfg.Version), "Now": now,
 			"Hours": hours, "Cards": cards})
 	}
+}
+
+// loadAndDiskCharts charts a host's minutes: its load (the top line is its CPU count, where it
+// saturates), its busiest disk's busy time, and its disks' throughput. A chart with nothing to
+// show is empty.
+func loadAndDiskCharts(hist []fleet.HostMinute, from, now time.Time) (load, busy, rate template.HTML) {
+	var l1, l15, busyAvg, busyMax, read, write fleet.Series
+	l1.Window, l15.Window, busyAvg.Window, busyMax.Window = "1-minute load", "15-minute load", "disk busy, average", "disk busy, peak"
+	read.Window, write.Window = "read", "written"
+	loadTop, rateTop := 1.0, 1.0
+	for _, m := range hist {
+		if m.CPUs > 0 {
+			l1.Points = append(l1.Points, fleet.Point{At: m.Minute, Used: m.Load1})
+			l15.Points = append(l15.Points, fleet.Point{At: m.Minute, Used: m.Load15})
+			loadTop = max(loadTop, float64(m.CPUs), m.Load1, m.Load15)
+		}
+		if m.DiskBusyAvgPct != nil {
+			busyAvg.Points = append(busyAvg.Points, fleet.Point{At: m.Minute, Used: *m.DiskBusyAvgPct})
+		}
+		if m.DiskBusyMaxPct != nil {
+			busyMax.Points = append(busyMax.Points, fleet.Point{At: m.Minute, Used: *m.DiskBusyMaxPct})
+		}
+		if m.DiskReadBps != nil && m.DiskWriteBps != nil {
+			r, w := *m.DiskReadBps/(1<<20), *m.DiskWriteBps/(1<<20)
+			read.Points = append(read.Points, fleet.Point{At: m.Minute, Used: r})
+			write.Points = append(write.Points, fleet.Point{At: m.Minute, Used: w})
+			rateTop = max(rateTop, r, w)
+		}
+	}
+	fromLabel := from.UTC().Format("Jan 2")
+	if s := nonEmpty(l1, l15); len(s) > 0 {
+		load = valueChart(s, from, now, loadTop, func(v float64) string { return fmt.Sprintf("%.1f", v) }, fromLabel, "now")
+	}
+	if s := nonEmpty(busyAvg, busyMax); len(s) > 0 {
+		busy = usageChart(s, from, now)
+	}
+	if s := nonEmpty(read, write); len(s) > 0 {
+		rate = valueChart(s, from, now, rateTop, func(v float64) string { return fmt.Sprintf("%.0f", v) }, fromLabel, "now")
+	}
+	return load, busy, rate
 }
 
 func nonEmpty(ss ...fleet.Series) []fleet.Series {

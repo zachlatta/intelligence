@@ -1271,3 +1271,29 @@ func TestDeletingAWorkflowKeepsItsRuns(t *testing.T) {
 		}
 	}
 }
+
+func TestMoveRepliesControlTurnLifetime(t *testing.T) {
+	for _, ending := range []string{"next", "skip", "done", "fail", "ask"} {
+		t.Run(ending, func(t *testing.T) {
+			h, _ := dbServer(t)
+			sendReport(t, h, wfReport())
+			key := keyOf(t, h, "host-1")
+			b := openStream(t, h, "host-1")
+			def := workflow.Starting
+			def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+			def.Steps = def.Steps[:2]
+			run := startRun(t, h, createWorkflow(t, h, def), "turn lifetime")
+			succeed(t, b, b.command(), `{"workspaceId":"w-run","agentId":"orch-1"}`)
+			for _, m := range []map[string]string{{"move": "next"}, {"move": "back", "step": "build", "why": "retry"}, {"move": "skip", "why": "allowed"}} {
+				code, msg := move(t, h, key, run, m)
+				if code != 200 || !strings.Contains(msg, "Continue in this same turn") {
+					t.Fatalf("%v: %d %s", m, code, msg)
+				}
+			}
+			code, msg := move(t, h, key, run, map[string]string{"move": ending, "why": "reason", "note": "question"})
+			if code != 200 || !strings.Contains(strings.ToLower(msg), "end your turn") || strings.Contains(msg, "Continue in this same turn") {
+				t.Fatalf("ending: %d %s", code, msg)
+			}
+		})
+	}
+}

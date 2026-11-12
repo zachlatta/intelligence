@@ -58,6 +58,11 @@ type Step struct {
 	Kind         string `json:"kind"`
 	Title        string `json:"title"`
 	Instructions string `json:"instructions"`
+	// Model is what the step's sub-agents run on: a model group's token ("{{frontier_model}}"),
+	// resolved to the group's current pick when the run enters the step, or an explicit
+	// provider/model with its Thinking. Empty leaves the choice to the orchestrator.
+	Model    string `json:"model,omitempty"`
+	Thinking string `json:"thinking,omitempty"`
 }
 
 // Triggers, project modes and step kinds.
@@ -75,6 +80,12 @@ const (
 
 var stepID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 
+// A step's model: a model group's whole token, or provider/model.
+var (
+	stepGroupModel    = regexp.MustCompile(`^` + groupToken.String() + `$`)
+	stepExplicitModel = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,39}/[a-zA-Z0-9][a-zA-Z0-9._/-]{0,119}$`)
+)
+
 // Parse decodes a definition strictly and validates it.
 func Parse(b []byte) (Definition, error) {
 	var d Definition
@@ -83,7 +94,17 @@ func Parse(b []byte) (Definition, error) {
 	if err := dec.Decode(&d); err != nil {
 		return d, fmt.Errorf("bad workflow: %w", err)
 	}
-	return d, d.Validate()
+	if err := d.Validate(); err != nil {
+		return d, err
+	}
+	return d.normalized(), nil
+}
+
+func (d Definition) normalized() Definition {
+	if d.Project.Mode == ProjectFixed && d.Project.Directory != "" {
+		d.Project.Directory = path.Clean(d.Project.Directory)
+	}
+	return d
 }
 
 // Validate says what in d cannot run.
@@ -138,6 +159,14 @@ func (d Definition) Validate() error {
 			return fmt.Errorf("step %d needs a title", n)
 		case blank(s.Instructions):
 			return fmt.Errorf("step %d (%s) needs instructions", n, s.Title)
+		case s.Model != "" && !stepGroupModel.MatchString(s.Model) && !stepExplicitModel.MatchString(s.Model):
+			return fmt.Errorf("step %d (%s): model %q: want a model group's token, such as {{frontier_model}}, or provider/model", n, s.Title, s.Model)
+		case s.Thinking != "" && s.Model == "":
+			return fmt.Errorf("step %d (%s): thinking needs a model", n, s.Title)
+		case s.Thinking != "" && stepGroupModel.MatchString(s.Model):
+			return fmt.Errorf("step %d (%s): a model group sets each model's thinking; leave thinking empty", n, s.Title)
+		case s.Thinking != "" && !modelSetting.MatchString(s.Thinking):
+			return fmt.Errorf("step %d (%s): thinking %q is not a thinking level", n, s.Title, s.Thinking)
 		}
 		seen[s.ID] = true
 	}
@@ -265,6 +294,7 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 		"Preserve scratch needed by later steps. A worker reports back and ends its turn; the orchestrator owns reuse and archiving. " +
 		"After a successful ask, end your turn and wait for the reply message; do not poll or create a wakeup.\n\n" +
 		PublicRepoRule + "\n\n")
+	b.WriteString("Lifecycle: after next, skip or back, keep working in the same turn using the returned instructions. Wait for sub-agents in the foreground. End your turn only after a successful ask or after the run is finished, done or failed.\n\n")
 	b.WriteString(StepMessage(d, 0, v))
 	return b.String()
 }

@@ -80,8 +80,9 @@ The hierarchy is hosts > workspaces > agents:
 - `schedules` and `schedule_runs`: each host's Paseo schedules and their runs (below), with the view
   `schedule_status` (each schedule's run counts and newest run). `hosts.schedules_at` and
   `schedules_error` say when the host last listed them, and why it could not.
-- `host_minutes`, `agent_minutes`, `oom_kills` and `host_probes`: each host's resources over time
-  (below), with the views `host_current`, `host_days` and `agent_days`.
+- `host_minutes`, `agent_minutes`, `oom_kills`, `host_probes` and `host_filesystems`: each host's
+  resources over time and its filesystems now (below), with the views `host_current`, `host_days`
+  and `agent_days`.
 - `usage_accounts`, `usage_readings`, `usage_active` and `usage_sources`: subscription plans' usage
   over time (below), with the views `usage_current`, `usage_pace`, `usage_cycles` and `usage_totals`.
 - `accounts` (username, argon2id password hash, its role), `sessions` (signed-in browsers; a hash
@@ -108,6 +109,63 @@ so nothing stale reads as current. The `host_status` view adds `online` (the hos
 to the server, `stream_id`, which was seen within the last minute) and counts; `workspace_status`
 adds each workspace's agent counts.
 
+Orchestrators continue in the same turn after `next`, `skip` and `back`, and wait for workers
+in the foreground. They end the turn after a successful `ask` or when the run is over.
+This lifecycle rule wraps every definition, including saved workflows.
+
+A server watchdog checks up to 100 running runs each minute, oldest checked first. For an
+unchanged eligible idle snapshot, attempts are due at two and ten minutes and the run becomes
+**Stalled** at twelve minutes, measured from `idle_since`. These are idle-window thresholds,
+not deadlines measured from the first detection of a stuck run.
+
+A continuation normally wakes the orchestrator and changes its reported activity. Once it
+becomes idle again, the next observation starts a new idle window. The remaining second attempt
+then needs ten unchanged idle minutes; after that attempt wakes it again, marking it stalled
+needs twelve unchanged idle minutes. There are still at most two attempts per lifecycle
+transition. For example, brief wakeups can produce attempts at minutes 2 and 13, then a stall at
+minute 26. The minute worker and host reporting can add their normal scheduling delay.
+
+Running or initializing workers and permission blocks prevent automatic recovery. Worker or
+agent snapshot changes and stale/offline hosts reset the idle window; pending commands pause
+reconciliation until they clear. No gate is skipped and no replacement agent starts. Hosts send
+a full snapshot every 30 seconds; the watchdog requires a heartbeat and a report received within
+the last minute. Older host clients must update before their idle runs can be recovered.
+Provider-error, closed or missing orchestrators require inspection of the agent/provider;
+automatic recovery only handles idle orchestrators and does not restart or replace them.
+
+`workflow_runs.idle_since`, `idle_observation`, `stall_checked_at`, status and error, and
+`workflow_run_continuations` (event, attempt, command and creation time) expose recovery through SQL.
+Run row locks and the unique `(run_id, event_id, attempt)` key coordinate server instances.
+Each continuation attempt and the stalled transition write an event and update `updated_at`, so
+both appear in What happened. Finished-turn attention is not a permission block; only a current
+`permission` attention reason or an open pending/error/stuck permission audit prevents recovery.
+Admission-waiting runs and startup retries are excluded before scanning and again under the run
+lock; this watchdog neither calls admission nor spends a startup retry. Each run reconciles in
+its own transaction, and failures are reported together so one bad run cannot roll back healthy
+recoveries. The minute worker lives beside `RunStartRetries` and stops with the server.
+`workflow_run_latest_transition` is a security-invoker view of the latest lifecycle event;
+label edits and message events do not create a new recovery epoch. Agent activity still resets
+the idle grace period. Runs without a lifecycle event are skipped until a transition provides
+the epoch needed to deduplicate recovery attempts.
+Attempts survive server restarts. Continuations expire after one minute; progress, asking,
+cancellation or completion invalidates them before delivery. An already delivered message cannot
+be recalled. The agent must check prior outcomes before repeating work.
+
+Stalled is a watchdog diagnosis, not a permission gate. Accepted run replies and forwarded
+thread messages clear the stalled reason, record a resume event and start a fresh recovery
+generation before sending the input to the existing orchestrator. An authenticated valid move
+also clears it in the same transaction, then applies normally; invalid moves roll everything
+back. This includes a new ask, completion or failure, whose normal resulting status still applies.
+These paths neither send an extra continuation nor create an agent. Direct agent conversations
+can carry on and clear the run's marker with their next valid move; they do not require a web-only
+unlock. A running run's label edits and messages still do not reset its recovery budget.
+
+**Resume** on the runs list or run page calls `POST /api/workflow-runs/{id}/resume` with `{}`.
+It starts a new recovery generation on the same idle orchestrator at the same step, only on a
+fresh online host without active or permission-blocked workers or pending commands. It returns
+204 on success, 409 when unsafe or not stalled, and 404 outside the account. Missing, closed or
+permission-blocked agents need inspection; Resume never replaces them or approves tools.
+
 ### The stream
 
 A host dials `GET /api/hosts/{host}/stream` (a WebSocket, with its own key) and keeps it
@@ -116,8 +174,8 @@ open, dialing again 5 seconds after it drops. Each frame is a JSON `hostclient.F
 - server to host: `hello` first (where its transcript copies end), then `command`s. The server's
   version is in the dial's `X-Intelligence-Version` header.
 - host to server: `report` (on each new stream, and within a second of a change; the host re-reads
-  the daemon's status every 15 seconds and reports it if it changed), `transcript` batches, `usage`
-  (every 5 minutes), `host` (every minute), `schedules` (when they changed, below), `diff` (a workspace's diff, when it
+  the daemon's status every 15 seconds and sends a full snapshot every 30 seconds), `transcript`
+  batches, `usage` (every 5 minutes), `host` (every minute), `schedules` (when they changed, below), `diff` (a workspace's diff, when it
   changed, below) and `command_update`s. Each carries an `id`, and the server answers each with an
   `ack` once it is stored (or with why not), transcript batches on their own so a large one holds up
   nothing else.
@@ -130,6 +188,7 @@ server instance holds it.
 Server instances learn of each other's changes through Postgres `NOTIFY` on the `fleet` channel
 (`fleet.Changes`): a queued command, a command's update and a stream taking a host over.
 Workflow start retries additionally reconcile finished startup commands every five seconds.
+The stall watchdog checks idle orchestrators each minute through the same command queue.
 
 ### Proposed workflow mutations
 
@@ -523,8 +582,20 @@ Every host measures itself (`internal/resources`) and sends each finished minute
   (`/proc/meminfo`), the home filesystem's space, pressure (`/proc/pressure`: the share of time
   tasks waited for CPU, memory or I/O), the kernel's OOM kill count (`/proc/vmstat`) and the Paseo
   daemon's cgroup (all its agents: memory less page cache, its peak, its OOM kills). A minute keeps
-  the average and peak CPU, the least memory and disk available, the most pressure, and the kills.
-  macOS hosts report CPU, load, memory, swap and disk (`sysctl`, `vm_stat`, `iostat`).
+  the average and peak CPU, the 1, 5 and 15-minute load, the least memory and disk available, the
+  most pressure, and the kills. macOS hosts report CPU, load, memory, swap and disk (`sysctl`,
+  `vm_stat`, `iostat`).
+- Disk I/O, every 5 seconds: across the physical disks (`/proc/diskstats`, keeping the devices
+  `/sys/block` gives a `device`, so partitions, device mapper, RAID and loop devices are not
+  counted twice, and leaving out optical drives), bytes read and written a second, operations a second, and the busiest disk's
+  share of the time it had I/O in flight (Linux's %util: near 100% the disk is saturated). A minute
+  keeps the averages, the fastest read and write, and the average and peak busy time
+  (`host_minutes.disk_*`). macOS reports bytes and operations (`ioreg`), not busy time.
+- Filesystems, once a minute: each local filesystem's total and available space (Linux:
+  `/proc/self/mounts`, each device once, a ZFS pool once, network filesystems left out, as statfs
+  on one whose server is gone can hang; macOS: `df -kPl`, its Data volume and external volumes,
+  not Xcode's read-only simulator images).
+  The newest reading replaces the host's rows in `host_filesystems` (`used_frac` is how full).
 - Each agent, every 15 seconds: its processes are those whose environment names it
   (`PASEO_AGENT_ID`, which commands inherit); a minute keeps their most memory (proportional set
   size, so shared pages count once) and how many there were.
@@ -533,7 +604,8 @@ Every host measures itself (`internal/resources`) and sends each finished minute
   commands (`cpu_source` says which).
 
 The server keeps 90 days of minutes (OOM kills are kept). `host_current` is each host's newest
-minute; `host_days` and `agent_days` sum days.
+minute (with `load1_per_cpu`); `host_days` and `agent_days` sum days (`host_days` has the day's
+highest load, fullest home filesystem, busiest disk and bytes read and written).
 
 ### The eBPF probe
 
@@ -729,8 +801,8 @@ workspace) through their results. A failed or expired start queues up to three r
 15, 30 and 60 seconds. The server checks every five seconds. A retry waits until the host is
 online and reports both a connected Paseo daemon and support for retry keys
 (`hosts.start_retry_keys`). Once ready, it joins the same capacity queue as new runs in
-original run creation order. A replacement stream must report support again before it can
-receive queued or unfinished retries. Each retry reuses the original Paseo creation key so a
+original run creation order; a run started by hand (Start now) retries at once instead. A
+replacement stream must report support again before it can receive queued or unfinished retries. Each retry reuses the original Paseo creation key so a
 lost response does not create a second workspace or agent.
 
 The existing durable `commands` queue handles host reconnects. `workflow_runs.start_retries`,
@@ -791,7 +863,8 @@ agents and descendants. Known creation times exclude agents started after the ru
 finished run without snapshots also falls back to its live agent tree, so legacy links remain
 available. This cannot recover metadata or transcripts already removed before the upgrade.
 
-Report-time capture runs once, before replacing live rows, and uses only unfinished runs with a listed workspace or live project finder,
+Report-time capture runs before and after replacing live rows, preserving departing agents and
+including new workers immediately. It uses only unfinished runs with a listed workspace or live project finder,
 with an index on unfinished runs. It takes a final snapshot when a run ends, then freezes membership
 and stops recapturing it. Agents started later in a failed or canceled run's retained workspace
 belong to later work, not that ended run's history. The history follows its run and host when
@@ -817,6 +890,14 @@ future suggestions, not delivered ones. Before another worker, refresh with
 Queued runs allocate when they launch; startup retries rebuild the prompt with fresh suggestions.
 Direct edits and proposal approvals validate group tokens before saving a workflow.
 
+A step can also name its model (**Model for this step** in the editor; `model` and `thinking` in
+the step's JSON): empty leaves it to the orchestrator; a group's token (`"{{frontier_model}}"`)
+is resolved on step entry like a token in the instructions (one allocation if both name the
+group), and the step's message tells the orchestrator to start its sub-agents with the pick; an
+explicit `provider/model` (from the host's catalog, with an optional `thinking`) is passed on
+with its launch settings. A group sets its own thinking, so a group step has none. A group a
+step names cannot be deleted while a saved workflow or active run uses it.
+
 Group writes use `POST /api/model-groups`, `PUT /api/model-groups/{id}` (with `revision`) and
 `DELETE /api/model-groups/{id}`. A host records a suggestion with
 `POST /api/workflow-runs/{id}/suggestions`, JSON `{"token", "exclude": []}`. Read groups, members,
@@ -837,9 +918,10 @@ its host is near capacity; with room, it starts at once. There is no fixed count
 host's measured load decides.
 
 The server projects the host's load from its newest minute of resources (Host resources, above):
-that minute's CPU, memory used (by the minute's least available) and 1-minute load per CPU, plus
-one run's footprint for each run still starting, whose load the minute cannot show yet, and one
-for the run about to start. A run is starting from its launch (`workflow_runs.launched_at`) until
+that minute's CPU, memory used (by the minute's least available) and 1-minute load per CPU.
+CPU and load add one run's footprint for each run still starting, whose load the minute cannot
+show yet, and one for the run about to start. Memory reservations persist throughout active runs,
+as described below. A run is starting from its launch (`workflow_runs.launched_at`) until
 its orchestrator has started: for its whole start-up. A run that finds its project first is
 starting all the while it finds it (its orchestrator is still to come), and every run is starting
 until the host reports its workspace and orchestrator command (`launch_command`) done and the
@@ -855,16 +937,55 @@ until the host has made them and a newer minute shows their load. The reason say
 capacity: CPU 70% now, about 90% with 1 run starting and this one (queues at 85%)”, or “over
 100%” when the projection is past all of it.
 
-A run's footprint is learned per host (`host_run_footprint`, readable with SQL): over the host's
-last 3 days, each minute's CPU, memory and load per CPU against how many runs were going then
+A run's memory estimate is learned from its selected repository on that host, within its account.
+`workflow_run_memory` sums the recorded agents' memory in each minute, then takes the run's peak.
+`workflow_repository_memory` takes what nine in ten successful-run peaks for that selected, non-empty
+repository root stayed under (the 90th percentile; the largest, until it has ten runs), adds 25%
+headroom, and applies a 1 GiB floor, so one unusually heavy run does not size every later run.
+Unfinished runs were re-estimated this way when it changed (migration
+`0043_workflow_queue_progress`). Without history the estimate is 4 GiB. A run still finding its
+project reserves 1 GiB (its finder is small), and its project's estimate is checked when it is
+chosen. Agent samples expire after 90 days, so older history eventually falls back. These views and `workflow_runs.estimated_memory_bytes` expose the evidence
+and estimate through SQL; the run page shows the estimate. Estimates are fixed at repository
+selection and reused for reservations and retries. Every starting or running run reserves
+`max(estimate - resident memory, 0)` in addition to the host's measured memory usage. Resident memory
+is the sum for that run's known agents in the exact newest host minute; without a matching sample,
+its full estimate stays reserved. This prevents a run's quiet phase from admitting another heavy
+run, without counting its resident memory twice. A run waiting for Zach's reply reserves nothing
+beyond what it uses: its agents are idle, perhaps for days, and their memory is already in the
+measured minute. The existing memory percentage limit supplies
+host headroom. Memory queue reasons name the repository estimate, measured free RAM and reservations.
+So that no estimate can block the FIFO for ever, the oldest run starts alone, whatever its
+estimate, when no other run is active or starting (a run waiting for Zach's reply does not count)
+and measured memory is below the limit. Otherwise memory used by other processes could keep an
+estimate that fits the host, but not beside them, queued for good, with every run behind it. The
+FIFO head check also applies during project selection, including older ready start retries and
+older runs that went back into the queue when they chose their project. CPU, load and
+telemetry checks still apply. Its full estimate stays reserved until it ends, so nothing else
+starts beside it until then. This is an advisory estimate,
+not a guarantee that an oversized workload will fit or avoid an OOM kill.
+Failed, canceled, finder-only and empty-repository runs do not teach the estimator; without a
+successful run for a selected non-empty repository, it keeps the 4 GiB fallback.
+After a finder selects a repository, admission replaces its reservation with that estimate,
+without counting the finder twice. If it no longer fits, the same run re-enters the existing FIFO
+and resumes with its selected repository when room returns; it never repeats project finding.
+`project_selected` distinguishes a selected `none` from a finder still to run.
+Project selection is recorded before a capacity wait. `queued_at_creation` distinguishes an
+initial submission from a run that already started finding its project and later requeued;
+its initial Started event is only shown as Submitted for an initial queue.
+
+CPU and load footprints remain learned per host (`host_run_footprint`, readable with SQL): over the host's
+last 3 days, each minute's CPU and load per CPU against how many runs were going then
 (launched, not finished), fitted with a straight line; its slope is what one run adds. Each metric
-is learned on its own (`cpu_learned`, `mem_learned`, `load_learned`) only when its fit can be
+is learned on its own (`cpu_learned`, `load_learned`) only when its fit can be
 trusted: 60 minutes or more, more than one count of runs among them, a slope above zero (history
 that says runs lighten the host is contradictory, not a footprint) and a fit explaining at least a
 fifth of the metric's variation (`regr_r2` at least 0.2). A learned footprint is kept between a
 quarter and three times the default. Otherwise the default stands, deliberately generous: 10% CPU,
-5% memory and 0.15 load per CPU a run. The view also has the raw fits (`cpu_pct_learned`,
-`mem_pct_learned`, `load_per_cpu_learned`) with their `*_r2`, the minutes and the run counts.
+and 0.15 load per CPU a run. The view also retains its legacy memory fit for SQL readers,
+but admission uses repository memory estimates. It includes raw fits with their `*_r2`,
+the minutes and the run counts. RAM estimates are not hard limits: unsampled spikes and
+processes outside recorded agent trees can be missed.
 
 Without fresh telemetry the server cannot know the host's capacity:
 
@@ -877,16 +998,22 @@ Without fresh telemetry the server cannot know the host's capacity:
 - a host that never sent its resources, or one connected now that has sent none for 30 minutes
   (its monitoring stopped), gives no sign of being near capacity, so its runs start.
 
-**Start now** bypasses the capacity hold for a new run. Automatic retries wait for admission.
+**Start now** bypasses the capacity hold and the queue for good (`workflow_runs.started_by_hand`;
+a queued run marked so starts on the queue's next pass, ahead of the others):
+a run started by hand that finds its project first starts its orchestrator as soon as the project
+is chosen, and its start retries go out as soon as its host is ready, never back behind the queue it
+skipped. Retries of runs the queue started wait for admission, in their original place.
 
-A run also queues while earlier runs wait in its host's queue, so the queue keeps its order. The
+A run also queues while earlier runs wait in its host's queue, so the queue keeps strict FIFO
+order: light runs wait behind heavy ones. The
 decision and the start are made in one transaction holding the host's queue lock (an advisory
 lock per host), so runs started at the same moment are judged one after another, each counting
 those just before it.
 
-A new queued run has no agents or commands yet. A ready retry keeps its startup phase and joins
+A new queued run has no agents or commands yet; a run queued after repository selection retains
+its archived finder history. A ready retry keeps its startup phase and joins
 the queue through `workflow_runs.start_retry_queued`. `workflow_runs.queue_reason` says why it waits
-(kept current while it waits, and kept after), its events say when it was `queued` and
+(kept current while it waits, and cleared on dequeue), its events say when it was `queued` and
 `dequeued`, and `workflow_run_queue` lists each host's queue in order (`position` 1 is next). The
 runs list and the run page show it queued, where in line (“2nd in line for host-1”) and why, and
 the run page says when it was queued, not started; the run page's **Start now** starts it at once,
@@ -1051,8 +1178,9 @@ When investigating a stalled workflow, check the host's `client_version` against
 server before assuming this recovery is active. Check both the orchestrator and its workers
 for pending permissions, then follow their audit rows and transcripts: a cleared prompt proves
 the request disappeared, while a completed tool or workflow move proves work resumed. An idle
-orchestrator can be waiting on a live background command whose completion starts its next turn;
-idle status alone is not evidence of abandonment and does not trigger an automatic reminder.
+orchestrator can be waiting on a live background command whose completion starts its next turn.
+The stall watchdog also checks worker activity, permission blocks, pending fleet commands and
+host freshness before sending a continuation; inspect prior outcomes before repeating work.
 
 Each attempt first stores a `permission_resolutions` row through the authenticated host stream.
 The row is account-scoped and readable through `/api/sql`; it survives agent removal.
@@ -1151,10 +1279,11 @@ the account and enrollment routes, the host binaries and the streams (with a hos
 - `GET /usage?days=7` (1 to 365): every login with a chart of each window's used % over the days,
   and its weekly peaks.
 - `GET /api/usage`: the logins and their windows, as JSON.
-- `GET /resources?hours=1` (1 to 2160; it was `/hosts`, which sends here), the Host monitoring tab: each host's CPU and
-  memory charts, its OOM kills and its agents ranked by CPU, with their most memory and commands
-  started. The home page shows each host's CPU, memory, disk and pressure under its name, and each
-  agent's memory beside it.
+- `GET /resources?hours=1` (1 to 2160; it was `/hosts`, which sends here), the Host monitoring tab: each host's CPU, memory,
+  load, disk busy time and disk throughput charts, its load averages, disk I/O now and filesystems
+  (used, free, total), its OOM kills and its agents ranked by CPU, with their most memory and
+  commands started. The home page shows each host's CPU, load, memory, disk (and how much is free),
+  a busy disk and pressure under its name, and each agent's memory beside it.
 - `GET /api/hosts/resources`: each host's newest minute, probe and agents' memory, as JSON.
 - `GET /hosts/{host}/workspaces/{ws}/agents/new`: the form that starts an agent in a workspace.
   `GET /hosts/{host}/workspaces/new`: the form that makes a workspace with an agent in it, by
@@ -1351,6 +1480,37 @@ mail credential is the read-only token of an email trigger's mailbox (above).
 Notes, step reports and transcripts render file-share images inline; other image origins and local
 paths remain placeholders. Existing local-path notes must be republished by an agent on the host
 that still holds the files; the server cannot recover them from a path alone.
+
+## Test capacity
+
+`make test` holds one of two host-wide leases for its entire suite, including `go vet` and the
+throwaway Postgres. Direct `scripts/with-test-postgres` calls use the same lease; nested calls
+share it. To run a full suite against an existing test database, use `make test` with
+`TEST_DATABASE_URL` set, or `scripts/with-test-capacity go test -race -timeout=30m ./...`.
+Reviewers use these leased entry points too. The entire web package is heavy; run
+`scripts/with-test-capacity go test -race -timeout=30m ./internal/web` for it.
+Narrow tests with `-run` can run directly during iteration. `make test` sets a 30-minute
+package timeout so a slow shared host does not hit Go's ten-minute default.
+
+`scripts/with-test-capacity` uses standard-library Go advisory file locks in `/var/lock`, shared
+across users and worktrees. Existing files open without `O_CREATE`, so Linux
+`protected_regular` does not reject another user's lease in the shared sticky directory.
+Missing files use exclusive creation and readable permissions. It prints **waiting for test capacity (2 host-wide slots)** while
+blocked, then **test capacity acquired**. These messages are visible in terminal output and
+agent transcripts. The wrapper and suite inherit the lock descriptor; exiting or crashing releases
+it when the last holder exits. It never evicts another suite. Lock files must not be deleted while
+suites run. These local process leases are independent of workflow admission and application state.
+They supplement the existing CPU, memory and load admission limits; they do not alter those
+thresholds, FIFO reservations or startup retry limits, and do not start an admission-waiting run.
+Test subprocesses inherit the agent environment, so normal host resource reports still charge
+their work to that agent and admission continues to observe that load.
+
+Every checkout must use this entry point to participate. Direct unwrapped `go test` calls and
+container builds with separate filesystems cannot share a host-local lock. For another operating
+system or container, provision one shared, readable lock directory and set
+`INTELLIGENCE_TEST_CAPACITY_DIR` consistently for every runner, mounting it into containers if
+needed. The directory must already exist. `INTELLIGENCE_TEST_CAPACITY_HELD` is an internal marker
+for nested entry points; do not set it yourself.
 
 ## Configuration
 

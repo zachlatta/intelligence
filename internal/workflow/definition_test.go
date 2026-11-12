@@ -62,6 +62,11 @@ func TestParseRefusesWhatCannotRun(t *testing.T) {
 		"no orchestrator":    {func(d *Definition) { d.Orchestrator.Provider = "" }, "provider"},
 		"no project agent":   {func(d *Definition) { d.Project.Provider = "" }, "provider"},
 		"orchestrator blank": {func(d *Definition) { d.Orchestrator.Instructions = "" }, "instructions"},
+		"step model unknown": {func(d *Definition) { d.Steps[0].Model = "opus" }, "model"},
+		"step model token":   {func(d *Definition) { d.Steps[0].Model = "{{frontier}}" }, "model"},
+		"group thinking":     {func(d *Definition) { d.Steps[0].Model = "{{frontier_model}}"; d.Steps[0].Thinking = "high" }, "thinking"},
+		"thinking no model":  {func(d *Definition) { d.Steps[0].Thinking = "high" }, "thinking"},
+		"bad thinking":       {func(d *Definition) { d.Steps[0].Model = "codex/sol"; d.Steps[0].Thinking = "very high" }, "thinking"},
 	} {
 		d := ok()
 		c.mod(&d)
@@ -78,6 +83,15 @@ func TestParseRefusesWhatCannotRun(t *testing.T) {
 	b, _ := json.Marshal(fixed)
 	if _, err := Parse(b); err != nil {
 		t.Errorf("a fixed project needs no agent: %v", err)
+	}
+	// A step's model is a model group's token or an explicit provider/model with its thinking.
+	models := ok()
+	models.Steps[0].Model = "{{frontier_model}}"
+	models.Steps[1].Model = "codex/gpt-5.5"
+	models.Steps[1].Thinking = "high"
+	b, _ = json.Marshal(models)
+	if _, err := Parse(b); err != nil {
+		t.Errorf("step models: %v", err)
 	}
 }
 
@@ -410,5 +424,16 @@ func TestPublicRepositoryChecksReadEveryOutgoingCommit(t *testing.T) {
 	}
 	if !strings.Contains(gate, "reports outside work/") {
 		t.Error("gate does not look for reports outside work/")
+	}
+}
+
+func TestOrchestratorLifecycleForEveryDefinition(t *testing.T) {
+	for _, d := range []Definition{Starting, {Orchestrator: Orchestrator{Instructions: "Custom"}, Steps: []Step{{ID: "one", Title: "One"}}}} {
+		p := OrchestratorPrompt("Saved", d, Vars{})
+		for _, want := range []string{"after next, skip or back", "same turn", "foreground", "only after a successful ask"} {
+			if !strings.Contains(p, want) {
+				t.Errorf("missing lifecycle rule %q", want)
+			}
+		}
 	}
 }

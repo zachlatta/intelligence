@@ -150,6 +150,65 @@ assert(modelTokenChips([]).includes('Edit groups'));
 	if err != nil {
 		t.Fatalf("model token chips: %v\n%s", err, out)
 	}
+	// The step inspector offers model groups next to the host's catalog models.
+	_, script, ok = strings.Cut(workflowsHTML, "function stepModelFields(")
+	if !ok {
+		t.Fatal("missing step model picker")
+	}
+	script, _, ok = strings.Cut(script, "\n}")
+	if !ok {
+		t.Fatal("missing step model picker end")
+	}
+	out, err = exec.Command(node, "-e", `const assert=require('assert');const esc=s=>String(s).replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;');const V=s=>'{{'+s+'}}';
+const opts=(list,cur)=>list.map(([v,l])=>'<option value="'+esc(v)+'"'+(v===cur?' selected':'')+'>'+esc(l)+'</option>').join('');
+const THINKING=['','low','high'];const def=()=>({host:'host-1'});
+global.window={modelGroups:{groups:()=>[{name:'Frontier',token:'frontier_model',members:[{}]},{name:'Spare',token:'spare_model',members:[]}],
+ catalog:()=>[{host:'host-1',provider:'codex',id:'sol',label:'Sol',thinking:['high','xhigh']},{host:'host-2',provider:'muse',id:'far',thinking:[]}]}};`+
+		"function stepModelFields("+script+"\n}\n"+`
+let html=stepModelFields({});
+assert(html.includes('<optgroup label="Model groups"><option value="{{frontier_model}}">Frontier · {{frontier_model}}</option>'),html);
+assert(html.includes('Spare (empty)'),html);
+assert(html.includes('<option value="codex/sol">Sol · codex/sol</option>'),html);
+assert(!html.includes('muse/far'),'another host\'s models');
+assert(!html.includes('data-step-thinking'),'no thinking without a model');
+html=stepModelFields({model:'{{frontier_model}}'});
+assert(html.includes('<option value="{{frontier_model}}" selected>'),html);
+assert(!html.includes('data-step-thinking'),'a group sets its own thinking');
+html=stepModelFields({model:'codex/sol',thinking:'xhigh'});
+assert(html.includes('<option value="xhigh" selected>'),html);
+html=stepModelFields({model:'{{gone_model}}'});
+assert(html.includes('{{gone_model}} (no such model group)'),html);
+`).CombinedOutput()
+	if err != nil {
+		t.Fatalf("step model picker: %v\n%s", err, out)
+	}
+	// The step's card names the group, not its token.
+	_, script, ok = strings.Cut(workflowsHTML, "function stepModelLabel(")
+	if !ok {
+		t.Fatal("missing step model label")
+	}
+	script, _, ok = strings.Cut(script, "\n}")
+	if !ok {
+		t.Fatal("missing step model label end")
+	}
+	out, err = exec.Command(node, "-e", `const assert=require('assert');const esc=s=>String(s).replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;');const V=s=>'{{'+s+'}}';const vars=s=>esc(s).replace(/\{\{[a-z0-9_]+\}\}/g,'<span class="var">$&</span>');
+global.window={modelGroups:{groups:()=>[{name:'Frontier <models>',token:'frontier_model',members:[{}]}]}};`+
+		"function stepModelLabel("+script+"\n}\n"+`
+assert.equal(stepModelLabel({}),'');
+let html=stepModelLabel({model:'{{frontier_model}}'});
+assert(html.includes('Frontier &lt;models>'),html);
+assert(html.includes('title="{{frontier_model}}"'),html);
+assert(!html.includes('<span class="var">'),html);
+html=stepModelLabel({model:'{{gone_model}}'});
+assert(html.includes('<span class="var">{{gone_model}}</span>'),html);
+html=stepModelLabel({model:'codex/sol',thinking:'high'});
+assert(html.includes('codex/sol · high'),html);
+global.window={};
+assert(stepModelLabel({model:'{{frontier_model}}'}).includes('<span class="var">{{frontier_model}}</span>'));
+`).CombinedOutput()
+	if err != nil {
+		t.Fatalf("step model label: %v\n%s", err, out)
+	}
 }
 
 func TestWorkflowHostAPIErrorsAreJSON(t *testing.T) {
@@ -492,6 +551,85 @@ func TestModelGroupRankingAndWorkflowExpansion(t *testing.T) {
 		if code != 200 || len(r.Rows) != 1 || r.Rows[0][0] != false || r.Rows[0][1] != tc.reason {
 			t.Fatalf("eligibility %s: %+v", tc.reason, r)
 		}
+	}
+}
+
+// A step's model can be a model group: entering the step resolves the group to its current pick,
+// as an inline token would, and an explicit model passes through with its launch settings.
+func TestStepModelGroupResolvesAtStepEntry(t *testing.T) {
+	h, d := dbServer(t)
+	rep := wfReport()
+	rep.Paseo.Providers = []hostclient.Provider{
+		{Name: "claude", Available: true, Models: []hostclient.Model{{ID: "opus", Label: "Claude Opus 5.5", Thinking: []string{"medium"}}}},
+	}
+	sendReport(t, h, rep)
+	for _, q := range []string{
+		`INSERT INTO usage_accounts(provider,account,first_seen,last_seen) VALUES('claude','one',now(),now())`,
+		`INSERT INTO usage_sources(host,provider,account,ok,received_at) VALUES('host-1','claude','one',true,now())`,
+		`INSERT INTO usage_readings(provider,account,window_id,window_seconds,used_pct,resets_at,first_observed,last_observed) VALUES('claude','one','7d',604800,30,now()+interval '1 day',now(),now())`,
+		`INSERT INTO usage_active(host,provider,account,since,until) VALUES('host-1','claude','one',now(),now())`,
+	} {
+		if _, err := d.Owner.Exec(t.Context(), q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec := call(t, h, "POST", "/api/model-groups", `{"name":"Frontier","members":[{"provider":"claude","model":"opus","thinking":"medium","login":"one","longWindow":"7d","enabled":true}]}`, sameOriginFetch)
+	if rec.Code != 201 {
+		t.Fatalf("create %d %s", rec.Code, rec.Body)
+	}
+	var g workflow.ModelGroup
+	json.Unmarshal(rec.Body.Bytes(), &g)
+
+	def := workflow.Starting
+	def.Host = "host-1"
+	def.Steps = append([]workflow.Step(nil), def.Steps...)
+	def.Project = workflow.Project{Mode: "fixed", Directory: "/w/app"}
+	def.Steps[0].Model = "{{missing_model}}"
+	body, _ := json.Marshal(map[string]any{"name": "Bad", "definition": def})
+	rec = call(t, h, "POST", "/api/workflows", string(body), sameOriginFetch)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "missing_model") {
+		t.Fatalf("unknown step model group saved: %d %s", rec.Code, rec.Body)
+	}
+	def.Steps[0].Model = "{{frontier_model}}"
+	def.Steps[0].Instructions = "Build it. Task: {{input}}"
+	def.Steps[1].Model = "codex/sol"
+	def.Steps[1].Thinking = "high"
+	def.Steps[1].Instructions = "Check it."
+	wf := createWorkflow(t, h, def)
+	stream := openStream(t, h, "host-1")
+	run := startRun(t, h, wf, "the task")
+	cmd := stream.command()
+	var ws hostclient.CreateWorkspaceArgs
+	json.Unmarshal(cmd.Args, &ws)
+	if !strings.Contains(ws.Agent.Prompt, "This step's model: Claude Opus 5.5 (Medium) via claude/opus --thinking medium on one.") ||
+		!strings.Contains(ws.Agent.Prompt, "--provider claude/opus --mode bypassPermissions --thinking medium") ||
+		strings.Count(ws.Agent.Prompt, "- frontier_model:") != 1 {
+		t.Fatalf("step model group not resolved: %s", ws.Agent.Prompt)
+	}
+	code, r := sqlPost(t, h, q(`SELECT token,step FROM workflow_model_suggestions`))
+	if code != 200 || len(r.Rows) != 1 || r.Rows[0][0] != "frontier_model" || r.Rows[0][1] != float64(0) {
+		t.Fatalf("suggestion not recorded: %d %+v", code, r)
+	}
+	code, r = sqlPost(t, h, q(`SELECT definition->'steps'->0->>'model' FROM workflow_versions`))
+	if code != 200 || len(r.Rows) != 1 || r.Rows[0][0] != "{{frontier_model}}" {
+		t.Fatalf("step model not readable: %d %+v", code, r)
+	}
+	succeed(t, stream, cmd, `{"workspaceId":"work","agentId":"orch"}`)
+	status, msg := move(t, h, keyOf(t, h, "host-1"), run, map[string]string{"move": "next", "summary": "built"})
+	if status != 200 || !strings.Contains(msg, "This step's model: codex/sol (high). Start this step's sub-agents with --provider codex/sol --mode full-access --thinking high.") {
+		t.Fatalf("explicit step model: %d %s", status, msg)
+	}
+	rec = call(t, h, "DELETE", "/api/model-groups/"+g.ID, "", sameOriginFetch)
+	if rec.Code != 409 {
+		t.Fatalf("deleted a group a step uses: %d %s", rec.Code, rec.Body)
+	}
+	// Back on the group's step with a stale meter, the step names no model to start.
+	if _, err := d.Owner.Exec(t.Context(), `UPDATE usage_readings SET last_observed=now()-interval '1 hour'`); err != nil {
+		t.Fatal(err)
+	}
+	status, msg = move(t, h, keyOf(t, h, "host-1"), run, map[string]string{"move": "back", "step": def.Steps[0].ID, "why": "again"})
+	if status != 200 || !strings.Contains(msg, "This step's model group frontier_model has no eligible model now") || strings.Contains(msg, "This step's model: ") {
+		t.Fatalf("no eligible step model: %d %s", status, msg)
 	}
 }
 
