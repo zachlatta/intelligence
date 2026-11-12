@@ -503,3 +503,18 @@ func TestModelGroupsScriptIsServed(t *testing.T) {
 		t.Errorf("/model-groups.js: %d %q, etag %q", rec.Code, rec.Header().Get("Content-Type"), rec.Header().Get("ETag"))
 	}
 }
+
+func TestWorkflowAPIRejectsStepModelFields(t *testing.T) {
+	h, _ := dbServer(t)
+	sendReport(t, h, wfReport())
+	def := workflow.Starting
+	def.Host = "host-1"
+	body, _ := json.Marshal(map[string]any{"name": "Removed model", "definition": def})
+	for _, field := range []string{`"model":"{{frontier_model}}"`, `"thinking":"high"`} {
+		raw := strings.Replace(string(body), `"steps":[{`, `"steps":[{`+field+",", 1)
+		rec := call(t, h, "POST", "/api/workflows", raw, sameOriginFetch)
+		if rec.Code != 400 || !strings.Contains(rec.Body.String(), "unknown field") {
+			t.Fatalf("removed field %s: %d %s", field, rec.Code, rec.Body)
+		}
+	}
+}

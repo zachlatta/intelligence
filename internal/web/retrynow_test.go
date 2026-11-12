@@ -73,6 +73,9 @@ func TestStartRetryNowSkipsQueue(t *testing.T) {
 	if n := runField(t, h, run, "start_retries"); n != float64(1) {
 		t.Fatalf("a forced retry should count as a retry: %v", n)
 	}
+	if byHand := runField(t, h, run, "started_by_hand"); byHand != true {
+		t.Fatalf("a forced retry should mark the run started by hand, as Start now does: %v", byHand)
+	}
 	if q := runField(t, h, run, "start_retry_queued"); q != false {
 		t.Fatalf("the forced retry is still queued: %v", q)
 	}

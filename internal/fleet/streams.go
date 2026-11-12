@@ -37,7 +37,7 @@ func (r *Registry) Detach(ctx context.Context, host, stream string) error {
 
 // Forget deletes everything host reported, in tx: it left its account.
 func Forget(ctx context.Context, tx pgx.Tx, host string) error {
-	for _, table := range []string{"hosts", "host_minutes", "agent_minutes", "oom_kills", "host_probes", "usage_active", "usage_sources"} {
+	for _, table := range []string{"hosts", "host_minutes", "agent_minutes", "oom_kills", "host_probes", "host_filesystems", "usage_active", "usage_sources"} {
 		col := "host"
 		if table == "hosts" { // its workspaces, agents, transcripts and commands go with it
 			col = "name"
