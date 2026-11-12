@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -201,6 +202,45 @@ func TestStatusViewsCountWork(t *testing.T) {
 	}
 	if wa != 2 || wr != 1 {
 		t.Errorf("workspace_status w1: agents %d running %d", wa, wr)
+	}
+}
+
+// TestRecordedWorkspaceStatusCountsInOnePass: the history listing behind agent pages and the
+// home page counts each workspace's agents without re-reading workflow history per workspace,
+// which took longer than the read roles' statement timeout once history grew.
+func TestRecordedWorkspaceStatusCountsInOnePass(t *testing.T) {
+	d := dbtest.New(t)
+	record(t, New(d.Owner), full(), time.Now())
+	reader := dbtest.Reader(t, d, "host-1")
+	var wa, wr int
+	if err := reader.QueryRow(ctx, "SELECT agents, running_agents FROM recorded_workspace_status WHERE id = 'w1'").Scan(&wa, &wr); err != nil {
+		t.Fatal(err)
+	}
+	if wa != 2 || wr != 1 {
+		t.Errorf("recorded_workspace_status w1: agents %d running %d", wa, wr)
+	}
+	var plan []byte
+	if err := reader.QueryRow(ctx, "EXPLAIN (ANALYZE, FORMAT JSON) SELECT * FROM recorded_workspace_status").Scan(&plan); err != nil {
+		t.Fatal(err)
+	}
+	var nodes []map[string]any
+	if err := json.Unmarshal(plan, &nodes); err != nil {
+		t.Fatal(err)
+	}
+	var walk func(n map[string]any)
+	walk = func(n map[string]any) {
+		if n["Relation Name"] == "workflow_run_agents" {
+			if loops, _ := n["Actual Loops"].(float64); loops > 1 {
+				t.Errorf("workflow_run_agents read %v times in one listing", loops)
+			}
+		}
+		children, _ := n["Plans"].([]any)
+		for _, c := range children {
+			walk(c.(map[string]any))
+		}
+	}
+	for _, n := range nodes {
+		walk(n["Plan"].(map[string]any))
 	}
 }
 
