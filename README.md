@@ -1002,7 +1002,7 @@ or **Immediate** (skip the queue and capacity hold). Save it through the existin
 `"normal"`, `"immediate"`, or `""` for Automatic. Automatic stays unset in the saved definition
 and follows the trigger: immediate for email and voice memos, normal otherwise, including
 after changing a task workflow to an email or voice-memo trigger. An explicit normal setting always wins.
-Migration `0045_workflow_priority` versions existing active email and voice-memo workflows
+Migration `0046_workflow_priority` versions existing active email and voice-memo workflows
 with explicit Immediate priority;
 email requests, including voice emails, and voice memos start immediately after deployment.
 Each new run snapshots its resolved priority in `workflow_runs.priority`, so later workflow

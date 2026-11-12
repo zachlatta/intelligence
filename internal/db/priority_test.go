@@ -27,7 +27,7 @@ func TestPriorityMigrationPreservesRunSnapshots(t *testing.T) {
 	if _, err := d.Owner.Exec(ctx, `INSERT INTO workflow_runs(account_id,workflow_id,version,host,title,input,status,created_at,updated_at) SELECT 1,id,1,'ann-host','Old request','Keep snapshot','queued',now(),now() FROM workflows WHERE name='Email task'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Owner.Exec(ctx, `DELETE FROM schema_migrations WHERE version='0045_workflow_priority'`); err != nil {
+	if _, err := d.Owner.Exec(ctx, `DELETE FROM schema_migrations WHERE version='0046_workflow_priority'`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Migrate(ctx, d.Owner); err != nil {
