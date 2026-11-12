@@ -282,10 +282,10 @@ func (e *Engine) fillModels(ctx context.Context, tx pgx.Tx, r run, step int) (De
 			if err != nil {
 				return d, err
 			}
-			if strings.HasPrefix(msg.Inline, "no eligible model") {
-				text += "\n\nThis step's model group " + m[1] + " has no eligible model now: see the model suggestions below before starting its sub-agents."
-			} else {
+			if msg.Eligible {
 				text += "\n\nThis step's model: " + msg.Inline + ". Start this step's sub-agents with it (launch settings in the model suggestions below)."
+			} else {
+				text += "\n\nThis step's model group " + m[1] + " has no eligible model now: see the model suggestions below before starting its sub-agents."
 			}
 		} else {
 			provider, _, _ := strings.Cut(s.Model, "/")
@@ -304,7 +304,12 @@ func (e *Engine) fillModels(ctx context.Context, tx pgx.Tx, r run, step int) (De
 	return d, nil
 }
 
-type modelSuggestion struct{ Inline, Note string }
+// modelSuggestion is one allocation: Inline replaces the token, Note goes under Model suggestions,
+// and Eligible says whether a model was picked.
+type modelSuggestion struct {
+	Inline, Note string
+	Eligible     bool
+}
 
 func (e *Engine) suggestModel(ctx context.Context, tx pgx.Tx, r run, step int, token string, exclude []string) (modelSuggestion, error) {
 	if err := lockModels(ctx, tx, r.Account); err != nil {
@@ -387,7 +392,7 @@ func (e *Engine) suggestModel(ctx context.Context, tx pgx.Tx, r run, step int, t
 		VALUES ($1, $2, $3, 'model_suggestion', $4, $5, $6)`, r.ID, r.Account, e.Now(), step, msg, id); err != nil {
 		return modelSuggestion{}, err
 	}
-	return modelSuggestion{Inline: inline, Note: msg + " Suggestion " + id + ". Before another worker, refresh with intelligence workflow suggest --run " + r.ID + " " + token + "."}, nil
+	return modelSuggestion{Inline: inline, Eligible: chosen != nil, Note: msg + " Suggestion " + id + ". Before another worker, refresh with intelligence workflow suggest --run " + r.ID + " " + token + "."}, nil
 }
 
 // SuggestModel records a new allocation without advancing the step.
