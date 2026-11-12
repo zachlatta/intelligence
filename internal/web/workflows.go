@@ -319,7 +319,7 @@ func readWorkflows(ctx context.Context, p *pgxpool.Pool, id string) ([]workflowR
 	})
 }
 
-// runRow is a run as the pages show it.
+// runAnswerRow is a message a run sent to its requester, as the run page lists it.
 type runAnswerRow struct {
 	Channel   string
 	MessageID string
@@ -328,6 +328,7 @@ type runAnswerRow struct {
 	Checked   bool
 }
 
+// runRow is a run as the pages show it.
 type runRow struct {
 	RequestedAt                                                          time.Time
 	AnsweredAt                                                           *time.Time
@@ -373,6 +374,9 @@ func scanRunRow(row pgx.CollectableRow) (runRow, error) {
 		err = json.Unmarshal(steps, &r.Steps)
 		if err == nil {
 			err = json.Unmarshal(answers, &r.Answers)
+		}
+		for i := range r.Answers { // JSON keeps Postgres's fixed offset; show them in the zone of the run's other times
+			r.Answers[i].SentAt = r.Answers[i].SentAt.Local()
 		}
 	}
 	return r, err

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zachlatta/intelligence/internal/db"
 	"github.com/zachlatta/intelligence/internal/workflow"
@@ -79,6 +80,9 @@ func TestRunAnswersAndUnansweredRequests(t *testing.T) {
 	page := get(t, h, "/workflow-runs/"+runs[4], nil).Body.String()
 	if !strings.Contains(page, "checked-send") || !strings.Contains(page, "draft-send") {
 		t.Fatal("missing answer history")
+	}
+	if sent := time.Date(2026, 11, 11, 20, 30, 0, 0, time.UTC).Local().Format("Jan 2, 2006 15:04:05 MST"); !strings.Contains(page, sent) {
+		t.Fatalf("answer time not in the server's zone like the rest of the page, want %q", sent)
 	}
 }
 
