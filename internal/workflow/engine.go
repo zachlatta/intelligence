@@ -61,6 +61,7 @@ const (
 	StartingOrchestrator = "starting"
 	Running              = "running"
 	Waiting              = "waiting"
+	Stalled              = "stalled"
 	Succeeded            = "succeeded"
 	Failed               = "failed"
 	Canceled             = "canceled"
@@ -699,6 +700,14 @@ func (e *Engine) MoveRun(ctx context.Context, host, runID string, m Move) (strin
 		if r.Host != host {
 			return ErrNotFound
 		}
+		if r.Status == Stalled {
+			// Move validation below shares this transaction: an invalid move rolls
+			// back both the recovery event and the state change.
+			if err := e.unstall(ctx, tx, r, "Resumed: orchestrator continued with "+m.Move+"."); err != nil {
+				return err
+			}
+			r.Status = Running
+		}
 		msg, err = e.move(ctx, tx, r, m)
 		return err
 	})
@@ -916,11 +925,18 @@ func (e *Engine) ReplyTx(ctx context.Context, tx pgx.Tx, account int64, runID, t
 	if err != nil {
 		return err
 	}
-	if r.Status != Waiting {
+	if r.Status != Waiting && r.Status != Stalled {
 		return conflict("this run is not waiting for a reply (%s)", r.Status)
 	}
-	args, _ := json.Marshal(hostclient.AgentArgs{AgentID: r.Orchestrator, Text: fmt.Sprintf("Zach replied to your note:\n\n%s\n\n"+
-		"Decide what it means for the run, then move it with intelligence workflow (next, back, skip, ask or fail) --run %s.", text, r.ID)})
+	heading := "Zach replied to your note:"
+	if r.Status == Stalled {
+		heading = "A reply arrived for this workflow:"
+		if err := e.unstall(ctx, tx, r, "Resumed: a reply arrived for the existing orchestrator."); err != nil {
+			return err
+		}
+	}
+	args, _ := json.Marshal(hostclient.AgentArgs{AgentID: r.Orchestrator, Text: fmt.Sprintf("%s\n\n%s\n\n"+
+		"Decide what it means for the run, then move it with intelligence workflow (next, back, skip, ask or fail) --run %s.", heading, text, r.ID)})
 	if _, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.SendMessageKind, args, replyTTL, e.Now()); err != nil {
 		return err
 	}
@@ -951,6 +967,9 @@ func (e *Engine) MessageTx(ctx context.Context, tx pgx.Tx, account int64, runID,
 			return err
 		}
 		return e.event(ctx, tx, r, "message", nil, nil, what)
+	}
+	if err := e.unstall(ctx, tx, r, "Resumed: new input arrived for the existing orchestrator."); err != nil {
+		return err
 	}
 	waiting := ""
 	if r.Status == Waiting {

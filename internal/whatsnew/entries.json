@@ -8,6 +8,14 @@
     "mediaAlt": "The workflow editor with step 1 selected and Model for this step set to the Frontier models group, which also shows on the step's card"
   },
   {
+    "id": "workflow-stall-recovery",
+    "released": "2026-11-11",
+    "title": "Recover stalled workflow runs",
+    "summary": "Workflows now nudges an idle orchestrator with its current step when no worker or reply is pending. After two unsuccessful continuations, the run shows Stalled with a reason. Open Workflows or the run page and choose Resume to continue on the same orchestrator and step. Admission queues, startup retries and permission prompts keep their existing rules.",
+    "media": "workflow-stalls.png",
+    "mediaAlt": "A sample workflow run marked Stalled, with its recovery reason and Resume button on the run page"
+  },
+  {
     "id": "repository-memory-admission",
     "released": "2026-11-11",
     "title": "Queue runs by repository memory needs",

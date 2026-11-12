@@ -371,7 +371,7 @@ func (r runRow) Where() string {
 		return "finding the project"
 	case workflow.StartingOrchestrator:
 		return "starting the orchestrator"
-	case workflow.Running, workflow.Waiting:
+	case workflow.Running, workflow.Waiting, workflow.Stalled:
 		if r.Step < len(r.Steps) {
 			return r.Steps[r.Step].Title
 		}
@@ -412,6 +412,8 @@ func (r runRow) StatusLabel() string {
 	switch r.Status {
 	case workflow.FindingProject, workflow.StartingOrchestrator, workflow.Running:
 		return "running"
+	case workflow.Stalled:
+		return "Stalled"
 	case workflow.Waiting:
 		return "needs you"
 	}
@@ -446,7 +448,7 @@ func (r runRow) StatusClass() string {
 		return "st-queued"
 	case workflow.Succeeded:
 		return "st-done"
-	case workflow.Failed:
+	case workflow.Failed, workflow.Stalled:
 		return "st-error"
 	}
 	return ""
@@ -537,9 +539,12 @@ func stepViews(r runRow, events []runEvent, visits []stepVisit, now time.Time) [
 			v.State, v.Label = "failed", "failed"
 		}
 	}
-	if (r.Status == workflow.Running || r.Status == workflow.Waiting) && r.Step < len(out) {
+	if (r.Status == workflow.Running || r.Status == workflow.Waiting || r.Status == workflow.Stalled) && r.Step >= 0 && r.Step < len(out) {
 		v := &out[r.Step]
 		v.State, v.Label = "running", "running"
+		if r.Status == workflow.Stalled {
+			v.State, v.Label = "stalled", "stalled"
+		}
 		if r.Status == workflow.Waiting {
 			v.State, v.Label = "asking", "asking you"
 		}
@@ -913,7 +918,7 @@ func (e runEvent) Line() string {
 		return "Failed: " + e.Text
 	case "cancel":
 		return "Canceled"
-	case "error":
+	case "error", "stalled", "continuation", "resume":
 		return e.Text
 	case "start_retry":
 		return "Start failed; retry queued: " + e.Text
@@ -928,4 +933,18 @@ func orDash(s string) string {
 		return "—"
 	}
 	return s
+}
+
+func (a *app) resumeRun(v viewer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct{}
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+		if err := a.wf.Resume(r.Context(), v.acct.ID, r.PathValue("id")); err != nil {
+			workflowError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
 }

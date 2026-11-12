@@ -168,3 +168,26 @@ func (e *Engine) RunStartRetries(ctx context.Context) {
 		}
 	}
 }
+
+// RunStallWatchdog bounds each pass and coordinates through row locks in Postgres.
+func (e *Engine) RunStallWatchdog(ctx context.Context) {
+	tick := time.NewTicker(time.Minute)
+	defer tick.Stop()
+	runStallWatchdog(ctx, tick.C, e.ReconcileStalls)
+}
+
+func runStallWatchdog(ctx context.Context, ticks <-chan time.Time, reconcile func(context.Context) error) {
+	for {
+		bounded, cancel := context.WithTimeout(ctx, 30*time.Second)
+		err := reconcile(bounded)
+		cancel()
+		if err != nil && ctx.Err() == nil {
+			log.Printf("workflow stall watchdog: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticks:
+		}
+	}
+}
