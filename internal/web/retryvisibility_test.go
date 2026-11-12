@@ -51,7 +51,7 @@ func TestRetryPageShowsProgressAndRecoveryWait(t *testing.T) {
 	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
 		t.Fatal(ack.Error)
 	}
-	check("Waiting for the Paseo daemon to reconnect", "24 hours")
+	check("Waiting for the Paseo daemon to reconnect", "it is sent then if the host is ready and has room, or the run fails")
 	rep.Paseo.Connected = true
 	rep.StartRetryKeys = false
 	if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
@@ -75,7 +75,8 @@ func TestRetryPageShowsProgressAndRecoveryWait(t *testing.T) {
 	}
 }
 
-func TestRetryWaitExpiresAfter24Hours(t *testing.T) {
+// A retry whose host is still not ready RetryWaitLimit after it was due fails the run, saying why.
+func TestRetryWaitExpiresAfterTheWaitLimit(t *testing.T) {
 	for _, connected := range []bool{false, true} {
 		t.Run(map[bool]string{false: "daemon", true: "host upgrade"}[connected], func(t *testing.T) {
 			h, db := dbServer(t)
@@ -95,7 +96,7 @@ func TestRetryWaitExpiresAfter24Hours(t *testing.T) {
 			if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
 				t.Fatal(ack.Error)
 			}
-			at := due.Add(24*time.Hour - time.Second)
+			at := due.Add(workflow.RetryWaitLimit - time.Second)
 			e := workflow.NewEngine(db.Owner, func() time.Time { return at })
 			if err := e.RetryStarts(t.Context()); err != nil {
 				t.Fatal(err)
@@ -103,12 +104,13 @@ func TestRetryWaitExpiresAfter24Hours(t *testing.T) {
 			if r := readRun(t, h, run); r["status"] == "failed" {
 				t.Fatal("failed before deadline")
 			}
-			at = due.Add(24 * time.Hour)
+			at = due.Add(workflow.RetryWaitLimit)
 			if err := e.RetryStarts(t.Context()); err != nil {
 				t.Fatal(err)
 			}
 			r := readRun(t, h, run)
-			if r["status"] != "failed" || !strings.Contains(r["error"].(string), "24 hours") || !strings.Contains(r["error"].(string), "last start error") {
+			why := map[bool]string{false: "Paseo daemon was still not connected", true: "still did not support retry keys"}[connected]
+			if msg := r["error"].(string); r["status"] != "failed" || !strings.Contains(msg, "was due at") || !strings.Contains(msg, why) || !strings.Contains(msg, "last start error") {
 				t.Fatal(r)
 			}
 		})

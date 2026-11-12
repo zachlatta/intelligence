@@ -362,6 +362,7 @@ func ownsHost(ctx context.Context, tx pgx.Tx, account int64, host string) error 
 // run is a run with its workflow's name and definition.
 type run struct {
 	ID, Host, Title, Input, Status, Repo, Branch string
+	WorkflowID                                   string
 	Account                                      int64
 	Step                                         int
 	WorkspaceID, ProjectAgent, Orchestrator      string
@@ -384,14 +385,14 @@ func (r run) vars() Vars { return Vars{Run: r.ID, Input: r.Input, Repo: r.Repo, 
 
 const runSelect = `SELECT r.id::text, r.host, r.title, r.input, r.status, r.repo, r.branch, r.account_id, r.step, r.workspace_id,
 	r.project_agent_id, r.orchestrator_id, r.project_command::text, w.name, v.definition, r.start_retry_at, r.start_retries,
-	r.estimated_memory_bytes, r.project_selected, r.started_by_hand, r.priority
+	r.estimated_memory_bytes, r.project_selected, r.started_by_hand, r.priority, r.workflow_id::text
 	FROM workflow_runs r JOIN workflow_versions v USING (workflow_id, version) JOIN workflows w ON w.id = r.workflow_id `
 
 func scanRun(row pgx.Row) (run, error) {
 	var r run
 	var def []byte
 	err := row.Scan(&r.ID, &r.Host, &r.Title, &r.Input, &r.Status, &r.Repo, &r.Branch, &r.Account, &r.Step, &r.WorkspaceID,
-		&r.ProjectAgent, &r.Orchestrator, &r.ProjectCommand, &r.Name, &def, &r.StartRetryAt, &r.StartRetries, &r.EstimatedMemory, &r.ProjectSelected, &r.StartedByHand, &r.Priority)
+		&r.ProjectAgent, &r.Orchestrator, &r.ProjectCommand, &r.Name, &def, &r.StartRetryAt, &r.StartRetries, &r.EstimatedMemory, &r.ProjectSelected, &r.StartedByHand, &r.Priority, &r.WorkflowID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, ErrNotFound
 	}
@@ -464,7 +465,7 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		if selected {
 			repo = d.Project.Directory
 		}
-		estimate, err := repositoryMemory(ctx, tx, account, host, repo, selected)
+		estimate, err := repositoryMemory(ctx, tx, account, host, workflowID, repo, selected)
 		if err != nil {
 			return err
 		}
@@ -769,7 +770,7 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		if err := e.archiveFinder(ctx, tx, r); err != nil {
 			return "", err
 		}
-		estimate, err := repositoryMemory(ctx, tx, r.Account, r.Host, repo, true)
+		estimate, err := repositoryMemory(ctx, tx, r.Account, r.Host, r.WorkflowID, repo, true)
 		if err != nil {
 			return "", err
 		}

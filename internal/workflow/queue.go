@@ -50,7 +50,7 @@ type minute struct {
 
 // room says why host is too near capacity for another run, or "" if it has room. It projects the
 // host's load: its newest minute, plus a run's footprint (host_run_footprint: learned from the
-// host's history, or a default; memory uses each run's repository estimate) for each run still
+// host's history, or a default; memory uses each run's estimate, repositoryMemory) for each run still
 // starting, whose CPU and load that minute cannot show
 // (launched since it began, still finding its project, or whose orchestrator the host had not
 // started when it began), and for the run to start. A run waits when the projection reaches a
@@ -107,14 +107,21 @@ func (e *Engine) room(ctx context.Context, tx pgx.Tx, host, candidate, repo stri
 	// reports its start command (launch_command: the workspace and orchestrator) done and that
 	// minute began after it. Memory remains reserved for the whole active run, less
 	// its resident memory already included in this exact host minute. With no matching
-	// sample, reserve the full estimate. Failed/expired attempts release their reservation.
+	// sample, reserve the full estimate. A failed or expired attempt keeps its reservation while
+	// its retry is pending (start_retry_at), so the next queued run cannot take the room the retry
+	// needs; the retry is sent or the run fails within RetryWaitLimit of its time, so this holds
+	// minutes, not hours. A run with no retry left fails, which releases it.
 	// A run waiting for Zach's reply reserves nothing more: its agents are idle, perhaps for
-	// days, and the memory they do use is already in the minute.
-	var started, active int
-	var reservedMemory int64
-	if err := tx.QueryRow(ctx, `SELECT count(*) FILTER (WHERE r.launched_at IS NOT NULL AND
+	// days, and the memory they do use is already in the minute. Its resident memory is counted
+	// apart (waitingMemory) only so the reason can say when sign-offs are what holds the queue.
+	var started, active, waiting int
+	var reservedMemory, waitingMemory int64
+	if err := tx.QueryRow(ctx, `SELECT count(*) FILTER (WHERE r.status <> $8 AND r.start_retry_at IS NULL AND r.launched_at IS NOT NULL AND
 			(r.launched_at >= $2 OR r.status = $5 OR c.id IS NOT NULL AND (c.finished_at IS NULL OR c.finished_at > $2))),
-		count(*), coalesce(sum(greatest(r.estimated_memory_bytes - resident.bytes, 0)), 0)::bigint
+		count(*) FILTER (WHERE r.status <> $8),
+		coalesce(sum(greatest(r.estimated_memory_bytes - resident.bytes, 0)) FILTER (WHERE r.status <> $8), 0)::bigint,
+		count(*) FILTER (WHERE r.status = $8),
+		coalesce(sum(resident.bytes) FILTER (WHERE r.status = $8), 0)::bigint
 		FROM workflow_runs r LEFT JOIN commands c ON c.id = r.launch_command
 		LEFT JOIN LATERAL (
 			SELECT coalesce(sum(m.mem_max), 0)::bigint AS bytes
@@ -123,10 +130,10 @@ func (e *Engine) room(ctx context.Context, tx pgx.Tx, host, candidate, repo stri
 				UNION SELECT r.project_agent_id WHERE r.project_agent_id <> '') members
 			JOIN agent_minutes m ON m.host = r.host AND m.agent_id = members.agent_id AND m.minute = $2
 		) resident ON true
-		WHERE r.host = $1 AND r.status NOT IN ($3, $4, $6, $8)
+		WHERE r.host = $1 AND r.status NOT IN ($3, $4, $6)
 			AND r.status <> 'queued' AND r.id::text <> $7
-			AND r.start_retry_at IS NULL AND coalesce(c.status NOT IN ('failed','expired'), true)`,
-		host, m.At, Failed, Canceled, FindingProject, Succeeded, candidate, Waiting).Scan(&started, &active, &reservedMemory); err != nil {
+			AND (r.start_retry_at IS NOT NULL OR coalesce(c.status NOT IN ('failed','expired'), true))`,
+		host, m.At, Failed, Canceled, FindingProject, Succeeded, candidate, Waiting).Scan(&started, &active, &reservedMemory, &waiting, &waitingMemory); err != nil {
 		return "", err
 	}
 	with := "this one"
@@ -156,8 +163,17 @@ func (e *Engine) room(ctx context.Context, tx pgx.Tx, host, candidate, repo stri
 			if active > 0 {
 				memoryWith = runsWord(active) + " active and this one"
 			}
-			why = append(why, fmt.Sprintf("memory %.0f%% used now, %s with %s (queues at %.0f%%); needs ~%.1f GiB for %s; %.1f GiB free (%.1f GiB reserved for active runs)",
-				used, about(p), memoryWith, l.MemPct, float64(memory)/(1<<30), project, float64(m.MemMin)/(1<<30), float64(reservedMemory)/(1<<30)))
+			reason := fmt.Sprintf("memory %.0f%% used now, %s with %s (queues at %.0f%%); needs ~%.1f GiB for %s; %.1f GiB free (%.1f GiB reserved for active runs)",
+				used, about(p), memoryWith, l.MemPct, float64(memory)/(1<<30), project, float64(m.MemMin)/(1<<30), float64(reservedMemory)/(1<<30))
+			// Runs waiting for Zach hold their agents' memory until he signs off, which can take hours.
+			// When they hold enough that the run would fit without it, say that plainly.
+			if waiting > 0 && waitingMemory > 0 {
+				reason += fmt.Sprintf("; %s waiting for sign-off hold %.1f GiB", runsWord(waiting), float64(waitingMemory)/(1<<30))
+				if p-100*float64(waitingMemory)/float64(m.MemTotal) < l.MemPct {
+					reason += fmt.Sprintf(": waiting for %s to free memory", signOffsWord(waiting))
+				}
+			}
+			why = append(why, reason)
 		}
 	}
 	if l.LoadPerCPU > 0 && m.CPUs > 0 {
@@ -178,6 +194,13 @@ func about(pct float64) string {
 		return "over 100%"
 	}
 	return fmt.Sprintf("about %.0f%%", pct)
+}
+
+func signOffsWord(n int) string {
+	if n == 1 {
+		return "a sign-off"
+	}
+	return fmt.Sprintf("%d sign-offs", n)
 }
 
 func runsWord(n int) string {
@@ -317,12 +340,13 @@ func (e *Engine) StartNow(ctx context.Context, account int64, runID string) erro
 }
 
 // retryHeld says why r's start retry cannot be sent yet, whatever its host's load ("" when it can):
-// it is still in its backoff, it has waited 24 hours and is timing out, or its host is not ready
+// it is still in its backoff, it is RetryWaitLimit overdue (reconciliation sends it with room or
+// fails the run), or its host is not ready
 // (online, with a connected Paseo daemon that supports retry keys).
 func (e *Engine) retryHeld(ctx context.Context, tx pgx.Tx, r run) (string, error) {
 	now := e.Now()
 	if !now.Before(r.StartRetryAt.Add(RetryWaitLimit)) {
-		return "this retry has waited 24 hours and is timing out", nil
+		return "this retry is " + waitLimitWords() + " overdue: it is sent if its host has room, or the run fails", nil
 	}
 	if now.Before(*r.StartRetryAt) {
 		return "this retry is not due until " + r.StartRetryAt.UTC().Format(time.RFC3339), nil

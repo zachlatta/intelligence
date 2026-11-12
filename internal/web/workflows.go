@@ -685,6 +685,27 @@ func renderWorkflows(w http.ResponseWriter, name string, data map[string]any) {
 	}
 }
 
+// queueHead is the run next in a host's queue (workflow_run_queue) and why it waits.
+type queueHead struct {
+	Host, RunID, Title, Reason string
+	Queued                     int // runs in the host's queue, the head included
+}
+
+// readQueueHeads reads each host's queue head, so the Workflows page can say what holds the queue.
+func readQueueHeads(ctx context.Context, p *pgxpool.Pool) ([]queueHead, error) {
+	rows, err := p.Query(ctx, `SELECT q.host, q.run_id::text, q.title, q.queue_reason,
+		(SELECT count(*) FROM workflow_run_queue a WHERE a.host = q.host)::int
+		FROM workflow_run_queue q WHERE q.position = 1 ORDER BY q.host`)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (queueHead, error) {
+		var h queueHead
+		err := row.Scan(&h.Host, &h.RunID, &h.Title, &h.Reason, &h.Queued)
+		return h, err
+	})
+}
+
 // workflowsPage: GET /workflows: a new task, the account's workflows and their runs.
 func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -714,6 +735,11 @@ func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		heads, err := readQueueHeads(ctx, v.pool)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		var tasks []workflowRow
 		for _, wf := range wfs {
 			if wf.Definition.Trigger == workflow.TriggerTask {
@@ -721,7 +747,8 @@ func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 			}
 		}
 		renderWorkflows(w, "list", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Workflows": wfs,
-			"List": list, "Waiting": waiting, "Hosts": hosts, "Tasks": tasks, "Starting": workflow.Starting, "Dictation": dictationPath(cfg)})
+			"List": list, "Waiting": waiting, "Hosts": hosts, "Tasks": tasks, "Starting": workflow.Starting, "Dictation": dictationPath(cfg),
+			"QueueHeads": heads})
 	}
 }
 

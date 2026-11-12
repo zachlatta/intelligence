@@ -183,6 +183,7 @@
     </div>
   </section>
 {{end}}
+{{range .QueueHeads}}<p class="banner note queue-head" data-host="{{.Host}}"><b>{{plural .Queued "run"}} queued on <span class="mono">{{.Host}}</span>.</b> Next: <a href="/workflow-runs/{{.RunID}}">{{.Title}}</a>. {{or .Reason "Checking its host for room"}}.</p>{{end}}
 {{range .Waiting}}<p class="banner note"><b>{{.Workflow}}</b> is asking you: “{{.Title}}” · <a href="/workflow-runs/{{.ID}}">Read the note →</a></p>{{end}}
 <h2 class="section-title">Workflows</h2>
 <div class="wf-grid">
@@ -740,7 +741,7 @@ render();
   {{if .Run.StartRetryAt}}{{if .Run.Position}}Waiting for capacity, {{.Run.InLine}}. {{with .Run.QueueReason}}{{localText .}}. {{end}}Retry eligible since {{else}}Next retry scheduled for {{end}}{{at .Run.StartRetryAt "full"}}.
     {{if not .Run.HostOnline}}Waiting for the host to reconnect.{{else if not .Run.DaemonConnected}}Waiting for the Paseo daemon to reconnect.{{end}}
     {{if not .Run.RetryKeys}}Waiting for the host to support retry keys.{{end}}
-    This queued retry can wait up to 24 hours, until {{at .Run.RetryDeadline "full"}}.
+    If it has not been sent by {{at .Run.RetryDeadline "full"}}, it is sent then if the host is ready and has room, or the run fails.
     {{if .Run.RetryInQueue}}<b>Start retry now</b> sends it anyway, ahead of the queue.{{end}}
   {{else}}Waiting for the host's result.{{end}}
   <div>Last start error: {{localText .Run.Error}}</div>

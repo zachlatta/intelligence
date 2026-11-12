@@ -816,19 +816,27 @@ error and archives any partial workspace. Cancellation removes the scheduled ret
 run starts with its own creation key and budget.
 
 The run page shows each queued or sent retry, its last error, its next scheduled time, and whether
-it is waiting for host recovery or capacity. A retry waiting only for capacity (due, its host
-ready, in the queue) has a **Start retry now** button: the same `POST /api/workflow-runs/{id}/start`
-as **Start now**, which sends that retry at once, ahead of the queue, whatever the host's load. It
-is an ordinary retry: it reuses the creation key, counts toward the three, and a failure is
-handled like any other failed retry (the next backoff, or the run fails once the retries run out).
-Like Start now, it marks the run `started_by_hand`, so a later retry goes out as soon as its host
-is ready instead of back behind the queue. The timeline records it as “Started: retry started by hand, ahead of the queue”. A retry still in
-its backoff or waiting for its host to be ready cannot be started by hand (`409`). Each queued retry
-has a deadline 24 hours after its scheduled time; at that deadline the run fails with the last
-start error and a timeout explanation. This allows a long outage or host update without leaving
-the run waiting forever. Queue and delivery events are recorded in the timeline. Reconciliation
-processes the other runs even when one run is broken, then logs all errors with their command IDs.
-Reconciliation also expires overdue startup commands when the host has no stream. An expired
+it is waiting for host recovery or capacity. A due retry waits at most `workflow.RetryWaitLimit`
+(5 minutes) past its scheduled time, for its host to be ready or for room in its host's queue.
+Its run keeps its memory reservation meanwhile, so the next queued run cannot take the room the
+retry needs. Then, if the host is ready and has room, it is sent; if not, the run fails with the
+last start error and why: the host was not ready (offline, Paseo daemon not connected, or no retry
+keys), or it had no room (with the queue reason). No automatic retry is sent beyond the host's
+capacity; only a run started by hand or with immediate priority skips the queue.
+
+A retry waiting only for capacity (due, its host ready, in the queue) has a **Start retry now**
+button: the same `POST /api/workflow-runs/{id}/start` as **Start now**, which sends that retry at
+once, ahead of the queue, whatever the host's load. It is an ordinary retry: it reuses the creation
+key, counts toward the three, and a failure is handled like any other failed retry (the next
+backoff, or the run fails once the retries run out). Like Start now, it marks the run
+`started_by_hand`, so a later retry goes out as soon as its host is ready instead of back behind the
+queue. The timeline records it as “Started: retry started by hand, ahead of the queue”. A retry
+still in its backoff, waiting for its host to be ready, or past `RetryWaitLimit` cannot be started
+by hand (`409`). All retry state is in Postgres and the retry worker reconciles it every 5 seconds,
+so a restart does not lose a retry. Queue and delivery events are recorded in the timeline.
+Reconciliation processes the other runs even when one run is broken, then logs all errors with
+their command IDs. Reconciliation also expires overdue startup commands when the host has no
+stream. An expired
 command's retry wait starts from its original expiry, so a long server outage cannot reset the
 deadline.
 
@@ -968,8 +976,9 @@ as described below. A run is starting from its launch (`workflow_runs.launched_a
 its orchestrator has started: for its whole start-up. A run that finds its project first is
 starting all the while it finds it (its orchestrator is still to come), and every run is starting
 until the host reports its workspace and orchestrator command (`launch_command`) done and the
-newest minute began after that. A failed or expired launch releases its reservation. A retry
-reserves capacity when admitted, updating `launched_at` and `launch_command` with the new attempt
+newest minute began after that. A failed or expired launch keeps its memory reservation while its
+retry is pending, at most `RetryWaitLimit` past the retry's time, and releases it when the run fails.
+A retry reserves capacity when admitted, updating `launched_at` and `launch_command` with the new attempt
 in the same transaction. An admitted command waiting for a slow or absent host holds capacity
 until it finishes or expires. Runs that succeeded, failed or were canceled no longer count.
 The run queues when
@@ -980,7 +989,12 @@ until the host has made them and a newer minute shows their load. The reason say
 capacity: CPU 70% now, about 90% with 1 run starting and this one (queues at 85%)”, or “over
 100%” when the projection is past all of it.
 
-A run's memory estimate is learned from its selected repository on that host, within its account.
+A run's memory estimate is learned from its own workflow's runs in its selected repository on that
+host, within its account (`workflow_memory_estimate`): an email answer in a repository is not
+charged like that repository's Factory Task runs. A workflow with no successful run there yet
+takes the repository's estimate (`workflow_repository_memory`, below: the same view's rows with a
+null `workflow_id`, one rule for both), then 4 GiB. Unfinished runs were re-estimated this way when it changed (migration
+`0048_workflow_memory_estimate`).
 `workflow_run_memory` sums the recorded agents' memory in each minute, then takes the run's peak.
 `workflow_repository_memory` takes what nine in ten successful-run peaks for that selected, non-empty
 repository root stayed under (the 90th percentile; the largest, until it has ten runs), adds 25%
@@ -996,8 +1010,11 @@ is the sum for that run's known agents in the exact newest host minute; without 
 its full estimate stays reserved. This prevents a run's quiet phase from admitting another heavy
 run, without counting its resident memory twice. A run waiting for Zach's reply reserves nothing
 beyond what it uses: its agents are idle, perhaps for days, and their memory is already in the
-measured minute. The existing memory percentage limit supplies
-host headroom. Memory queue reasons name the repository estimate, measured free RAM and reservations.
+measured minute. When the queue waits on memory and waiting runs hold some of it, the reason says
+so: “2 runs waiting for sign-off hold 10.5 GiB”, and “: waiting for 2 sign-offs to free memory”
+when the run would fit without them. The Workflows page shows each host's queue head, how many
+runs are queued there and its reason. The existing memory percentage limit supplies host headroom.
+Memory queue reasons name the run's estimate and repository, measured free RAM and reservations.
 So that no estimate can block the FIFO for ever, the oldest run starts alone, whatever its
 estimate, when no other run is active or starting (a run waiting for Zach's reply does not count)
 and measured memory is below the limit. Otherwise memory used by other processes could keep an

@@ -1,5 +1,13 @@
 [
   {
+    "id": "workflow-queue-head",
+    "released": "2026-11-12",
+    "title": "See what holds a host's run queue",
+    "summary": "When runs are queued for room on a host, the Workflows page now names the next one and why it waits, for example that runs waiting for your sign-off hold the memory it needs. Each run's memory estimate now comes from its own workflow's past runs, so a quick email answer is no longer sized like a Factory Task in the same repository.",
+    "media": "workflow-queue-head.png",
+    "mediaAlt": "The Workflows page with a banner: 3 runs queued on host-1, the next run and its reason, ending with waiting for 2 sign-offs to free memory"
+  },
+  {
     "id": "local-times",
     "released": "2026-11-12",
     "title": "Times in your own time zone",

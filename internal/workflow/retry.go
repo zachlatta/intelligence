@@ -17,8 +17,10 @@ import (
 const (
 	// StartRetryLimit is how many times a failed or expired start is tried again.
 	StartRetryLimit = 3
-	// RetryWaitLimit bounds each queued start retry, including daemon and host upgrade waits.
-	RetryWaitLimit = 24 * time.Hour
+	// RetryWaitLimit is how long past due a start retry may wait, for its host to be ready or for
+	// room in its host's queue. Then it is sent if the host is ready and has room (its run kept
+	// its reservation), and the run fails, saying why, if not.
+	RetryWaitLimit = 5 * time.Minute
 )
 
 // retryStart schedules a retry and makes it eligible for the host's capacity queue
@@ -47,10 +49,11 @@ func (e *Engine) retryStart(ctx context.Context, tx pgx.Tx, r run, c fleet.Comma
 	if at.Before(*due) {
 		return true, msg, nil
 	}
-	if !at.Before(due.Add(RetryWaitLimit)) {
-		return false, "Start retry timed out after 24 hours waiting for a ready host with capacity. Last start error: " + msg, nil
-	}
+	overdue := !at.Before(due.Add(RetryWaitLimit))
 	ready, err := retryHostReady(ctx, tx, r.Host)
+	if overdue && errors.Is(err, pgx.ErrNoRows) {
+		ready, err = false, nil // a host that is gone cannot take it: fail the run below
+	}
 	if err != nil {
 		return true, msg, err
 	}
@@ -62,6 +65,26 @@ func (e *Engine) retryStart(ctx context.Context, tx pgx.Tx, r run, c fleet.Comma
 		}
 		_, err := e.dequeueRetry(ctx, tx, r, why)
 		return true, msg, err
+	}
+	if overdue {
+		// The retry has waited RetryWaitLimit past its time. Send it if the host is ready and
+		// has room (its own reservation was kept), and otherwise fail the run saying why: it
+		// must not sit in starting for hours, nor start beyond the host's capacity.
+		var why string
+		if ready {
+			if why, err = e.room(ctx, tx, r.Host, r.ID, r.Repo, r.EstimatedMemory); err != nil {
+				return true, msg, err
+			}
+			if why == "" {
+				_, err := e.dequeueRetry(ctx, tx, r, r.Host+" has room for the retry")
+				return true, msg, err
+			}
+			why = r.Host + " still had no room (" + why + ")"
+		} else if why, err = retryHostNotReady(ctx, tx, r.Host); err != nil {
+			return true, msg, err
+		}
+		return false, fmt.Sprintf("Start retry %d of %d was due at %s, but %s %s after it was due. Last start error: %s",
+			retries+1, StartRetryLimit, due.UTC().Format(time.RFC3339), why, waitLimitWords(), msg), nil
 	}
 	// Preserve the run's original FIFO priority when it becomes eligible again.
 	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET start_retry_queued=$2, queue_reason=''
@@ -76,8 +99,35 @@ func retryHostReady(ctx context.Context, tx pgx.Tx, host string) (bool, error) {
 	return ready, err
 }
 
-// dequeueRetry runs only after the priority queue admits r, or when r skips the queue (by hand or
-// immediate priority); why says which. Lock the old command so a late success either wins before
+// retryHostNotReady says why host cannot take a retry now, for an error: "host-1 was still
+// offline", "host-1's Paseo daemon was still not connected", or "host-1 still did not support
+// retry keys".
+func retryHostNotReady(ctx context.Context, tx pgx.Tx, host string) (string, error) {
+	var online, connected, keys bool
+	err := tx.QueryRow(ctx, `SELECT coalesce(s.online, false), coalesce(s.connected, false), coalesce(h.start_retry_keys, false)
+		FROM hosts h LEFT JOIN host_status s USING (name) WHERE h.name=$1`, host).Scan(&online, &connected, &keys)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return host + " was still unknown", nil
+	}
+	switch {
+	case err != nil:
+		return "", err
+	case !online:
+		return host + " was still offline", nil
+	case !connected:
+		return host + "'s Paseo daemon was still not connected", nil
+	case !keys:
+		return host + " still did not support retry keys (update its host client)", nil
+	}
+	return host + " was still not ready", nil
+}
+
+func waitLimitWords() string {
+	return fmt.Sprintf("%d minutes", int(RetryWaitLimit.Minutes()))
+}
+
+// dequeueRetry runs only after the priority queue admits r (or an overdue retry finds room), or
+// when r skips the queue (by hand or immediate priority); why says which. Lock the old command so a late success either wins before
 // admission or is superseded by this delivery.
 func (e *Engine) dequeueRetry(ctx context.Context, tx pgx.Tx, r run, why string) (bool, error) {
 	var previous fleet.Command
