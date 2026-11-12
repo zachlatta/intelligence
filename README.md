@@ -1294,7 +1294,9 @@ origin (another site's request is refused with 403), and those with a body must 
   (201, with its `Location`), or queues it while the host is near capacity; 400 for a workflow
   saved without one.
 - `POST /api/workflow-runs/{id}/start` with `{}`: starts a queued run now, ahead of its queue and
-  whatever its host's load (204; 409 for a run that is not queued).
+  whatever its host's load, or sends a run's queued start retry the same way (it still counts as
+  a retry) (204; 409 for a run that is not queued, or a retry still in its backoff, past its
+  deadline or whose host is not ready).
 - `POST /api/workflow-runs/{id}/reply` with `{"text"}`: answers the note the run waits on (204;
   409 when it waits on none). `POST /api/workflow-runs/{id}/cancel` with `{}`: ends the run and
   stops its orchestrator (204).
