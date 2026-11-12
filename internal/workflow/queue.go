@@ -325,7 +325,7 @@ func (e *Engine) retryHeld(ctx context.Context, tx pgx.Tx, r run) (string, error
 		return "this retry has waited 24 hours and is timing out", nil
 	}
 	if now.Before(*r.StartRetryAt) {
-		return "this retry is not due until " + r.StartRetryAt.UTC().Format("15:04:05 MST"), nil
+		return "this retry is not due until " + r.StartRetryAt.UTC().Format(time.RFC3339), nil
 	}
 	ready, err := retryHostReady(ctx, tx, r.Host)
 	if err != nil || ready {
