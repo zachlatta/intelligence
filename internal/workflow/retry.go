@@ -54,6 +54,11 @@ func (e *Engine) retryStart(ctx context.Context, tx pgx.Tx, r run, c fleet.Comma
 	if err != nil {
 		return true, msg, err
 	}
+	if ready && r.StartedByHand {
+		// Started by hand, ahead of the queue and whatever the load: its retry is too.
+		_, err := e.dequeueRetry(ctx, tx, r)
+		return true, msg, err
+	}
 	// Preserve the run's original FIFO priority when it becomes eligible again.
 	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET start_retry_queued=$2, queue_reason=''
 		WHERE id=$1 AND start_retry_queued IS DISTINCT FROM $2`, r.ID, ready)
@@ -104,7 +109,11 @@ func (e *Engine) dequeueRetry(ctx context.Context, tx pgx.Tx, r run) (bool, erro
 	if _, err := tx.Exec(ctx, "UPDATE commands SET idempotency_key=$2 WHERE id=$1", next.ID, key); err != nil {
 		return false, err
 	}
-	if err := e.recordDequeue(ctx, tx, r, r.Host+" has room for the retry"); err != nil {
+	why := r.Host + " has room for the retry"
+	if r.StartedByHand {
+		why = "started by hand: retrying ahead of the queue"
+	}
+	if err := e.recordDequeue(ctx, tx, r, why); err != nil {
 		return false, err
 	}
 	if err := e.event(ctx, tx, r, "start_retry_sent", nil, nil, fmt.Sprintf("Retry %d of %d", r.StartRetries+1, StartRetryLimit)); err != nil {
@@ -165,6 +174,29 @@ func (e *Engine) RunStartRetries(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		}
+	}
+}
+
+// RunStallWatchdog bounds each pass and coordinates through row locks in Postgres.
+func (e *Engine) RunStallWatchdog(ctx context.Context) {
+	tick := time.NewTicker(time.Minute)
+	defer tick.Stop()
+	runStallWatchdog(ctx, tick.C, e.ReconcileStalls)
+}
+
+func runStallWatchdog(ctx context.Context, ticks <-chan time.Time, reconcile func(context.Context) error) {
+	for {
+		bounded, cancel := context.WithTimeout(ctx, 30*time.Second)
+		err := reconcile(bounded)
+		cancel()
+		if err != nil && ctx.Err() == nil {
+			log.Printf("workflow stall watchdog: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticks:
 		}
 	}
 }

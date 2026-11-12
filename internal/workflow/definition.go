@@ -83,7 +83,17 @@ func Parse(b []byte) (Definition, error) {
 	if err := dec.Decode(&d); err != nil {
 		return d, fmt.Errorf("bad workflow: %w", err)
 	}
-	return d, d.Validate()
+	if err := d.Validate(); err != nil {
+		return d, err
+	}
+	return d.normalized(), nil
+}
+
+func (d Definition) normalized() Definition {
+	if d.Project.Mode == ProjectFixed && d.Project.Directory != "" {
+		d.Project.Directory = path.Clean(d.Project.Directory)
+	}
+	return d
 }
 
 // Validate says what in d cannot run.
@@ -248,6 +258,7 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 		fmt.Fprintf(&b, "%d. %s (%s, id %s)\n", i+1, s.Title, s.Kind, s.ID)
 	}
 	fmt.Fprintf(&b, "\nYou get one step at a time. Move the run with these commands:\n\n"+
+		"  intelligence workflow answer --run %[1]s --channel email --message-id <sent-id> [--thread-id <thread-id>] [--sent-at <date>] [--checked]    record an answer to the requester\n"+
 		"  intelligence workflow next --run %[1]s --summary \"<one line>\"    this step is done; prints the next one\n"+
 		"  intelligence workflow back --run %[1]s <step id> --why \"<what is missing>\"    send the work back to an earlier step\n"+
 		"  intelligence workflow skip --run %[1]s --why \"<why>\"    skip a step its instructions let you skip\n"+
@@ -265,6 +276,7 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 		"Preserve scratch needed by later steps. A worker reports back and ends its turn; the orchestrator owns reuse and archiving. " +
 		"After a successful ask, end your turn and wait for the reply message; do not poll or create a wakeup.\n\n" +
 		PublicRepoRule + "\n\n")
+	b.WriteString("Lifecycle: after next, skip or back, keep working in the same turn using the returned instructions. Wait for sub-agents in the foreground. End your turn only after a successful ask or after the run is finished, done or failed.\n\n")
 	b.WriteString(StepMessage(d, 0, v))
 	return b.String()
 }
@@ -286,7 +298,7 @@ const DeliverableEmailRule = "When the run's result is a deliverable for Zach ra
 	"with files.zachlatta.com links to the full report and files under the file-delivery rule above; never only a link or a local path. " +
 	"Earlier steps draft the email (subject and HTML body) in the worktree and pass it on; only the last step sends it, or, when the run ends early (fail or skip to the end), a worker the orchestrator starts before it moves the run. " +
 	"Before sending, search zrl-bot's sent mail from the run's request date, not a recent-days window: by subject, by the report's URL, and in the request thread if there is one. " +
-	"Inspect every match, send only if none already delivered it, so it goes out once, and put the sent message's id (or the earlier delivery's) in the run's final summary. " +
+	"Inspect every match, send only if none already delivered it, so it goes out once, and put the sent message's id (or the earlier delivery's) in the run's final summary, and record it with intelligence workflow answer --run <run id> --channel email --message-id <sent id> --thread-id <thread id> [--sent-at <date>] [--checked]. " +
 	"Pass this deliverable-email rule to every worker."
 
 // FileDeliveryRule is appended at runtime so saved workflows get it too. Uploading belongs
@@ -362,6 +374,7 @@ const UnattendedShellRule = "Agents run unattended. Pass this shell guidance to 
 	"Even bypass mode can ask for permission on shell safety checks. Intelligence denies those prompts and asks for a safer approach. Use Write/Edit tools for prompt files and other multiline content instead of shell heredocs; split compound commands and use git -C instead of cd && git. A denial does not authorize broader actions. If blocked, report why."
 
 // RunAnswerRule applies to saved workflows too, including code and service tasks.
-const RunAnswerRule = "The final step must record every answer sent to Zach before finishing the run: intelligence workflow answer --run {{run}} --channel email --message-id <sent message id> --thread-id <thread id> --sent-at <actual RFC3339 send time> [--checked]. " +
-	"Use --checked only when the sent answer passed the required review. Record earlier unchecked sends as well as the checked final answer. If an earlier message already answered this request, inspect it and record its actual identifiers and sent time. " +
-	"For another response channel, use that channel and its message identifier. Do not invent a send or record a draft as sent. If no answer was delivered, report that explicitly; the run will remain flagged as unanswered. Pass this rule to every worker; only a step authorized to send may send."
+const RunAnswerRule = "Record every answer sent to the requester, including requesters other than Zach, with intelligence workflow answer --run {{run}} --channel email --message-id <sent message id> [--thread-id <thread id>] [--sent-at <date>] [--checked]. " +
+	"The final step must do this before finishing. On an early exit (fail or skip to the end), the authorized worker that sends the answer must record it before the orchestrator ends the run. Only a step authorized to send may send. " +
+	"Use --checked only when the sent answer passed the required review. Record earlier unchecked sends too. Use the actual send time in RFC 3339 or RFC 5322 format when available; immediately after sending, omit --sent-at if the mail tool returns no timestamp, and the server defaults to now(). " +
+	"For an earlier delivery, inspect the message and supply its actual send date and identifiers; do not use the current time. For another response channel, use that channel and its message identifier. Do not invent a send or record an unsent draft. If no checked answer was delivered, report that explicitly. Pass this rule to every worker."

@@ -233,3 +233,33 @@ func TestHostRestoresPermissionAuditsOnStartAndBothReconnects(t *testing.T) {
 	d.DropAll()
 	waitCleared(3)
 }
+
+func TestHostSendsPeriodicSnapshotsWithoutChanges(t *testing.T) {
+	s, d := newStreamServer(t), daemon(t)
+	ticks := make(chan time.Time)
+	seen := make(chan Frame, 16)
+	s.answer = func(f Frame) Frame {
+		if f.Type == ReportFrame {
+			seen <- f
+		}
+		return Frame{Type: AckFrame, ID: f.ID}
+	}
+	hostRig(t, s, d, func(c *Client) {
+		c.reportTicks = ticks
+		c.StatusEvery = time.Hour
+		c.Settle = -1 // no debounce delay in this test
+	})
+	// Initial daemon discovery is asynchronous; report delivery is our barrier.
+	for f := range seen {
+		if f.Report.Paseo.Connected && len(f.Report.Paseo.Agents) == 2 {
+			break
+		}
+	}
+	for range 2 {
+		ticks <- time.Time{}
+		f := <-seen
+		if f.Report.Name != "host" || len(f.Report.Paseo.Agents) != 2 {
+			t.Fatalf("periodic report lost unchanged snapshot: %+v", f.Report)
+		}
+	}
+}

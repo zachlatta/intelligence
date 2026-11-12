@@ -94,6 +94,9 @@ func TestABusyHostQueuesNewRunsAndStartsThemInOrder(t *testing.T) {
 	if s := runField(t, h, first, "status"); s != "starting" {
 		t.Fatalf("the first queued run should start first: %v", s)
 	}
+	if reason := runField(t, h, first, "queue_reason"); reason != "" {
+		t.Errorf("dequeued run retains stale reason: %v", reason)
+	}
 	if ws := runField(t, h, first, "workspace_title").(string); !strings.Contains(ws, runHex(first)) {
 		t.Errorf("workspace = %q", ws)
 	}
@@ -124,7 +127,7 @@ func TestABusyHostQueuesNewRunsAndStartsThemInOrder(t *testing.T) {
 	for _, row := range r.Rows {
 		kinds = append(kinds, row[0].(string))
 	}
-	if strings.Join(kinds, ",") != "started,queued,dequeued,project" {
+	if strings.Join(kinds, ",") != "started,project,queued,dequeued" {
 		t.Errorf("events = %v", kinds)
 	}
 }
@@ -274,7 +277,7 @@ func TestEachHostLearnsARunsFootprint(t *testing.T) {
 	// two hours: the first with no runs at 10% CPU, the second with two runs at 50%
 	now := time.Now().UTC().Truncate(time.Minute)
 	if _, err := d.Owner.Exec(t.Context(), `INSERT INTO host_minutes (host, minute, samples, cpus, cpu_avg_pct, load1, mem_total, mem_available_min)
-		SELECT 'host-1', $1::timestamptz - i * interval '1 minute', 12, 8, CASE WHEN i <= 60 THEN 50 ELSE 10 END, 1, 100, 70
+		SELECT 'host-1', $1::timestamptz - i * interval '1 minute', 12, 8, CASE WHEN i <= 60 THEN 50 ELSE 10 END, 1, 107374182400, 75161927680
 		FROM generate_series(1, 120) i`, now); err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +395,7 @@ func TestContradictoryHistoryIsNotLearned(t *testing.T) {
 	wf := fixedWorkflow(t, h)
 	now := time.Now().UTC().Truncate(time.Minute)
 	if _, err := d.Owner.Exec(t.Context(), `INSERT INTO host_minutes (host, minute, samples, cpus, cpu_avg_pct, load1, mem_total, mem_available_min)
-		SELECT 'host-1', $1::timestamptz - i * interval '1 minute', 12, 8, CASE WHEN i <= 60 THEN 10 ELSE 50 END, 1, 100, 70
+		SELECT 'host-1', $1::timestamptz - i * interval '1 minute', 12, 8, CASE WHEN i <= 60 THEN 10 ELSE 50 END, 1, 107374182400, 75161927680
 		FROM generate_series(1, 120) i`, now); err != nil {
 		t.Fatal(err)
 	}

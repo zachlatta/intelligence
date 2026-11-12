@@ -40,7 +40,7 @@ func TestMCPReadmeGuidesSQL(t *testing.T) {
 	h, _ := dbServer(t)
 	_, token := mintMCP(t, h)
 	got := rpc(t, h, token, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"readme","arguments":{}}}`)
-	for _, term := range []string{"schema_overview", "describe_table", "workflow_runs", "workflow_run_events", "recorded_agents", "transcripts", "seq_start", "epoch", "synced_at", "LIMIT", "SQL"} {
+	for _, term := range []string{"schema_overview", "describe_table", "workflow_runs", "workflow_run_answers", "workflow_runs_unanswered", "requested_at", "answer_expected", "workflow_run_events", "recorded_agents", "transcripts", "seq_start", "epoch", "synced_at", "LIMIT", "SQL"} {
 		if !strings.Contains(got, term) {
 			t.Errorf("readme missing %s: %s", term, got)
 		}
@@ -63,15 +63,26 @@ func TestMCPProposalGuidance(t *testing.T) {
 
 // Keep the shipped guide executable, and verify its reads use the same SQL API path.
 func TestMCPGuideExamples(t *testing.T) {
-	h, _ := dbServer(t)
+	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
-	wf := createWorkflow(t, h, workflow.Starting)
+	def := workflow.Starting
+	def.Trigger = workflow.TriggerEmail
+	def.Email = &workflow.EmailFilter{From: []string{"requester@example.com"}}
+	wf := createWorkflow(t, h, def)
 	run := startRun(t, h, wf, "Guide fixture")
+	overdue := startRun(t, h, wf, "Overdue guide fixture")
+	if _, err := d.Owner.Exec(t.Context(), `UPDATE workflow_runs SET requested_at='2020-01-01T12:00:00Z' WHERE id=$1 OR id=$2`, run, overdue); err != nil {
+		t.Fatal(err)
+	}
+	rec := call(t, anon(h), "POST", "/api/workflow-runs/"+run+"/answers", `{"channel":"email","messageId":"guide-reply","sentAt":"2020-01-01T12:15:00Z","checked":true}`, map[string]string{"Authorization": "Bearer " + keyOf(t, h, "host-1")})
+	if rec.Code != 200 {
+		t.Fatal(rec.Body)
+	}
 	sendBatch(t, h, batch(true, "guide-epoch", tentry(0, `{"type":"user_message","text":"guide message"}`)))
 	_, token := mintMCP(t, h)
 	parts := strings.Split(mcpReadme, "```sql\n")
-	if len(parts) != 7 {
-		t.Fatalf("expected six SQL examples, got %d", len(parts)-1)
+	if len(parts) != 9 {
+		t.Fatalf("expected eight SQL examples, got %d", len(parts)-1)
 	}
 	for _, part := range parts[1:] {
 		query := strings.SplitN(part, "```", 2)[0]

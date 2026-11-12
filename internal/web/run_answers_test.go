@@ -37,7 +37,7 @@ func TestRunAnswersAndUnansweredRequests(t *testing.T) {
 	if code := post(keyOf(t, h, "host-2"), draft); code != 404 {
 		t.Fatalf("other host: %d", code)
 	}
-	if code := post(key, `{"channel":"email","messageId":"x"}`); code != 400 {
+	if code := post(key, `{"channel":"email"}`); code != 400 {
 		t.Fatalf("invalid: %d", code)
 	}
 	for _, body := range []string{draft, draft, `{"channel":"email","messageId":"checked-send","threadId":"thread-demo","sentAt":"2026-11-11T20:30:00Z","checked":true}`} {
@@ -96,13 +96,22 @@ func TestRequestTimeMigrationBackfillsAndToleratesBadDates(t *testing.T) {
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	wf := createWorkflow(t, h, workflow.Starting)
-	email := startRun(t, h, wf, "Example email\nDate: Wed, 11 Nov 2026 14:39:00 -0500\n")
-	voice := startRun(t, h, wf, "Voice memo: Example\nRecorded: 2026-11-11T12:00:00Z\n")
+	emailDef := workflow.Starting
+	emailDef.Trigger = workflow.TriggerEmail
+	emailDef.Email = &workflow.EmailFilter{From: []string{"requester@example.com"}}
+	emailWF := createWorkflow(t, h, emailDef)
+	voiceDef := workflow.Starting
+	voiceDef.Trigger = workflow.TriggerVoiceMemo
+	voiceDef.VoiceMemo = &workflow.VoiceMemoFilter{}
+	voiceWF := createWorkflow(t, h, voiceDef)
+	email := startRun(t, h, emailWF, "Example email\nDate: Wed, 11 Nov 2026 14:39:00 -0500 (EST)\n")
+	voice := startRun(t, h, voiceWF, "Voice memo: Example\nRecorded: 2026-11-11T12:00:00Z\n")
 	bad := startRun(t, h, wf, "Example email\nDate: invalid date\n")
 	if _, err := d.Owner.Exec(t.Context(), `DROP VIEW workflow_runs_unanswered;
  DROP TABLE workflow_run_answers;
  ALTER TABLE workflow_runs DROP COLUMN requested_at;
- DELETE FROM schema_migrations WHERE version='0040_workflow_answers'`); err != nil {
+ ALTER TABLE workflow_runs DROP COLUMN answer_expected;
+ DELETE FROM schema_migrations WHERE version='0045_workflow_answers'`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Migrate(t.Context(), d.Owner); err != nil {
@@ -113,8 +122,8 @@ func TestRequestTimeMigrationBackfillsAndToleratesBadDates(t *testing.T) {
 		{voice, "TIMESTAMPTZ '2026-11-11T12:00:00Z'"},
 		{bad, "created_at"},
 	} {
-		code, r := sqlPost(t, h, q("SELECT requested_at="+tc.expected+" FROM workflow_runs WHERE id='"+tc.id+"'"))
-		if code != 200 || len(r.Rows) != 1 || r.Rows[0][0] != true {
+		code, r := sqlPost(t, h, q("SELECT requested_at="+tc.expected+", answer_expected FROM workflow_runs WHERE id='"+tc.id+"'"))
+		if code != 200 || len(r.Rows) != 1 || r.Rows[0][0] != true || r.Rows[0][1] != (tc.id != bad) {
 			t.Fatalf("backfill: %d %+v", code, r)
 		}
 	}

@@ -28,11 +28,14 @@ narrow the query. When truncated, continue with a stable key cursor, not an unbo
 | Proposal questions and agent answers | `workflow_proposal_comments` (filter proposal_id, order by id) |
 | Answer dispatch, command, agent, failure and completion | `workflow_proposal_questions`, `workflow_proposal_question_status` |
 | Runs, task input, current step, waiting note, errors | `workflow_runs` |
+| Request time and whether a reply is owed | `workflow_runs.requested_at`, `workflow_runs.answer_expected` |
+| Sent answer messages and review status | `workflow_run_answers` |
+| Expected requests overdue without a checked answer (excludes canceled) | `workflow_runs_unanswered` (includes has_unchecked_sends) |
 | Run events, agents, step durations | `workflow_run_events`, `workflow_run_agents`, `workflow_run_step_times` |
 | Synced transcript metadata and full entries | `transcripts`, `transcript_entries` |
 | Commands and their results | `commands` |
 | Schedules and their runs | `schedule_status`, `schedule_runs` |
-| Resources, usage, diffs | `host_current`, `agent_days`, `usage_current`, `workspace_diff_files` |
+| Resources, usage, diffs | `host_current`, `host_minutes`, `host_days`, `host_filesystems`, `agent_days`, `usage_current`, `workspace_diff_files` |
 | Released features (What's New) and which this account has not seen | `whats_new`, `whats_new_unseen` |
 
 Host and agent IDs form a composite key: join on both, never agent ID alone. Run `step`
@@ -78,7 +81,7 @@ List recent runs (add `WHERE status = 'waiting'` for ones awaiting a reply). Kee
 
 ```sql
 SELECT id, workflow_id, version, host, coalesce(nullif(task_summary, ''), title) AS title, status, step, orchestrator_id,
-       note, error, created_at, finished_at
+       note, error, created_at, finished_at, requested_at, answer_expected
 FROM workflow_runs
 ORDER BY created_at DESC, id DESC LIMIT 50
 ```
@@ -86,9 +89,32 @@ ORDER BY created_at DESC, id DESC LIMIT 50
 Read one run, even if it has no events:
 
 ```sql
-SELECT id, coalesce(nullif(task_summary, ''), title) AS title, task_summary, input, status, step, note, error, host, orchestrator_id, workspace_id
+SELECT id, coalesce(nullif(task_summary, ''), title) AS title, task_summary, input, status, step, note, error, host, orchestrator_id, workspace_id, requested_at, answer_expected
 FROM workflow_runs WHERE id = '00000000-0000-4000-8000-000000000001' LIMIT 1
 ```
+
+Measure request-to-answer time using the first checked answer, retaining unanswered runs:
+
+```sql
+SELECT r.id, r.requested_at, r.answer_expected, a.message_id, a.thread_id, a.sent_at,
+       extract(epoch FROM (a.sent_at-r.requested_at))/60 AS answered_minutes
+FROM workflow_runs r
+LEFT JOIN LATERAL (
+  SELECT message_id, thread_id, sent_at FROM workflow_run_answers
+  WHERE run_id=r.id AND checked ORDER BY sent_at, id LIMIT 1
+) a ON true
+ORDER BY r.requested_at DESC, r.id LIMIT 50
+```
+
+Find overdue expected requests, including ones with only unchecked sends:
+
+```sql
+SELECT id, requested_at, answer_expected, status, has_unchecked_sends
+FROM workflow_runs_unanswered ORDER BY requested_at, id LIMIT 50
+```
+
+Read all sends from `workflow_run_answers` to inspect unchecked messages as well.
+Task runs do not owe replies by default but can record them and appear in the timing query.
 
 Read its events in order. For another page replace `0` with the last returned `id`:
 

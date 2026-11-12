@@ -21,8 +21,8 @@
   .st-queued::before { background: var(--orange); }
   .st-done { background: var(--green-bg); border-color: var(--green-line); color: var(--green); }
   .st-done::before { background: var(--green); }
-  .st-error, .st-failed { background: var(--red-bg); border-color: var(--red-line); color: var(--red); }
-  .st-error::before, .st-failed::before { background: var(--red); }
+  .st-error, .st-failed, .st-stalled { background: var(--red-bg); border-color: var(--red-line); color: var(--red); }
+  .st-error::before, .st-failed::before, .st-stalled::before { background: var(--red); }
   @keyframes pulse { 50% { opacity: .35; } }
   .wf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr)); gap: 1rem; }
   .wf-card { display: flex; flex-direction: column; margin: 0; }
@@ -199,13 +199,13 @@
 {{if .Runs}}<div class="table-wrap"><table class="table">
   <tr><th>Status</th><th>What</th><th>Workflow</th><th>Now</th><th>Host</th><th>Project</th><th>Asked → answered</th><th class="n">Started</th></tr>
   {{range .Runs}}<tr>
-    <td><span class="status {{.StatusClass}}">{{.StatusLabel}}</span></td>
+    <td><span class="status {{.StatusClass}}">{{.StatusLabel}}</span>{{if eq .Status "stalled"}} <button class="btn sm" data-resume-run="{{.ID}}">Resume</button>{{end}}</td>
     <td><a href="/workflow-runs/{{.ID}}">{{.Title}}</a></td>
     <td>{{.Workflow}} <span class="meta">v{{.Version}}{{if .WorkflowDeleted}} (deleted){{end}}</span></td>
     <td class="meta">{{.Where}}</td>
     <td class="mono" style="white-space:nowrap">{{.Host}}</td>
     <td class="mono">{{.Repo}}</td>
-    <td>{{if .MissingAnswer}}<span class="status st-error">{{.AnswerTiming}}</span>{{else}}{{.AnswerTiming}}{{end}}</td><td class="n meta">{{ago $.Now .CreatedAt}}</td></tr>{{end}}
+    <td>{{if .MissingAnswer}}<span class="status st-error">{{.AnswerTiming}}</span>{{else}}{{.AnswerTiming}}{{end}}{{with .UncheckedTiming}}<div class="meta">{{.}}</div>{{end}}</td><td class="n meta">{{ago $.Now .CreatedAt}}</td></tr>{{end}}
 </table></div>{{else}}<p class="empty-state">No runs yet.</p>{{end}}
 </div>
 <script>
@@ -218,6 +218,14 @@ async function api(method, path, body) {
   if (!res.ok) throw new Error(await res.text());
   return res.status === 204 ? null : res.json();
 }
+// Resume controls
+document.addEventListener("click", async (event) => {
+ const button = event.target.closest("[data-resume-run]");
+ if (!button || button.disabled) return;
+ button.disabled = true;
+ try { await api("POST", "/api/workflow-runs/" + button.dataset.resumeRun + "/resume", {}); location.reload(); }
+ catch(e) { err(e.message); button.disabled = false; }
+});
 document.querySelectorAll("[data-default-workflow]").forEach(button => button.addEventListener("click", async () => {
   button.disabled = true;
   try {
@@ -521,7 +529,7 @@ function inspector() {
     const o = d.orchestrator;
     return panel("Orchestrator", "", `<p class="muted" style="margin-top:0">One per run, in the worktree. It gets one step at a time and decides when each is done. It never does the work itself.</p>
       ${agentFields(o, "o")}<label>Its standing instructions</label><textarea data-o="instructions" class="prompt" style="min-height:16rem">${esc(o.instructions)}</textarea>
-      <p class="hint">It also gets the run, the list of steps, the <code>intelligence workflow</code> commands (next, back, skip, ask, fail) and the first step.</p>`);
+      <p class="hint">It also gets the run, the list of steps, the <code>intelligence workflow</code> commands (next, back, skip, ask, fail, answer) and the first step.</p>`);
   }
   const s = d.steps.find((x) => x.id === sel);
   if (!s) return panel("Steps", "", `<p class="muted">Select a step to edit it, or add one with +.</p>`);
@@ -696,18 +704,20 @@ render();
   <div><h1>{{.Run.Title}}</h1>
     <div class="run-meta"><span class="status {{.Run.StatusClass}}">{{.Run.StatusLabel}}</span>
       <span><b>{{.Run.Workflow}}</b> v{{.Run.Version}}{{if .Run.WorkflowDeleted}} (deleted){{end}}</span><span>on <b class="mono">{{.Run.Host}}</b></span>
-      {{if .Run.Repo}}<span><b class="mono">{{.Run.Repo}}</b> @ <span class="mono">{{.Run.Branch}}</span></span>{{end}}
+      {{if .Run.Repo}}<span><b class="mono">{{.Run.Repo}}</b>{{if .Run.Branch}} @ <span class="mono">{{.Run.Branch}}</span>{{end}}</span>{{end}}
       {{if .Run.WorkspaceTitle}}<span>workspace <b>{{.Run.WorkspaceTitle}}</b></span>{{end}}
       <span>{{plural (len .Agents) "agent"}}</span><span>{{if eq .Run.Status "queued"}}queued{{else}}started{{end}} {{ago .Now .Run.CreatedAt}}</span></div></div>
-  <div class="actions">{{if eq .Run.Status "queued"}}<button class="btn sm primary" id="start-now">Start now</button>{{end}}{{if .Run.Live}}<button class="btn sm" id="cancel">Cancel run</button>{{end}}</div>
+  <div class="actions">{{if eq .Run.Status "stalled"}}<button class="btn sm" id="resume">Resume</button>{{end}}{{if eq .Run.Status "queued"}}<button class="btn sm primary" id="start-now">Start now</button>{{end}}{{if .Run.Live}}<button class="btn sm" id="cancel">Cancel run</button>{{end}}</div>
 </div>
-<p class="banner {{if not .Run.MissingAnswer}}note{{end}}">{{.Run.AnswerTiming}} · Asked {{.Run.RequestedAt.Format "Jan 2, 2006 15:04 MST"}}</p>
+<p class="banner {{if not .Run.MissingAnswer}}note{{end}}">{{.Run.AnswerTiming}}{{with .Run.UncheckedTiming}} · {{.}}{{end}} · Asked {{.Run.RequestedAt.Format "Jan 2, 2006 15:04 MST"}}</p>
 {{if .Run.Answers}}<section class="card"><div class="card-head"><h2>Answers sent</h2></div><div class="card-body"><ul class="events">{{range .Run.Answers}}<li><b>{{.Channel}}</b> · message <code>{{.MessageID}}</code> · thread <code>{{.ThreadID}}</code> · {{.SentAt.Format "Jan 2, 2006 15:04:05 MST"}} · {{if .Checked}}checked{{else}}unchecked{{end}}</li>{{end}}</ul></div></section>{{end}}
 <div class="request">{{.Run.Input}}</div>
 {{if .VoiceMemos}}<section class="card"><div class="card-head"><h2>Voice memo that started this run</h2><span class="grow"></span><a class="btn sm ghost" href="/workflows/voice-memos">All voice memos</a></div><div class="card-body">{{template "voice-memo-rows" .VoiceMemos}}</div></section>{{end}}
 {{if .Emails}}<section class="card"><div class="card-head"><h2>Email thread</h2><span class="meta grow">what each email in it did</span><a class="btn sm ghost" href="/workflows/email">All email</a></div>
   <div class="card-body"><ul class="events">{{range .Emails}}<li><span class="t">{{.ReceivedAt.Format "Jan 2 15:04"}}</span><b>{{.Who}}</b> · {{or .Subject "(no subject)"}} · <span class="badge {{.Badge}}">{{.Label}}</span>{{with .Reason}} <span class="meta">{{.}}</span>{{end}}</li>{{end}}</ul></div></section>{{end}}
 {{if eq .Run.Status "queued"}}<p class="banner note">Queued, {{.Run.InLine}}: {{.Run.QueueReason}}. It starts by itself, oldest first, once the host has room; <b>Start now</b> starts it anyway.</p>{{end}}
+<p class="meta">Estimated run memory: {{memoryGiB .Run.EstimatedMemory}} GiB{{if .Run.Repo}} for <span class="mono">{{.Run.Repo}}</span>{{end}}.</p>
+{{if eq .Run.Status "stalled"}}<p class="banner">{{.Run.Error}}</p>{{end}}
 {{if eq .Run.Status "failed"}}<p class="banner">{{or .Run.Error "The orchestrator marked the run failed."}}</p>{{end}}
 {{if .Run.RetryStatus}}<div class="banner note" id="start-retry" role="status">
   <strong>{{.Run.RetryStatus}}</strong>.
@@ -730,14 +740,14 @@ render();
 <div id="steps" class="builder">
   <div class="pipe">
     <div class="node fixed"><div class="nh"><div><div class="kind">Before the orchestrator</div><div class="ttl">Find the project</div></div>
-      <span class="grow-r">{{if eq .Run.Status "finding_project"}}<span class="status st-running">running</span>{{else if eq .Run.Status "queued"}}<span class="status st-queued">queued</span>{{else}}<span class="status st-done">done</span>{{end}}</span></div>
-      <div class="nb">{{if eq .Run.Status "queued"}}Waits in the queue for room on <span class="mono">{{.Run.Host}}</span>.{{else if eq .Run.Status "finding_project"}}An agent is choosing the repository.{{else if .Run.Repo}}<span class="mono">{{.Run.Repo}}</span>, worktree <span class="mono">{{.Run.Branch}}</span>{{else}}No repository: the home directory.{{end}}
+      <span class="grow-r">{{if .Run.ProjectSelected}}<span class="status st-done">done</span>{{else if eq .Run.Status "finding_project"}}<span class="status st-running">running</span>{{else if eq .Run.Status "queued"}}<span class="status st-queued">queued</span>{{else}}<span class="status st-done">done</span>{{end}}</span></div>
+      <div class="nb">{{if .Run.ProjectSelected}}{{if .Run.Repo}}<span class="mono">{{.Run.Repo}}</span>{{if .Run.Branch}}, worktree <span class="mono">{{.Run.Branch}}</span>{{end}}{{else}}No repository: the home directory.{{end}}{{else if eq .Run.Status "queued"}}Waits in the queue for room on <span class="mono">{{.Run.Host}}</span>.{{else if eq .Run.Status "finding_project"}}An agent is choosing the repository.{{else}}Project selection did not finish.{{end}}
         <ul class="events">{{range .Before}}<li><span class="t">{{.At.Format "15:04"}}</span><div class="md">{{markdown .Line}}</div></li>{{end}}</ul></div></div>
     <div class="link{{if .Run.Orchestrator}} done{{end}}"></div>
     <div class="node fixed"><div class="nh"><div><div class="kind">In the worktree</div><div class="ttl">Orchestrator and its sub-agents</div></div></div>
-      <div class="nb">{{if .Agents}}<div class="tree">{{range .Agents}}<div class="ag" style="padding-left:{{.Depth}}.2rem"><span class="status{{if eq .Status "running"}} st-running{{end}}">{{.Status}}</span>
+      <div class="nb">{{if and .Run.ProjectSelected (eq .Run.Status "queued")}}<p>Orchestrator is waiting for host capacity.</p>{{end}}{{if .Agents}}<div class="tree">{{range .Agents}}<div class="ag" style="padding-left:{{.Depth}}.2rem"><span class="status{{if eq .Status "running"}} st-running{{end}}">{{.Status}}</span>
         <a href="/hosts/{{$.Run.Host}}/agents/{{.ID}}">{{or .Title .ID}}</a><span class="meta">{{.Provider}}{{with .Model}} · {{.}}{{end}}</span></div>{{end}}</div>
-        {{else if .Run.Orchestrator}}Its agents show here once the host reports them.{{else}}Starts once the project is found.{{end}}</div></div>
+        {{else if .Run.Orchestrator}}Its agents show here once the host reports them.{{else if .Run.ProjectSelected}}{{if ne .Run.Status "queued"}}The project is selected; no orchestrator has been reported.{{end}}{{else}}Starts once the project is found.{{end}}</div></div>
     <div class="link{{if .Run.Orchestrator}} done{{end}}"></div>
     {{range $i, $s := .Steps}}
     <div class="node k-{{.Kind}} r-{{.State}}"><div class="nh"><div style="min-width:0"><div class="kind">{{kind .Kind}} {{.N}}</div><div class="ttl">{{.Title}}</div></div>
@@ -761,6 +771,14 @@ async function post(path, body) {
   if (!res.ok) throw new Error(await res.text());
 }
 function bind() {
+  if ($("#resume")) $("#resume").onclick = async (event) => {
+    const button = event.currentTarget;
+    if (button.disabled) return;
+    button.disabled = true;
+    try { await post(`/api/workflow-runs/${run}/resume`, {}); await refresh(true); }
+    catch (e) { err(e.message); button.disabled = false; }
+  };
+
   if ($("#start-now")) $("#start-now").onclick = async (ev) => {
     ev.target.disabled = true;
     try { await post(`/api/workflow-runs/${run}/start`, {}); refresh(true); } catch (e) { err(e.message); ev.target.disabled = false; }

@@ -92,7 +92,7 @@ func (r *Registry) record(ctx context.Context, rep hostclient.Report, at time.Ti
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, "UPDATE hosts SET projects = $2 WHERE name = $1", rep.Name, projects); err != nil {
+		if _, err := tx.Exec(ctx, "UPDATE hosts SET projects = $2, report_received_at = $3 WHERE name = $1", rep.Name, projects, at); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, "DELETE FROM workspaces WHERE host = $1", rep.Name); err != nil { // and their agents
@@ -131,6 +131,11 @@ func (r *Registry) record(ctx context.Context, rep hostclient.Report, at time.Ti
 		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"agents"}, []string{"host", "id", "workspace_id", "parent_id", "title",
 			"provider", "model", "thinking", "status", "cwd", "requires_attention", "attention_reason", "created_at",
 			"updated_at", "last_user_message_at"}, pgx.CopyFromRows(arows)); err != nil {
+			return err
+		}
+		// Preserve departing agents before replacement, and capture newly reported
+		// workers now so their resource samples reduce reservations immediately.
+		if err := CaptureWorkflowAgents(ctx, tx, rep.Name, "", at); err != nil {
 			return err
 		}
 		if !ps.Connected {

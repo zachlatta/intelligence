@@ -22,9 +22,13 @@ func seedHost(t *testing.T, d dbtest.DB) {
 	for i := 30; i >= 1; i-- {
 		m := now.Add(-time.Duration(i) * time.Minute)
 		rep := resources.Report{
-			Minutes: []resources.Minute{{Minute: m, Samples: 12, CPUs: 24, CPUAvgPct: f(float64(i)), CPUMaxPct: f(90), Load1: 2,
+			Minutes: []resources.Minute{{Minute: m, Samples: 12, CPUs: 24, CPUAvgPct: f(float64(i)), CPUMaxPct: f(90), Load1: 2, Load5: 1.5, Load15: 1,
 				MemTotal: 20 << 30, MemAvailableMin: 8 << 30, DiskTotal: 100 << 30, DiskAvailableMin: 25 << 30,
-				PSIMemSome: f(0.5), OOMKills: u(0), PaseoMemMax: u(11 << 30)}},
+				PSIMemSome: f(0.5), OOMKills: u(0), PaseoMemMax: u(11 << 30),
+				DiskReadBps: f(12 << 20), DiskWriteBps: f(3 << 20), DiskIOPS: f(250), DiskReadBpsMax: f(40 << 20), DiskWriteBpsMax: f(8 << 20),
+				DiskBusyAvgPct: f(62), DiskBusyMaxPct: f(97),
+				Filesystems: []resources.Filesystem{{Mount: "/", Device: "/dev/sda1", Type: "ext4", Total: 100 << 30, Available: 25 << 30},
+					{Mount: "/srv/data", Device: "/dev/sdb1", Type: "xfs", Total: 2000 << 30, Available: 1500 << 30}}}},
 			Agents: []resources.AgentMinute{{AgentID: agentA1, Minute: m, CPUSeconds: f(6), CPUSource: "ebpf", MemMax: 3 << 30, ProcessesMax: 4, Execs: u(10)}},
 			Probe:  &resources.ProbeStatus{Running: true, Version: "v", Tracked: 99},
 		}
@@ -41,7 +45,8 @@ func TestIndexShowsEachHostsResourcesAndAgentsMemory(t *testing.T) {
 	h, d := dbServer(t)
 	seedHost(t, d)
 	body := get(t, h, "/", nil).Body.String()
-	for _, want := range []string{`href="/resources#host-1"`, "CPU 1%", "RAM 12.0/20.0 GB", "disk 75%", "3.0 GB"} {
+	for _, want := range []string{`href="/resources#host-1"`, "CPU 1%", "load 2.0", "RAM 12.0/20.0 GB", "disk 75% (25.0 GB free)",
+		"disk busy 62%", "3.0 GB"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("index misses %q", want)
 		}
@@ -57,7 +62,10 @@ func TestResourcesPageChartsEachHostAndRanksAgents(t *testing.T) {
 	}
 	body := rec.Body.String()
 	for _, want := range []string{"<title>Host monitoring · Intelligence</title>", "<h1>Host monitoring</h1>", `id="host-1"`, "<polyline", "Fix the", "3m 0s", "300 commands", "OOM kills", "node", "9.0 GB",
-		"eBPF probe v", "Paseo"} {
+		"eBPF probe v", "Paseo",
+		// load, disk I/O and every filesystem
+		"<h3>Load</h3>", "load 2.0 · 1.5 · 1.0", "0.08 per CPU", "<h3>Disk I/O</h3>", "<h3>Disk throughput, MB/s</h3>", ">12</text>", "read 12.0 MB/s",
+		"write 3.0 MB/s", "250 IOPS", "disk busy 62%", "<h3>Filesystems</h3>", "/srv/data", "xfs", "500.0 GB", "1500.0 GB", "25%"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("resources page misses %q", want)
 		}

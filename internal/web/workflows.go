@@ -29,7 +29,8 @@ import (
 var workflowsHTML string
 
 var workflowsTmpl = template.Must(template.New("workflows").Funcs(template.FuncMap{
-	"short": short, "ago": ago, "markdown": markdown, "plural": plural, "emailSummary": emailSummary, "voiceMemoSummary": voiceMemoSummary,
+	"memoryGiB": func(b int64) string { return fmt.Sprintf("%.1f", float64(b)/(1<<30)) },
+	"short":     short, "ago": ago, "markdown": markdown, "plural": plural, "emailSummary": emailSummary, "voiceMemoSummary": voiceMemoSummary,
 	"json": func(v any) (template.JS, error) {
 		b, err := json.Marshal(v)
 		return template.JS(b), err //nolint:gosec // JSON from the server's own values, in a script
@@ -330,11 +331,15 @@ type runAnswerRow struct {
 type runRow struct {
 	RequestedAt                                                          time.Time
 	AnsweredAt                                                           *time.Time
+	FirstUncheckedAt                                                     *time.Time
+	AnswerExpected                                                       bool
 	Answers                                                              []runAnswerRow
 	ID, Title, Input, Status, Host, Repo, Branch, Workflow, WorkflowID   string
 	WorkspaceID, WorkspaceTitle, Orchestrator, ProjectAgent, Note, Error string
 	QueueReason                                                          string
 	Position                                                             int // in its host's queue (workflow_run_queue), 1 next; 0 not queued
+	EstimatedMemory                                                      int64
+	ProjectSelected, QueuedAtCreation                                    bool
 	Step, Version                                                        int
 	WorkflowDeleted                                                      bool
 	Steps                                                                []workflow.Step
@@ -350,8 +355,10 @@ const runRowSelect = `SELECT r.id::text, coalesce(nullif(r.task_summary, ''), r.
 	w.deleted_at IS NOT NULL, r.start_retries, r.start_retry_at,
 	COALESCE((SELECT online FROM host_status WHERE name=r.host),false),
 	COALESCE((SELECT online AND connected FROM host_status WHERE name=r.host),false),
-	COALESCE((SELECT start_retry_keys FROM hosts WHERE name=r.host),false), r.queue_reason, coalesce(q.position, 0), r.requested_at,
- (SELECT min(sent_at) FROM workflow_run_answers WHERE run_id=r.id),
+	COALESCE((SELECT start_retry_keys FROM hosts WHERE name=r.host),false), r.queue_reason, coalesce(q.position, 0), r.estimated_memory_bytes,
+	r.project_selected, r.queued_at_creation, r.requested_at, r.answer_expected,
+ (SELECT min(sent_at) FROM workflow_run_answers WHERE run_id=r.id AND checked),
+ (SELECT min(sent_at) FROM workflow_run_answers WHERE run_id=r.id AND NOT checked),
  (SELECT coalesce(jsonb_agg(jsonb_build_object('Channel',channel,'MessageID',message_id,'ThreadID',thread_id,'SentAt',sent_at,'Checked',checked) ORDER BY sent_at,id),'[]'::jsonb) FROM workflow_run_answers WHERE run_id=r.id)
 	FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id JOIN workflow_versions v ON v.workflow_id = r.workflow_id AND v.version = r.version
 	LEFT JOIN workflow_run_queue q ON q.run_id = r.id `
@@ -361,7 +368,7 @@ func scanRunRow(row pgx.CollectableRow) (runRow, error) {
 	var steps, answers []byte
 	err := row.Scan(&r.ID, &r.Title, &r.Input, &r.Status, &r.Host, &r.Repo, &r.Branch, &r.Workflow, &r.WorkflowID, &r.WorkspaceID, &r.WorkspaceTitle,
 		&r.Orchestrator, &r.ProjectAgent, &r.Note, &r.Error, &r.Step, &r.Version, &steps, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt, &r.WorkflowDeleted,
-		&r.StartRetries, &r.StartRetryAt, &r.HostOnline, &r.DaemonConnected, &r.RetryKeys, &r.QueueReason, &r.Position, &r.RequestedAt, &r.AnsweredAt, &answers)
+		&r.StartRetries, &r.StartRetryAt, &r.HostOnline, &r.DaemonConnected, &r.RetryKeys, &r.QueueReason, &r.Position, &r.EstimatedMemory, &r.ProjectSelected, &r.QueuedAtCreation, &r.RequestedAt, &r.AnswerExpected, &r.AnsweredAt, &r.FirstUncheckedAt, &answers)
 	if err == nil {
 		err = json.Unmarshal(steps, &r.Steps)
 		if err == nil {
@@ -383,7 +390,7 @@ func (r runRow) Where() string {
 		return "finding the project"
 	case workflow.StartingOrchestrator:
 		return "starting the orchestrator"
-	case workflow.Running, workflow.Waiting:
+	case workflow.Running, workflow.Waiting, workflow.Stalled:
 		if r.Step < len(r.Steps) {
 			return r.Steps[r.Step].Title
 		}
@@ -424,6 +431,8 @@ func (r runRow) StatusLabel() string {
 	switch r.Status {
 	case workflow.FindingProject, workflow.StartingOrchestrator, workflow.Running:
 		return "running"
+	case workflow.Stalled:
+		return "Stalled"
 	case workflow.Waiting:
 		return "needs you"
 	}
@@ -458,7 +467,7 @@ func (r runRow) StatusClass() string {
 		return "st-queued"
 	case workflow.Succeeded:
 		return "st-done"
-	case workflow.Failed:
+	case workflow.Failed, workflow.Stalled:
 		return "st-error"
 	}
 	return ""
@@ -549,9 +558,12 @@ func stepViews(r runRow, events []runEvent, visits []stepVisit, now time.Time) [
 			v.State, v.Label = "failed", "failed"
 		}
 	}
-	if (r.Status == workflow.Running || r.Status == workflow.Waiting) && r.Step < len(out) {
+	if (r.Status == workflow.Running || r.Status == workflow.Waiting || r.Status == workflow.Stalled) && r.Step >= 0 && r.Step < len(out) {
 		v := &out[r.Step]
 		v.State, v.Label = "running", "running"
+		if r.Status == workflow.Stalled {
+			v.State, v.Label = "stalled", "stalled"
+		}
 		if r.Status == workflow.Waiting {
 			v.State, v.Label = "asking", "asking you"
 		}
@@ -829,7 +841,7 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if run.QueueReason != "" { // it was queued: its first event submitted it, and it started later
+		if run.QueuedAtCreation {
 			for i := range events {
 				if events[i].Kind == "started" {
 					events[i].Kind = "submitted"
@@ -925,7 +937,7 @@ func (e runEvent) Line() string {
 		return "Failed: " + e.Text
 	case "cancel":
 		return "Canceled"
-	case "error":
+	case "error", "stalled", "continuation", "resume":
 		return e.Text
 	case "start_retry":
 		return "Start failed; retry queued: " + e.Text
@@ -958,10 +970,42 @@ func (r runRow) AnswerTiming() string {
 	if r.AnsweredAt != nil {
 		return fmt.Sprintf("Asked → answered: %.1f min", r.AnsweredAt.Sub(r.RequestedAt).Minutes())
 	}
-	if !r.Live() {
+	if r.FirstUncheckedAt != nil {
+		return "Only unchecked sends"
+	}
+	if r.Status == workflow.Canceled {
+		return "Canceled"
+	}
+	if !r.AnswerExpected {
+		return "No answer expected"
+	}
+	if r.MissingAnswer() {
 		return "No answer recorded"
 	}
-	return "Awaiting answer"
+	return "Awaiting checked answer"
 }
 
-func (r runRow) MissingAnswer() bool { return r.AnsweredAt == nil && !r.Live() }
+func (r runRow) MissingAnswer() bool {
+	return r.AnswerExpected && r.AnsweredAt == nil && (r.Status == workflow.Succeeded || r.Status == workflow.Failed)
+}
+
+func (r runRow) UncheckedTiming() string {
+	if r.FirstUncheckedAt == nil {
+		return ""
+	}
+	return fmt.Sprintf("Unchecked send at %.1f min", r.FirstUncheckedAt.Sub(r.RequestedAt).Minutes())
+}
+
+func (a *app) resumeRun(v viewer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct{}
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+		if err := a.wf.Resume(r.Context(), v.acct.ID, r.PathValue("id")); err != nil {
+			workflowError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}

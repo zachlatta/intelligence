@@ -15,18 +15,26 @@
 {{template "top" "/resources"}}
 <main class="container page mid">
 <div class="page-head">
-  <div><h1>Host monitoring</h1><p class="sub">Each host's CPU and memory, its OOM kills and its agents ranked by CPU.</p></div>
+  <div><h1>Host monitoring</h1><p class="sub">Each host's CPU, load, memory, disk I/O and filesystems, its OOM kills and its agents ranked by CPU.</p></div>
   <nav class="segmented" aria-label="Range">{{range $h := (list 1 6 24 168 720)}}<a href="/resources?hours={{$h}}"{{if eq $h $.Hours}} class="on"{{end}}>{{if lt $h 48}}{{$h}}h{{else}}{{div $h 24}}d{{end}}</a>{{end}}</nav>
 </div>
 {{range .Cards}}{{$host := .Host}}
 <section class="card" id="{{.Host}}">
   <div class="card-head"><h2>{{.Host}}</h2><span class="meta">{{hostLine .Now}}</span></div>
   <div class="card-body">
-  <div class="facts">{{with .Now.Minute}}<span class="badge">{{.CPUs}} CPUs</span><span class="badge">load {{printf "%.1f" .Load1}}</span>{{if .SwapTotal}}<span class="badge">swap {{gb .SwapUsedMax}}/{{gb .SwapTotal}}</span>{{end}}{{with .PaseoMemMax}}<span class="badge">Paseo {{gb .}}</span>{{end}}{{end}}
+  <div class="facts">{{with .Now.Minute}}<span class="badge">{{.CPUs}} CPUs</span><span class="badge" title="1, 5 and 15-minute load averages; above 1 per CPU, tasks wait for a CPU">load {{printf "%.1f" .Load1}} · {{printf "%.1f" .Load5}} · {{printf "%.1f" .Load15}}{{with perCPU .}} ({{.}}){{end}}</span>{{if .SwapTotal}}<span class="badge">swap {{gb .SwapUsedMax}}/{{gb .SwapTotal}}</span>{{end}}{{with .PaseoMemMax}}<span class="badge">Paseo {{gb .}}</span>{{end}}
+  {{with .DiskReadBps}}<span class="badge">read {{mbps .}}</span>{{end}}{{with .DiskWriteBps}}<span class="badge">write {{mbps .}}</span>{{end}}{{with .DiskIOPS}}<span class="badge">{{whole .}} IOPS</span>{{end}}{{with .DiskBusyAvgPct}}<span class="badge" title="the busiest disk's share of the minute with I/O in flight; near 100% it is saturated">disk busy {{whole .}}%</span>{{end}}{{end}}
   {{with .Now.Probe}}{{if .Running}}<span class="badge green" title="following {{.Tracked}} processes; CPU per agent is exact">eBPF probe {{.Version | printf "%.7s"}}</span>{{end}}{{end}}</div>
   {{with .Now.Probe}}{{if not .Running}}<p class="banner">eBPF probe not running ({{.Error}}): CPU per agent counts only processes alive every 15 seconds</p>{{end}}{{end}}
   {{if .CPU}}<h3>CPU</h3>{{.CPU}}<div class="legend"><span><i style="background: #4b70cc"></i>average</span><span><i style="background: #e0803a"></i>peak</span></div>{{end}}
   {{if .Mem}}<h3>Memory</h3>{{.Mem}}<div class="legend"><span><i style="background: #4b70cc"></i>used</span><span><i style="background: #e0803a"></i>Paseo and its agents</span></div>{{end}}
+  {{if .Load}}<h3>Load</h3>{{.Load}}<div class="legend"><span><i style="background: #4b70cc"></i>1-minute load</span><span><i style="background: #e0803a"></i>15-minute load</span><span>top line: {{with .Now.Minute}}{{.CPUs}} CPUs or the highest load{{end}}</span></div>{{end}}
+  {{if .Busy}}<h3>Disk I/O</h3>{{.Busy}}<div class="legend"><span><i style="background: #4b70cc"></i>busiest disk busy, average</span><span><i style="background: #e0803a"></i>peak</span></div>{{end}}
+  {{if .Rate}}<h3>Disk throughput, MB/s</h3>{{.Rate}}<div class="legend"><span><i style="background: #4b70cc"></i>read</span><span><i style="background: #e0803a"></i>written</span></div>{{end}}
+  {{with .Now.Filesystems}}<h3>Filesystems</h3>
+  <div class="table-wrap"><table class="table"><tr><th>Mounted at</th><th>Type</th><th class="n">Used</th><th class="n">Free</th><th class="n">Total</th><th class="n">Full</th></tr>
+  {{range .}}<tr><td class="mono" title="{{.Device}}">{{.Mount}}</td><td>{{.Type}}</td><td class="n">{{fsUsed .}}</td><td class="n">{{gb .Available}}</td><td class="n">{{gb .Total}}</td><td class="n">{{pct .UsedFrac}}</td></tr>{{end}}
+  </table></div>{{end}}
   {{if .OOMs}}<h3 class="warn">OOM kills</h3>
   <div class="table-wrap"><table class="table"><tr><th>When</th><th>Process</th><th class="n">Memory</th><th>Agent</th></tr>
   {{range .OOMs}}<tr><td>{{.At.Format "Jan 2 15:04:05 MST"}}</td><td><span class="mono">{{.Comm}}</span> ({{.PID}})</td><td class="n">{{gb .AnonRSS}}</td>

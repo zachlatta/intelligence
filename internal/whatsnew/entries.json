@@ -3,9 +3,33 @@
     "id": "workflow-answer-tracking",
     "released": "2026-11-12",
     "title": "See when workflow requests get answered",
-    "summary": "Workflows and each run now show asked-to-answered minutes and flag finished runs with no recorded answer. Open a run to see every sent message, its send time and whether it passed review. Agents record replies with the workflow answer command; SQL also lists requests waiting over 30 minutes.",
+    "summary": "Workflows and each run show minutes to the first checked answer, with unchecked sends listed separately. Email and voice requests without checked answers are flagged when they finish; overdue requests are also readable in SQL. Task runs can record answers without owing a reply. Agents use the workflow answer command.",
     "media": "workflow-answers.png",
-    "mediaAlt": "A completed example run showing 15 minutes from request to first answer and both an unchecked send and a checked answer with message identifiers"
+    "mediaAlt": "A completed example email workflow with its step marked done, an unchecked send at 6 minutes and a checked answer at 15 minutes, plus the sent message identifiers"
+  },
+  {
+    "id": "host-disk-io-load-filesystems",
+    "released": "2026-11-12",
+    "title": "Disk I/O, free space and load in Host monitoring",
+    "summary": "Host monitoring now charts each host's load against its CPU count, how busy its disks are and how fast they read and write, and lists every local filesystem with its used, free and total space. Hosts on the home page show their load and free disk, and a disk busy more than half the time.",
+    "media": "host-disk-load.png",
+    "mediaAlt": "Host monitoring for a demo host: load, disk busy and disk throughput charts, and a filesystems table with used, free and total space"
+  },
+  {
+    "id": "workflow-stall-recovery",
+    "released": "2026-11-11",
+    "title": "Recover stalled workflow runs",
+    "summary": "Workflows now nudges an idle orchestrator with its current step when no worker or reply is pending. After two unsuccessful continuations, the run shows Stalled with a reason. Open Workflows or the run page and choose Resume to continue on the same orchestrator and step. Admission queues, startup retries and permission prompts keep their existing rules.",
+    "media": "workflow-stalls.png",
+    "mediaAlt": "A sample workflow run marked Stalled, with its recovery reason and Resume button on the run page"
+  },
+  {
+    "id": "repository-memory-admission",
+    "released": "2026-11-11",
+    "title": "Queue runs by repository memory needs",
+    "summary": "The host queue estimates RAM from successful runs of the selected repository, with headroom and a default for repositories without history. The run page shows the estimate. Active runs keep unused memory reserved, and startup retries use the same estimate and FIFO queue.",
+    "media": "repository-memory.png",
+    "mediaAlt": "A queued application build showing its 10 GiB repository memory estimate and the host memory capacity reason"
   },
   {
     "id": "workflow-model-groups",

@@ -221,3 +221,40 @@ func TestRunAnswerCLI(t *testing.T) {
 		t.Fatal("missing answer instruction")
 	}
 }
+
+func TestRunAnswerCLIAcceptsMailDatesAndOmittedTime(t *testing.T) {
+	for _, date := range []string{"", "Thu, 12 Nov 2026 14:13:23 -0500", "Thu, 12 Nov 2026 14:13:23 -0500 (EST)"} {
+		args := []string{"--run", "11111111-1111-4111-8111-111111111111", "--channel", "email", "--message-id", "sent-example"}
+		if date != "" {
+			args = append(args, "--sent-at", date)
+		}
+		_, body, err := parseAnswerCLI(args)
+		if err != nil {
+			t.Errorf("date %q: %v", date, err)
+			continue
+		}
+		var a Answer
+		if err := json.Unmarshal(body, &a); err != nil {
+			t.Fatal(err)
+		}
+		if date != "" && a.SentAt.UTC().Format("2006-01-02T15:04:05Z") != "2026-11-12T19:13:23Z" {
+			t.Fatalf("wrong mail date: %s", body)
+		}
+	}
+}
+
+func TestAnswerInstructionsCoverRequestersAndEarlyExits(t *testing.T) {
+	for _, want := range []string{"requester", "fail", "skip", "--sent-at", "RFC 5322", "server"} {
+		if !strings.Contains(RunAnswerRule, want) {
+			t.Errorf("answer instructions miss %q", want)
+		}
+	}
+	if !strings.Contains(DeliverableEmailRule, "intelligence workflow answer") {
+		t.Error("email delivery instructions omit recording")
+	}
+	prompt := OrchestratorPrompt("Example", Starting, Vars{Run: "run-example"})
+	commandList, _, _ := strings.Cut(prompt, "next after the last step")
+	if !strings.Contains(commandList, "intelligence workflow answer --run run-example") {
+		t.Error("command list omits answer")
+	}
+}

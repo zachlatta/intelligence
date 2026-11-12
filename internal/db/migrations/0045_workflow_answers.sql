@@ -1,4 +1,7 @@
 ALTER TABLE workflow_runs ADD COLUMN requested_at timestamptz NOT NULL DEFAULT now();
+ALTER TABLE workflow_runs ADD COLUMN answer_expected boolean NOT NULL DEFAULT false;
+UPDATE workflow_runs r SET answer_expected=(v.definition->>'trigger' IN ('email','voice_memo'))
+FROM workflow_versions v WHERE v.workflow_id=r.workflow_id AND v.version=r.version;
 -- Best effort for historical inputs. Malformed dates never prevent the upgrade.
 DO $$
 DECLARE r record; stamp timestamptz; raw text;
@@ -7,7 +10,10 @@ BEGIN
   stamp := r.created_at;
   raw := substring(r.input from '(?m)^(?:Date:|Recorded:) ([^\r\n]+)');
   BEGIN
-   IF raw IS NOT NULL THEN stamp := raw::timestamptz; END IF;
+   IF raw IS NOT NULL THEN
+    raw := regexp_replace(raw, '[[:space:]]+\([^)]*\)[[:space:]]*$', '');
+    stamp := raw::timestamptz;
+   END IF;
    IF NOT isfinite(stamp) THEN stamp := r.created_at; END IF;
   EXCEPTION WHEN OTHERS THEN stamp := r.created_at;
   END;
@@ -29,6 +35,9 @@ CREATE TABLE workflow_run_answers (
 ALTER TABLE workflow_run_answers ENABLE ROW LEVEL SECURITY;
 CREATE POLICY own_rows ON workflow_run_answers FOR SELECT USING (account_id=current_account_id());
 CREATE VIEW workflow_runs_unanswered WITH (security_invoker=true) AS
- SELECT r.*, extract(epoch FROM (now()-r.requested_at))/60 AS waiting_minutes
- FROM workflow_runs r WHERE requested_at < now()-interval '30 minutes'
- AND NOT EXISTS (SELECT 1 FROM workflow_run_answers a WHERE a.run_id=r.id);
+ SELECT r.id, r.account_id, r.workflow_id, r.host, r.title, r.status, r.requested_at, r.answer_expected,
+ extract(epoch FROM (now()-r.requested_at))/60 AS waiting_minutes,
+ EXISTS (SELECT 1 FROM workflow_run_answers a WHERE a.run_id=r.id AND NOT a.checked) AS has_unchecked_sends
+ FROM workflow_runs r WHERE r.answer_expected AND r.status <> 'canceled'
+ AND requested_at < now()-interval '30 minutes'
+ AND NOT EXISTS (SELECT 1 FROM workflow_run_answers a WHERE a.run_id=r.id AND a.checked);

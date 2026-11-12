@@ -173,6 +173,9 @@ func (r *Registry) Claim(ctx context.Context, host string, options ClaimOptions,
 				AND CASE WHEN idempotency_key = '' THEN $3::boolean ELSE $6::boolean END))
 			AND (idempotency_key = '' OR ($5 AND EXISTS (
 				SELECT 1 FROM hosts WHERE name = $1 AND stream_id = NULLIF($4, '')::uuid AND start_retry_keys)))
+            AND NOT EXISTS (SELECT 1 FROM workflow_run_continuations k JOIN workflow_runs r ON r.id=k.run_id
+              WHERE k.command_id=commands.id AND (r.status<>'running'
+                OR k.event_id<>(SELECT event_id FROM workflow_run_latest_transition WHERE run_id=r.id)))
 			FOR UPDATE SKIP LOCKED)
 		RETURNING `+commandColumns, host, at, options.Replay, options.StreamID, options.RetryReady, options.ReplayRetries)
 	if err != nil {
