@@ -29,7 +29,8 @@ import (
 var workflowsHTML string
 
 var workflowsTmpl = template.Must(template.New("workflows").Funcs(template.FuncMap{
-	"short": short, "ago": ago, "markdown": markdown, "plural": plural, "emailSummary": emailSummary, "voiceMemoSummary": voiceMemoSummary,
+	"memoryGiB": func(b int64) string { return fmt.Sprintf("%.1f", float64(b)/(1<<30)) },
+	"short":     short, "ago": ago, "markdown": markdown, "plural": plural, "emailSummary": emailSummary, "voiceMemoSummary": voiceMemoSummary,
 	"json": func(v any) (template.JS, error) {
 		b, err := json.Marshal(v)
 		return template.JS(b), err //nolint:gosec // JSON from the server's own values, in a script
@@ -324,6 +325,8 @@ type runRow struct {
 	WorkspaceID, WorkspaceTitle, Orchestrator, ProjectAgent, Note, Error string
 	QueueReason                                                          string
 	Position                                                             int // in its host's queue (workflow_run_queue), 1 next; 0 not queued
+	EstimatedMemory                                                      int64
+	ProjectSelected, QueuedAtCreation                                    bool
 	Step, Version                                                        int
 	WorkflowDeleted                                                      bool
 	Steps                                                                []workflow.Step
@@ -339,7 +342,8 @@ const runRowSelect = `SELECT r.id::text, coalesce(nullif(r.task_summary, ''), r.
 	w.deleted_at IS NOT NULL, r.start_retries, r.start_retry_at,
 	COALESCE((SELECT online FROM host_status WHERE name=r.host),false),
 	COALESCE((SELECT online AND connected FROM host_status WHERE name=r.host),false),
-	COALESCE((SELECT start_retry_keys FROM hosts WHERE name=r.host),false), r.queue_reason, coalesce(q.position, 0)
+	COALESCE((SELECT start_retry_keys FROM hosts WHERE name=r.host),false), r.queue_reason, coalesce(q.position, 0), r.estimated_memory_bytes,
+	r.project_selected, r.queued_at_creation
 	FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id JOIN workflow_versions v ON v.workflow_id = r.workflow_id AND v.version = r.version
 	LEFT JOIN workflow_run_queue q ON q.run_id = r.id `
 
@@ -348,7 +352,7 @@ func scanRunRow(row pgx.CollectableRow) (runRow, error) {
 	var steps []byte
 	err := row.Scan(&r.ID, &r.Title, &r.Input, &r.Status, &r.Host, &r.Repo, &r.Branch, &r.Workflow, &r.WorkflowID, &r.WorkspaceID, &r.WorkspaceTitle,
 		&r.Orchestrator, &r.ProjectAgent, &r.Note, &r.Error, &r.Step, &r.Version, &steps, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt, &r.WorkflowDeleted,
-		&r.StartRetries, &r.StartRetryAt, &r.HostOnline, &r.DaemonConnected, &r.RetryKeys, &r.QueueReason, &r.Position)
+		&r.StartRetries, &r.StartRetryAt, &r.HostOnline, &r.DaemonConnected, &r.RetryKeys, &r.QueueReason, &r.Position, &r.EstimatedMemory, &r.ProjectSelected, &r.QueuedAtCreation)
 	if err == nil {
 		err = json.Unmarshal(steps, &r.Steps)
 	}
@@ -367,7 +371,7 @@ func (r runRow) Where() string {
 		return "finding the project"
 	case workflow.StartingOrchestrator:
 		return "starting the orchestrator"
-	case workflow.Running, workflow.Waiting:
+	case workflow.Running, workflow.Waiting, workflow.Stalled:
 		if r.Step < len(r.Steps) {
 			return r.Steps[r.Step].Title
 		}
@@ -408,6 +412,8 @@ func (r runRow) StatusLabel() string {
 	switch r.Status {
 	case workflow.FindingProject, workflow.StartingOrchestrator, workflow.Running:
 		return "running"
+	case workflow.Stalled:
+		return "Stalled"
 	case workflow.Waiting:
 		return "needs you"
 	}
@@ -442,7 +448,7 @@ func (r runRow) StatusClass() string {
 		return "st-queued"
 	case workflow.Succeeded:
 		return "st-done"
-	case workflow.Failed:
+	case workflow.Failed, workflow.Stalled:
 		return "st-error"
 	}
 	return ""
@@ -533,9 +539,12 @@ func stepViews(r runRow, events []runEvent, visits []stepVisit, now time.Time) [
 			v.State, v.Label = "failed", "failed"
 		}
 	}
-	if (r.Status == workflow.Running || r.Status == workflow.Waiting) && r.Step < len(out) {
+	if (r.Status == workflow.Running || r.Status == workflow.Waiting || r.Status == workflow.Stalled) && r.Step >= 0 && r.Step < len(out) {
 		v := &out[r.Step]
 		v.State, v.Label = "running", "running"
+		if r.Status == workflow.Stalled {
+			v.State, v.Label = "stalled", "stalled"
+		}
 		if r.Status == workflow.Waiting {
 			v.State, v.Label = "asking", "asking you"
 		}
@@ -656,12 +665,17 @@ func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		rows, err := v.pool.Query(ctx, runRowSelect+"ORDER BY r.created_at DESC LIMIT 100")
+		list, err := readRunsPage(ctx, v.pool, r.URL.Query().Get("q"), r.URL.Query().Get("page"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		runs, err := pgx.CollectRows(rows, scanRunRow)
+		rows, err := v.pool.Query(ctx, runRowSelect+"WHERE r.status = 'waiting' ORDER BY r.created_at DESC LIMIT 20")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		waiting, err := pgx.CollectRows(rows, scanRunRow)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -677,8 +691,8 @@ func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 				tasks = append(tasks, wf)
 			}
 		}
-		renderWorkflows(w, "list", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Workflows": wfs, "Runs": runs,
-			"Hosts": hosts, "Tasks": tasks, "Starting": workflow.Starting, "Dictation": dictationPath(cfg)})
+		renderWorkflows(w, "list", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Workflows": wfs,
+			"List": list, "Waiting": waiting, "Hosts": hosts, "Tasks": tasks, "Starting": workflow.Starting, "Dictation": dictationPath(cfg)})
 	}
 }
 
@@ -813,7 +827,7 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if run.QueueReason != "" { // it was queued: its first event submitted it, and it started later
+		if run.QueuedAtCreation {
 			for i := range events {
 				if events[i].Kind == "started" {
 					events[i].Kind = "submitted"
@@ -909,7 +923,7 @@ func (e runEvent) Line() string {
 		return "Failed: " + e.Text
 	case "cancel":
 		return "Canceled"
-	case "error":
+	case "error", "stalled", "continuation", "resume":
 		return e.Text
 	case "start_retry":
 		return "Start failed; retry queued: " + e.Text
@@ -924,4 +938,18 @@ func orDash(s string) string {
 		return "—"
 	}
 	return s
+}
+
+func (a *app) resumeRun(v viewer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct{}
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+		if err := a.wf.Resume(r.Context(), v.acct.ID, r.PathValue("id")); err != nil {
+			workflowError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
 }

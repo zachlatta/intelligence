@@ -21,13 +21,18 @@
   .st-queued::before { background: var(--orange); }
   .st-done { background: var(--green-bg); border-color: var(--green-line); color: var(--green); }
   .st-done::before { background: var(--green); }
-  .st-error, .st-failed { background: var(--red-bg); border-color: var(--red-line); color: var(--red); }
-  .st-error::before, .st-failed::before { background: var(--red); }
+  .st-error, .st-failed, .st-stalled { background: var(--red-bg); border-color: var(--red-line); color: var(--red); }
+  .st-error::before, .st-failed::before, .st-stalled::before { background: var(--red); }
   @keyframes pulse { 50% { opacity: .35; } }
   .wf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr)); gap: 1rem; }
   .wf-card { display: flex; flex-direction: column; margin: 0; }
   .wf-card .card-body { flex: 1; }
   .wf-card h2 a { color: var(--fg); } .wf-card h2 a:hover { color: var(--accent); }
+  .runs-head { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin: 2rem 0 .75rem; }
+  .runs-head .section-title { margin: 0; }
+  .runs-search { display: flex; gap: .4rem; align-items: center; margin-left: auto; }
+  .runs-search input { width: 16rem; height: 1.75rem; padding: 0 .6rem; font-size: 13px; }
+  .pager { display: flex; align-items: center; justify-content: flex-end; gap: .75rem; margin-top: .75rem; }
   .card-foot { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; padding: .6rem 1rem; border-top: 1px solid var(--line); background: var(--bg-subtle); }
   .strip { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; margin: .6rem 0 0; }
   .strip .arrow { color: var(--faint); font-size: 12px; }
@@ -178,7 +183,7 @@
     </div>
   </section>
 {{end}}
-{{range .Runs}}{{if eq .Status "waiting"}}<p class="banner note"><b>{{.Workflow}}</b> is asking you: “{{.Title}}” · <a href="/workflow-runs/{{.ID}}">Read the note →</a></p>{{end}}{{end}}
+{{range .Waiting}}<p class="banner note"><b>{{.Workflow}}</b> is asking you: “{{.Title}}” · <a href="/workflow-runs/{{.ID}}">Read the note →</a></p>{{end}}
 <h2 class="section-title">Workflows</h2>
 <div class="wf-grid">
 {{range .Workflows}}
@@ -194,19 +199,28 @@
 {{end}}
 </div>
 {{end}}
-<h2 class="section-title">Runs</h2>
+<div class="runs-head"><h2 class="section-title" id="runs-title">Runs</h2>
+<form class="runs-search" method="get" action="/workflows" role="search">
+  <input type="search" name="q" value="{{.List.Query}}" placeholder="Search runs…" aria-label="Search runs" autocomplete="off">
+  <button class="btn sm" type="submit">Search</button>{{if .List.Query}}<a class="btn sm ghost" href="/workflows">Clear</a>{{end}}
+</form></div>
 <div id="runs">
-{{if .Runs}}<div class="table-wrap"><table class="table">
+{{with .List}}{{if .Runs}}<div class="table-wrap"><table class="table">
   <tr><th>Status</th><th>What</th><th>Workflow</th><th>Now</th><th>Host</th><th>Project</th><th class="n">Started</th></tr>
   {{range .Runs}}<tr>
-    <td><span class="status {{.StatusClass}}">{{.StatusLabel}}</span></td>
+    <td><span class="status {{.StatusClass}}">{{.StatusLabel}}</span>{{if eq .Status "stalled"}} <button class="btn sm" data-resume-run="{{.ID}}">Resume</button>{{end}}</td>
     <td><a href="/workflow-runs/{{.ID}}">{{.Title}}</a></td>
     <td>{{.Workflow}} <span class="meta">v{{.Version}}{{if .WorkflowDeleted}} (deleted){{end}}</span></td>
     <td class="meta">{{.Where}}</td>
     <td class="mono" style="white-space:nowrap">{{.Host}}</td>
     <td class="mono">{{.Repo}}</td>
     <td class="n meta">{{ago $.Now .CreatedAt}}</td></tr>{{end}}
-</table></div>{{else}}<p class="empty-state">No runs yet.</p>{{end}}
+</table></div>{{else if .Query}}<p class="empty-state">No runs match “{{.Query}}”.</p>{{else if gt .Page 1}}<p class="empty-state">No runs on this page.</p>{{else}}<p class="empty-state">No runs yet.</p>{{end}}
+{{if or .Runs (gt .Page 1)}}<nav class="pager" aria-label="Runs pages">
+  {{with .Newer}}<a class="btn sm" href="{{.}}" rel="prev">← Newer</a>{{end}}
+  <span class="meta">{{if .Runs}}{{.First}}–{{.Last}} of {{.Total}}{{else}}{{.Total}} in all{{end}}{{if .Query}} matching{{end}}</span>
+  {{with .Older}}<a class="btn sm" href="{{.}}" rel="next">Older →</a>{{end}}
+</nav>{{end}}{{end}}
 </div>
 <script>
 const starting = {{json .Starting}};
@@ -218,6 +232,14 @@ async function api(method, path, body) {
   if (!res.ok) throw new Error(await res.text());
   return res.status === 204 ? null : res.json();
 }
+// Resume controls
+document.addEventListener("click", async (event) => {
+ const button = event.target.closest("[data-resume-run]");
+ if (!button || button.disabled) return;
+ button.disabled = true;
+ try { await api("POST", "/api/workflow-runs/" + button.dataset.resumeRun + "/resume", {}); location.reload(); }
+ catch(e) { err(e.message); button.disabled = false; }
+});
 document.querySelectorAll("[data-default-workflow]").forEach(button => button.addEventListener("click", async () => {
   button.disabled = true;
   try {
@@ -698,16 +720,18 @@ render();
   <div><h1>{{.Run.Title}}</h1>
     <div class="run-meta"><span class="status {{.Run.StatusClass}}">{{.Run.StatusLabel}}</span>
       <span><b>{{.Run.Workflow}}</b> v{{.Run.Version}}{{if .Run.WorkflowDeleted}} (deleted){{end}}</span><span>on <b class="mono">{{.Run.Host}}</b></span>
-      {{if .Run.Repo}}<span><b class="mono">{{.Run.Repo}}</b> @ <span class="mono">{{.Run.Branch}}</span></span>{{end}}
+      {{if .Run.Repo}}<span><b class="mono">{{.Run.Repo}}</b>{{if .Run.Branch}} @ <span class="mono">{{.Run.Branch}}</span>{{end}}</span>{{end}}
       {{if .Run.WorkspaceTitle}}<span>workspace <b>{{.Run.WorkspaceTitle}}</b></span>{{end}}
       <span>{{plural (len .Agents) "agent"}}</span><span>{{if eq .Run.Status "queued"}}queued{{else}}started{{end}} {{ago .Now .Run.CreatedAt}}</span></div></div>
-  <div class="actions">{{if eq .Run.Status "queued"}}<button class="btn sm primary" id="start-now">Start now</button>{{end}}{{if .Run.Live}}<button class="btn sm" id="cancel">Cancel run</button>{{end}}</div>
+  <div class="actions">{{if eq .Run.Status "stalled"}}<button class="btn sm" id="resume">Resume</button>{{end}}{{if eq .Run.Status "queued"}}<button class="btn sm primary" id="start-now">Start now</button>{{end}}{{if .Run.Live}}<button class="btn sm" id="cancel">Cancel run</button>{{end}}</div>
 </div>
 <div class="request">{{.Run.Input}}</div>
 {{if .VoiceMemos}}<section class="card"><div class="card-head"><h2>Voice memo that started this run</h2><span class="grow"></span><a class="btn sm ghost" href="/workflows/voice-memos">All voice memos</a></div><div class="card-body">{{template "voice-memo-rows" .VoiceMemos}}</div></section>{{end}}
 {{if .Emails}}<section class="card"><div class="card-head"><h2>Email thread</h2><span class="meta grow">what each email in it did</span><a class="btn sm ghost" href="/workflows/email">All email</a></div>
   <div class="card-body"><ul class="events">{{range .Emails}}<li><span class="t">{{.ReceivedAt.Format "Jan 2 15:04"}}</span><b>{{.Who}}</b> · {{or .Subject "(no subject)"}} · <span class="badge {{.Badge}}">{{.Label}}</span>{{with .Reason}} <span class="meta">{{.}}</span>{{end}}</li>{{end}}</ul></div></section>{{end}}
 {{if eq .Run.Status "queued"}}<p class="banner note">Queued, {{.Run.InLine}}: {{.Run.QueueReason}}. It starts by itself once the host has room, immediate-priority runs first, then oldest first; <b>Start now</b> starts it anyway.</p>{{end}}
+<p class="meta">Estimated run memory: {{memoryGiB .Run.EstimatedMemory}} GiB{{if .Run.Repo}} for <span class="mono">{{.Run.Repo}}</span>{{end}}.</p>
+{{if eq .Run.Status "stalled"}}<p class="banner">{{.Run.Error}}</p>{{end}}
 {{if eq .Run.Status "failed"}}<p class="banner">{{or .Run.Error "The orchestrator marked the run failed."}}</p>{{end}}
 {{if .Run.RetryStatus}}<div class="banner note" id="start-retry" role="status">
   <strong>{{.Run.RetryStatus}}</strong>.
@@ -730,14 +754,14 @@ render();
 <div id="steps" class="builder">
   <div class="pipe">
     <div class="node fixed"><div class="nh"><div><div class="kind">Before the orchestrator</div><div class="ttl">Find the project</div></div>
-      <span class="grow-r">{{if eq .Run.Status "finding_project"}}<span class="status st-running">running</span>{{else if eq .Run.Status "queued"}}<span class="status st-queued">queued</span>{{else}}<span class="status st-done">done</span>{{end}}</span></div>
-      <div class="nb">{{if eq .Run.Status "queued"}}Waits in the queue for room on <span class="mono">{{.Run.Host}}</span>.{{else if eq .Run.Status "finding_project"}}An agent is choosing the repository.{{else if .Run.Repo}}<span class="mono">{{.Run.Repo}}</span>, worktree <span class="mono">{{.Run.Branch}}</span>{{else}}No repository: the home directory.{{end}}
+      <span class="grow-r">{{if .Run.ProjectSelected}}<span class="status st-done">done</span>{{else if eq .Run.Status "finding_project"}}<span class="status st-running">running</span>{{else if eq .Run.Status "queued"}}<span class="status st-queued">queued</span>{{else}}<span class="status st-done">done</span>{{end}}</span></div>
+      <div class="nb">{{if .Run.ProjectSelected}}{{if .Run.Repo}}<span class="mono">{{.Run.Repo}}</span>{{if .Run.Branch}}, worktree <span class="mono">{{.Run.Branch}}</span>{{end}}{{else}}No repository: the home directory.{{end}}{{else if eq .Run.Status "queued"}}Waits in the queue for room on <span class="mono">{{.Run.Host}}</span>.{{else if eq .Run.Status "finding_project"}}An agent is choosing the repository.{{else}}Project selection did not finish.{{end}}
         <ul class="events">{{range .Before}}<li><span class="t">{{.At.Format "15:04"}}</span><div class="md">{{markdown .Line}}</div></li>{{end}}</ul></div></div>
     <div class="link{{if .Run.Orchestrator}} done{{end}}"></div>
     <div class="node fixed"><div class="nh"><div><div class="kind">In the worktree</div><div class="ttl">Orchestrator and its sub-agents</div></div></div>
-      <div class="nb">{{if .Agents}}<div class="tree">{{range .Agents}}<div class="ag" style="padding-left:{{.Depth}}.2rem"><span class="status{{if eq .Status "running"}} st-running{{end}}">{{.Status}}</span>
+      <div class="nb">{{if and .Run.ProjectSelected (eq .Run.Status "queued")}}<p>Orchestrator is waiting for host capacity.</p>{{end}}{{if .Agents}}<div class="tree">{{range .Agents}}<div class="ag" style="padding-left:{{.Depth}}.2rem"><span class="status{{if eq .Status "running"}} st-running{{end}}">{{.Status}}</span>
         <a href="/hosts/{{$.Run.Host}}/agents/{{.ID}}">{{or .Title .ID}}</a><span class="meta">{{.Provider}}{{with .Model}} · {{.}}{{end}}</span></div>{{end}}</div>
-        {{else if .Run.Orchestrator}}Its agents show here once the host reports them.{{else}}Starts once the project is found.{{end}}</div></div>
+        {{else if .Run.Orchestrator}}Its agents show here once the host reports them.{{else if .Run.ProjectSelected}}{{if ne .Run.Status "queued"}}The project is selected; no orchestrator has been reported.{{end}}{{else}}Starts once the project is found.{{end}}</div></div>
     <div class="link{{if .Run.Orchestrator}} done{{end}}"></div>
     {{range $i, $s := .Steps}}
     <div class="node k-{{.Kind}} r-{{.State}}"><div class="nh"><div style="min-width:0"><div class="kind">{{kind .Kind}} {{.N}}</div><div class="ttl">{{.Title}}</div></div>
@@ -761,6 +785,14 @@ async function post(path, body) {
   if (!res.ok) throw new Error(await res.text());
 }
 function bind() {
+  if ($("#resume")) $("#resume").onclick = async (event) => {
+    const button = event.currentTarget;
+    if (button.disabled) return;
+    button.disabled = true;
+    try { await post(`/api/workflow-runs/${run}/resume`, {}); await refresh(true); }
+    catch (e) { err(e.message); button.disabled = false; }
+  };
+
   if ($("#start-now")) $("#start-now").onclick = async (ev) => {
     ev.target.disabled = true;
     try { await post(`/api/workflow-runs/${run}/start`, {}); refresh(true); } catch (e) { err(e.message); ev.target.disabled = false; }

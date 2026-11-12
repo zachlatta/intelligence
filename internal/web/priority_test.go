@@ -148,3 +148,38 @@ func TestEmailAndVoiceMemoPriorityDefaultsStartImmediately(t *testing.T) {
 		})
 	}
 }
+
+// An immediate run that finds its project starts its orchestrator as soon as the project is
+// chosen, like a run started by hand, rather than queueing behind the older runs it skipped.
+func TestImmediateRunSkipsTheQueueAtProjectSelection(t *testing.T) {
+	d := dbtest.New(t)
+	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
+	b := sendReport(t, h, wfReport())
+	repositoryHistory(t, h, d, "/w/app")
+	b.command()
+	hostMinute(t, b, time.Now().UTC().Truncate(time.Minute), 97, 0.5)
+	older := startRun(t, h, fixedWorkflow(t, h), "older queued build")
+	def := workflow.Starting
+	def.Priority = workflow.PriorityImmediate
+	urgent := startRun(t, h, createWorkflow(t, h, def), "urgent matched build")
+	if got := runField(t, h, urgent, "status"); got != "finding_project" {
+		t.Fatalf("immediate run = %v (%v)", got, runField(t, h, urgent, "queue_reason"))
+	}
+	succeed(t, b, b.command(), `{"agentId":"finder"}`)
+	if code, msg := move(t, h, keyOf(t, h, "host-1"), urgent, map[string]string{"move": "project", "directory": "/w/app"}); code != http.StatusOK {
+		t.Fatalf("move: %d %s", code, msg)
+	}
+	if got := runField(t, h, urgent, "status"); got != "starting" {
+		t.Fatalf("immediate run queued again behind %s: %v (%v)", older, got, runField(t, h, urgent, "queue_reason"))
+	}
+	var requeued int
+	if err := d.Owner.QueryRow(t.Context(), `SELECT count(*) FROM workflow_run_events WHERE run_id=$1 AND kind IN ('queued','dequeued')`, urgent).Scan(&requeued); err != nil {
+		t.Fatal(err)
+	}
+	if requeued != 0 {
+		t.Fatalf("immediate run went back into the queue at project selection (%d queue events)", requeued)
+	}
+	if got := runField(t, h, older, "status"); got != "queued" {
+		t.Fatalf("older run = %v, want still queued", got)
+	}
+}

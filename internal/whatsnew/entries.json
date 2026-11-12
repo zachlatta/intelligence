@@ -8,6 +8,38 @@
     "mediaAlt": "Workflow editor Trigger panel showing Automatic priority after changing a task workflow to a voice memo trigger"
   },
   {
+    "id": "workflow-runs-pages-and-search",
+    "released": "2026-11-12",
+    "title": "Page through and search workflow runs",
+    "summary": "Workflows now lists every run, 50 a page, with Newer and Older links under the table, so older runs are no longer cut off. The search box beside Runs finds runs across all history by any words in their summary, prompt, workflow, status, host, project or branch.",
+    "media": "workflow-runs-search.gif",
+    "mediaAlt": "The Runs list on Workflows: a search for a word narrows it to the matching runs, then Clear and Older page back through history"
+  },
+  {
+    "id": "host-disk-io-load-filesystems",
+    "released": "2026-11-12",
+    "title": "Disk I/O, free space and load in Host monitoring",
+    "summary": "Host monitoring now charts each host's load against its CPU count, how busy its disks are and how fast they read and write, and lists every local filesystem with its used, free and total space. Hosts on the home page show their load and free disk, and a disk busy more than half the time.",
+    "media": "host-disk-load.png",
+    "mediaAlt": "Host monitoring for a demo host: load, disk busy and disk throughput charts, and a filesystems table with used, free and total space"
+  },
+  {
+    "id": "workflow-stall-recovery",
+    "released": "2026-11-11",
+    "title": "Recover stalled workflow runs",
+    "summary": "Workflows now nudges an idle orchestrator with its current step when no worker or reply is pending. After two unsuccessful continuations, the run shows Stalled with a reason. Open Workflows or the run page and choose Resume to continue on the same orchestrator and step. Admission queues, startup retries and permission prompts keep their existing rules.",
+    "media": "workflow-stalls.png",
+    "mediaAlt": "A sample workflow run marked Stalled, with its recovery reason and Resume button on the run page"
+  },
+  {
+    "id": "repository-memory-admission",
+    "released": "2026-11-11",
+    "title": "Queue runs by repository memory needs",
+    "summary": "The host queue estimates RAM from successful runs of the selected repository, with headroom and a default for repositories without history. The run page shows the estimate. Active runs keep unused memory reserved, and startup retries use the same estimate and FIFO queue.",
+    "media": "repository-memory.png",
+    "mediaAlt": "A queued application build showing its 10 GiB repository memory estimate and the host memory capacity reason"
+  },
+  {
     "id": "workflow-model-groups",
     "released": "2026-11-11",
     "title": "Choose worker models with reusable groups",
