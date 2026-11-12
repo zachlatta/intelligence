@@ -190,7 +190,7 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 	if err := lockQueue(ctx, tx, host); err != nil {
 		return false, err
 	}
-	r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.host = $1 AND (r.status = $2 OR r.start_retry_queued) ORDER BY (r.priority = 'immediate') DESC, r.created_at, r.id LIMIT 1 FOR UPDATE OF r", host, Queued))
+	r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.host = $1 AND (r.status = $2 OR r.start_retry_queued) ORDER BY (r.priority = $3) DESC, r.created_at, r.id LIMIT 1 FOR UPDATE OF r", host, Queued, PriorityImmediate))
 	if errors.Is(err, ErrNotFound) {
 		return false, nil
 	}

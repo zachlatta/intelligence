@@ -2,8 +2,6 @@
 -- Old runs without an explicit priority keep Normal, including already queued requests.
 ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS priority text NOT NULL DEFAULT 'normal'
     CHECK (priority IN ('normal','immediate'));
-UPDATE workflow_runs r SET priority=coalesce(nullif(v.definition->>'priority',''),'normal')
-FROM workflow_versions v WHERE v.workflow_id=r.workflow_id AND v.version=r.version;
 
 -- Version saved definitions rather than changing the snapshots used by existing runs.
 -- Email (including voice email) and voice memo requests should start without a capacity hold.
@@ -16,8 +14,7 @@ BEGIN
         WHERE f.deleted_at IS NULL AND v.definition->>'trigger' IN ('email','voice_memo') AND coalesce(v.definition->>'priority', '') = ''
     LOOP
         INSERT INTO workflow_versions(workflow_id, version, account_id, definition, created_at)
-        VALUES(w.id, w.version+1, w.account_id, w.definition || jsonb_build_object('priority',
-            CASE WHEN w.definition->>'trigger' IN ('email','voice_memo') THEN 'immediate' ELSE 'normal' END), now());
+        VALUES(w.id, w.version+1, w.account_id, w.definition || '{"priority":"immediate"}'::jsonb, now());
         UPDATE workflows SET version=w.version+1, updated_at=now() WHERE id=w.id;
     END LOOP;
 END $$;
