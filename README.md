@@ -816,7 +816,14 @@ error and archives any partial workspace. Cancellation removes the scheduled ret
 run starts with its own creation key and budget.
 
 The run page shows each queued or sent retry, its last error, its next scheduled time, and whether
-it is waiting for host recovery or capacity. Each queued retry
+it is waiting for host recovery or capacity. A retry waiting only for capacity (due, its host
+ready, in the queue) has a **Start retry now** button: the same `POST /api/workflow-runs/{id}/start`
+as **Start now**, which sends that retry at once, ahead of the queue, whatever the host's load. It
+is an ordinary retry: it reuses the creation key, counts toward the three, and a failure is
+handled like any other failed retry (the next backoff, or the run fails once the retries run out).
+Like Start now, it marks the run `started_by_hand`, so a later retry goes out as soon as its host
+is ready instead of back behind the queue. The timeline records it as “Started: retry started by hand, ahead of the queue”. A retry still in
+its backoff or waiting for its host to be ready cannot be started by hand (`409`). Each queued retry
 has a deadline 24 hours after its scheduled time; at that deadline the run fails with the last
 start error and a timeout explanation. This allows a long outage or host update without leaving
 the run waiting forever. Queue and delivery events are recorded in the timeline. Reconciliation
@@ -876,12 +883,12 @@ Variables in instructions: `{{input}}`, `{{repo}}`, `{{branch}}` and `{{run}}`.
 
 Every run stores `workflow_runs.requested_at`: the Gmail Date header, a voice memo’s
 recorded_at, or task submission time. Missing or invalid source times fall back to run creation.
-Migration 0045 backfills stored Date:/Recorded: lines when parseable, otherwise created_at;
+Migration 0047 backfills stored Date:/Recorded: lines when parseable, otherwise created_at;
 it does not infer historical answer messages from free-text summaries.
 
 Email and voice memo triggers set `workflow_runs.answer_expected` to true, including
 email workflows that reply to someone other than Zach. Task submissions (including code-landing
-Factory Tasks) set it to false. Migration 0045 backfills this flag from each run’s saved trigger.
+Factory Tasks) set it to false. Migration 0047 backfills this flag from each run’s saved trigger.
 Task runs can still record answers and show timing. Canceled runs never count as unanswered.
 
 The final authorized step, or the sending worker on an early fail/skip exit, records every sent
@@ -1034,11 +1041,42 @@ Without fresh telemetry the server cannot know the host's capacity:
 - a host that never sent its resources, or one connected now that has sent none for 30 minutes
   (its monitoring stopped), gives no sign of being near capacity, so its runs start.
 
+In the workflow editor's Trigger panel, **Priority** chooses **Normal** (wait for capacity)
+or **Immediate** (skip the queue and capacity hold). Save it through the existing
+`POST /api/workflows` or `PUT /api/workflows/{id}` JSON route as `definition.priority`:
+`"normal"`, `"immediate"`, or `""` for Automatic. Automatic stays unset in the saved definition
+and follows the trigger: immediate for email and voice memos, normal otherwise, including
+after changing a task workflow to an email or voice-memo trigger. An explicit normal setting always wins.
+Migration `0046_workflow_priority` versions existing active email and voice-memo workflows
+with explicit Immediate priority;
+email requests, including voice emails, and voice memos start immediately after deployment.
+Each new run snapshots its resolved priority in `workflow_runs.priority`, so later workflow
+edits cannot change its queue or retry behavior. Existing runs without an explicit priority,
+including email and voice-memo runs already queued at deployment, retain Normal; use **Start now**
+to launch one immediately. Read the configured setting and effective run snapshot through `/api/sql`:
+
+```sql
+SELECT coalesce(v.definition->>'priority', '') AS configured_priority, r.priority AS effective_priority
+FROM workflow_runs r JOIN workflow_versions v USING (workflow_id, version);
+```
+
+An empty configured priority means Automatic. `workflow_run_queue.priority` also exposes the
+effective snapshot. The saved definition remains available for future workflow edits.
+
+Immediate runs launch even with older runs waiting or missing capacity measurements. Like a run
+started by hand, a run that finds its project starts its orchestrator as soon as the project is
+chosen, and its startup retries go out as soon as its host is ready, bypassing capacity, but still
+respecting retry backoff, deadlines and host/daemon readiness. Immediate starts can increase host
+load; they do not interrupt running work or make an offline host execute commands. Normal runs
+retain FIFO order.
+
 **Start now** bypasses the capacity hold and the queue for good (`workflow_runs.started_by_hand`;
 a queued run marked so starts on the queue's next pass, ahead of the others):
 a run started by hand that finds its project first starts its orchestrator as soon as the project
 is chosen, and its start retries go out as soon as its host is ready, never back behind the queue it
 skipped. Retries of runs the queue started wait for admission, in their original place.
+**Start retry now** does the same for a run whose queued retry waits for admission (The run queue,
+below).
 
 A run also queues while earlier runs wait in its host's queue, so the queue keeps strict FIFO
 order: light runs wait behind heavy ones. The
@@ -1053,7 +1091,8 @@ the queue through `workflow_runs.start_retry_queued`. `workflow_runs.queue_reaso
 `dequeued`, and `workflow_run_queue` lists each host's queue in order (`position` 1 is next). The
 runs list and the run page show it queued, where in line (“2nd in line for host-1”) and why, and
 the run page says when it was queued, not started; the run page's **Start now** starts it at once,
-whatever the host's load (`POST /api/workflow-runs/{id}/start`), and **Cancel run** cancels it.
+whatever the host's load (`POST /api/workflow-runs/{id}/start`; for a queued retry the button reads
+**Start retry now** and sends the retry), and **Cancel run** cancels it.
 
 The server starts queued runs on a host, oldest first, while the projection leaves room: every 15
 seconds, on each minute of resources the host sends, and when a run ends or fails to start. Runs
@@ -1420,6 +1459,12 @@ origin (another site's request is refused with 403), and those with a body must 
 - `GET /workflows`: a new task (for workflows triggered by a task: pick the workflow, which names
   its host, with the default first and selected), the account's workflows and their runs. Without
   workflows, a button adds the starting one (`workflow.Starting`) on the account's first host.
+  Runs are listed newest first, 50 a page (`?page=2`, with Newer and Older links), so all of
+  history is reachable. The search box above them (`?q=`) finds runs, across all pages, that
+  hold every word typed, in any case, in their summary or title, prompt, workflow name, status,
+  host, project, branch (which holds the run's id) or workspace; `%` and `_` match themselves.
+  Both are plain reads of `workflow_runs` and `workflows` through the account's role, the same
+  rows `/api/sql` returns. A waiting run's note shows above, whatever page it is on.
   The task composer has a full-width prompt and an action bar for images, dictation (when enabled),
   workflow selection and submission. Cmd/Ctrl+Enter submits; Enter keeps its newline. Images can be
   picked, dropped or pasted, and appear as removable thumbnail chips; image limits open on demand.
@@ -1451,7 +1496,9 @@ origin (another site's request is refused with 403), and those with a body must 
   (201, with its `Location`), or queues it while the host is near capacity; 400 for a workflow
   saved without one.
 - `POST /api/workflow-runs/{id}/start` with `{}`: starts a queued run now, ahead of its queue and
-  whatever its host's load (204; 409 for a run that is not queued).
+  whatever its host's load, or sends a run's queued start retry the same way (it still counts as
+  a retry) (204; 409 for a run that is not queued, or a retry still in its backoff, past its
+  deadline or whose host is not ready).
 - `POST /api/workflow-runs/{id}/reply` with `{"text"}`: answers the note the run waits on (204;
   409 when it waits on none). `POST /api/workflow-runs/{id}/cancel` with `{}`: ends the run and
   stops its orchestrator (204).

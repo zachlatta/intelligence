@@ -213,8 +213,8 @@ func (a *app) cancelRun(v viewer) http.HandlerFunc {
 	}
 }
 
-// startQueuedRun: POST /api/workflow-runs/{id}/start {}: a queued run starts now, ahead of its
-// queue, whatever its host's load.
+// startQueuedRun: POST /api/workflow-runs/{id}/start {}: a queued run, or a queued start retry,
+// starts now, ahead of its queue, whatever its host's load.
 func (a *app) startQueuedRun(v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := a.wf.StartNow(r.Context(), v.acct.ID, r.PathValue("id")); err != nil {
@@ -454,6 +454,12 @@ func (r runRow) RetryStatus() string {
 	return fmt.Sprintf("Retry %d of %d sent", r.StartRetries, workflow.StartRetryLimit)
 }
 
+// RetryInQueue says r's start retry waits in its host's queue for room, so Start retry now can send
+// it ahead of the queue.
+func (r runRow) RetryInQueue() bool {
+	return r.Position > 0 && r.StartRetryAt != nil && r.Status != workflow.Queued
+}
+
 func (r runRow) RetryDeadline() time.Time {
 	if r.StartRetryAt == nil {
 		return time.Time{}
@@ -688,12 +694,17 @@ func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		rows, err := v.pool.Query(ctx, runRowSelect+"ORDER BY r.created_at DESC LIMIT 100")
+		list, err := readRunsPage(ctx, v.pool, r.URL.Query().Get("q"), r.URL.Query().Get("page"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		runs, err := pgx.CollectRows(rows, scanRunRow)
+		rows, err := v.pool.Query(ctx, runRowSelect+"WHERE r.status = 'waiting' ORDER BY r.created_at DESC LIMIT 20")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		waiting, err := pgx.CollectRows(rows, scanRunRow)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -709,8 +720,8 @@ func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 				tasks = append(tasks, wf)
 			}
 		}
-		renderWorkflows(w, "list", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Workflows": wfs, "Runs": runs,
-			"Hosts": hosts, "Tasks": tasks, "Starting": workflow.Starting, "Dictation": dictationPath(cfg)})
+		renderWorkflows(w, "list", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Workflows": wfs,
+			"List": list, "Waiting": waiting, "Hosts": hosts, "Tasks": tasks, "Starting": workflow.Starting, "Dictation": dictationPath(cfg)})
 	}
 }
 

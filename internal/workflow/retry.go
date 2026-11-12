@@ -54,9 +54,13 @@ func (e *Engine) retryStart(ctx context.Context, tx pgx.Tx, r run, c fleet.Comma
 	if err != nil {
 		return true, msg, err
 	}
-	if ready && r.StartedByHand {
-		// Started by hand, ahead of the queue and whatever the load: its retry is too.
-		_, err := e.dequeueRetry(ctx, tx, r)
+	if ready && r.skipsQueue() {
+		// Started by hand or immediate, ahead of the queue and whatever the load: its retry is too.
+		why := "started by hand: retrying ahead of the queue"
+		if !r.StartedByHand {
+			why = "immediate priority retry, ahead of the queue"
+		}
+		_, err := e.dequeueRetry(ctx, tx, r, why)
 		return true, msg, err
 	}
 	// Preserve the run's original FIFO priority when it becomes eligible again.
@@ -72,9 +76,10 @@ func retryHostReady(ctx context.Context, tx pgx.Tx, host string) (bool, error) {
 	return ready, err
 }
 
-// dequeueRetry runs only after the FIFO admits r. Lock the old command so a
-// late success either wins before admission or is superseded by this delivery.
-func (e *Engine) dequeueRetry(ctx context.Context, tx pgx.Tx, r run) (bool, error) {
+// dequeueRetry runs only after the priority queue admits r, or when r skips the queue (by hand or
+// immediate priority); why says which. Lock the old command so a late success either wins before
+// admission or is superseded by this delivery.
+func (e *Engine) dequeueRetry(ctx context.Context, tx pgx.Tx, r run, why string) (bool, error) {
 	var previous fleet.Command
 	err := tx.QueryRow(ctx, `SELECT c.id::text, c.kind, c.idempotency_key
 		FROM commands c JOIN workflow_runs r ON r.pending_command=c.id
@@ -108,10 +113,6 @@ func (e *Engine) dequeueRetry(ctx context.Context, tx pgx.Tx, r run) (bool, erro
 	}
 	if _, err := tx.Exec(ctx, "UPDATE commands SET idempotency_key=$2 WHERE id=$1", next.ID, key); err != nil {
 		return false, err
-	}
-	why := r.Host + " has room for the retry"
-	if r.StartedByHand {
-		why = "started by hand: retrying ahead of the queue"
 	}
 	if err := e.recordDequeue(ctx, tx, r, why); err != nil {
 		return false, err

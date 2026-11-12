@@ -8,6 +8,30 @@
     "mediaAlt": "A completed example email workflow with its step marked done, an unchecked send at 6 minutes and a checked answer at 15 minutes, plus the sent message identifiers"
   },
   {
+    "id": "start-retry-now",
+    "released": "2026-11-12",
+    "title": "Start a queued retry now",
+    "summary": "When a run's start retry is waiting in its host's queue for capacity, its run page has a Start retry now button. It sends the retry at once, ahead of the queue, and What happened records it. It still counts as one of the three retries, and if it fails it is handled like any other failed retry.",
+    "media": "start-retry-now.gif",
+    "mediaAlt": "A run page showing Retry 1 of 3 queued with a Start retry now button; after the click it shows Retry 1 of 3 sent and the timeline says the retry was started by hand, ahead of the queue"
+  },
+  {
+    "id": "workflow-immediate-priority",
+    "released": "2026-11-12",
+    "title": "Let urgent workflows skip the queue",
+    "summary": "Choose Priority in the workflow editor\u2019s Trigger panel: Automatic follows the trigger, Immediate skips capacity checks, and Normal waits. Automatic email requests and voice memos start immediately, even after changing a task workflow\u2019s trigger. Use Start now on a queued run for a one-time bypass.",
+    "media": "workflow-priority.png",
+    "mediaAlt": "Workflow editor Trigger panel showing Automatic priority after changing a task workflow to a voice memo trigger"
+  },
+  {
+    "id": "workflow-runs-pages-and-search",
+    "released": "2026-11-12",
+    "title": "Page through and search workflow runs",
+    "summary": "Workflows now lists every run, 50 a page, with Newer and Older links under the table, so older runs are no longer cut off. The search box beside Runs finds runs across all history by any words in their summary, prompt, workflow, status, host, project or branch.",
+    "media": "workflow-runs-search.gif",
+    "mediaAlt": "The Runs list on Workflows: a search for a word narrows it to the matching runs, then Clear and Older page back through history"
+  },
+  {
     "id": "host-disk-io-load-filesystems",
     "released": "2026-11-12",
     "title": "Disk I/O, free space and load in Host monitoring",

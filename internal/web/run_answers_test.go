@@ -115,7 +115,7 @@ func TestRequestTimeMigrationBackfillsAndToleratesBadDates(t *testing.T) {
  DROP TABLE workflow_run_answers;
  ALTER TABLE workflow_runs DROP COLUMN requested_at;
  ALTER TABLE workflow_runs DROP COLUMN answer_expected;
- DELETE FROM schema_migrations WHERE version='0045_workflow_answers'`); err != nil {
+ DELETE FROM schema_migrations WHERE version='0047_workflow_answers'`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Migrate(t.Context(), d.Owner); err != nil {

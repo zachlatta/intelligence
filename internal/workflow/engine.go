@@ -372,21 +372,26 @@ type run struct {
 	ProjectSelected                              bool
 	StartedByHand                                bool // Start now: it bypasses its host's queue until it has started
 	Name                                         string
+	Priority                                     string // the effective priority snapshotted at creation: normal or immediate
 	Def                                          Definition
 }
+
+// skipsQueue says r goes ahead of its host's queue and whatever the host's load, through project
+// selection and start retries: it was started by hand (Start now), or its priority is immediate.
+func (r run) skipsQueue() bool { return r.StartedByHand || r.Priority == PriorityImmediate }
 
 func (r run) vars() Vars { return Vars{Run: r.ID, Input: r.Input, Repo: r.Repo, Branch: r.Branch} }
 
 const runSelect = `SELECT r.id::text, r.host, r.title, r.input, r.status, r.repo, r.branch, r.account_id, r.step, r.workspace_id,
 	r.project_agent_id, r.orchestrator_id, r.project_command::text, w.name, v.definition, r.start_retry_at, r.start_retries,
-	r.estimated_memory_bytes, r.project_selected, r.started_by_hand
+	r.estimated_memory_bytes, r.project_selected, r.started_by_hand, r.priority
 	FROM workflow_runs r JOIN workflow_versions v USING (workflow_id, version) JOIN workflows w ON w.id = r.workflow_id `
 
 func scanRun(row pgx.Row) (run, error) {
 	var r run
 	var def []byte
 	err := row.Scan(&r.ID, &r.Host, &r.Title, &r.Input, &r.Status, &r.Repo, &r.Branch, &r.Account, &r.Step, &r.WorkspaceID,
-		&r.ProjectAgent, &r.Orchestrator, &r.ProjectCommand, &r.Name, &def, &r.StartRetryAt, &r.StartRetries, &r.EstimatedMemory, &r.ProjectSelected, &r.StartedByHand)
+		&r.ProjectAgent, &r.Orchestrator, &r.ProjectCommand, &r.Name, &def, &r.StartRetryAt, &r.StartRetries, &r.EstimatedMemory, &r.ProjectSelected, &r.StartedByHand, &r.Priority)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, ErrNotFound
 	}
@@ -463,18 +468,22 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		if err != nil {
 			return err
 		}
-		why, err := e.room(ctx, tx, host, "", repo, estimate)
-		if err != nil {
-			return err
+		priority := d.EffectivePriority()
+		var why string
+		if priority != PriorityImmediate { // immediate skips the queue and the host's capacity
+			why, err = e.room(ctx, tx, host, "", repo, estimate)
+			if err != nil {
+				return err
+			}
 		}
 		status := FindingProject
 		if why != "" {
 			status = Queued
 		}
 		if err := tx.QueryRow(ctx, `INSERT INTO workflow_runs (account_id, workflow_id, version, host, title, input, status, queue_reason, created_at, updated_at,
-			repo, project_selected, estimated_memory_bytes, queued_at_creation, requested_at, answer_expected)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $14, $15) RETURNING id::text`, account, workflowID, version, host, taskName(input), input,
-			status, why, e.Now(), repo, selected, estimate, why != "", requestedAt, d.Trigger == TriggerEmail || d.Trigger == TriggerVoiceMemo).Scan(&id); err != nil { // now, holding the lock: the queue's order is the order decided
+			repo, project_selected, estimated_memory_bytes, queued_at_creation, requested_at, answer_expected, priority)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id::text`, account, workflowID, version, host, taskName(input), input,
+			status, why, e.Now(), repo, selected, estimate, why != "", requestedAt, d.Trigger == TriggerEmail || d.Trigger == TriggerVoiceMemo, priority).Scan(&id); err != nil { // now, holding the lock: the queue's order is the order decided
 			return err
 		}
 		r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id = $1", id))
@@ -773,10 +782,10 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		}
 		// This run already holds a startup reservation. Replace it with the selected
 		// project's estimate; do not count the finder twice or lose its FIFO priority.
-		// A run started by hand was started ahead of the queue and whatever the load:
-		// its orchestrator starts too, rather than waiting behind the queue it skipped.
+		// A run started by hand or with immediate priority went ahead of the queue and whatever
+		// the load: its orchestrator starts too, rather than waiting behind the queue it skipped.
 		why := ""
-		if !r.StartedByHand {
+		if !r.skipsQueue() {
 			why, err = e.room(ctx, tx, r.Host, r.ID, repo, estimate)
 			if err != nil {
 				return "", err

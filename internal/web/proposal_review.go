@@ -60,6 +60,7 @@ func proposalChanges(a, b *workflow.WorkflowState) []proposalChange {
 	x, y := a.Definition, b.Definition
 	add("Host", x.Host, y.Host)
 	add("Trigger", x.Trigger, y.Trigger)
+	add("Priority", x.Priority, y.Priority)
 	add("Email filter", prettyProposal(x.Email), prettyProposal(y.Email))
 	add("Voice memo filter", prettyProposal(x.VoiceMemo), prettyProposal(y.VoiceMemo))
 	add("Project mode", x.Project.Mode, y.Project.Mode)

@@ -187,7 +187,8 @@ func runsWord(n int) string {
 	return fmt.Sprintf("%d runs", n)
 }
 
-// StartQueued starts, on each host with a queue, its queued runs in order while the host has room (room).
+// StartQueued starts, on each host with a queue, its queued runs in order while the host has room
+// (room). Runs started by hand go first, then immediate runs, which start whatever the load.
 func (e *Engine) StartQueued(ctx context.Context) error {
 	rows, err := e.p.Query(ctx, "SELECT DISTINCT host FROM workflow_run_queue")
 	if err != nil {
@@ -213,15 +214,17 @@ func (e *Engine) StartQueued(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// startNext starts host's oldest queued run if the host has room, and says whether it did.
+// startNext admits the next run by priority and creation order. Immediate bypasses room.
 func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, error) {
 	if err := lockQueue(ctx, tx, host); err != nil {
 		return false, err
 	}
 	// A queued run started by hand comes first: Start now put it ahead of the queue (it may have
-	// gone back in when it chose its project, before started_by_hand kept it out).
+	// gone back in when it chose its project, before started_by_hand kept it out). Immediate runs
+	// come next, ahead of normal ones.
 	r, err := scanRun(tx.QueryRow(ctx, runSelect+`WHERE r.host = $1 AND (r.status = $2 OR r.start_retry_queued)
-		ORDER BY (r.status = $2 AND r.started_by_hand) DESC, r.created_at, r.id LIMIT 1 FOR UPDATE OF r`, host, Queued))
+		ORDER BY (r.status = $2 AND r.started_by_hand) DESC, (r.priority = $3) DESC, r.created_at, r.id LIMIT 1 FOR UPDATE OF r`,
+		host, Queued, PriorityImmediate))
 	if errors.Is(err, ErrNotFound) {
 		return false, nil
 	}
@@ -232,26 +235,30 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 		return true, e.dequeue(ctx, tx, r, startedByHand)
 	}
 	if r.StartRetryAt != nil {
-		if !e.Now().Before(r.StartRetryAt.Add(RetryWaitLimit)) {
-			return false, nil // reconciliation records the timeout
-		}
-		ready, err := retryHostReady(ctx, tx, r.Host)
-		if err != nil || !ready {
-			return false, err // reconciliation removes it from the queue if readiness was lost
+		// Reconciliation records a timeout, and removes a retry whose host is no longer ready.
+		if held, err := e.retryHeld(ctx, tx, r); err != nil || held != "" {
+			return false, err
 		}
 	}
-	why, err := e.room(ctx, tx, host, r.ID, r.Repo, r.EstimatedMemory)
-	if err != nil {
-		return false, err
+	var why string
+	if r.Priority != PriorityImmediate {
+		why, err = e.room(ctx, tx, host, r.ID, r.Repo, r.EstimatedMemory)
+		if err != nil {
+			return false, err
+		}
 	}
 	if why != "" {
 		_, err := tx.Exec(ctx, "UPDATE workflow_runs SET queue_reason = $2 WHERE id = $1 AND queue_reason <> $2", r.ID, why)
 		return false, err
 	}
 	if r.StartRetryAt != nil {
-		return e.dequeueRetry(ctx, tx, r)
+		return e.dequeueRetry(ctx, tx, r, host+" has room for the retry")
 	}
-	return true, e.dequeue(ctx, tx, r, host+" has room")
+	reason := host + " has room"
+	if r.Priority == PriorityImmediate {
+		reason = "immediate priority, ahead of the queue"
+	}
+	return true, e.dequeue(ctx, tx, r, reason)
 }
 
 // dequeue starts queued run r, saying why it starts now.
@@ -271,8 +278,32 @@ func (e *Engine) recordDequeue(ctx context.Context, tx pgx.Tx, r run, why string
 }
 
 // StartNow starts account's queued run at once, ahead of its queue and whatever its host's load.
+// A run whose start retry waits in the queue sends that retry now: it counts as a retry, and a
+// failure is handled like any other failed retry.
 func (e *Engine) StartNow(ctx context.Context, account int64, runID string) error {
-	return e.forAccount(ctx, account, runID, func(tx pgx.Tx, r run) error {
+	if !uuidRe.MatchString(runID) {
+		return ErrNotFound
+	}
+	return pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		var host string
+		err := tx.QueryRow(ctx, "SELECT host FROM workflow_runs WHERE id = $1 AND account_id = $2", runID, account).Scan(&host)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		// Take the host's queue lock before the run row, in the same order as startNext.
+		if err := lockQueue(ctx, tx, host); err != nil {
+			return err
+		}
+		r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id = $1 AND r.account_id = $2 FOR UPDATE OF r", runID, account))
+		if err != nil {
+			return err
+		}
+		if r.StartRetryAt != nil {
+			return e.startRetryNow(ctx, tx, r)
+		}
 		if r.Status != Queued {
 			return conflict("this run is not queued (%s)", strings.ReplaceAll(r.Status, "_", " "))
 		}
@@ -283,6 +314,50 @@ func (e *Engine) StartNow(ctx context.Context, account int64, runID string) erro
 		r.StartedByHand = true
 		return e.dequeue(ctx, tx, r, startedByHand)
 	})
+}
+
+// retryHeld says why r's start retry cannot be sent yet, whatever its host's load ("" when it can):
+// it is still in its backoff, it has waited 24 hours and is timing out, or its host is not ready
+// (online, with a connected Paseo daemon that supports retry keys).
+func (e *Engine) retryHeld(ctx context.Context, tx pgx.Tx, r run) (string, error) {
+	now := e.Now()
+	if !now.Before(r.StartRetryAt.Add(RetryWaitLimit)) {
+		return "this retry has waited 24 hours and is timing out", nil
+	}
+	if now.Before(*r.StartRetryAt) {
+		return "this retry is not due until " + r.StartRetryAt.UTC().Format("15:04:05 MST"), nil
+	}
+	ready, err := retryHostReady(ctx, tx, r.Host)
+	if err != nil || ready {
+		return "", err
+	}
+	return "this retry is waiting for " + r.Host + " to be ready (online, with a connected Paseo daemon that supports retry keys), not for room", nil
+}
+
+// startRetryNow sends r's queued start retry at once, whatever its host's load. Only a retry in the
+// queue can go: one retryHeld holds waits, as automatic retries do. The caller holds the host's
+// queue lock and the run's row.
+func (e *Engine) startRetryNow(ctx context.Context, tx pgx.Tx, r run) error {
+	held, err := e.retryHeld(ctx, tx, r)
+	if err != nil {
+		return err
+	}
+	if held != "" {
+		return conflict("%s", held)
+	}
+	// Remembered, as Start now does: should this attempt fail, its next retry skips the queue too.
+	if _, err := tx.Exec(ctx, "UPDATE workflow_runs SET started_by_hand = true WHERE id = $1", r.ID); err != nil {
+		return err
+	}
+	r.StartedByHand = true
+	sent, err := e.dequeueRetry(ctx, tx, r, "retry started by hand, ahead of the queue")
+	if err != nil {
+		return err
+	}
+	if !sent {
+		return conflict("the previous start attempt has just finished; reload the run")
+	}
+	return nil
 }
 
 // startedByHand is the dequeued event's text for Start now. Migration 0043 matches it to mark

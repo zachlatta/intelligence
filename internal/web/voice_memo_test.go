@@ -232,6 +232,7 @@ func TestVoiceMemoRunsUseTheHostCapacityQueue(t *testing.T) {
 	sendReport(t, h, wfReport())
 	lastMinute(t, d, 0, 99)
 	def := workflow.Starting
+	def.Priority = workflow.PriorityNormal
 	def.Trigger = workflow.TriggerVoiceMemo
 	def.VoiceMemo = &workflow.VoiceMemoFilter{}
 	createWorkflow(t, h, def)
