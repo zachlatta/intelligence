@@ -1,5 +1,13 @@
 [
   {
+    "id": "host-disk-io-load-filesystems",
+    "released": "2026-11-12",
+    "title": "Disk I/O, free space and load in Host monitoring",
+    "summary": "Host monitoring now charts each host's load against its CPU count, how busy its disks are and how fast they read and write, and lists every local filesystem with its used, free and total space. Hosts on the home page show their load and free disk, and a disk busy more than half the time.",
+    "media": "host-disk-load.png",
+    "mediaAlt": "Host monitoring for a demo host: load, disk busy and disk throughput charts, and a filesystems table with used, free and total space"
+  },
+  {
     "id": "workflow-step-model",
     "released": "2026-11-11",
     "title": "Pick a model group as a step's model",

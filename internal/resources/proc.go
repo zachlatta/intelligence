@@ -17,10 +17,65 @@ func strconvItoa(n int) string { return strconv.Itoa(n) }
 type Reader struct {
 	Proc     string     // default /proc
 	Cgroup   string     // default /sys/fs/cgroup
+	Sys      string     // default /sys: which block devices are physical disks
 	Home     string     // the filesystem whose space is measured
 	PaseoPID func() int // the Paseo daemon, for its cgroup; 0 unknown
 
-	prev *cpuTicks
+	prev       *cpuTicks
+	prevDisk   diskCounters
+	prevDiskAt time.Time
+	fsAt       time.Time
+}
+
+// setDiskIO puts the disks' rates since the sample before into s, and keeps c for the next.
+func (r *Reader) setDiskIO(now time.Time, c diskCounters, s *Sample) {
+	if c == nil {
+		return
+	}
+	if io := diskRates(r.prevDisk, c, now.Sub(r.prevDiskAt).Seconds()); io != nil {
+		s.DiskReadBps, s.DiskWriteBps, s.DiskIOPS, s.DiskBusyPct = &io.readBps, &io.writeBps, &io.iops, io.busyPct
+	}
+	r.prevDisk, r.prevDiskAt = c, now
+}
+
+// filesystemsDue says whether to read the filesystems now: once a minute.
+func (r *Reader) filesystemsDue(now time.Time) bool {
+	if !r.fsAt.IsZero() && now.Sub(r.fsAt) < time.Minute && !now.Before(r.fsAt) {
+		return false
+	}
+	r.fsAt = now
+	return true
+}
+
+// wholeDisk says whether a block device is a physical disk (it has a device behind it), not a
+// partition, loop, RAM, mapper or RAID device built on the disks.
+func (r *Reader) wholeDisk(name string) bool {
+	root := r.Sys
+	if root == "" {
+		root = "/sys"
+	}
+	if strings.ContainsAny(name, "/.") {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(root, "block", name, "device"))
+	return err == nil
+}
+
+// linuxFilesystems is each local filesystem's space.
+func (r *Reader) linuxFilesystems() []Filesystem {
+	text, ok := readString(r.proc("self", "mounts"))
+	if !ok {
+		return nil
+	}
+	out := []Filesystem{}
+	for _, m := range parseMounts(text) {
+		total, avail := diskSpace(m.path)
+		if total == 0 {
+			continue
+		}
+		out = append(out, Filesystem{Mount: m.path, Device: m.device, Type: m.fsType, Total: total, Available: avail})
+	}
+	return out
 }
 
 func (r *Reader) proc(p ...string) string {
@@ -80,6 +135,12 @@ func (r *Reader) sampleLinux(now time.Time) Sample {
 		}
 	}
 	s.DiskTotal, s.DiskAvailable = diskSpace(r.Home)
+	if text, ok := readString(r.proc("diskstats")); ok {
+		r.setDiskIO(now, parseDiskstats(text, r.wholeDisk), &s)
+	}
+	if r.filesystemsDue(now) {
+		s.Filesystems = r.linuxFilesystems()
+	}
 	if r.PaseoPID != nil {
 		if pid := r.PaseoPID(); pid > 0 {
 			r.paseoCgroup(pid, &s)

@@ -80,8 +80,9 @@ The hierarchy is hosts > workspaces > agents:
 - `schedules` and `schedule_runs`: each host's Paseo schedules and their runs (below), with the view
   `schedule_status` (each schedule's run counts and newest run). `hosts.schedules_at` and
   `schedules_error` say when the host last listed them, and why it could not.
-- `host_minutes`, `agent_minutes`, `oom_kills` and `host_probes`: each host's resources over time
-  (below), with the views `host_current`, `host_days` and `agent_days`.
+- `host_minutes`, `agent_minutes`, `oom_kills`, `host_probes` and `host_filesystems`: each host's
+  resources over time and its filesystems now (below), with the views `host_current`, `host_days`
+  and `agent_days`.
 - `usage_accounts`, `usage_readings`, `usage_active` and `usage_sources`: subscription plans' usage
   over time (below), with the views `usage_current`, `usage_pace`, `usage_cycles` and `usage_totals`.
 - `accounts` (username, argon2id password hash, its role), `sessions` (signed-in browsers; a hash
@@ -581,8 +582,19 @@ Every host measures itself (`internal/resources`) and sends each finished minute
   (`/proc/meminfo`), the home filesystem's space, pressure (`/proc/pressure`: the share of time
   tasks waited for CPU, memory or I/O), the kernel's OOM kill count (`/proc/vmstat`) and the Paseo
   daemon's cgroup (all its agents: memory less page cache, its peak, its OOM kills). A minute keeps
-  the average and peak CPU, the least memory and disk available, the most pressure, and the kills.
-  macOS hosts report CPU, load, memory, swap and disk (`sysctl`, `vm_stat`, `iostat`).
+  the average and peak CPU, the 1, 5 and 15-minute load, the least memory and disk available, the
+  most pressure, and the kills. macOS hosts report CPU, load, memory, swap and disk (`sysctl`,
+  `vm_stat`, `iostat`).
+- Disk I/O, every 5 seconds: across the physical disks (`/proc/diskstats`, keeping the devices
+  `/sys/block` gives a `device`, so partitions, device mapper, RAID and loop devices are not
+  counted twice), bytes read and written a second, operations a second, and the busiest disk's
+  share of the time it had I/O in flight (Linux's %util: near 100% the disk is saturated). A minute
+  keeps the averages, the fastest read and write, and the average and peak busy time
+  (`host_minutes.disk_*`). macOS reports bytes and operations (`ioreg`), not busy time.
+- Filesystems, once a minute: each local filesystem's total and available space (Linux:
+  `/proc/self/mounts`, each device once, a ZFS pool once, network filesystems left out, as statfs
+  on one whose server is gone can hang; macOS: `df -kPl`, its Data volume and external volumes).
+  The newest reading replaces the host's rows in `host_filesystems` (`used_frac` is how full).
 - Each agent, every 15 seconds: its processes are those whose environment names it
   (`PASEO_AGENT_ID`, which commands inherit); a minute keeps their most memory (proportional set
   size, so shared pages count once) and how many there were.
@@ -591,7 +603,8 @@ Every host measures itself (`internal/resources`) and sends each finished minute
   commands (`cpu_source` says which).
 
 The server keeps 90 days of minutes (OOM kills are kept). `host_current` is each host's newest
-minute; `host_days` and `agent_days` sum days.
+minute (with `load1_per_cpu`); `host_days` and `agent_days` sum days (`host_days` has the day's
+highest load, fullest home filesystem, busiest disk and bytes read and written).
 
 ### The eBPF probe
 
@@ -1256,10 +1269,11 @@ the account and enrollment routes, the host binaries and the streams (with a hos
 - `GET /usage?days=7` (1 to 365): every login with a chart of each window's used % over the days,
   and its weekly peaks.
 - `GET /api/usage`: the logins and their windows, as JSON.
-- `GET /resources?hours=1` (1 to 2160; it was `/hosts`, which sends here), the Host monitoring tab: each host's CPU and
-  memory charts, its OOM kills and its agents ranked by CPU, with their most memory and commands
-  started. The home page shows each host's CPU, memory, disk and pressure under its name, and each
-  agent's memory beside it.
+- `GET /resources?hours=1` (1 to 2160; it was `/hosts`, which sends here), the Host monitoring tab: each host's CPU, memory,
+  load, disk busy time and disk throughput charts, its load averages, disk I/O now and filesystems
+  (used, free, total), its OOM kills and its agents ranked by CPU, with their most memory and
+  commands started. The home page shows each host's CPU, load, memory, disk (and how much is free),
+  a busy disk and pressure under its name, and each agent's memory beside it.
 - `GET /api/hosts/resources`: each host's newest minute, probe and agents' memory, as JSON.
 - `GET /hosts/{host}/workspaces/{ws}/agents/new`: the form that starts an agent in a workspace.
   `GET /hosts/{host}/workspaces/new`: the form that makes a workspace with an agent in it, by
