@@ -247,6 +247,7 @@ func (e *Engine) applyWorkflowState(ctx context.Context, tx pgx.Tx, account int6
 	}
 	s.Name = name
 	s.Description = strings.TrimSpace(s.Description)
+	s.Definition = s.Definition.normalized()
 	if err := s.Definition.Validate(); err != nil {
 		return "", nil, bad("%s", err)
 	}
@@ -366,6 +367,8 @@ type run struct {
 	ProjectCommand                               *string
 	StartRetryAt                                 *time.Time
 	StartRetries                                 int
+	EstimatedMemory                              int64
+	ProjectSelected                              bool
 	Name                                         string
 	Def                                          Definition
 }
@@ -373,14 +376,15 @@ type run struct {
 func (r run) vars() Vars { return Vars{Run: r.ID, Input: r.Input, Repo: r.Repo, Branch: r.Branch} }
 
 const runSelect = `SELECT r.id::text, r.host, r.title, r.input, r.status, r.repo, r.branch, r.account_id, r.step, r.workspace_id,
-	r.project_agent_id, r.orchestrator_id, r.project_command::text, w.name, v.definition, r.start_retry_at, r.start_retries
+	r.project_agent_id, r.orchestrator_id, r.project_command::text, w.name, v.definition, r.start_retry_at, r.start_retries,
+	r.estimated_memory_bytes, r.project_selected
 	FROM workflow_runs r JOIN workflow_versions v USING (workflow_id, version) JOIN workflows w ON w.id = r.workflow_id `
 
 func scanRun(row pgx.Row) (run, error) {
 	var r run
 	var def []byte
 	err := row.Scan(&r.ID, &r.Host, &r.Title, &r.Input, &r.Status, &r.Repo, &r.Branch, &r.Account, &r.Step, &r.WorkspaceID,
-		&r.ProjectAgent, &r.Orchestrator, &r.ProjectCommand, &r.Name, &def, &r.StartRetryAt, &r.StartRetries)
+		&r.ProjectAgent, &r.Orchestrator, &r.ProjectCommand, &r.Name, &def, &r.StartRetryAt, &r.StartRetries, &r.EstimatedMemory, &r.ProjectSelected)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, ErrNotFound
 	}
@@ -434,6 +438,7 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		if err := json.Unmarshal(def, &d); err != nil {
 			return err
 		}
+		d = d.normalized()
 		host = d.Host
 		if host == "" {
 			return bad("this workflow does not say which host it runs on: pick one in its editor, and save")
@@ -444,7 +449,16 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		if err := lockQueue(ctx, tx, host); err != nil {
 			return err
 		}
-		why, err := e.queueReason(ctx, tx, host)
+		repo := ""
+		selected := d.Project.Mode == ProjectFixed
+		if selected {
+			repo = d.Project.Directory
+		}
+		estimate, err := repositoryMemory(ctx, tx, account, host, repo, selected)
+		if err != nil {
+			return err
+		}
+		why, err := e.room(ctx, tx, host, "", repo, estimate)
 		if err != nil {
 			return err
 		}
@@ -452,9 +466,10 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		if why != "" {
 			status = Queued
 		}
-		if err := tx.QueryRow(ctx, `INSERT INTO workflow_runs (account_id, workflow_id, version, host, title, input, status, queue_reason, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9) RETURNING id::text`, account, workflowID, version, host, taskName(input), input,
-			status, why, e.Now()).Scan(&id); err != nil { // now, holding the lock: the queue's order is the order decided
+		if err := tx.QueryRow(ctx, `INSERT INTO workflow_runs (account_id, workflow_id, version, host, title, input, status, queue_reason, created_at, updated_at,
+			repo, project_selected, estimated_memory_bytes, queued_at_creation)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13) RETURNING id::text`, account, workflowID, version, host, taskName(input), input,
+			status, why, e.Now(), repo, selected, estimate, why != "").Scan(&id); err != nil { // now, holding the lock: the queue's order is the order decided
 			return err
 		}
 		r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id = $1", id))
@@ -463,6 +478,11 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		}
 		if err := e.event(ctx, tx, r, "started", nil, nil, input); err != nil {
 			return err
+		}
+		if selected {
+			if err := e.recordProject(ctx, tx, r, repo); err != nil {
+				return err
+			}
 		}
 		if why != "" {
 			return e.event(ctx, tx, r, "queued", nil, nil, why)
@@ -488,8 +508,8 @@ func (e *Engine) launch(ctx context.Context, tx pgx.Tx, r run) error {
 
 // startFirst queues the command that starts run r, its pending_command.
 func (e *Engine) startFirst(ctx context.Context, tx pgx.Tx, r run) error {
-	if r.Def.Project.Mode == ProjectFixed {
-		return e.startOrchestrator(ctx, tx, r, r.Def.Project.Directory)
+	if r.ProjectSelected {
+		return e.startOrchestrator(ctx, tx, r, r.Repo)
 	}
 	args, err := projectStartArgs(ctx, tx, r)
 	if err != nil {
@@ -561,11 +581,7 @@ func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo s
 	if err != nil {
 		return err
 	}
-	text := repo
-	if text == "" {
-		text = "none"
-	}
-	if err := e.event(ctx, tx, r, "project", nil, nil, text); err != nil {
+	if err := e.recordProject(ctx, tx, r, repo); err != nil {
 		return err
 	}
 	// the workspace becomes the command that starts the run (launch_command): a run whose finder ran
@@ -573,6 +589,15 @@ func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo s
 	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, repo = $3, branch = $4, workspace_title = $5, pending_command = $6, launch_command = $6, updated_at = $7,
 		start_retries=0, start_retry_at=NULL, start_retry_queued=false, error='',
 		title = $8 WHERE id = $1`, r.ID, StartingOrchestrator, repo, r.Branch, wsTitle, c.ID, e.Now(), r.Title)
+	return err
+}
+
+// The selection event precedes any capacity wait. Legacy queued selections may
+// lack it, so launch also calls this without duplicating a recorded choice.
+func (e *Engine) recordProject(ctx context.Context, tx pgx.Tx, r run, repo string) error {
+	_, err := tx.Exec(ctx, `INSERT INTO workflow_run_events (run_id,account_id,at,kind,text)
+		SELECT $1,$2,$3,'project',$4 WHERE NOT EXISTS
+		(SELECT 1 FROM workflow_run_events WHERE run_id=$1 AND kind='project')`, r.ID, r.Account, e.Now(), orNone(repo))
 	return err
 }
 
@@ -664,6 +689,9 @@ func (e *Engine) MoveRun(ctx context.Context, host, runID string, m Move) (strin
 	}
 	var msg string
 	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		if err := lockQueue(ctx, tx, host); err != nil {
+			return err
+		}
 		r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id = $1 FOR UPDATE OF r", runID))
 		if err != nil {
 			return err
@@ -698,7 +726,7 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 	case Succeeded, Failed:
 		return "", conflict("This run is over (%s). Do nothing more for it.", r.Status)
 	case Queued:
-		return "", conflict("This run is queued for room on its host: it has no agents yet. Do nothing for it.")
+		return "", conflict("This run is queued for room on its host. Do nothing for it.")
 	}
 	if m.Move == "project" {
 		if r.Status != FindingProject {
@@ -718,6 +746,30 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		}
 		if err := e.archiveFinder(ctx, tx, r); err != nil {
 			return "", err
+		}
+		estimate, err := repositoryMemory(ctx, tx, r.Account, r.Host, repo, true)
+		if err != nil {
+			return "", err
+		}
+		r.Repo, r.ProjectSelected, r.EstimatedMemory = repo, true, estimate
+		if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET repo=$2, project_selected=true, estimated_memory_bytes=$3 WHERE id=$1`, r.ID, repo, estimate); err != nil {
+			return "", err
+		}
+		if err := e.recordProject(ctx, tx, r, repo); err != nil {
+			return "", err
+		}
+		// This run already holds a startup reservation. Replace it with the selected
+		// project's estimate; do not count the finder twice or lose its FIFO priority.
+		why, err := e.room(ctx, tx, r.Host, r.ID, repo, estimate)
+		if err != nil {
+			return "", err
+		}
+		if why != "" {
+			if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET status='queued', queue_reason=$2, pending_command=NULL,
+				start_retry_at=NULL, start_retry_queued=false, updated_at=$3 WHERE id=$1`, r.ID, why, e.Now()); err != nil {
+				return "", err
+			}
+			return "Project selected. The orchestrator is queued for host capacity. Stop now.", e.event(ctx, tx, r, "queued", nil, nil, why)
 		}
 		if err := e.startOrchestrator(ctx, tx, r, repo); err != nil {
 			return "", err

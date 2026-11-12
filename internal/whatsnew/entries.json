@@ -8,6 +8,14 @@
     "mediaAlt": "The workflow editor with step 1 selected and Model for this step set to the Frontier models group, which also shows on the step's card"
   },
   {
+    "id": "repository-memory-admission",
+    "released": "2026-11-11",
+    "title": "Queue runs by repository memory needs",
+    "summary": "The host queue estimates RAM from successful runs of the selected repository, with headroom and a default for repositories without history. The run page shows the estimate. Active runs keep unused memory reserved, and startup retries use the same estimate and FIFO queue.",
+    "media": "repository-memory.png",
+    "mediaAlt": "A queued application build showing its 10 GiB repository memory estimate and the host memory capacity reason"
+  },
+  {
     "id": "workflow-model-groups",
     "released": "2026-11-11",
     "title": "Choose worker models with reusable groups",

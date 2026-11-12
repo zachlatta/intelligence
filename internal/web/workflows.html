@@ -737,7 +737,7 @@ render();
   <div><h1>{{.Run.Title}}</h1>
     <div class="run-meta"><span class="status {{.Run.StatusClass}}">{{.Run.StatusLabel}}</span>
       <span><b>{{.Run.Workflow}}</b> v{{.Run.Version}}{{if .Run.WorkflowDeleted}} (deleted){{end}}</span><span>on <b class="mono">{{.Run.Host}}</b></span>
-      {{if .Run.Repo}}<span><b class="mono">{{.Run.Repo}}</b> @ <span class="mono">{{.Run.Branch}}</span></span>{{end}}
+      {{if .Run.Repo}}<span><b class="mono">{{.Run.Repo}}</b>{{if .Run.Branch}} @ <span class="mono">{{.Run.Branch}}</span>{{end}}</span>{{end}}
       {{if .Run.WorkspaceTitle}}<span>workspace <b>{{.Run.WorkspaceTitle}}</b></span>{{end}}
       <span>{{plural (len .Agents) "agent"}}</span><span>{{if eq .Run.Status "queued"}}queued{{else}}started{{end}} {{ago .Now .Run.CreatedAt}}</span></div></div>
   <div class="actions">{{if eq .Run.Status "queued"}}<button class="btn sm primary" id="start-now">Start now</button>{{end}}{{if .Run.Live}}<button class="btn sm" id="cancel">Cancel run</button>{{end}}</div>
@@ -747,6 +747,7 @@ render();
 {{if .Emails}}<section class="card"><div class="card-head"><h2>Email thread</h2><span class="meta grow">what each email in it did</span><a class="btn sm ghost" href="/workflows/email">All email</a></div>
   <div class="card-body"><ul class="events">{{range .Emails}}<li><span class="t">{{.ReceivedAt.Format "Jan 2 15:04"}}</span><b>{{.Who}}</b> · {{or .Subject "(no subject)"}} · <span class="badge {{.Badge}}">{{.Label}}</span>{{with .Reason}} <span class="meta">{{.}}</span>{{end}}</li>{{end}}</ul></div></section>{{end}}
 {{if eq .Run.Status "queued"}}<p class="banner note">Queued, {{.Run.InLine}}: {{.Run.QueueReason}}. It starts by itself, oldest first, once the host has room; <b>Start now</b> starts it anyway.</p>{{end}}
+<p class="meta">Estimated run memory: {{memoryGiB .Run.EstimatedMemory}} GiB{{if .Run.Repo}} for <span class="mono">{{.Run.Repo}}</span>{{end}}.</p>
 {{if eq .Run.Status "failed"}}<p class="banner">{{or .Run.Error "The orchestrator marked the run failed."}}</p>{{end}}
 {{if .Run.RetryStatus}}<div class="banner note" id="start-retry" role="status">
   <strong>{{.Run.RetryStatus}}</strong>.
@@ -769,14 +770,14 @@ render();
 <div id="steps" class="builder">
   <div class="pipe">
     <div class="node fixed"><div class="nh"><div><div class="kind">Before the orchestrator</div><div class="ttl">Find the project</div></div>
-      <span class="grow-r">{{if eq .Run.Status "finding_project"}}<span class="status st-running">running</span>{{else if eq .Run.Status "queued"}}<span class="status st-queued">queued</span>{{else}}<span class="status st-done">done</span>{{end}}</span></div>
-      <div class="nb">{{if eq .Run.Status "queued"}}Waits in the queue for room on <span class="mono">{{.Run.Host}}</span>.{{else if eq .Run.Status "finding_project"}}An agent is choosing the repository.{{else if .Run.Repo}}<span class="mono">{{.Run.Repo}}</span>, worktree <span class="mono">{{.Run.Branch}}</span>{{else}}No repository: the home directory.{{end}}
+      <span class="grow-r">{{if .Run.ProjectSelected}}<span class="status st-done">done</span>{{else if eq .Run.Status "finding_project"}}<span class="status st-running">running</span>{{else if eq .Run.Status "queued"}}<span class="status st-queued">queued</span>{{else}}<span class="status st-done">done</span>{{end}}</span></div>
+      <div class="nb">{{if .Run.ProjectSelected}}{{if .Run.Repo}}<span class="mono">{{.Run.Repo}}</span>{{if .Run.Branch}}, worktree <span class="mono">{{.Run.Branch}}</span>{{end}}{{else}}No repository: the home directory.{{end}}{{else if eq .Run.Status "queued"}}Waits in the queue for room on <span class="mono">{{.Run.Host}}</span>.{{else if eq .Run.Status "finding_project"}}An agent is choosing the repository.{{else}}Project selection did not finish.{{end}}
         <ul class="events">{{range .Before}}<li><span class="t">{{.At.Format "15:04"}}</span><div class="md">{{markdown .Line}}</div></li>{{end}}</ul></div></div>
     <div class="link{{if .Run.Orchestrator}} done{{end}}"></div>
     <div class="node fixed"><div class="nh"><div><div class="kind">In the worktree</div><div class="ttl">Orchestrator and its sub-agents</div></div></div>
-      <div class="nb">{{if .Agents}}<div class="tree">{{range .Agents}}<div class="ag" style="padding-left:{{.Depth}}.2rem"><span class="status{{if eq .Status "running"}} st-running{{end}}">{{.Status}}</span>
+      <div class="nb">{{if and .Run.ProjectSelected (eq .Run.Status "queued")}}<p>Orchestrator is waiting for host capacity.</p>{{end}}{{if .Agents}}<div class="tree">{{range .Agents}}<div class="ag" style="padding-left:{{.Depth}}.2rem"><span class="status{{if eq .Status "running"}} st-running{{end}}">{{.Status}}</span>
         <a href="/hosts/{{$.Run.Host}}/agents/{{.ID}}">{{or .Title .ID}}</a><span class="meta">{{.Provider}}{{with .Model}} · {{.}}{{end}}</span></div>{{end}}</div>
-        {{else if .Run.Orchestrator}}Its agents show here once the host reports them.{{else}}Starts once the project is found.{{end}}</div></div>
+        {{else if .Run.Orchestrator}}Its agents show here once the host reports them.{{else if .Run.ProjectSelected}}{{if ne .Run.Status "queued"}}The project is selected; no orchestrator has been reported.{{end}}{{else}}Starts once the project is found.{{end}}</div></div>
     <div class="link{{if .Run.Orchestrator}} done{{end}}"></div>
     {{range $i, $s := .Steps}}
     <div class="node k-{{.Kind}} r-{{.State}}"><div class="nh"><div style="min-width:0"><div class="kind">{{kind .Kind}} {{.N}}</div><div class="ttl">{{.Title}}</div></div>

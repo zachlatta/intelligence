@@ -791,7 +791,8 @@ agents and descendants. Known creation times exclude agents started after the ru
 finished run without snapshots also falls back to its live agent tree, so legacy links remain
 available. This cannot recover metadata or transcripts already removed before the upgrade.
 
-Report-time capture runs once, before replacing live rows, and uses only unfinished runs with a listed workspace or live project finder,
+Report-time capture runs before and after replacing live rows, preserving departing agents and
+including new workers immediately. It uses only unfinished runs with a listed workspace or live project finder,
 with an index on unfinished runs. It takes a final snapshot when a run ends, then freezes membership
 and stops recapturing it. Agents started later in a failed or canceled run's retained workspace
 belong to later work, not that ended run's history. The history follows its run and host when
@@ -845,9 +846,10 @@ its host is near capacity; with room, it starts at once. There is no fixed count
 host's measured load decides.
 
 The server projects the host's load from its newest minute of resources (Host resources, above):
-that minute's CPU, memory used (by the minute's least available) and 1-minute load per CPU, plus
-one run's footprint for each run still starting, whose load the minute cannot show yet, and one
-for the run about to start. A run is starting from its launch (`workflow_runs.launched_at`) until
+that minute's CPU, memory used (by the minute's least available) and 1-minute load per CPU.
+CPU and load add one run's footprint for each run still starting, whose load the minute cannot
+show yet, and one for the run about to start. Memory reservations persist throughout active runs,
+as described below. A run is starting from its launch (`workflow_runs.launched_at`) until
 its orchestrator has started: for its whole start-up. A run that finds its project first is
 starting all the while it finds it (its orchestrator is still to come), and every run is starting
 until the host reports its workspace and orchestrator command (`launch_command`) done and the
@@ -863,16 +865,50 @@ until the host has made them and a newer minute shows their load. The reason say
 capacity: CPU 70% now, about 90% with 1 run starting and this one (queues at 85%)”, or “over
 100%” when the projection is past all of it.
 
-A run's footprint is learned per host (`host_run_footprint`, readable with SQL): over the host's
-last 3 days, each minute's CPU, memory and load per CPU against how many runs were going then
+A run's memory estimate is learned from its selected repository on that host, within its account.
+`workflow_run_memory` sums the recorded agents' memory in each minute, then takes the run's peak.
+`workflow_repository_memory` takes the largest successful-run peak for that selected, non-empty repository root,
+adds 25% headroom, and applies a 1 GiB floor. Without history the estimate is 4 GiB, including
+while a finder has not selected a project. Agent samples expire after 90 days, so older history
+eventually falls back. These views and `workflow_runs.estimated_memory_bytes` expose the evidence
+and estimate through SQL; the run page shows the estimate. Estimates are fixed at repository
+selection and reused for reservations and retries. Every starting, running or waiting run reserves
+`max(estimate - resident memory, 0)` in addition to the host's measured memory usage. Resident memory
+is the sum for that run's known agents in the exact newest host minute; without a matching sample,
+its full estimate stays reserved. This prevents a run's quiet phase from admitting another heavy
+run, without counting its resident memory twice. The existing memory percentage limit supplies
+host headroom. Memory queue reasons name the repository estimate, measured free RAM and reservations.
+To prevent a genuinely oversized estimate from permanently blocking the FIFO, the oldest run
+may start alone only when its estimate exceeds the memory limit's share of total host RAM,
+there are no other active or starting runs, and measured memory is below the limit. The FIFO
+head check also applies during project selection, including older ready start retries.
+An ordinary estimate must fit alongside non-workflow memory use; an OS baseline is not an
+exception. CPU, load and
+telemetry checks still apply. Its full estimate stays reserved until it ends, so it cannot block
+the queue forever solely because the estimate exceeds host RAM. This is an advisory estimate,
+not a guarantee that an oversized workload will fit or avoid an OOM kill.
+Failed, canceled, finder-only and empty-repository runs do not teach the estimator; without a
+successful run for a selected non-empty repository, it keeps the 4 GiB fallback.
+After a finder selects a repository, admission replaces its reservation with that estimate,
+without counting the finder twice. If it no longer fits, the same run re-enters the existing FIFO
+and resumes with its selected repository when room returns; it never repeats project finding.
+`project_selected` distinguishes a selected `none` from a finder still to run.
+Project selection is recorded before a capacity wait. `queued_at_creation` distinguishes an
+initial submission from a run that already started finding its project and later requeued;
+its initial Started event is only shown as Submitted for an initial queue.
+
+CPU and load footprints remain learned per host (`host_run_footprint`, readable with SQL): over the host's
+last 3 days, each minute's CPU and load per CPU against how many runs were going then
 (launched, not finished), fitted with a straight line; its slope is what one run adds. Each metric
-is learned on its own (`cpu_learned`, `mem_learned`, `load_learned`) only when its fit can be
+is learned on its own (`cpu_learned`, `load_learned`) only when its fit can be
 trusted: 60 minutes or more, more than one count of runs among them, a slope above zero (history
 that says runs lighten the host is contradictory, not a footprint) and a fit explaining at least a
 fifth of the metric's variation (`regr_r2` at least 0.2). A learned footprint is kept between a
 quarter and three times the default. Otherwise the default stands, deliberately generous: 10% CPU,
-5% memory and 0.15 load per CPU a run. The view also has the raw fits (`cpu_pct_learned`,
-`mem_pct_learned`, `load_per_cpu_learned`) with their `*_r2`, the minutes and the run counts.
+and 0.15 load per CPU a run. The view also retains its legacy memory fit for SQL readers,
+but admission uses repository memory estimates. It includes raw fits with their `*_r2`,
+the minutes and the run counts. RAM estimates are not hard limits: unsampled spikes and
+processes outside recorded agent trees can be missed.
 
 Without fresh telemetry the server cannot know the host's capacity:
 
@@ -887,14 +923,16 @@ Without fresh telemetry the server cannot know the host's capacity:
 
 **Start now** bypasses the capacity hold for a new run. Automatic retries wait for admission.
 
-A run also queues while earlier runs wait in its host's queue, so the queue keeps its order. The
+A run also queues while earlier runs wait in its host's queue, so the queue keeps strict FIFO
+order: light runs wait behind heavy ones. The
 decision and the start are made in one transaction holding the host's queue lock (an advisory
 lock per host), so runs started at the same moment are judged one after another, each counting
 those just before it.
 
-A new queued run has no agents or commands yet. A ready retry keeps its startup phase and joins
+A new queued run has no agents or commands yet; a run queued after repository selection retains
+its archived finder history. A ready retry keeps its startup phase and joins
 the queue through `workflow_runs.start_retry_queued`. `workflow_runs.queue_reason` says why it waits
-(kept current while it waits, and kept after), its events say when it was `queued` and
+(kept current while it waits, and cleared on dequeue), its events say when it was `queued` and
 `dequeued`, and `workflow_run_queue` lists each host's queue in order (`position` 1 is next). The
 runs list and the run page show it queued, where in line (“2nd in line for host-1”) and why, and
 the run page says when it was queued, not started; the run page's **Start now** starts it at once,
