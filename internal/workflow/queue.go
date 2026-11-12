@@ -198,12 +198,9 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 		return false, err
 	}
 	if r.StartRetryAt != nil {
-		if !e.Now().Before(r.StartRetryAt.Add(RetryWaitLimit)) {
-			return false, nil // reconciliation records the timeout
-		}
-		ready, err := retryHostReady(ctx, tx, r.Host)
-		if err != nil || !ready {
-			return false, err // reconciliation removes it from the queue if readiness was lost
+		// Reconciliation records a timeout, and removes a retry whose host is no longer ready.
+		if held, err := e.retryHeld(ctx, tx, r); err != nil || held != "" {
+			return false, err
 		}
 	}
 	why, err := e.room(ctx, tx, host)
@@ -270,24 +267,34 @@ func (e *Engine) StartNow(ctx context.Context, account int64, runID string) erro
 	})
 }
 
-// startRetryNow sends r's queued start retry at once, whatever its host's load. Only a retry in the
-// queue can go: one still in its backoff, or whose host is not ready (online, with a connected
-// Paseo daemon that supports retry keys), waits, as automatic retries do. The caller holds the
-// host's queue lock and the run's row.
-func (e *Engine) startRetryNow(ctx context.Context, tx pgx.Tx, r run) error {
+// retryHeld says why r's start retry cannot be sent yet, whatever its host's load ("" when it can):
+// it is still in its backoff, it has waited 24 hours and is timing out, or its host is not ready
+// (online, with a connected Paseo daemon that supports retry keys).
+func (e *Engine) retryHeld(ctx context.Context, tx pgx.Tx, r run) (string, error) {
 	now := e.Now()
 	if !now.Before(r.StartRetryAt.Add(RetryWaitLimit)) {
-		return conflict("this retry has waited 24 hours and is timing out")
+		return "this retry has waited 24 hours and is timing out", nil
 	}
 	if now.Before(*r.StartRetryAt) {
-		return conflict("this retry is not due until %s", r.StartRetryAt.UTC().Format("15:04:05 MST"))
+		return "this retry is not due until " + r.StartRetryAt.UTC().Format("15:04:05 MST"), nil
 	}
 	ready, err := retryHostReady(ctx, tx, r.Host)
+	if err != nil || ready {
+		return "", err
+	}
+	return "this retry is waiting for " + r.Host + " to be ready (online, with a connected Paseo daemon that supports retry keys), not for room", nil
+}
+
+// startRetryNow sends r's queued start retry at once, whatever its host's load. Only a retry in the
+// queue can go: one retryHeld holds waits, as automatic retries do. The caller holds the host's
+// queue lock and the run's row.
+func (e *Engine) startRetryNow(ctx context.Context, tx pgx.Tx, r run) error {
+	held, err := e.retryHeld(ctx, tx, r)
 	if err != nil {
 		return err
 	}
-	if !ready {
-		return conflict("this retry is waiting for %s to be ready (online, with a connected Paseo daemon that supports retry keys), not for room", r.Host)
+	if held != "" {
+		return conflict("%s", held)
 	}
 	sent, err := e.dequeueRetry(ctx, tx, r, "retry started by hand, ahead of the queue")
 	if err != nil {
