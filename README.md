@@ -942,7 +942,7 @@ A run's memory estimate is learned from its selected repository on that host, wi
 `workflow_repository_memory` takes what nine in ten successful-run peaks for that selected, non-empty
 repository root stayed under (the 90th percentile; the largest, until it has ten runs), adds 25%
 headroom, and applies a 1 GiB floor, so one unusually heavy run does not size every later run.
-Unfinished runs were re-estimated this way when it changed (migration `0042_workflow_queue_progress`). Without history the estimate is 4 GiB. A run still
+Unfinished runs were re-estimated this way when it changed (migration `0043_workflow_queue_progress`). Without history the estimate is 4 GiB. A run still
 finding its project reserves 1 GiB (its finder is small), and its project's estimate is checked
 when it is chosen. Agent samples expire after 90 days, so older history
 eventually falls back. These views and `workflow_runs.estimated_memory_bytes` expose the evidence

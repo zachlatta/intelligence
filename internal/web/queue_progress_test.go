@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zachlatta/intelligence/internal/db"
 	"github.com/zachlatta/intelligence/internal/dbtest"
 	"github.com/zachlatta/intelligence/internal/hostclient"
 	"github.com/zachlatta/intelligence/internal/workflow"
@@ -265,4 +266,29 @@ func otherRunActive(t *testing.T, h http.Handler, d dbtest.DB, b *rawHost) strin
 		t.Fatal(err)
 	}
 	return id
+}
+
+// The upgrade lowers the estimate of runs still finding their project, stored as 4 GiB before,
+// to what a finder now reserves; finished runs keep theirs.
+func TestQueueProgressUpgradeReestimatesFinders(t *testing.T) {
+	h, d := dbServer(t)
+	b := sendReport(t, h, wfReport())
+	finding := startRun(t, h, createWorkflow(t, h, workflow.Starting), "still finding")
+	b.command()
+	done := startRun(t, h, createWorkflow(t, h, workflow.Starting), "finished")
+	if _, err := d.Owner.Exec(t.Context(), `UPDATE workflow_runs SET estimated_memory_bytes=4294967296;
+		UPDATE workflow_runs SET status='canceled', finished_at=now() WHERE id='`+done+`';
+		ALTER TABLE workflow_runs DROP COLUMN started_by_hand;
+		DELETE FROM schema_migrations WHERE version='0043_workflow_queue_progress'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(t.Context(), d.Owner); err != nil {
+		t.Fatal(err)
+	}
+	if got := runField(t, h, finding, "estimated_memory_bytes"); got != float64(1<<30) {
+		t.Fatalf("finder estimate after upgrade = %v, want 1 GiB", got)
+	}
+	if got := runField(t, h, done, "estimated_memory_bytes"); got != float64(4<<30) {
+		t.Fatalf("finished run re-estimated: %v", got)
+	}
 }

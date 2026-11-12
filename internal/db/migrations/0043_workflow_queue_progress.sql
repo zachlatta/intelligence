@@ -24,3 +24,8 @@ UPDATE workflow_runs r SET estimated_memory_bytes = m.estimated_memory_bytes
 FROM workflow_repository_memory m
 WHERE r.status NOT IN ('succeeded', 'failed', 'canceled') AND r.project_selected
     AND m.account_id = r.account_id AND m.host = r.host AND m.repo = r.repo;
+
+-- A run still finding its project reserves what its finder needs (finderMemory in
+-- internal/workflow/memory.go), not the 4 GiB stored before.
+UPDATE workflow_runs SET estimated_memory_bytes = 1073741824
+WHERE status NOT IN ('succeeded', 'failed', 'canceled') AND NOT project_selected;
