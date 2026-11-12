@@ -28,6 +28,11 @@
   .wf-card { display: flex; flex-direction: column; margin: 0; }
   .wf-card .card-body { flex: 1; }
   .wf-card h2 a { color: var(--fg); } .wf-card h2 a:hover { color: var(--accent); }
+  .runs-head { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin: 2rem 0 .75rem; }
+  .runs-head .section-title { margin: 0; }
+  .runs-search { display: flex; gap: .4rem; align-items: center; margin-left: auto; }
+  .runs-search input { width: 16rem; height: 1.75rem; padding: 0 .6rem; font-size: 13px; }
+  .pager { display: flex; align-items: center; justify-content: flex-end; gap: .75rem; margin-top: .75rem; }
   .card-foot { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; padding: .6rem 1rem; border-top: 1px solid var(--line); background: var(--bg-subtle); }
   .strip { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; margin: .6rem 0 0; }
   .strip .arrow { color: var(--faint); font-size: 12px; }
@@ -178,7 +183,7 @@
     </div>
   </section>
 {{end}}
-{{range .Runs}}{{if eq .Status "waiting"}}<p class="banner note"><b>{{.Workflow}}</b> is asking you: “{{.Title}}” · <a href="/workflow-runs/{{.ID}}">Read the note →</a></p>{{end}}{{end}}
+{{range .Waiting}}<p class="banner note"><b>{{.Workflow}}</b> is asking you: “{{.Title}}” · <a href="/workflow-runs/{{.ID}}">Read the note →</a></p>{{end}}
 <h2 class="section-title">Workflows</h2>
 <div class="wf-grid">
 {{range .Workflows}}
@@ -194,9 +199,13 @@
 {{end}}
 </div>
 {{end}}
-<h2 class="section-title">Runs</h2>
+<div class="runs-head"><h2 class="section-title" id="runs-title">Runs</h2>
+<form class="runs-search" method="get" action="/workflows" role="search">
+  <input type="search" name="q" value="{{.List.Query}}" placeholder="Search runs…" aria-label="Search runs" autocomplete="off">
+  <button class="btn sm" type="submit">Search</button>{{if .List.Query}}<a class="btn sm ghost" href="/workflows">Clear</a>{{end}}
+</form></div>
 <div id="runs">
-{{if .Runs}}<div class="table-wrap"><table class="table">
+{{with .List}}{{if .Runs}}<div class="table-wrap"><table class="table">
   <tr><th>Status</th><th>What</th><th>Workflow</th><th>Now</th><th>Host</th><th>Project</th><th class="n">Started</th></tr>
   {{range .Runs}}<tr>
     <td><span class="status {{.StatusClass}}">{{.StatusLabel}}</span>{{if eq .Status "stalled"}} <button class="btn sm" data-resume-run="{{.ID}}">Resume</button>{{end}}</td>
@@ -206,7 +215,12 @@
     <td class="mono" style="white-space:nowrap">{{.Host}}</td>
     <td class="mono">{{.Repo}}</td>
     <td class="n meta">{{ago $.Now .CreatedAt}}</td></tr>{{end}}
-</table></div>{{else}}<p class="empty-state">No runs yet.</p>{{end}}
+</table></div>{{else if .Query}}<p class="empty-state">No runs match “{{.Query}}”.</p>{{else if gt .Page 1}}<p class="empty-state">No runs on this page.</p>{{else}}<p class="empty-state">No runs yet.</p>{{end}}
+{{if or .Runs (gt .Page 1)}}<nav class="pager" aria-label="Runs pages">
+  {{with .Newer}}<a class="btn sm" href="{{.}}" rel="prev">← Newer</a>{{end}}
+  <span class="meta">{{if .Runs}}{{.First}}–{{.Last}} of {{.Total}}{{else}}{{.Total}} in all{{end}}{{if .Query}} matching{{end}}</span>
+  {{with .Older}}<a class="btn sm" href="{{.}}" rel="next">Older →</a>{{end}}
+</nav>{{end}}{{end}}
 </div>
 <script>
 const starting = {{json .Starting}};

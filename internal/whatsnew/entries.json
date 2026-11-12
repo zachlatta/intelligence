@@ -8,6 +8,14 @@
     "mediaAlt": "A run page showing Retry 1 of 3 queued with a Start retry now button; after the click it shows Retry 1 of 3 sent and the timeline says the retry was started by hand, ahead of the queue"
   },
   {
+    "id": "workflow-runs-pages-and-search",
+    "released": "2026-11-12",
+    "title": "Page through and search workflow runs",
+    "summary": "Workflows now lists every run, 50 a page, with Newer and Older links under the table, so older runs are no longer cut off. The search box beside Runs finds runs across all history by any words in their summary, prompt, workflow, status, host, project or branch.",
+    "media": "workflow-runs-search.gif",
+    "mediaAlt": "The Runs list on Workflows: a search for a word narrows it to the matching runs, then Clear and Older page back through history"
+  },
+  {
     "id": "host-disk-io-load-filesystems",
     "released": "2026-11-12",
     "title": "Disk I/O, free space and load in Host monitoring",

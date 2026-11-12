@@ -1392,6 +1392,12 @@ origin (another site's request is refused with 403), and those with a body must 
 - `GET /workflows`: a new task (for workflows triggered by a task: pick the workflow, which names
   its host, with the default first and selected), the account's workflows and their runs. Without
   workflows, a button adds the starting one (`workflow.Starting`) on the account's first host.
+  Runs are listed newest first, 50 a page (`?page=2`, with Newer and Older links), so all of
+  history is reachable. The search box above them (`?q=`) finds runs, across all pages, that
+  hold every word typed, in any case, in their summary or title, prompt, workflow name, status,
+  host, project, branch (which holds the run's id) or workspace; `%` and `_` match themselves.
+  Both are plain reads of `workflow_runs` and `workflows` through the account's role, the same
+  rows `/api/sql` returns. A waiting run's note shows above, whatever page it is on.
   The task composer has a full-width prompt and an action bar for images, dictation (when enabled),
   workflow selection and submission. Cmd/Ctrl+Enter submits; Enter keeps its newline. Images can be
   picked, dropped or pasted, and appear as removable thumbnail chips; image limits open on demand.

@@ -671,12 +671,17 @@ func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		rows, err := v.pool.Query(ctx, runRowSelect+"ORDER BY r.created_at DESC LIMIT 100")
+		list, err := readRunsPage(ctx, v.pool, r.URL.Query().Get("q"), r.URL.Query().Get("page"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		runs, err := pgx.CollectRows(rows, scanRunRow)
+		rows, err := v.pool.Query(ctx, runRowSelect+"WHERE r.status = 'waiting' ORDER BY r.created_at DESC LIMIT 20")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		waiting, err := pgx.CollectRows(rows, scanRunRow)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -692,8 +697,8 @@ func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 				tasks = append(tasks, wf)
 			}
 		}
-		renderWorkflows(w, "list", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Workflows": wfs, "Runs": runs,
-			"Hosts": hosts, "Tasks": tasks, "Starting": workflow.Starting, "Dictation": dictationPath(cfg)})
+		renderWorkflows(w, "list", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Workflows": wfs,
+			"List": list, "Waiting": waiting, "Hosts": hosts, "Tasks": tasks, "Starting": workflow.Starting, "Dictation": dictationPath(cfg)})
 	}
 }
 
