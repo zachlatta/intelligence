@@ -159,7 +159,7 @@ func (e *Engine) queueReason(ctx context.Context, tx pgx.Tx, host string) (strin
 	return e.room(ctx, tx, host)
 }
 
-// StartQueued starts, on each host with a queue, its queued runs in order while the host has room (room).
+// StartQueued starts immediate runs first, then normal runs in order while their host has room.
 func (e *Engine) StartQueued(ctx context.Context) error {
 	rows, err := e.p.Query(ctx, "SELECT DISTINCT host FROM workflow_run_queue")
 	if err != nil {
@@ -185,12 +185,12 @@ func (e *Engine) StartQueued(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// startNext starts host's oldest queued run if the host has room, and says whether it did.
+// startNext admits the next run by priority and creation order. Immediate bypasses room.
 func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, error) {
 	if err := lockQueue(ctx, tx, host); err != nil {
 		return false, err
 	}
-	r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.host = $1 AND (r.status = $2 OR r.start_retry_queued) ORDER BY r.created_at, r.id LIMIT 1 FOR UPDATE OF r", host, Queued))
+	r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.host = $1 AND (r.status = $2 OR r.start_retry_queued) ORDER BY (coalesce(v.definition->>'priority', 'normal') = 'immediate') DESC, r.created_at, r.id LIMIT 1 FOR UPDATE OF r", host, Queued))
 	if errors.Is(err, ErrNotFound) {
 		return false, nil
 	}
@@ -206,9 +206,12 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 			return false, err // reconciliation removes it from the queue if readiness was lost
 		}
 	}
-	why, err := e.room(ctx, tx, host)
-	if err != nil {
-		return false, err
+	var why string
+	if r.Def.Priority != PriorityImmediate {
+		why, err = e.room(ctx, tx, host)
+		if err != nil {
+			return false, err
+		}
 	}
 	if why != "" {
 		_, err := tx.Exec(ctx, "UPDATE workflow_runs SET queue_reason = $2 WHERE id = $1 AND queue_reason <> $2", r.ID, why)
@@ -217,7 +220,11 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 	if r.StartRetryAt != nil {
 		return e.dequeueRetry(ctx, tx, r)
 	}
-	return true, e.dequeue(ctx, tx, r, host+" has room")
+	reason := host + " has room"
+	if r.Def.Priority == PriorityImmediate {
+		reason = "immediate priority, ahead of the queue"
+	}
+	return true, e.dequeue(ctx, tx, r, reason)
 }
 
 // dequeue starts queued run r, saying why it starts now.

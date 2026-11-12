@@ -247,6 +247,7 @@ func (e *Engine) applyWorkflowState(ctx context.Context, tx pgx.Tx, account int6
 	}
 	s.Name = name
 	s.Description = strings.TrimSpace(s.Description)
+	s.Definition.defaultPriority()
 	if err := s.Definition.Validate(); err != nil {
 		return "", nil, bad("%s", err)
 	}
@@ -444,9 +445,12 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		if err := lockQueue(ctx, tx, host); err != nil {
 			return err
 		}
-		why, err := e.queueReason(ctx, tx, host)
-		if err != nil {
-			return err
+		var why string
+		if d.Priority != PriorityImmediate {
+			why, err = e.queueReason(ctx, tx, host)
+			if err != nil {
+				return err
+			}
 		}
 		status := FindingProject
 		if why != "" {

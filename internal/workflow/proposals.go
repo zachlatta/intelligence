@@ -106,6 +106,7 @@ func (e *Engine) Propose(ctx context.Context, account int64, proposer string, r 
 		}
 		r.Workflow.Name = name
 		r.Workflow.Description = strings.TrimSpace(r.Workflow.Description)
+		r.Workflow.Definition.defaultPriority()
 		if r.Workflow.Version != 0 || r.Workflow.IsDefault || r.Workflow.Deleted {
 			return "", bad("workflow takes only name, description and definition")
 		}

@@ -877,7 +877,22 @@ Without fresh telemetry the server cannot know the host's capacity:
 - a host that never sent its resources, or one connected now that has sent none for 30 minutes
   (its monitoring stopped), gives no sign of being near capacity, so its runs start.
 
-**Start now** bypasses the capacity hold for a new run. Automatic retries wait for admission.
+In the workflow editor's Trigger panel, **Priority** chooses **Normal** (wait for capacity)
+or **Immediate** (skip the queue and capacity hold). Save it through the existing
+`POST /api/workflows` or `PUT /api/workflows/{id}` JSON route as `definition.priority`:
+`"normal"` or `"immediate"`. Omitting it or using `""` selects immediate for email and
+voice-memo triggers, normal otherwise. An explicit normal setting always wins.
+Migration `0040_workflow_priority` versions existing active workflows with these defaults;
+email requests, including voice emails, and voice memos start immediately after deployment.
+Existing runs keep their saved versions and priority. Read a run's priority by joining
+`workflow_runs` to `workflow_versions` on `(workflow_id, version)` and selecting
+`coalesce(definition->>'priority', 'normal')` through `/api/sql`.
+
+Immediate runs launch even with older runs waiting or missing capacity measurements. Their
+startup retries also go first and bypass capacity, but still respect retry backoff, deadlines
+and host/daemon readiness. Immediate starts can increase host load; they do not interrupt
+running work or make an offline host execute commands. Normal runs retain FIFO order.
+**Start now** on an already queued run bypasses the capacity hold for that run.
 
 A run also queues while earlier runs wait in its host's queue, so the queue keeps its order. The
 decision and the start are made in one transaction holding the host's queue lock (an advisory
