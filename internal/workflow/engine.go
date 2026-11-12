@@ -410,17 +410,16 @@ func (e *Engine) StartRun(ctx context.Context, account int64, workflowID, input 
 	var id string
 	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
 		var err error
-		id, err = e.StartRunTx(ctx, tx, account, workflowID, input)
+		id, err = e.StartRunTx(ctx, tx, account, workflowID, input, time.Time{})
 		return err
 	})
 	return id, err
 }
 
-// StartRunTx is StartRun in tx.
-func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workflowID, input string, requestedAt ...time.Time) (string, error) {
-	requested := e.Now()
-	if len(requestedAt) > 0 && !requestedAt[0].IsZero() {
-		requested = requestedAt[0]
+// StartRunTx is StartRun in tx, for a request sent at requestedAt (zero: now).
+func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workflowID, input string, requestedAt time.Time) (string, error) {
+	if requestedAt.IsZero() {
+		requestedAt = e.Now()
 	}
 	if strings.TrimSpace(input) == "" {
 		return "", bad("a run needs input: what should be done")
@@ -475,7 +474,7 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		if err := tx.QueryRow(ctx, `INSERT INTO workflow_runs (account_id, workflow_id, version, host, title, input, status, queue_reason, created_at, updated_at,
 			repo, project_selected, estimated_memory_bytes, queued_at_creation, requested_at, answer_expected)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $14, $15) RETURNING id::text`, account, workflowID, version, host, taskName(input), input,
-			status, why, e.Now(), repo, selected, estimate, why != "", requested, d.Trigger == TriggerEmail || d.Trigger == TriggerVoiceMemo).Scan(&id); err != nil { // now, holding the lock: the queue's order is the order decided
+			status, why, e.Now(), repo, selected, estimate, why != "", requestedAt, d.Trigger == TriggerEmail || d.Trigger == TriggerVoiceMemo).Scan(&id); err != nil { // now, holding the lock: the queue's order is the order decided
 			return err
 		}
 		r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id = $1", id))
