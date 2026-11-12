@@ -182,6 +182,33 @@ assert(html.includes('{{gone_model}} (no such model group)'),html);
 	if err != nil {
 		t.Fatalf("step model picker: %v\n%s", err, out)
 	}
+	// The step's card names the group, not its token.
+	_, script, ok = strings.Cut(workflowsHTML, "function stepModelLabel(")
+	if !ok {
+		t.Fatal("missing step model label")
+	}
+	script, _, ok = strings.Cut(script, "\n}")
+	if !ok {
+		t.Fatal("missing step model label end")
+	}
+	out, err = exec.Command(node, "-e", `const assert=require('assert');const esc=s=>String(s).replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;');const V=s=>'{{'+s+'}}';const vars=s=>esc(s).replace(/\{\{[a-z0-9_]+\}\}/g,'<span class="var">$&</span>');
+global.window={modelGroups:{groups:()=>[{name:'Frontier <models>',token:'frontier_model',members:[{}]}]}};`+
+		"function stepModelLabel("+script+"\n}\n"+`
+assert.equal(stepModelLabel({}),'');
+let html=stepModelLabel({model:'{{frontier_model}}'});
+assert(html.includes('Frontier &lt;models>'),html);
+assert(html.includes('title="{{frontier_model}}"'),html);
+assert(!html.includes('<span class="var">'),html);
+html=stepModelLabel({model:'{{gone_model}}'});
+assert(html.includes('<span class="var">{{gone_model}}</span>'),html);
+html=stepModelLabel({model:'codex/sol',thinking:'high'});
+assert(html.includes('codex/sol · high'),html);
+global.window={};
+assert(stepModelLabel({model:'{{frontier_model}}'}).includes('<span class="var">{{frontier_model}}</span>'));
+`).CombinedOutput()
+	if err != nil {
+		t.Fatalf("step model label: %v\n%s", err, out)
+	}
 }
 
 func TestWorkflowHostAPIErrorsAreJSON(t *testing.T) {
