@@ -35,13 +35,14 @@ func TestPriorityMigrationPreservesRunSnapshots(t *testing.T) {
 	}
 	for name, want := range map[string]string{"Email task": "immediate", "Voice memos": "immediate", "Task": "normal", "Explicit normal": "normal"} {
 		var priority string
-		if err := ann.QueryRow(ctx, `SELECT v.definition->>'priority' FROM workflows w JOIN workflow_versions v ON v.workflow_id=w.id AND v.version=w.version WHERE w.name=$1`, name).Scan(&priority); err != nil || priority != want {
+		if err := ann.QueryRow(ctx, `SELECT coalesce(v.definition->>'priority','normal') FROM workflows w JOIN workflow_versions v ON v.workflow_id=w.id AND v.version=w.version WHERE w.name=$1`, name).Scan(&priority); err != nil || priority != want {
 			t.Fatalf("%s: %q %v", name, priority, err)
 		}
 	}
 	var version int
 	var unchanged bool
-	if err := ann.QueryRow(ctx, `SELECT r.version, v.definition='{"trigger":"email"}'::jsonb FROM workflow_runs r JOIN workflow_versions v USING(workflow_id,version)`).Scan(&version, &unchanged); err != nil || version != 1 || !unchanged {
+	var priority string
+	if err := ann.QueryRow(ctx, `SELECT r.version, v.definition='{"trigger":"email"}'::jsonb, r.priority FROM workflow_runs r JOIN workflow_versions v USING(workflow_id,version)`).Scan(&version, &unchanged, &priority); err != nil || version != 1 || !unchanged || priority != "normal" {
 		t.Fatalf("snapshot: %d %v %v", version, unchanged, err)
 	}
 	if err := db.CheckContract(ctx, d.Owner, d.Readonly); err != nil {

@@ -105,7 +105,7 @@ func (e *Engine) dequeueRetry(ctx context.Context, tx pgx.Tx, r run) (bool, erro
 		return false, err
 	}
 	reason := r.Host + " has room for the retry"
-	if r.Def.Priority == PriorityImmediate {
+	if r.Priority == PriorityImmediate {
 		reason = "immediate priority retry, ahead of the queue"
 	}
 	if err := e.recordDequeue(ctx, tx, r, reason); err != nil {

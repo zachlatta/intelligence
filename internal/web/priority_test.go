@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -106,16 +107,31 @@ func TestEmailAndVoiceMemoPriorityDefaultsStartImmediately(t *testing.T) {
 			b := openStream(t, h, "host-1")
 			hostMinute(t, b, time.Now().UTC().Truncate(time.Minute), 97, .5)
 			def := workflow.Starting
+			wf := createWorkflow(t, h, def)
+			// The editor opens the saved task definition before switching its trigger.
+			var saved []byte
+			if err := d.Owner.QueryRow(t.Context(), `SELECT v.definition FROM workflows w JOIN workflow_versions v ON v.workflow_id=w.id AND v.version=w.version WHERE w.id=$1`, wf).Scan(&saved); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(saved, &def); err != nil {
+				t.Fatal(err)
+			}
 			def.Trigger = trigger
 			if trigger == workflow.TriggerEmail {
 				def.Email = &workflow.EmailFilter{From: []string{"sender@example.com"}}
 			} else {
 				def.VoiceMemo = &workflow.VoiceMemoFilter{}
 			}
-			wf := createWorkflow(t, h, def)
+			if rec := call(t, h, http.MethodPut, "/api/workflows/"+wf, wfBody(t, "Automatic requests", def), sameOriginFetch); rec.Code != 200 {
+				t.Fatal(rec.Body)
+			}
 			run := startRun(t, h, wf, "new request")
 			if got := runField(t, h, run, "status"); got == "queued" {
 				t.Fatal("default request queued")
+			}
+			code, rows := sqlPost(t, h, q("SELECT coalesce(v.definition->>'priority',''),r.priority FROM workflow_runs r JOIN workflow_versions v USING(workflow_id,version) WHERE r.id='"+run+"'"))
+			if code != 200 || len(rows.Rows) != 1 || rows.Rows[0][0] != "" || rows.Rows[0][1] != "immediate" {
+				t.Fatalf("configured/effective priorities: %+v", rows)
 			}
 			def.Priority = workflow.PriorityNormal
 			if rec := call(t, h, http.MethodPut, "/api/workflows/"+wf, wfBody(t, "Normal requests", def), sameOriginFetch); rec.Code != 200 {
@@ -124,6 +140,10 @@ func TestEmailAndVoiceMemoPriorityDefaultsStartImmediately(t *testing.T) {
 			run = startRun(t, h, wf, "normal request")
 			if got := runField(t, h, run, "status"); got != "queued" {
 				t.Fatalf("normal request = %v", got)
+			}
+			code, rows = sqlPost(t, h, q("SELECT priority FROM workflow_runs WHERE workflow_id='"+wf+"' ORDER BY created_at"))
+			if code != 200 || len(rows.Rows) != 2 || rows.Rows[0][0] != "immediate" || rows.Rows[1][0] != "normal" {
+				t.Fatalf("run priorities changed after edit: %+v", rows)
 			}
 		})
 	}

@@ -40,8 +40,11 @@ func TestPriorityDefaultsAndValidation(t *testing.T) {
 					want = "immediate"
 				}
 			}
-			if fields["priority"] != want {
-				t.Errorf("%s/%s: priority = %v, want %s", trigger, priority, fields["priority"], want)
+			if got.Priority != priority {
+				t.Errorf("configured priority changed: %q -> %q", priority, got.Priority)
+			}
+			if got.EffectivePriority() != want {
+				t.Errorf("%s/%s: priority = %v, want %s", trigger, priority, got.EffectivePriority(), want)
 			}
 		}
 	}

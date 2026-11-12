@@ -880,13 +880,24 @@ Without fresh telemetry the server cannot know the host's capacity:
 In the workflow editor's Trigger panel, **Priority** chooses **Normal** (wait for capacity)
 or **Immediate** (skip the queue and capacity hold). Save it through the existing
 `POST /api/workflows` or `PUT /api/workflows/{id}` JSON route as `definition.priority`:
-`"normal"` or `"immediate"`. Omitting it or using `""` selects immediate for email and
-voice-memo triggers, normal otherwise. An explicit normal setting always wins.
-Migration `0040_workflow_priority` versions existing active workflows with these defaults;
+`"normal"`, `"immediate"`, or `""` for Automatic. Automatic stays unset in the saved definition
+and follows the trigger: immediate for email and voice memos, normal otherwise, including
+after changing a task workflow to an email or voice-memo trigger. An explicit normal setting always wins.
+Migration `0040_workflow_priority` versions existing active email and voice-memo workflows
+with explicit Immediate priority;
 email requests, including voice emails, and voice memos start immediately after deployment.
-Existing runs keep their saved versions and priority. Read a run's priority by joining
-`workflow_runs` to `workflow_versions` on `(workflow_id, version)` and selecting
-`coalesce(definition->>'priority', 'normal')` through `/api/sql`.
+Each new run snapshots its resolved priority in `workflow_runs.priority`, so later workflow
+edits cannot change its queue or retry behavior. Existing runs without an explicit priority,
+including email and voice-memo runs already queued at deployment, retain Normal; use **Start now**
+to launch one immediately. Read the configured setting and effective run snapshot through `/api/sql`:
+
+```sql
+SELECT coalesce(v.definition->>'priority', '') AS configured_priority, r.priority AS effective_priority
+FROM workflow_runs r JOIN workflow_versions v USING (workflow_id, version);
+```
+
+An empty configured priority means Automatic. `workflow_run_queue.priority` also exposes the
+effective snapshot. The saved definition remains available for future workflow edits.
 
 Immediate runs launch even with older runs waiting or missing capacity measurements. Their
 startup retries also go first and bypass capacity, but still respect retry backoff, deadlines

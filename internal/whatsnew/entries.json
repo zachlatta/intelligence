@@ -3,9 +3,9 @@
     "id": "workflow-immediate-priority",
     "released": "2026-11-12",
     "title": "Let urgent workflows skip the queue",
-    "summary": "Choose Priority in the workflow editor\u2019s Trigger panel: Immediate starts even when the host is busy; Normal waits for capacity. Email requests and voice memos now default to Immediate. Use Start now on a queued run for a one-time bypass.",
+    "summary": "Choose Priority in the workflow editor\u2019s Trigger panel: Automatic follows the trigger, Immediate skips capacity checks, and Normal waits. Automatic email requests and voice memos start immediately, even after changing a task workflow\u2019s trigger. Use Start now on a queued run for a one-time bypass.",
     "media": "workflow-priority.png",
-    "mediaAlt": "Workflow editor Trigger panel showing Immediate priority and its capacity bypass explanation"
+    "mediaAlt": "Workflow editor Trigger panel showing Automatic priority after changing a task workflow to a voice memo trigger"
   },
   {
     "id": "workflow-model-groups",

@@ -247,7 +247,6 @@ func (e *Engine) applyWorkflowState(ctx context.Context, tx pgx.Tx, account int6
 	}
 	s.Name = name
 	s.Description = strings.TrimSpace(s.Description)
-	s.Definition.defaultPriority()
 	if err := s.Definition.Validate(); err != nil {
 		return "", nil, bad("%s", err)
 	}
@@ -368,20 +367,21 @@ type run struct {
 	StartRetryAt                                 *time.Time
 	StartRetries                                 int
 	Name                                         string
+	Priority                                     string
 	Def                                          Definition
 }
 
 func (r run) vars() Vars { return Vars{Run: r.ID, Input: r.Input, Repo: r.Repo, Branch: r.Branch} }
 
 const runSelect = `SELECT r.id::text, r.host, r.title, r.input, r.status, r.repo, r.branch, r.account_id, r.step, r.workspace_id,
-	r.project_agent_id, r.orchestrator_id, r.project_command::text, w.name, v.definition, r.start_retry_at, r.start_retries
+	r.project_agent_id, r.orchestrator_id, r.project_command::text, w.name, v.definition, r.start_retry_at, r.start_retries, r.priority
 	FROM workflow_runs r JOIN workflow_versions v USING (workflow_id, version) JOIN workflows w ON w.id = r.workflow_id `
 
 func scanRun(row pgx.Row) (run, error) {
 	var r run
 	var def []byte
 	err := row.Scan(&r.ID, &r.Host, &r.Title, &r.Input, &r.Status, &r.Repo, &r.Branch, &r.Account, &r.Step, &r.WorkspaceID,
-		&r.ProjectAgent, &r.Orchestrator, &r.ProjectCommand, &r.Name, &def, &r.StartRetryAt, &r.StartRetries)
+		&r.ProjectAgent, &r.Orchestrator, &r.ProjectCommand, &r.Name, &def, &r.StartRetryAt, &r.StartRetries, &r.Priority)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, ErrNotFound
 	}
@@ -446,7 +446,7 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 			return err
 		}
 		var why string
-		if d.Priority != PriorityImmediate {
+		if d.EffectivePriority() != PriorityImmediate {
 			why, err = e.queueReason(ctx, tx, host)
 			if err != nil {
 				return err
@@ -456,9 +456,9 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		if why != "" {
 			status = Queued
 		}
-		if err := tx.QueryRow(ctx, `INSERT INTO workflow_runs (account_id, workflow_id, version, host, title, input, status, queue_reason, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9) RETURNING id::text`, account, workflowID, version, host, taskName(input), input,
-			status, why, e.Now()).Scan(&id); err != nil { // now, holding the lock: the queue's order is the order decided
+		if err := tx.QueryRow(ctx, `INSERT INTO workflow_runs (account_id, workflow_id, version, host, title, input, status, queue_reason, created_at, updated_at, priority)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10) RETURNING id::text`, account, workflowID, version, host, taskName(input), input,
+			status, why, e.Now(), d.EffectivePriority()).Scan(&id); err != nil { // now, holding the lock: the queue's order is the order decided
 			return err
 		}
 		r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id = $1", id))

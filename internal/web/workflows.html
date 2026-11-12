@@ -377,7 +377,7 @@ function fixedCards() {
       (d.trigger === "task" ? "A task submitted on the Workflows page. It becomes " + V("input") + "." :
         d.trigger === "email" ? esc(emailSummary(d.email)) + (mailbox ? ` to <b>${esc(mailbox)}</b>` : "") + ". The email becomes " + V("input") + "." :
         d.trigger === "voice_memo" ? "A new PDW recording matching the filter. The first 1000 transcript characters become " + V("input") + " with instructions for fetching the full transcript." : "Someone presses Run and types what it should do.") +
-      ` Runs on <b class="mono">${esc(d.host || "no host yet")}</b>. Priority: <b>${esc(d.priority || ((d.trigger === "email" || d.trigger === "voice_memo") ? "immediate" : "normal"))}</b>.`) +
+      ` Runs on <b class="mono">${esc(d.host || "no host yet")}</b>. Priority: <b>${esc(d.priority || ("automatic (" + ((d.trigger === "email" || d.trigger === "voice_memo") ? "immediate" : "normal") + ")"))}</b>.`) +
     `<div class="link"></div>` +
     card("__project", "Before the orchestrator", "Find the project", p.mode === "fixed" ? `Always ${esc(allRepos.find((r) => r.directory === p.directory)?.project || "")} <span class="mono">${esc(p.directory)}</span>.` :
       `An agent (${esc(p.provider)}${p.model ? " · " + esc(p.model) : ""}) picks one of the host's repositories, or none. Then the worktree is made.`) +
@@ -505,8 +505,8 @@ function inspector() {
     if (d.host && !hosts.includes(d.host)) hostOpts.push([d.host, d.host + " (not in this account)"]);
     return panel("Trigger", "", `<label>Starts when</label><select data-d="trigger">${opts([["task", "A task is submitted on the Workflows page"], ["manual", "Someone presses Run"], ["email", "An email arrives"], ["voice_memo", "A voice memo is transcribed in PDW"]], d.trigger)}</select>
     ${d.trigger === "email" ? emailPanel(d.email) : d.trigger === "voice_memo" ? voiceMemoPanel(d.voiceMemo) : `<p class="hint">What was submitted is ${V("input")} in the instructions.</p>`}
-    <label>Priority</label><select data-d="priority">${opts([["", "Automatic — immediate for email and voice memos"], ["normal", "Normal — wait for host capacity"], ["immediate", "Immediate — skip the queue"]], d.priority || "")}</select>
-    <p class="hint">Immediate starts ahead of waiting runs, even when the host is busy. It can increase host load. Startup retries still wait for a ready host. Save to apply to future runs.</p>
+    <label>Priority</label><select data-d="priority">${opts([["", "Automatic — follow the trigger"], ["normal", "Normal — wait for host capacity"], ["immediate", "Immediate — skip the queue"]], d.priority || "")}</select>
+    <p class="hint">Automatic uses Immediate for email and voice memos, Normal otherwise. Immediate starts ahead of waiting runs, even when the host is busy. It can increase host load. Startup retries still wait for a ready host. Save to apply to future runs.</p>
     <label>Runs on</label><select data-d="host">${d.host ? "" : `<option value="" selected disabled>Pick a host</option>`}${opts(hostOpts, d.host || "")}</select>
     <p class="hint">Every run of this workflow happens on this host: its project is found among the host's repositories, and its worktree and agents are made there.</p>`);
   }

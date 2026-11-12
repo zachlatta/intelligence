@@ -190,7 +190,7 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 	if err := lockQueue(ctx, tx, host); err != nil {
 		return false, err
 	}
-	r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.host = $1 AND (r.status = $2 OR r.start_retry_queued) ORDER BY (coalesce(v.definition->>'priority', 'normal') = 'immediate') DESC, r.created_at, r.id LIMIT 1 FOR UPDATE OF r", host, Queued))
+	r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.host = $1 AND (r.status = $2 OR r.start_retry_queued) ORDER BY (r.priority = 'immediate') DESC, r.created_at, r.id LIMIT 1 FOR UPDATE OF r", host, Queued))
 	if errors.Is(err, ErrNotFound) {
 		return false, nil
 	}
@@ -207,7 +207,7 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 		}
 	}
 	var why string
-	if r.Def.Priority != PriorityImmediate {
+	if r.Priority != PriorityImmediate {
 		why, err = e.room(ctx, tx, host)
 		if err != nil {
 			return false, err
@@ -221,7 +221,7 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 		return e.dequeueRetry(ctx, tx, r)
 	}
 	reason := host + " has room"
-	if r.Def.Priority == PriorityImmediate {
+	if r.Priority == PriorityImmediate {
 		reason = "immediate priority, ahead of the queue"
 	}
 	return true, e.dequeue(ctx, tx, r, reason)

@@ -23,7 +23,7 @@ import (
 // Definition is one version of a workflow: the host it runs on, what starts it, how its project
 // is found, its orchestrator, and its steps, in order.
 type Definition struct {
-	Priority     string           `json:"priority,omitempty"`  // normal queues for capacity; immediate bypasses it
+	Priority     string           `json:"priority,omitempty"`  // empty is Automatic, resolved from Trigger when each run starts
 	Host         string           `json:"host"`                // the account's host every run happens on
 	Trigger      string           `json:"trigger"`             // task (submitted on the Workflows page), manual, email or voice_memo
 	Email        *EmailFilter     `json:"email,omitempty"`     // email: which email starts a run
@@ -86,17 +86,18 @@ func Parse(b []byte) (Definition, error) {
 	if err := dec.Decode(&d); err != nil {
 		return d, fmt.Errorf("bad workflow: %w", err)
 	}
-	d.defaultPriority()
 	return d, d.Validate()
 }
 
-func (d *Definition) defaultPriority() {
-	if d.Priority == "" {
-		d.Priority = PriorityNormal
-		if d.Trigger == TriggerEmail || d.Trigger == TriggerVoiceMemo {
-			d.Priority = PriorityImmediate
-		}
+// EffectivePriority resolves Automatic without changing the saved configuration.
+func (d Definition) EffectivePriority() string {
+	if d.Priority != "" {
+		return d.Priority
 	}
+	if d.Trigger == TriggerEmail || d.Trigger == TriggerVoiceMemo {
+		return PriorityImmediate
+	}
+	return PriorityNormal
 }
 
 // Validate says what in d cannot run.
