@@ -108,6 +108,10 @@ so nothing stale reads as current. The `host_status` view adds `online` (the hos
 to the server, `stream_id`, which was seen within the last minute) and counts; `workspace_status`
 adds each workspace's agent counts.
 
+Orchestrators continue in the same turn after `next`, `skip` and `back`, and wait for workers
+in the foreground. They end the turn after a successful `ask` or when the run is over.
+This lifecycle rule wraps every definition, including saved workflows.
+
 ### The stream
 
 A host dials `GET /api/hosts/{host}/stream` (a WebSocket, with its own key) and keeps it
