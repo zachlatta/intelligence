@@ -187,7 +187,8 @@ func runsWord(n int) string {
 	return fmt.Sprintf("%d runs", n)
 }
 
-// StartQueued starts, on each host with a queue, its queued runs in order while the host has room (room).
+// StartQueued starts, on each host with a queue, its queued runs in order while the host has room
+// (room). Runs started by hand go first, then immediate runs, which start whatever the load.
 func (e *Engine) StartQueued(ctx context.Context) error {
 	rows, err := e.p.Query(ctx, "SELECT DISTINCT host FROM workflow_run_queue")
 	if err != nil {
@@ -213,15 +214,17 @@ func (e *Engine) StartQueued(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// startNext starts host's oldest queued run if the host has room, and says whether it did.
+// startNext admits the next run by priority and creation order. Immediate bypasses room.
 func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, error) {
 	if err := lockQueue(ctx, tx, host); err != nil {
 		return false, err
 	}
 	// A queued run started by hand comes first: Start now put it ahead of the queue (it may have
-	// gone back in when it chose its project, before started_by_hand kept it out).
+	// gone back in when it chose its project, before started_by_hand kept it out). Immediate runs
+	// come next, ahead of normal ones.
 	r, err := scanRun(tx.QueryRow(ctx, runSelect+`WHERE r.host = $1 AND (r.status = $2 OR r.start_retry_queued)
-		ORDER BY (r.status = $2 AND r.started_by_hand) DESC, r.created_at, r.id LIMIT 1 FOR UPDATE OF r`, host, Queued))
+		ORDER BY (r.status = $2 AND r.started_by_hand) DESC, (r.priority = $3) DESC, r.created_at, r.id LIMIT 1 FOR UPDATE OF r`,
+		host, Queued, PriorityImmediate))
 	if errors.Is(err, ErrNotFound) {
 		return false, nil
 	}
@@ -237,9 +240,12 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 			return false, err
 		}
 	}
-	why, err := e.room(ctx, tx, host, r.ID, r.Repo, r.EstimatedMemory)
-	if err != nil {
-		return false, err
+	var why string
+	if r.Priority != PriorityImmediate {
+		why, err = e.room(ctx, tx, host, r.ID, r.Repo, r.EstimatedMemory)
+		if err != nil {
+			return false, err
+		}
 	}
 	if why != "" {
 		_, err := tx.Exec(ctx, "UPDATE workflow_runs SET queue_reason = $2 WHERE id = $1 AND queue_reason <> $2", r.ID, why)
@@ -248,7 +254,11 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 	if r.StartRetryAt != nil {
 		return e.dequeueRetry(ctx, tx, r, host+" has room for the retry")
 	}
-	return true, e.dequeue(ctx, tx, r, host+" has room")
+	reason := host + " has room"
+	if r.Priority == PriorityImmediate {
+		reason = "immediate priority, ahead of the queue"
+	}
+	return true, e.dequeue(ctx, tx, r, reason)
 }
 
 // dequeue starts queued run r, saying why it starts now.

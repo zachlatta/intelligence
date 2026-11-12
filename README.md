@@ -1003,6 +1003,35 @@ Without fresh telemetry the server cannot know the host's capacity:
 - a host that never sent its resources, or one connected now that has sent none for 30 minutes
   (its monitoring stopped), gives no sign of being near capacity, so its runs start.
 
+In the workflow editor's Trigger panel, **Priority** chooses **Normal** (wait for capacity)
+or **Immediate** (skip the queue and capacity hold). Save it through the existing
+`POST /api/workflows` or `PUT /api/workflows/{id}` JSON route as `definition.priority`:
+`"normal"`, `"immediate"`, or `""` for Automatic. Automatic stays unset in the saved definition
+and follows the trigger: immediate for email and voice memos, normal otherwise, including
+after changing a task workflow to an email or voice-memo trigger. An explicit normal setting always wins.
+Migration `0046_workflow_priority` versions existing active email and voice-memo workflows
+with explicit Immediate priority;
+email requests, including voice emails, and voice memos start immediately after deployment.
+Each new run snapshots its resolved priority in `workflow_runs.priority`, so later workflow
+edits cannot change its queue or retry behavior. Existing runs without an explicit priority,
+including email and voice-memo runs already queued at deployment, retain Normal; use **Start now**
+to launch one immediately. Read the configured setting and effective run snapshot through `/api/sql`:
+
+```sql
+SELECT coalesce(v.definition->>'priority', '') AS configured_priority, r.priority AS effective_priority
+FROM workflow_runs r JOIN workflow_versions v USING (workflow_id, version);
+```
+
+An empty configured priority means Automatic. `workflow_run_queue.priority` also exposes the
+effective snapshot. The saved definition remains available for future workflow edits.
+
+Immediate runs launch even with older runs waiting or missing capacity measurements. Like a run
+started by hand, a run that finds its project starts its orchestrator as soon as the project is
+chosen, and its startup retries go out as soon as its host is ready, bypassing capacity, but still
+respecting retry backoff, deadlines and host/daemon readiness. Immediate starts can increase host
+load; they do not interrupt running work or make an offline host execute commands. Normal runs
+retain FIFO order.
+
 **Start now** bypasses the capacity hold and the queue for good (`workflow_runs.started_by_hand`;
 a queued run marked so starts on the queue's next pass, ahead of the others):
 a run started by hand that finds its project first starts its orchestrator as soon as the project

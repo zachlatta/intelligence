@@ -23,6 +23,7 @@ import (
 // Definition is one version of a workflow: the host it runs on, what starts it, how its project
 // is found, its orchestrator, and its steps, in order.
 type Definition struct {
+	Priority     string           `json:"priority,omitempty"`  // empty is Automatic, resolved from Trigger when each run starts
 	Host         string           `json:"host"`                // the account's host every run happens on
 	Trigger      string           `json:"trigger"`             // task (submitted on the Workflows page), manual, email or voice_memo
 	Email        *EmailFilter     `json:"email,omitempty"`     // email: which email starts a run
@@ -62,15 +63,17 @@ type Step struct {
 
 // Triggers, project modes and step kinds.
 const (
-	TriggerTask      = "task"
-	TriggerManual    = "manual"
-	TriggerEmail     = "email"      // an email to the account's connected Gmail matches Email
-	TriggerVoiceMemo = "voice_memo" // a new PDW voice memo recording matches VoiceMemo
-	ProjectMatch     = "match"
-	ProjectFixed     = "fixed"
-	KindStep         = "step"
-	KindGate         = "gate"
-	KindSignoff      = "signoff"
+	PriorityNormal    = "normal"
+	PriorityImmediate = "immediate"
+	TriggerTask       = "task"
+	TriggerManual     = "manual"
+	TriggerEmail      = "email"      // an email to the account's connected Gmail matches Email
+	TriggerVoiceMemo  = "voice_memo" // a new PDW voice memo recording matches VoiceMemo
+	ProjectMatch      = "match"
+	ProjectFixed      = "fixed"
+	KindStep          = "step"
+	KindGate          = "gate"
+	KindSignoff       = "signoff"
 )
 
 var stepID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
@@ -96,10 +99,23 @@ func (d Definition) normalized() Definition {
 	return d
 }
 
+// EffectivePriority resolves Automatic without changing the saved configuration.
+func (d Definition) EffectivePriority() string {
+	if d.Priority != "" {
+		return d.Priority
+	}
+	if d.Trigger == TriggerEmail || d.Trigger == TriggerVoiceMemo {
+		return PriorityImmediate
+	}
+	return PriorityNormal
+}
+
 // Validate says what in d cannot run.
 func (d Definition) Validate() error {
 	blank := func(s string) bool { return strings.TrimSpace(s) == "" }
 	switch {
+	case d.Priority != "" && d.Priority != PriorityNormal && d.Priority != PriorityImmediate:
+		return errors.New("priority must be normal or immediate")
 	case d.Host == "":
 		return errors.New("a workflow needs a host to run on")
 	case !hostclient.ValidName(d.Host):

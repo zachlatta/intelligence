@@ -8,6 +8,14 @@
     "mediaAlt": "A run page showing Retry 1 of 3 queued with a Start retry now button; after the click it shows Retry 1 of 3 sent and the timeline says the retry was started by hand, ahead of the queue"
   },
   {
+    "id": "workflow-immediate-priority",
+    "released": "2026-11-12",
+    "title": "Let urgent workflows skip the queue",
+    "summary": "Choose Priority in the workflow editor\u2019s Trigger panel: Automatic follows the trigger, Immediate skips capacity checks, and Normal waits. Automatic email requests and voice memos start immediately, even after changing a task workflow\u2019s trigger. Use Start now on a queued run for a one-time bypass.",
+    "media": "workflow-priority.png",
+    "mediaAlt": "Workflow editor Trigger panel showing Automatic priority after changing a task workflow to a voice memo trigger"
+  },
+  {
     "id": "workflow-runs-pages-and-search",
     "released": "2026-11-12",
     "title": "Page through and search workflow runs",
