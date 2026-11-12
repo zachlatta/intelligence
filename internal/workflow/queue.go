@@ -59,8 +59,8 @@ type minute struct {
 // Unmonitored (its monitoring stopped). One away that long keeps holding: its runs would all reach
 // it at once when it came back. Call it holding the host's queue lock (lockQueue).
 func (e *Engine) room(ctx context.Context, tx pgx.Tx, host, candidate, repo string, memory int64) (string, error) {
-	// Project selection can call room directly after Start now bypassed the FIFO.
-	// Honor older queued runs and ready retries on every admission path.
+	// Project selection and retries call room for a run the queue started, while older runs may
+	// have gone back into the queue. Honor older queued runs and ready retries on every admission path.
 	var ahead int
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM workflow_run_queue q
 		WHERE q.host=$1 AND q.run_id::text<>$2 AND ($2='' OR EXISTS (
@@ -229,7 +229,7 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 		return false, err
 	}
 	if r.Status == Queued && r.StartedByHand {
-		return true, e.dequeue(ctx, tx, r, "started by hand, ahead of the queue")
+		return true, e.dequeue(ctx, tx, r, startedByHand)
 	}
 	if r.StartRetryAt != nil {
 		if !e.Now().Before(r.StartRetryAt.Add(RetryWaitLimit)) {
@@ -281,9 +281,13 @@ func (e *Engine) StartNow(ctx context.Context, account int64, runID string) erro
 			return err
 		}
 		r.StartedByHand = true
-		return e.dequeue(ctx, tx, r, "started by hand, ahead of the queue")
+		return e.dequeue(ctx, tx, r, startedByHand)
 	})
 }
+
+// startedByHand is the dequeued event's text for Start now. Migration 0043 matches it to mark
+// earlier runs started_by_hand.
+const startedByHand = "started by hand, ahead of the queue"
 
 // RunQueue starts queued runs as their hosts have room, every interval until ctx ends.
 func (e *Engine) RunQueue(ctx context.Context, every time.Duration) {

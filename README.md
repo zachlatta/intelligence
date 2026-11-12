@@ -801,8 +801,8 @@ workspace) through their results. A failed or expired start queues up to three r
 15, 30 and 60 seconds. The server checks every five seconds. A retry waits until the host is
 online and reports both a connected Paseo daemon and support for retry keys
 (`hosts.start_retry_keys`). Once ready, it joins the same capacity queue as new runs in
-original run creation order; a run started by hand (Start now) retries at once instead. A replacement stream must report support again before it can
-receive queued or unfinished retries. Each retry reuses the original Paseo creation key so a
+original run creation order; a run started by hand (Start now) retries at once instead. A
+replacement stream must report support again before it can receive queued or unfinished retries. Each retry reuses the original Paseo creation key so a
 lost response does not create a second workspace or agent.
 
 The existing durable `commands` queue handles host reconnects. `workflow_runs.start_retries`,
@@ -942,10 +942,10 @@ A run's memory estimate is learned from its selected repository on that host, wi
 `workflow_repository_memory` takes what nine in ten successful-run peaks for that selected, non-empty
 repository root stayed under (the 90th percentile; the largest, until it has ten runs), adds 25%
 headroom, and applies a 1 GiB floor, so one unusually heavy run does not size every later run.
-Unfinished runs were re-estimated this way when it changed (migration `0043_workflow_queue_progress`). Without history the estimate is 4 GiB. A run still
-finding its project reserves 1 GiB (its finder is small), and its project's estimate is checked
-when it is chosen. Agent samples expire after 90 days, so older history
-eventually falls back. These views and `workflow_runs.estimated_memory_bytes` expose the evidence
+Unfinished runs were re-estimated this way when it changed (migration
+`0043_workflow_queue_progress`). Without history the estimate is 4 GiB. A run still finding its
+project reserves 1 GiB (its finder is small), and its project's estimate is checked when it is
+chosen. Agent samples expire after 90 days, so older history eventually falls back. These views and `workflow_runs.estimated_memory_bytes` expose the evidence
 and estimate through SQL; the run page shows the estimate. Estimates are fixed at repository
 selection and reused for reservations and retries. Every starting or running run reserves
 `max(estimate - resident memory, 0)` in addition to the host's measured memory usage. Resident memory
