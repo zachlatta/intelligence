@@ -1,9 +1,37 @@
 package voicememo
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
+
+// Run checks every second, so an error that persists (a PDW_INTELLIGENCE_ACCOUNT naming no
+// account, a database outage) is logged once a minute, not every second; a new error, or the
+// same one after a recovery, is logged at once.
+func TestRepeatedErrorsAreLoggedOnceAMinute(t *testing.T) {
+	start := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
+	missing, down := errors.New("missing account"), errors.New("database down")
+	var l errorLog
+	for _, tt := range []struct {
+		after time.Duration
+		err   error
+		want  bool
+	}{
+		{0, missing, true},
+		{time.Second, missing, false},
+		{59 * time.Second, missing, false},
+		{time.Minute, missing, true},
+		{61 * time.Second, down, true},
+		{62 * time.Second, missing, true},
+		{63 * time.Second, nil, false},
+		{64 * time.Second, missing, true},
+	} {
+		if got := l.report(tt.err, start.Add(tt.after)); got != tt.want {
+			t.Errorf("+%v %v: logged=%v, want %v", tt.after, tt.err, got, tt.want)
+		}
+	}
+}
 
 func TestNextPollIsEverySecondWithSlackAndBacksOff(t *testing.T) {
 	start := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)

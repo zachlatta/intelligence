@@ -50,8 +50,9 @@ func (s *Service) every() time.Duration {
 func (s *Service) Run(ctx context.Context) {
 	ticker := time.NewTicker(s.every())
 	defer ticker.Stop()
+	var errs errorLog
 	for {
-		if err := s.PollIfDue(ctx); err != nil && ctx.Err() == nil {
+		if err := s.PollIfDue(ctx); ctx.Err() == nil && errs.report(err, s.now()) {
 			log.Printf("voice memos: %v", err)
 		}
 		select {
@@ -60,6 +61,26 @@ func (s *Service) Run(ctx context.Context) {
 		case <-ticker.C:
 		}
 	}
+}
+
+// errorLog keeps a check that fails the same way every second from logging every second.
+type errorLog struct {
+	last string
+	at   time.Time
+}
+
+// report says whether to log err (nil is a success): a new error at once, the same error again
+// once a minute.
+func (l *errorLog) report(err error, now time.Time) bool {
+	if err == nil {
+		l.last = ""
+		return false
+	}
+	if err.Error() == l.last && now.Sub(l.at) < time.Minute {
+		return false
+	}
+	l.last, l.at = err.Error(), now
+	return true
 }
 
 // nextPoll is when to read again after a read from started to finished. A healthy read is due
