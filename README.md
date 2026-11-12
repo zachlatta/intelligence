@@ -787,7 +787,7 @@ workspace) through their results. A failed or expired start queues up to three r
 15, 30 and 60 seconds. The server checks every five seconds. A retry waits until the host is
 online and reports both a connected Paseo daemon and support for retry keys
 (`hosts.start_retry_keys`). Once ready, it joins the same capacity queue as new runs in
-original run creation order. A replacement stream must report support again before it can
+original run creation order; a run started by hand (Start now) retries at once instead. A replacement stream must report support again before it can
 receive queued or unfinished retries. Each retry reuses the original Paseo creation key so a
 lost response does not create a second workspace or agent.
 
@@ -925,16 +925,20 @@ capacity: CPU 70% now, about 90% with 1 run starting and this one (queues at 85%
 
 A run's memory estimate is learned from its selected repository on that host, within its account.
 `workflow_run_memory` sums the recorded agents' memory in each minute, then takes the run's peak.
-`workflow_repository_memory` takes the largest successful-run peak for that selected, non-empty repository root,
-adds 25% headroom, and applies a 1 GiB floor. Without history the estimate is 4 GiB, including
+`workflow_repository_memory` takes what nine in ten successful-run peaks for that selected, non-empty
+repository root stayed under (the 90th percentile; the largest, until it has ten runs), adds 25%
+headroom, and applies a 1 GiB floor, so one unusually heavy run does not size every later run.
+Unfinished runs were re-estimated this way when it changed (migration `0042_workflow_queue_progress`). Without history the estimate is 4 GiB, including
 while a finder has not selected a project. Agent samples expire after 90 days, so older history
 eventually falls back. These views and `workflow_runs.estimated_memory_bytes` expose the evidence
 and estimate through SQL; the run page shows the estimate. Estimates are fixed at repository
-selection and reused for reservations and retries. Every starting, running or waiting run reserves
+selection and reused for reservations and retries. Every starting or running run reserves
 `max(estimate - resident memory, 0)` in addition to the host's measured memory usage. Resident memory
 is the sum for that run's known agents in the exact newest host minute; without a matching sample,
 its full estimate stays reserved. This prevents a run's quiet phase from admitting another heavy
-run, without counting its resident memory twice. The existing memory percentage limit supplies
+run, without counting its resident memory twice. A run waiting for Zach's reply reserves nothing
+beyond what it uses: its agents are idle, perhaps for days, and their memory is already in the
+measured minute. The existing memory percentage limit supplies
 host headroom. Memory queue reasons name the repository estimate, measured free RAM and reservations.
 To prevent a genuinely oversized estimate from permanently blocking the FIFO, the oldest run
 may start alone only when its estimate exceeds the memory limit's share of total host RAM,
@@ -979,7 +983,10 @@ Without fresh telemetry the server cannot know the host's capacity:
 - a host that never sent its resources, or one connected now that has sent none for 30 minutes
   (its monitoring stopped), gives no sign of being near capacity, so its runs start.
 
-**Start now** bypasses the capacity hold for a new run. Automatic retries wait for admission.
+**Start now** bypasses the capacity hold and the queue for good (`workflow_runs.started_by_hand`):
+a run started by hand that finds its project first starts its orchestrator as soon as the project
+is chosen, and its start retries go out as soon as its host is ready, never back behind the queue it
+skipped. Retries of runs the queue started wait for admission, in their original place.
 
 A run also queues while earlier runs wait in its host's queue, so the queue keeps strict FIFO
 order: light runs wait behind heavy ones. The

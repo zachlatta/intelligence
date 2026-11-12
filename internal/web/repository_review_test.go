@@ -76,33 +76,6 @@ func TestRepositoryHistoryIgnoresIncompleteAndUnselectedRuns(t *testing.T) {
 	}
 }
 
-func TestProjectSelectionCannotUseSoloAdmissionAheadOfOlderQueue(t *testing.T) {
-	d := dbtest.New(t)
-	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
-	b := sendReport(t, h, wfReport())
-	repositoryHistory(t, h, d, "/w/app")
-	b.command()
-	if _, err := d.Owner.Exec(t.Context(), `UPDATE agent_minutes SET mem_max=$1`, int64(7<<30)); err != nil {
-		t.Fatal(err)
-	}
-	hostMinute(t, b, time.Now().UTC().Truncate(time.Minute), 97, 0)
-	older := startRun(t, h, fixedWorkflow(t, h), "older queued build")
-	newer := startRun(t, h, createWorkflow(t, h, workflow.Starting), "newer matched build")
-	if rec := call(t, h, http.MethodPost, "/api/workflow-runs/"+newer+"/start", `{}`, sameOriginFetch); rec.Code != http.StatusNoContent {
-		t.Fatal(rec.Body)
-	}
-	succeed(t, b, b.command(), `{"agentId":"finder"}`)
-	if _, err := d.Owner.Exec(t.Context(), `UPDATE host_minutes SET cpu_avg_pct=10,mem_total=$1,mem_available_min=$1`, int64(16<<30)); err != nil {
-		t.Fatal(err)
-	}
-	if code, msg := move(t, h, keyOf(t, h, "host-1"), newer, map[string]string{"move": "project", "directory": "/w/app"}); code != http.StatusOK {
-		t.Fatalf("move: %d %s", code, msg)
-	}
-	if got := runField(t, h, newer, "status"); got != "queued" {
-		t.Fatalf("newer run skipped FIFO head %s: %v", older, got)
-	}
-}
-
 func TestProjectSelectionCannotSkipOlderReadyRetry(t *testing.T) {
 	d := dbtest.New(t)
 	clock := &fakeClock{t: time.Now().UTC()}
@@ -113,8 +86,13 @@ func TestProjectSelectionCannotSkipOlderReadyRetry(t *testing.T) {
 	if _, err := d.Owner.Exec(t.Context(), `UPDATE agent_minutes SET mem_max=$1`, int64(7<<30)); err != nil {
 		t.Fatal(err)
 	}
+	// Both start while the host has room: the newer one by the queue, not by hand (Start now
+	// skips the queue for good: TestStartNowCarriesThroughProjectSelection).
 	older := startRun(t, h, wf, "older retry")
 	cmd := b.command()
+	clock.Add(time.Second)
+	newer := startRun(t, h, createWorkflow(t, h, workflow.Starting), "newer project")
+	finder := b.command()
 	hostMinute(t, b, clock.Now().Truncate(time.Minute), 97, 0)
 	if ack := b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{ID: cmd.ID, Status: hostclient.CommandFailed, Error: "temporary failure"}}); ack.Error != "" {
 		t.Fatal(ack.Error)
@@ -126,11 +104,7 @@ func TestProjectSelectionCannotSkipOlderReadyRetry(t *testing.T) {
 	if got := runField(t, h, older, "start_retry_queued"); got != true {
 		t.Fatalf("retry not ready: %v", got)
 	}
-	newer := startRun(t, h, createWorkflow(t, h, workflow.Starting), "newer project")
-	if rec := call(t, h, http.MethodPost, "/api/workflow-runs/"+newer+"/start", `{}`, sameOriginFetch); rec.Code != http.StatusNoContent {
-		t.Fatal(rec.Body)
-	}
-	succeed(t, b, b.command(), `{"agentId":"finder"}`)
+	succeed(t, b, finder, `{"agentId":"finder"}`)
 	if _, err := d.Owner.Exec(t.Context(), `UPDATE host_minutes SET cpu_avg_pct=10,mem_total=$1,mem_available_min=$1`, int64(16<<30)); err != nil {
 		t.Fatal(err)
 	}

@@ -370,6 +370,7 @@ type run struct {
 	StartRetries                                 int
 	EstimatedMemory                              int64
 	ProjectSelected                              bool
+	StartedByHand                                bool // Start now: it bypasses its host's queue until it has started
 	Name                                         string
 	Def                                          Definition
 }
@@ -378,14 +379,14 @@ func (r run) vars() Vars { return Vars{Run: r.ID, Input: r.Input, Repo: r.Repo, 
 
 const runSelect = `SELECT r.id::text, r.host, r.title, r.input, r.status, r.repo, r.branch, r.account_id, r.step, r.workspace_id,
 	r.project_agent_id, r.orchestrator_id, r.project_command::text, w.name, v.definition, r.start_retry_at, r.start_retries,
-	r.estimated_memory_bytes, r.project_selected
+	r.estimated_memory_bytes, r.project_selected, r.started_by_hand
 	FROM workflow_runs r JOIN workflow_versions v USING (workflow_id, version) JOIN workflows w ON w.id = r.workflow_id `
 
 func scanRun(row pgx.Row) (run, error) {
 	var r run
 	var def []byte
 	err := row.Scan(&r.ID, &r.Host, &r.Title, &r.Input, &r.Status, &r.Repo, &r.Branch, &r.Account, &r.Step, &r.WorkspaceID,
-		&r.ProjectAgent, &r.Orchestrator, &r.ProjectCommand, &r.Name, &def, &r.StartRetryAt, &r.StartRetries, &r.EstimatedMemory, &r.ProjectSelected)
+		&r.ProjectAgent, &r.Orchestrator, &r.ProjectCommand, &r.Name, &def, &r.StartRetryAt, &r.StartRetries, &r.EstimatedMemory, &r.ProjectSelected, &r.StartedByHand)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, ErrNotFound
 	}
@@ -769,9 +770,14 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		}
 		// This run already holds a startup reservation. Replace it with the selected
 		// project's estimate; do not count the finder twice or lose its FIFO priority.
-		why, err := e.room(ctx, tx, r.Host, r.ID, repo, estimate)
-		if err != nil {
-			return "", err
+		// A run started by hand was started ahead of the queue and whatever the load:
+		// its orchestrator starts too, rather than waiting behind the queue it skipped.
+		why := ""
+		if !r.StartedByHand {
+			why, err = e.room(ctx, tx, r.Host, r.ID, repo, estimate)
+			if err != nil {
+				return "", err
+			}
 		}
 		if why != "" {
 			if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET status='queued', queue_reason=$2, pending_command=NULL,

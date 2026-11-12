@@ -108,6 +108,8 @@ func (e *Engine) room(ctx context.Context, tx pgx.Tx, host, candidate, repo stri
 	// minute began after it. Memory remains reserved for the whole active run, less
 	// its resident memory already included in this exact host minute. With no matching
 	// sample, reserve the full estimate. Failed/expired attempts release their reservation.
+	// A run waiting for Zach's reply reserves nothing more: its agents are idle, perhaps for
+	// days, and the memory they do use is already in the minute.
 	var started, active int
 	var reservedMemory int64
 	if err := tx.QueryRow(ctx, `SELECT count(*) FILTER (WHERE r.launched_at IS NOT NULL AND
@@ -121,10 +123,10 @@ func (e *Engine) room(ctx context.Context, tx pgx.Tx, host, candidate, repo stri
 				UNION SELECT r.project_agent_id WHERE r.project_agent_id <> '') members
 			JOIN agent_minutes m ON m.host = r.host AND m.agent_id = members.agent_id AND m.minute = $2
 		) resident ON true
-		WHERE r.host = $1 AND r.status NOT IN ($3, $4, $6)
+		WHERE r.host = $1 AND r.status NOT IN ($3, $4, $6, $8)
 			AND r.status <> 'queued' AND r.id::text <> $7
 			AND r.start_retry_at IS NULL AND coalesce(c.status NOT IN ('failed','expired'), true)`,
-		host, m.At, Failed, Canceled, FindingProject, Succeeded, candidate).Scan(&started, &active, &reservedMemory); err != nil {
+		host, m.At, Failed, Canceled, FindingProject, Succeeded, candidate, Waiting).Scan(&started, &active, &reservedMemory); err != nil {
 		return "", err
 	}
 	with := "this one"
@@ -268,6 +270,11 @@ func (e *Engine) StartNow(ctx context.Context, account int64, runID string) erro
 		if r.Status != Queued {
 			return conflict("this run is not queued (%s)", strings.ReplaceAll(r.Status, "_", " "))
 		}
+		// Remembered, so that its project selection and any start retry skip the queue too.
+		if _, err := tx.Exec(ctx, "UPDATE workflow_runs SET started_by_hand = true WHERE id = $1", r.ID); err != nil {
+			return err
+		}
+		r.StartedByHand = true
 		return e.dequeue(ctx, tx, r, "started by hand, ahead of the queue")
 	})
 }
