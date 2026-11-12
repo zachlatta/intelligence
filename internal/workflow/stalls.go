@@ -84,7 +84,7 @@ func (e *Engine) reconcileStall(ctx context.Context, tx pgx.Tx, r run) error {
 	}
 	var previous string
 	var since *time.Time
-	var event int64
+	var event *int64
 	var starting bool
 	if err := tx.QueryRow(ctx, `SELECT idle_observation,idle_since,pending_command IS NOT NULL,
  (SELECT event_id FROM workflow_run_latest_transition WHERE run_id=$1) FROM workflow_runs WHERE id=$1`, r.ID).Scan(&previous, &since, &starting, &event); err != nil {
@@ -93,17 +93,20 @@ func (e *Engine) reconcileStall(ctx context.Context, tx pgx.Tx, r run) error {
 	if pending {
 		return nil
 	}
-	if !fresh || !idle || blocked || starting {
+	// Legacy or seeded runs may have no lifecycle history. Without an epoch
+	// there is no durable key for a continuation; keep the check timestamp but
+	// clear any idle window until a real transition supplies one.
+	if event == nil || !fresh || !idle || blocked || starting {
 		_, err := tx.Exec(ctx, "UPDATE workflow_runs SET idle_since=NULL,idle_observation='' WHERE id=$1", r.ID)
 		return err
 	}
-	observation += ":" + strconv.FormatInt(event, 10)
+	observation += ":" + strconv.FormatInt(*event, 10)
 	if since == nil || observation != previous {
 		_, err := tx.Exec(ctx, "UPDATE workflow_runs SET idle_since=$2,idle_observation=$3 WHERE id=$1", r.ID, now, observation)
 		return err
 	}
 	var count int
-	if err := tx.QueryRow(ctx, "SELECT count(*) FROM workflow_run_continuations WHERE run_id=$1 AND event_id=$2", r.ID, event).Scan(&count); err != nil {
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM workflow_run_continuations WHERE run_id=$1 AND event_id=$2", r.ID, *event).Scan(&count); err != nil {
 		return err
 	}
 	delay := 2 * time.Minute
@@ -124,7 +127,7 @@ func (e *Engine) reconcileStall(ctx context.Context, tx pgx.Tx, r run) error {
 		_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status='stalled',error=$2,updated_at=$3 WHERE id=$1`, r.ID, reason, now)
 		return err
 	}
-	return e.continueRun(ctx, tx, r, event, count+1)
+	return e.continueRun(ctx, tx, r, *event, count+1)
 }
 
 func (e *Engine) continueRun(ctx context.Context, tx pgx.Tx, r run, event int64, attempt int) error {

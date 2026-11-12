@@ -144,7 +144,8 @@ its own transaction, and failures are reported together so one bad run cannot ro
 recoveries. The minute worker lives beside `RunStartRetries` and stops with the server.
 `workflow_run_latest_transition` is a security-invoker view of the latest lifecycle event;
 label edits and message events do not create a new recovery epoch. Agent activity still resets
-the idle grace period.
+the idle grace period. Runs without a lifecycle event are skipped until a transition provides
+the epoch needed to deduplicate recovery attempts.
 Attempts survive server restarts. Continuations expire after one minute; progress, asking,
 cancellation or completion invalidates them before delivery. An already delivered message cannot
 be recalled. The agent must check prior outcomes before repeating work.
@@ -1146,8 +1147,9 @@ When investigating a stalled workflow, check the host's `client_version` against
 server before assuming this recovery is active. Check both the orchestrator and its workers
 for pending permissions, then follow their audit rows and transcripts: a cleared prompt proves
 the request disappeared, while a completed tool or workflow move proves work resumed. An idle
-orchestrator can be waiting on a live background command whose completion starts its next turn;
-idle status alone is not evidence of abandonment and does not trigger an automatic reminder.
+orchestrator can be waiting on a live background command whose completion starts its next turn.
+The stall watchdog also checks worker activity, permission blocks, pending fleet commands and
+host freshness before sending a continuation; inspect prior outcomes before repeating work.
 
 Each attempt first stores a `permission_resolutions` row through the authenticated host stream.
 The row is account-scoped and readable through `/api/sql`; it survives agent removal.

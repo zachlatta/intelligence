@@ -138,3 +138,37 @@ func TestStalledPresentation(t *testing.T) {
 		t.Fatalf("step states: %+v", views)
 	}
 }
+
+func TestStallWatchdogWithoutLifecycleEvent(t *testing.T) {
+	f := newStallFixture(t)
+	b := f.reset(t)
+	d, clock, h := f.d, f.clock, f.h
+	run := startRun(t, h, fixedWorkflow(t, h), "missing lifecycle history")
+	succeed(t, b, b.command(), `{"workspaceId":"w-run","agentId":"orch-1"}`)
+	// Metadata events do not provide the lifecycle epoch needed to deduplicate
+	// continuations. A legacy or seeded row must be skipped without a scan error.
+	if _, err := d.Owner.Exec(t.Context(), "DELETE FROM workflow_run_events WHERE run_id=$1", run); err != nil {
+		t.Fatal(err)
+	}
+	if code, msg := move(t, h, keyOf(t, h, "host-1"), run, map[string]string{"move": "summarize", "summary": "Missing history"}); code != 200 {
+		t.Fatalf("summarize: %d %s", code, msg)
+	}
+	rep := wfReport()
+	rep.Paseo.Agents = []hostclient.Agent{{ID: "orch-1", WorkspaceID: "w-run", Status: "idle"}}
+	e := workflow.NewEngine(d.Owner, clock.Now)
+	for i := 0; i < 2; i++ {
+		if ack := b.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+			t.Fatal(ack.Error)
+		}
+		if err := e.ReconcileStalls(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		var skipped bool
+		if err := d.Owner.QueryRow(t.Context(), `SELECT status='running' AND idle_since IS NULL
+ AND stall_checked_at=$2 AND NOT EXISTS (SELECT 1 FROM workflow_run_continuations WHERE run_id=$1)
+ FROM workflow_runs WHERE id=$1`, run, clock.Now()).Scan(&skipped); err != nil || !skipped {
+			t.Fatalf("run without lifecycle history was not safely skipped: %v", err)
+		}
+		clock.Add(15 * time.Minute)
+	}
+}
