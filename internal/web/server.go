@@ -28,6 +28,8 @@ import (
 type Config struct {
 	// PDWURL, PDWKey and PDWAccount turn voice memo triggers on for the account named PDWAccount.
 	PDWURL, PDWKey, PDWAccount string
+	// VoiceMemoInterval is how often PDW's voice memo feed is read (default voicememo.Interval).
+	VoiceMemoInterval time.Duration
 	// Context is the server's lifetime: its listener for fleet changes stops when it ends. Default: never.
 	Context    context.Context
 	Version    string        // the deployed commit, shown on every page and by /healthz
@@ -119,7 +121,7 @@ func newHandler(cfg Config, workers bool) http.Handler {
 		go a.wf.RunStallWatchdog(cfg.Context)
 	}
 	if cfg.PDWURL != "" && cfg.PDWKey != "" && cfg.PDWAccount != "" {
-		voice := &voicememo.Service{DB: cfg.DB, Engine: a.wf, URL: cfg.PDWURL, Key: cfg.PDWKey, Username: cfg.PDWAccount}
+		voice := &voicememo.Service{DB: cfg.DB, Engine: a.wf, URL: cfg.PDWURL, Key: cfg.PDWKey, Username: cfg.PDWAccount, Interval: cfg.VoiceMemoInterval}
 		if workers {
 			go voice.Run(cfg.Context)
 		}

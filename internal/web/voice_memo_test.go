@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/zachlatta/intelligence/internal/dbtest"
 	"github.com/zachlatta/intelligence/internal/voicememo"
@@ -362,6 +363,59 @@ func TestVoiceMemoUnexpectedStartFailureRemainsRetryable(t *testing.T) {
 	_, state = sqlPost(t, h, q("SELECT cursor,error FROM voice_memo_polling"))
 	if state.Rows[0][0] != "MQ" || state.Rows[0][1] != "" {
 		t.Fatalf("cursor not advanced: %+v", state)
+	}
+}
+
+// The poll loop reads PDW about once a second, keeps when it is next due in SQL (so a second
+// server instance does not double the load) and backs off after failures instead of retrying
+// every second.
+func TestVoiceMemoPollingIsDueEverySecondAndBacksOffOnFailure(t *testing.T) {
+	d := dbtest.New(t)
+	h := newServer(t, d, d.Owner, "v")
+	var mu sync.Mutex
+	requests, fail := 0, false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		requests++
+		if fail {
+			http.Error(w, "feed temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"feed": "feed:voice-memos", "next_cursor": "MQ", "recordings": []workflow.VoiceMemo{}, "has_more": false})
+	}))
+	defer srv.Close()
+	now := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
+	s := voicememo.Service{DB: d.Owner, Engine: workflow.NewEngine(d.Owner, nil), URL: srv.URL, Key: "test", Username: h.acct.Username,
+		Interval: time.Second, Now: func() time.Time { return now }}
+	step := func(after time.Duration, wantRequests int) {
+		t.Helper()
+		now = now.Add(after)
+		if err := s.PollIfDue(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if requests != wantRequests {
+			_, state := sqlPost(t, h, q("SELECT next_poll_at,retry_count,error FROM voice_memo_polling"))
+			t.Fatalf("at +%v: %d PDW requests, want %d; state %+v", after, requests, wantRequests, state)
+		}
+	}
+	step(0, 1)           // the first check is due at once
+	step(0, 1)           // not due again yet
+	step(time.Second, 2) // due a second later
+	fail = true
+	step(time.Second, 3) // fails: next in 2s
+	step(time.Second, 3) // still backing off
+	step(time.Second, 4) // fails again: next in 4s
+	step(3*time.Second, 4)
+	step(time.Second, 5) // third failure: next in 8s
+	fail = false
+	step(8*time.Second, 6) // recovers
+	step(time.Second, 7)   // and is back to every second
+	_, state := sqlPost(t, h, q("SELECT retry_count,error FROM voice_memo_polling"))
+	if len(state.Rows) != 1 || state.Rows[0][0] != float64(0) || state.Rows[0][1] != "" {
+		t.Fatalf("state after recovery: %+v", state)
 	}
 }
 

@@ -17,18 +17,41 @@ import (
 	"github.com/zachlatta/intelligence/internal/workflow"
 )
 
+// Interval is how often PDW's voice memo feed is read when it is healthy. Each read costs PDW
+// one small query over the last 48 hours; see nextPoll for how a slow or failing PDW is read
+// less often.
+const Interval = time.Second
+
 type Service struct {
 	DB                 *pgxpool.Pool
 	Engine             *workflow.Engine
 	URL, Key, Username string
 	Client             *http.Client
+	Interval           time.Duration    // default Interval
+	Now                func() time.Time // default time.Now
 }
 
+func (s *Service) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
+}
+
+func (s *Service) every() time.Duration {
+	if s.Interval > 0 {
+		return s.Interval
+	}
+	return Interval
+}
+
+// Run reads the feed whenever it is due, checking every interval, until ctx ends. Reads never
+// overlap: the next check waits for the last read to finish.
 func (s *Service) Run(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(s.every())
 	defer ticker.Stop()
 	for {
-		if err := s.Poll(ctx); err != nil && ctx.Err() == nil {
+		if err := s.PollIfDue(ctx); err != nil && ctx.Err() == nil {
 			log.Printf("voice memos: %v", err)
 		}
 		select {
@@ -39,9 +62,34 @@ func (s *Service) Run(ctx context.Context) {
 	}
 }
 
-// Poll serializes readers across server instances and persists the feed arrival cursor.
-// The first successful scan establishes a baseline without starting historical runs.
-func (s *Service) Poll(ctx context.Context) error {
+// nextPoll is when to read again after a read from started to finished. A healthy read is due
+// again one interval after it started, less a tenth so a slightly late tick still reads. A slow
+// read waits as long again as it took, so PDW spends at most half its time on us. After a
+// failure (failures in a row, counting it) the wait doubles from 2s up to 64s.
+func nextPoll(started, finished time.Time, every time.Duration, failures int) time.Time {
+	if failures > 0 {
+		return finished.Add(max(every, time.Second<<min(failures, 6)))
+	}
+	return maxTime(started.Add(every-every/10), finished.Add(finished.Sub(started)))
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
+}
+
+// Poll reads the feed now, whenever it was due.
+func (s *Service) Poll(ctx context.Context) error { return s.check(ctx, false) }
+
+// PollIfDue reads the feed if its next read (voice_memo_polling.next_poll_at) is due.
+func (s *Service) PollIfDue(ctx context.Context) error { return s.check(ctx, true) }
+
+// check serializes readers across server instances and persists the feed arrival cursor and
+// the read schedule. The first successful scan establishes a baseline without starting
+// historical runs.
+func (s *Service) check(ctx context.Context, onlyDue bool) error {
 	var account int64
 	if err := s.DB.QueryRow(ctx, "SELECT id FROM accounts WHERE username = $1", s.Username).Scan(&account); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -55,19 +103,30 @@ func (s *Service) Poll(ctx context.Context) error {
 	return pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
 		var cursor string
 		var initialized bool
-		err := tx.QueryRow(ctx, "SELECT cursor, initialized FROM voice_memo_polling WHERE account_id=$1 FOR UPDATE SKIP LOCKED", account).Scan(&cursor, &initialized)
+		var due time.Time
+		var failures int
+		err := tx.QueryRow(ctx, "SELECT cursor, initialized, next_poll_at, retry_count FROM voice_memo_polling WHERE account_id=$1 FOR UPDATE SKIP LOCKED", account).Scan(&cursor, &initialized, &due, &failures)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
+		started := s.now()
+		if onlyDue && started.Before(due) {
+			return nil
+		}
 		pollErr := s.poll(ctx, account, &cursor, &initialized)
 		message := ""
 		if pollErr != nil {
 			message = pollErr.Error()
+			failures = min(failures+1, 7)
+		} else {
+			failures = 0
 		}
-		_, err = tx.Exec(ctx, "UPDATE voice_memo_polling SET checked_at=now(), error=$2, cursor=$3, initialized=$4 WHERE account_id=$1", account, message, cursor, initialized)
+		finished := s.now()
+		_, err = tx.Exec(ctx, "UPDATE voice_memo_polling SET checked_at=$5, error=$2, cursor=$3, initialized=$4, next_poll_at=$6, retry_count=$7 WHERE account_id=$1",
+			account, message, cursor, initialized, finished, nextPoll(started, finished, s.every(), failures), failures)
 		return err
 	})
 }
@@ -88,7 +147,7 @@ func (s *Service) read(ctx context.Context, cursor string) (page, error) {
 	req.Header.Set("Content-Type", "application/json")
 	client := s.Client
 	if client == nil {
-		client = &http.Client{Timeout: 75 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		client = &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	resp, err := client.Do(req)
 	if err != nil {

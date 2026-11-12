@@ -1629,7 +1629,11 @@ Each optional field is a case-insensitive substring; all filled fields must matc
 One memo starts one run: the matching workflow with the most filled fields wins, with the
 oldest workflow winning ties. Deleted workflows do not match.
 
-The server reads PDW's scoped `GET /api/external-feeds/voice-memos` feed every 30 seconds.
+The server reads PDW's scoped `GET /api/external-feeds/voice-memos` feed every second
+(`VOICE_MEMO_POLL_INTERVAL`), one read at a time. A read PDW takes long to answer is followed
+by a wait as long again, and failed reads back off from 2 to 64 seconds. The next read's time
+and the failures in a row are in `voice_memo_polling` (`next_poll_at`, `retry_count`), shared by
+every server instance.
 PDW supplies transcribed, enriched recordings from the last 48 hours (including separate
 parts of stopped and restarted recordings). The first scan establishes a baseline and does
 not start runs for existing recordings. Later arrivals start runs; feed updates and retries
@@ -1644,8 +1648,8 @@ by source, account and recording ID. Agents use their own normal PDW access for 
 the server's feed key cannot run SQL. Full transcripts are used for matching but never stored
 in Intelligence or embedded in run input.
 
-Read `voice_memo_polling` through `/api/sql` for the cursor, initialization, last check and
-poll error. Read `voice_memos` for previews, lengths, decisions and linked workflow/run IDs.
+Read `voice_memo_polling` through `/api/sql` for the cursor, initialization, last check, next
+check and poll error. Read `voice_memos` for previews, lengths, decisions and linked workflow/run IDs.
 Both tables are restricted to their owning Intelligence account.
 The workflow editor shows whether PDW is configured for the signed-in account, the last check
 and the last poll error. `/workflows/voice-memos` shows the latest 200 receipts with their
@@ -1667,6 +1671,8 @@ Set all three server variables to enable polling:
   Only this account's workflows can receive its memos; other accounts never receive this data.
 
 Unset all three to disable polling. Removing configuration preserves cursors and receipts.
+
+`VOICE_MEMO_POLL_INTERVAL` is optional: a Go duration, default `1s`, minimum `1s`.
 
 Server:
 
