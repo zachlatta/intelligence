@@ -199,3 +199,25 @@ func TestTheCLIReadsAHostInstalledAsADevBox(t *testing.T) {
 		t.Errorf("%d %q", code, errOut)
 	}
 }
+
+func TestRunAnswerCLI(t *testing.T) {
+	id := "11111111-1111-4111-8111-111111111111"
+	args := []string{"--run", id, "--channel", "email", "--message-id", "sent-demo", "--thread-id", "thread-demo", "--sent-at", "2026-11-11T20:00:00Z", "--checked"}
+	path, body, err := parseAnswerCLI(args)
+	if err != nil || path != "/api/workflow-runs/"+id+"/answers" {
+		t.Fatalf("%s %v", path, err)
+	}
+	var a Answer
+	if json.Unmarshal(body, &a) != nil || !a.Checked || a.MessageID != "sent-demo" {
+		t.Fatalf("%s", body)
+	}
+	for _, args := range [][]string{nil, {"--run", "../x"}, {"--run", id, "--sent-at", "bad"}} {
+		if _, _, err := parseAnswerCLI(args); err == nil {
+			t.Fatalf("accepted %v", args)
+		}
+	}
+	msg := StepMessage(Starting, 0, Vars{Run: id})
+	if !strings.Contains(msg, "workflow answer --run "+id) {
+		t.Fatal("missing answer instruction")
+	}
+}

@@ -464,7 +464,7 @@ func (s *Service) route(ctx context.Context, tx pgx.Tx, account int64, owners []
 	if best == nil {
 		return decision{Decision: "ignored", Reason: why}, nil
 	}
-	return s.start(ctx, tx, account, best.ID, best.Name, m.Input(fromZach), "started")
+	return s.start(ctx, tx, account, best.ID, best.Name, m.Input(fromZach), "started", m.Date)
 }
 
 // reply is what m does in the thread of run (of workflow wf), whose status is status.
@@ -498,11 +498,11 @@ func (s *Service) reply(ctx context.Context, tx pgx.Tx, account int64, fromZach 
 		d.Decision, d.Reason = "ignored", "“"+name+"” ignores replies in its runs' threads"
 		return d, nil
 	case replies == workflow.RepliesNewRun:
-		return s.start(ctx, tx, account, wf, name, input, "started")
+		return s.start(ctx, tx, account, wf, name, input, "started", m.Date)
 	}
 	switch status {
 	case workflow.Succeeded, workflow.Failed, workflow.Canceled:
-		return s.start(ctx, tx, account, wf, name, input+fmt.Sprintf("\n\nIt replies in the thread of an earlier run of this workflow, %s, which is over (%s).", run, status), "follow_up")
+		return s.start(ctx, tx, account, wf, name, input+fmt.Sprintf("\n\nIt replies in the thread of an earlier run of this workflow, %s, which is over (%s).", run, status), "follow_up", m.Date)
 	case workflow.Waiting:
 		if fromZach {
 			text := strings.TrimSpace(m.Text)
@@ -519,10 +519,11 @@ func (s *Service) reply(ctx context.Context, tx pgx.Tx, account int64, fromZach 
 
 // start starts a run of workflow wf, recorded as kind; a run the workflow cannot start is
 // recorded as ignored, with why.
-func (s *Service) start(ctx context.Context, tx pgx.Tx, account int64, wf, name, input, kind string) (decision, error) {
+func (s *Service) start(ctx context.Context, tx pgx.Tx, account int64, wf, name, input, kind, date string) (decision, error) {
 	d := decision{Workflow: wf}
 	return d.or(try(ctx, tx, kind, func(sp pgx.Tx) error {
-		id, err := s.Engine.StartRunTx(ctx, sp, account, wf, input)
+		requested, _ := mail.ParseDate(date)
+		id, err := s.Engine.StartRunTx(ctx, sp, account, wf, input, requested)
 		if err != nil {
 			return fmt.Errorf("could not start “%s”: %w", name, err)
 		}

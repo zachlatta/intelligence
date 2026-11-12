@@ -21,6 +21,7 @@ const CLIUsage = `usage: intelligence workflow <move> --run <id> [...]
 
 The agents of a workflow run move it with these, on the run's host:
 
+  answer    --run <id> --channel email --message-id <id> --sent-at <RFC3339> [--thread-id <id>] [--checked]
   project   --run <id> <directory>|none   the project finder's answer
   summarize --run <id> --summary <text>   save a short task summary without moving the run
   next      --run <id> [--summary <text>]  this step is done; prints the next step (after the last, finishes the run)
@@ -43,7 +44,9 @@ func CLI(ctx context.Context, args []string, getenv func(string) string, stdin i
 	var body []byte
 	var path string
 	var err error
-	if len(args) > 0 && args[0] == "answer-proposal" {
+	if len(args) > 0 && args[0] == "answer" {
+		path, body, err = parseAnswerCLI(args[1:])
+	} else if len(args) > 0 && args[0] == "answer-proposal" {
 		path, body, err = parseAnswerProposalCLI(args[1:], stdin)
 	} else if len(args) > 0 && (args[0] == "propose" || args[0] == "withdraw") {
 		path, body, err = parseProposalCLI(args, stdin)

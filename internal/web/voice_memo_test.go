@@ -74,8 +74,8 @@ func TestVoiceMemoAPIStartsOnceAndIsAccountScoped(t *testing.T) {
 		_, state := sqlPost(t, h, q("SELECT error FROM voice_memo_polling"))
 		t.Fatalf("receipts: %+v; state: %+v", rows, state)
 	}
-	_, runs := sqlPost(t, h, q("SELECT input FROM workflow_runs"))
-	if len(runs.Rows) != 1 || strings.Contains(runs.Rows[0][0].(string), "secret-tail") {
+	_, runs := sqlPost(t, h, q("SELECT input, requested_at = TIMESTAMPTZ '2026-11-11T12:00:00Z' FROM workflow_runs"))
+	if len(runs.Rows) != 1 || runs.Rows[0][1] != true || strings.Contains(runs.Rows[0][0].(string), "secret-tail") {
 		t.Fatalf("runs: %+v", runs)
 	}
 	runID := rows.Rows[0][2].(string)

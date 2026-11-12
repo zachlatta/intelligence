@@ -1,5 +1,13 @@
 [
   {
+    "id": "workflow-answer-tracking",
+    "released": "2026-11-12",
+    "title": "See when workflow requests get answered",
+    "summary": "Workflows and each run now show asked-to-answered minutes and flag finished runs with no recorded answer. Open a run to see every sent message, its send time and whether it passed review. Agents record replies with the workflow answer command; SQL also lists requests waiting over 30 minutes.",
+    "media": "workflow-answers.png",
+    "mediaAlt": "A completed example run showing 15 minutes from request to first answer and both an unchecked send and a checked answer with message identifiers"
+  },
+  {
     "id": "workflow-model-groups",
     "released": "2026-11-11",
     "title": "Choose worker models with reusable groups",

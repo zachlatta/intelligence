@@ -319,7 +319,18 @@ func readWorkflows(ctx context.Context, p *pgxpool.Pool, id string) ([]workflowR
 }
 
 // runRow is a run as the pages show it.
+type runAnswerRow struct {
+	Channel   string
+	MessageID string
+	ThreadID  string
+	SentAt    time.Time
+	Checked   bool
+}
+
 type runRow struct {
+	RequestedAt                                                          time.Time
+	AnsweredAt                                                           *time.Time
+	Answers                                                              []runAnswerRow
 	ID, Title, Input, Status, Host, Repo, Branch, Workflow, WorkflowID   string
 	WorkspaceID, WorkspaceTitle, Orchestrator, ProjectAgent, Note, Error string
 	QueueReason                                                          string
@@ -339,18 +350,23 @@ const runRowSelect = `SELECT r.id::text, coalesce(nullif(r.task_summary, ''), r.
 	w.deleted_at IS NOT NULL, r.start_retries, r.start_retry_at,
 	COALESCE((SELECT online FROM host_status WHERE name=r.host),false),
 	COALESCE((SELECT online AND connected FROM host_status WHERE name=r.host),false),
-	COALESCE((SELECT start_retry_keys FROM hosts WHERE name=r.host),false), r.queue_reason, coalesce(q.position, 0)
+	COALESCE((SELECT start_retry_keys FROM hosts WHERE name=r.host),false), r.queue_reason, coalesce(q.position, 0), r.requested_at,
+ (SELECT min(sent_at) FROM workflow_run_answers WHERE run_id=r.id),
+ (SELECT coalesce(jsonb_agg(jsonb_build_object('Channel',channel,'MessageID',message_id,'ThreadID',thread_id,'SentAt',sent_at,'Checked',checked) ORDER BY sent_at,id),'[]'::jsonb) FROM workflow_run_answers WHERE run_id=r.id)
 	FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id JOIN workflow_versions v ON v.workflow_id = r.workflow_id AND v.version = r.version
 	LEFT JOIN workflow_run_queue q ON q.run_id = r.id `
 
 func scanRunRow(row pgx.CollectableRow) (runRow, error) {
 	var r runRow
-	var steps []byte
+	var steps, answers []byte
 	err := row.Scan(&r.ID, &r.Title, &r.Input, &r.Status, &r.Host, &r.Repo, &r.Branch, &r.Workflow, &r.WorkflowID, &r.WorkspaceID, &r.WorkspaceTitle,
 		&r.Orchestrator, &r.ProjectAgent, &r.Note, &r.Error, &r.Step, &r.Version, &steps, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt, &r.WorkflowDeleted,
-		&r.StartRetries, &r.StartRetryAt, &r.HostOnline, &r.DaemonConnected, &r.RetryKeys, &r.QueueReason, &r.Position)
+		&r.StartRetries, &r.StartRetryAt, &r.HostOnline, &r.DaemonConnected, &r.RetryKeys, &r.QueueReason, &r.Position, &r.RequestedAt, &r.AnsweredAt, &answers)
 	if err == nil {
 		err = json.Unmarshal(steps, &r.Steps)
+		if err == nil {
+			err = json.Unmarshal(answers, &r.Answers)
+		}
 	}
 	return r, err
 }
@@ -925,3 +941,27 @@ func orDash(s string) string {
 	}
 	return s
 }
+
+func (a *app) recordRunAnswer(w http.ResponseWriter, r *http.Request) {
+	_, host, ok := a.hostCaller(w, r)
+	if !ok {
+		return
+	}
+	var answer workflow.Answer
+	if !decodeWorkflowJSON(w, r, &answer) {
+		return
+	}
+	workflowResult(w, "Answer recorded", a.wf.RecordAnswer(r.Context(), host, r.PathValue("id"), answer))
+}
+
+func (r runRow) AnswerTiming() string {
+	if r.AnsweredAt != nil {
+		return fmt.Sprintf("Asked → answered: %.1f min", r.AnsweredAt.Sub(r.RequestedAt).Minutes())
+	}
+	if !r.Live() {
+		return "No answer recorded"
+	}
+	return "Awaiting answer"
+}
+
+func (r runRow) MissingAnswer() bool { return r.AnsweredAt == nil && !r.Live() }

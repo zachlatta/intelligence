@@ -411,7 +411,11 @@ func (e *Engine) StartRun(ctx context.Context, account int64, workflowID, input 
 }
 
 // StartRunTx is StartRun in tx.
-func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workflowID, input string) (string, error) {
+func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workflowID, input string, requestedAt ...time.Time) (string, error) {
+	requested := e.Now()
+	if len(requestedAt) > 0 && !requestedAt[0].IsZero() {
+		requested = requestedAt[0]
+	}
 	if strings.TrimSpace(input) == "" {
 		return "", bad("a run needs input: what should be done")
 	}
@@ -452,9 +456,9 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		if why != "" {
 			status = Queued
 		}
-		if err := tx.QueryRow(ctx, `INSERT INTO workflow_runs (account_id, workflow_id, version, host, title, input, status, queue_reason, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9) RETURNING id::text`, account, workflowID, version, host, taskName(input), input,
-			status, why, e.Now()).Scan(&id); err != nil { // now, holding the lock: the queue's order is the order decided
+		if err := tx.QueryRow(ctx, `INSERT INTO workflow_runs (account_id, workflow_id, version, host, title, input, status, queue_reason, created_at, updated_at, requested_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10) RETURNING id::text`, account, workflowID, version, host, taskName(input), input,
+			status, why, e.Now(), requested).Scan(&id); err != nil { // now, holding the lock: the queue's order is the order decided
 			return err
 		}
 		r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id = $1", id))

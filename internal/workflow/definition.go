@@ -272,7 +272,7 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 // StepMessage is step i's title and filled instructions, as the orchestrator gets them.
 func StepMessage(d Definition, i int, v Vars) string {
 	s := d.Steps[i]
-	return fmt.Sprintf("Step %d of %d: %s\n\n%s", i+1, len(d.Steps), s.Title, strings.TrimSpace(v.fill(s.Instructions))+"\n\n"+UnattendedShellRule+"\n\n"+FileDeliveryRule+"\n\n"+DeliverableEmailRule)
+	return fmt.Sprintf("Step %d of %d: %s\n\n%s", i+1, len(d.Steps), s.Title, strings.TrimSpace(v.fill(s.Instructions))+"\n\n"+UnattendedShellRule+"\n\n"+FileDeliveryRule+"\n\n"+DeliverableEmailRule+"\n\n"+v.fill(RunAnswerRule))
 }
 
 // DeliverableEmailRule is appended at runtime, like FileDeliveryRule, so saved workflows get it
@@ -360,3 +360,8 @@ var Starting = Definition{
 // UnattendedShellRule is included for saved workflows too, not only Starting.
 const UnattendedShellRule = "Agents run unattended. Pass this shell guidance to each sub-agent. " +
 	"Even bypass mode can ask for permission on shell safety checks. Intelligence denies those prompts and asks for a safer approach. Use Write/Edit tools for prompt files and other multiline content instead of shell heredocs; split compound commands and use git -C instead of cd && git. A denial does not authorize broader actions. If blocked, report why."
+
+// RunAnswerRule applies to saved workflows too, including code and service tasks.
+const RunAnswerRule = "The final step must record every answer sent to Zach before finishing the run: intelligence workflow answer --run {{run}} --channel email --message-id <sent message id> --thread-id <thread id> --sent-at <actual RFC3339 send time> [--checked]. " +
+	"Use --checked only when the sent answer passed the required review. Record earlier unchecked sends as well as the checked final answer. If an earlier message already answered this request, inspect it and record its actual identifiers and sent time. " +
+	"For another response channel, use that channel and its message identifier. Do not invent a send or record a draft as sent. If no answer was delivered, report that explicitly; the run will remain flagged as unanswered. Pass this rule to every worker; only a step authorized to send may send."

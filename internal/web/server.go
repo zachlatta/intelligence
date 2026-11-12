@@ -229,6 +229,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("POST /api/workflow-runs/{id}/cancel", a.write(a.cancelRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/start", a.write(a.startQueuedRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/moves", a.moveRun)
+	mux.HandleFunc("POST /api/workflow-runs/{id}/answers", a.recordRunAnswer)
 	mux.HandleFunc("GET /workflows", a.page(func(v viewer) http.HandlerFunc { return workflowsPage(cfg, v) }))
 	// email triggers: the account's Gmail mailbox, connected through Google's sign-in
 	mux.HandleFunc("POST /api/gmail/sign-in", a.write(a.gmailSignIn))

@@ -799,6 +799,33 @@ either is deleted.
 
 Variables in instructions: `{{input}}`, `{{repo}}`, `{{branch}}` and `{{run}}`.
 
+#### Request and answer tracking
+
+Every run stores `workflow_runs.requested_at`: the Gmail Date header, a voice memo’s
+recorded_at, or task submission time. Missing or invalid source times fall back to run creation.
+Migration 0040 backfills stored Date:/Recorded: lines when parseable, otherwise created_at;
+it does not infer historical answer messages from free-text summaries.
+
+The final authorized step records each sent answer, including earlier unchecked sends:
+
+```sh
+intelligence workflow answer --run <UUID> --channel email --message-id <sent-id> --thread-id <thread-id> --sent-at <RFC3339> --checked
+```
+
+Omit `--checked` for a send that has not passed review. A draft that was never sent is not
+an answer. This host-authenticated command posts JSON `{"channel","messageId","threadId","sentAt","checked"}`
+to `POST /api/workflow-runs/{id}/answers`. It accepts finished runs too, so a verified prior
+delivery can be recorded later. Exact retries are idempotent; conflicting details for the same
+run/channel/message are refused. The app has no email-send credential; recording attests delivery,
+it does not send or independently verify mail.
+
+Read all sends through `workflow_run_answers`, scoped to the run’s account. Workflows and the
+run page show minutes to the first recorded send, whether checked or unchecked; the run page
+shows every message’s identifiers, actual sent time and review status. Finished runs without a
+recorded answer are flagged. `workflow_runs_unanswered` lists requests older than 30 minutes
+with no answer of either kind, including queued and starting runs. For checked-answer latency,
+join answers to runs and filter `checked` before taking the earliest sent_at.
+
 #### Model groups
 
 Plans and Workflows share a model group editor. Each group generates a token, such as

@@ -197,7 +197,7 @@
 <h2 class="section-title">Runs</h2>
 <div id="runs">
 {{if .Runs}}<div class="table-wrap"><table class="table">
-  <tr><th>Status</th><th>What</th><th>Workflow</th><th>Now</th><th>Host</th><th>Project</th><th class="n">Started</th></tr>
+  <tr><th>Status</th><th>What</th><th>Workflow</th><th>Now</th><th>Host</th><th>Project</th><th>Asked → answered</th><th class="n">Started</th></tr>
   {{range .Runs}}<tr>
     <td><span class="status {{.StatusClass}}">{{.StatusLabel}}</span></td>
     <td><a href="/workflow-runs/{{.ID}}">{{.Title}}</a></td>
@@ -205,7 +205,7 @@
     <td class="meta">{{.Where}}</td>
     <td class="mono" style="white-space:nowrap">{{.Host}}</td>
     <td class="mono">{{.Repo}}</td>
-    <td class="n meta">{{ago $.Now .CreatedAt}}</td></tr>{{end}}
+    <td>{{if .MissingAnswer}}<span class="status st-error">{{.AnswerTiming}}</span>{{else}}{{.AnswerTiming}}{{end}}</td><td class="n meta">{{ago $.Now .CreatedAt}}</td></tr>{{end}}
 </table></div>{{else}}<p class="empty-state">No runs yet.</p>{{end}}
 </div>
 <script>
@@ -701,6 +701,8 @@ render();
       <span>{{plural (len .Agents) "agent"}}</span><span>{{if eq .Run.Status "queued"}}queued{{else}}started{{end}} {{ago .Now .Run.CreatedAt}}</span></div></div>
   <div class="actions">{{if eq .Run.Status "queued"}}<button class="btn sm primary" id="start-now">Start now</button>{{end}}{{if .Run.Live}}<button class="btn sm" id="cancel">Cancel run</button>{{end}}</div>
 </div>
+<p class="banner {{if not .Run.MissingAnswer}}note{{end}}">{{.Run.AnswerTiming}} · Asked {{.Run.RequestedAt.Format "Jan 2, 2006 15:04 MST"}}</p>
+{{if .Run.Answers}}<section class="card"><div class="card-head"><h2>Answers sent</h2></div><div class="card-body"><ul class="events">{{range .Run.Answers}}<li><b>{{.Channel}}</b> · message <code>{{.MessageID}}</code> · thread <code>{{.ThreadID}}</code> · {{.SentAt.Format "Jan 2, 2006 15:04:05 MST"}} · {{if .Checked}}checked{{else}}unchecked{{end}}</li>{{end}}</ul></div></section>{{end}}
 <div class="request">{{.Run.Input}}</div>
 {{if .VoiceMemos}}<section class="card"><div class="card-head"><h2>Voice memo that started this run</h2><span class="grow"></span><a class="btn sm ghost" href="/workflows/voice-memos">All voice memos</a></div><div class="card-body">{{template "voice-memo-rows" .VoiceMemos}}</div></section>{{end}}
 {{if .Emails}}<section class="card"><div class="card-head"><h2>Email thread</h2><span class="meta grow">what each email in it did</span><a class="btn sm ghost" href="/workflows/email">All email</a></div>

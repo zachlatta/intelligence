@@ -142,11 +142,23 @@ func TestEmailStartsTheWorkflowThatMatchesItAndRepliesGoToItsRun(t *testing.T) {
 	}
 
 	// a new email from Christina starts her workflow; its input says it is not from Zach
-	fake.Add(mailMsg("m1", "t1", "Christina <christina@example.com>", "Q4 board deck", "Numbers for slide 6, please."))
+	fake.Add(mailMsg("m1", "t1", "Christina <christina@example.com>", "Q4 board deck", "Numbers for slide 6, please.", email.Header{Name: "Date", Value: "Wed, 11 Nov 2026 14:39:00 -0500"}))
 	r := decided(t, h, "m1")
 	run, _ := r["run_id"].(string)
 	if r["decision"] != "started" || run == "" {
 		t.Fatalf("m1 = %v", r)
+	}
+	code, requested := sqlPost(t, h, q("SELECT requested_at = TIMESTAMPTZ '2026-11-11T19:39:00Z' FROM workflow_runs WHERE id='"+run+"'"))
+	if code != 200 || len(requested.Rows) != 1 || requested.Rows[0][0] != true {
+		t.Fatalf("requested_at: %+v", requested)
+	}
+	receipt := call(t, anon(h), "POST", "/api/workflow-runs/"+run+"/answers", `{"channel":"email","messageId":"reply-example","threadId":"t1","sentAt":"2026-11-11T20:00:00Z","checked":true}`, map[string]string{"Authorization": "Bearer " + key})
+	if receipt.Code != 200 {
+		t.Fatal(receipt.Body.String())
+	}
+	code, answerReceipt := sqlPost(t, h, q("SELECT message_id,thread_id,sent_at=TIMESTAMPTZ '2026-11-11T20:00:00Z' FROM workflow_run_answers WHERE run_id='"+run+"'"))
+	if code != 200 || len(answerReceipt.Rows) != 1 || answerReceipt.Rows[0][0] != "reply-example" || answerReceipt.Rows[0][1] != "t1" || answerReceipt.Rows[0][2] != true {
+		t.Fatalf("reply receipt: %+v", answerReceipt)
 	}
 	ws := b.command()
 	var wa hostclient.CreateWorkspaceArgs

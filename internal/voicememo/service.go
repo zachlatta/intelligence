@@ -187,7 +187,8 @@ func (s *Service) keep(ctx context.Context, account int64, m workflow.VoiceMemo,
 		var run string
 		err = pgx.BeginFunc(ctx, tx, func(sp pgx.Tx) error {
 			var startErr error
-			run, startErr = s.Engine.StartRunTx(ctx, sp, account, best.id, m.Input())
+			requested, _ := time.Parse(time.RFC3339Nano, m.RecordedAt)
+			run, startErr = s.Engine.StartRunTx(ctx, sp, account, best.id, m.Input(), requested)
 			return startErr
 		})
 		if err != nil {
