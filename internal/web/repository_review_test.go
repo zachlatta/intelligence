@@ -182,6 +182,7 @@ func TestMatchedProjectSelectionIsVisibleWhileQueued(t *testing.T) {
 	b := sendReport(t, h, wfReport())
 	repositoryHistory(t, h, d, "/w/app")
 	b.command()
+	otherRunActive(t, h, d, b)
 	id := startRun(t, h, createWorkflow(t, h, workflow.Starting), "find project")
 	succeed(t, b, b.command(), `{"agentId":"finder"}`)
 	repositoryMinute(t, b, 7<<30)

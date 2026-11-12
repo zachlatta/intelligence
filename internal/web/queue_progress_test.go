@@ -158,3 +158,111 @@ func TestARetryOfAHandStartedRunSkipsTheQueue(t *testing.T) {
 		t.Fatalf("older run = %v, want still queued", got)
 	}
 }
+
+// Before started_by_hand existed, a run started by hand that then chose its project went back into
+// the queue. Marked started by hand, it starts on the next
+// pass of the queue, ahead of older runs and whatever the load.
+func TestARequeuedHandStartedRunStartsOnTheNextPass(t *testing.T) {
+	d := dbtest.New(t)
+	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
+	b := sendReport(t, h, wfReport())
+	hostMinute(t, b, time.Now().UTC().Truncate(time.Minute), 20, 0.97)
+	wf := fixedWorkflow(t, h)
+	older := startRun(t, h, wf, "older queued build")
+	requeued := startRun(t, h, wf, "started by hand, then requeued")
+	if _, err := d.Owner.Exec(t.Context(), `UPDATE workflow_runs SET started_by_hand=true WHERE id=$1`, requeued); err != nil {
+		t.Fatal(err)
+	}
+	hostMinute(t, b, time.Now().UTC().Truncate(time.Minute), 20, 0.97)
+	if got := runField(t, h, requeued, "status"); got != "starting" {
+		t.Fatalf("status = %v (%v), want starting", got, runField(t, h, requeued, "queue_reason"))
+	}
+	if got := runField(t, h, older, "status"); got != "queued" {
+		t.Fatalf("older run = %v, want still queued", got)
+	}
+}
+
+// The queue's head starts once nothing else is going, whatever its estimate: memory the host uses
+// for other things could otherwise keep a run whose estimate fits the host, but not beside them,
+// queued for ever, and every run behind it.
+func TestTheQueueHeadStartsOnAnIdleHost(t *testing.T) {
+	h, d := dbServer(t)
+	b := sendReport(t, h, wfReport())
+	wf := repositoryHistory(t, h, d, "/w/app") // 10 GiB estimate
+	b.command()
+	repositoryMinute(t, b, 1<<30)
+	head := startRun(t, h, wf, "build")
+	if got := runField(t, h, head, "status"); got != "queued" {
+		t.Fatalf("status = %v, want queued while memory is full", got)
+	}
+	// 9 GiB of 16 in use by other things: 10 GiB more never fits under 90%.
+	repositoryMinute(t, b, 7<<30)
+	if got := runField(t, h, head, "status"); got != "starting" {
+		t.Fatalf("idle host kept its head queued: %v", runField(t, h, head, "queue_reason"))
+	}
+	next := startRun(t, h, wf, "next build")
+	if got := runField(t, h, next, "status"); got != "queued" {
+		t.Fatalf("a second run must wait beside an active one: %v", got)
+	}
+}
+
+// A run the queue started that then chooses its project still waits behind an older run that went
+// back into the queue when it chose its own.
+func TestProjectSelectionCannotSkipAnOlderRequeuedRun(t *testing.T) {
+	d := dbtest.New(t)
+	clock := &fakeClock{t: time.Now().UTC()}
+	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour; c.Now = clock.Now })
+	b := sendReport(t, h, wfReport())
+	repositoryHistory(t, h, d, "/w/app")
+	b.command()
+	repositoryMinute(t, b, 16<<30)
+	older := startRun(t, h, createWorkflow(t, h, workflow.Starting), "older")
+	succeed(t, b, b.command(), `{"agentId":"finder-older"}`)
+	clock.Add(time.Second)
+	newer := startRun(t, h, createWorkflow(t, h, workflow.Starting), "newer")
+	succeed(t, b, b.command(), `{"agentId":"finder-newer"}`)
+	key := keyOf(t, h, "host-1")
+	repositoryMinute(t, b, 8<<30)
+	if code, msg := move(t, h, key, older, map[string]string{"move": "project", "directory": "/w/app"}); code != http.StatusOK {
+		t.Fatalf("move: %d %s", code, msg)
+	}
+	if got := runField(t, h, older, "status"); got != "queued" {
+		t.Fatalf("older = %v, want queued for memory", got)
+	}
+	if code, msg := move(t, h, key, newer, map[string]string{"move": "project", "directory": "none"}); code != http.StatusOK {
+		t.Fatalf("move: %d %s", code, msg)
+	}
+	if got := runField(t, h, newer, "status"); got != "queued" {
+		t.Fatalf("newer jumped the older requeued run: %v", got)
+	}
+}
+
+// A run still choosing its project reserves 1 GiB, not 4: its finder is small, and the project's
+// own estimate is checked again once it is chosen.
+func TestAFinderReservesLittle(t *testing.T) {
+	h, _ := dbServer(t)
+	sendReport(t, h, wfReport())
+	id := startRun(t, h, createWorkflow(t, h, workflow.Starting), "find it")
+	if got := runField(t, h, id, "estimated_memory_bytes"); got != float64(1<<30) {
+		t.Fatalf("finder estimate = %v, want 1 GiB", got)
+	}
+}
+
+// otherRunActive keeps a tiny run active on host-1, so the queue's head cannot start alone and
+// the memory limit applies. Its start command is drained from b.
+func otherRunActive(t *testing.T, h http.Handler, d dbtest.DB, b *rawHost) string {
+	t.Helper()
+	def := workflow.Starting
+	def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/other"}
+	id := startRun(t, h, createWorkflow(t, h, def), "other work")
+	if runField(t, h, id, "status") == "queued" {
+		if rec := call(t, h, http.MethodPost, "/api/workflow-runs/"+id+"/start", `{}`, sameOriginFetch); rec.Code != http.StatusNoContent {
+			t.Fatal(rec.Body)
+		}
+	}
+	b.command()
+	if _, err := d.Owner.Exec(t.Context(), `UPDATE workflow_runs SET estimated_memory_bytes=1 WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}

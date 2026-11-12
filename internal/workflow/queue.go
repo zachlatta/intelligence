@@ -142,11 +142,11 @@ func (e *Engine) room(ctx context.Context, tx pgx.Tx, host, candidate, repo stri
 	}
 	if l.MemPct > 0 && m.MemTotal > 0 {
 		used := 100 * (1 - float64(m.MemMin)/float64(m.MemTotal))
-		// Only a genuinely oversized estimate can bypass the RAM projection, and
-		// only at the FIFO head with no other active workflow. Ordinary estimates
-		// must fit alongside memory used by non-workflow processes. Keep the
-		// full estimate: no following job fits until this one releases its reservation.
-		solo := active == 0 && used < l.MemPct && float64(memory) > float64(m.MemTotal)*l.MemPct/100
+		// The FIFO head starts alone when no other run is active and measured memory is under the
+		// limit, whatever its estimate: memory used by other processes could otherwise keep an
+		// estimate that fits the host, but not beside them, queued for ever. Keep the full
+		// estimate: no following job fits until this one releases its reservation.
+		solo := active == 0 && used < l.MemPct
 		if p := used + 100*(float64(reservedMemory)+float64(memory))/float64(m.MemTotal); p >= l.MemPct && !solo {
 			project := repo
 			if project == "" {
@@ -218,12 +218,18 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 	if err := lockQueue(ctx, tx, host); err != nil {
 		return false, err
 	}
-	r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.host = $1 AND (r.status = $2 OR r.start_retry_queued) ORDER BY r.created_at, r.id LIMIT 1 FOR UPDATE OF r", host, Queued))
+	// A queued run started by hand comes first: Start now put it ahead of the queue (it may have
+	// gone back in when it chose its project, before started_by_hand kept it out).
+	r, err := scanRun(tx.QueryRow(ctx, runSelect+`WHERE r.host = $1 AND (r.status = $2 OR r.start_retry_queued)
+		ORDER BY (r.status = $2 AND r.started_by_hand) DESC, r.created_at, r.id LIMIT 1 FOR UPDATE OF r`, host, Queued))
 	if errors.Is(err, ErrNotFound) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
+	}
+	if r.Status == Queued && r.StartedByHand {
+		return true, e.dequeue(ctx, tx, r, "started by hand, ahead of the queue")
 	}
 	if r.StartRetryAt != nil {
 		if !e.Now().Before(r.StartRetryAt.Add(RetryWaitLimit)) {

@@ -50,7 +50,8 @@ func TestRepositoryEstimateGatesExistingQueue(t *testing.T) {
 	h, d := dbServer(t)
 	b := sendReport(t, h, wfReport())
 	heavy := repositoryHistory(t, h, d, "/w/app")
-	b.command() // historical workspace
+	b.command()                // historical workspace
+	otherRunActive(t, h, d, b) // the head may not start alone
 	repositoryMinute(t, b, 7<<30)
 	id := startRun(t, h, heavy, "large build")
 	if got := runField(t, h, id, "status"); got != "queued" {
@@ -85,6 +86,7 @@ func TestRepositoryMemoryEstimateHoldsStartRetry(t *testing.T) {
 	b := sendReport(t, h, wfReport())
 	wf := repositoryHistory(t, h, d, "/w/app")
 	b.command()
+	otherRunActive(t, h, d, b) // the head may not start alone
 	repositoryMinute(t, b, 16<<30)
 	id := startRun(t, h, wf, "retry large build")
 	cmd := b.command()
@@ -113,6 +115,7 @@ func TestMatchedRepositoryReentersExistingQueue(t *testing.T) {
 	b := sendReport(t, h, wfReport())
 	repositoryHistory(t, h, d, "/w/app")
 	b.command()
+	otherRunActive(t, h, d, b) // the head may not start alone
 	id := startRun(t, h, createWorkflow(t, h, workflow.Starting), "choose project")
 	succeed(t, b, b.command(), `{"agentId":"finder"}`)
 	repositoryMinute(t, b, 7<<30)
@@ -157,8 +160,8 @@ func TestOversizedRepositoryRunsAloneWithoutBlockingFIFOForever(t *testing.T) {
 	if got := runField(t, h, light, "status"); got != "starting" {
 		t.Fatalf("FIFO did not progress: %v", got)
 	}
-	// An OS baseline can also make an estimate permanently exceed the idle
-	// budget, even when the estimate is smaller than physical RAM.
+	// An OS baseline can make an estimate never fit beside it, even one smaller than
+	// physical RAM. On an idle host the head still starts, so the queue cannot wait for ever.
 	if _, err := d.Owner.Exec(t.Context(), `UPDATE workflow_runs SET status='succeeded',finished_at=now() WHERE id=$1`, light); err != nil {
 		t.Fatal(err)
 	}
@@ -167,8 +170,8 @@ func TestOversizedRepositoryRunsAloneWithoutBlockingFIFOForever(t *testing.T) {
 	}
 	repositoryMinute(t, b, 7<<30)
 	baseline := startRun(t, h, wf, "build alongside OS baseline")
-	if got := runField(t, h, baseline, "status"); got != "queued" {
-		t.Fatalf("ordinary estimate bypassed the memory gate: %v", got)
+	if got := runField(t, h, baseline, "status"); got != "starting" {
+		t.Fatalf("idle host kept its head queued behind an OS baseline: %v", got)
 	}
 }
 

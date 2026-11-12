@@ -928,8 +928,9 @@ A run's memory estimate is learned from its selected repository on that host, wi
 `workflow_repository_memory` takes what nine in ten successful-run peaks for that selected, non-empty
 repository root stayed under (the 90th percentile; the largest, until it has ten runs), adds 25%
 headroom, and applies a 1 GiB floor, so one unusually heavy run does not size every later run.
-Unfinished runs were re-estimated this way when it changed (migration `0042_workflow_queue_progress`). Without history the estimate is 4 GiB, including
-while a finder has not selected a project. Agent samples expire after 90 days, so older history
+Unfinished runs were re-estimated this way when it changed (migration `0042_workflow_queue_progress`). Without history the estimate is 4 GiB. A run still
+finding its project reserves 1 GiB (its finder is small), and its project's estimate is checked
+when it is chosen. Agent samples expire after 90 days, so older history
 eventually falls back. These views and `workflow_runs.estimated_memory_bytes` expose the evidence
 and estimate through SQL; the run page shows the estimate. Estimates are fixed at repository
 selection and reused for reservations and retries. Every starting or running run reserves
@@ -940,14 +941,14 @@ run, without counting its resident memory twice. A run waiting for Zach's reply 
 beyond what it uses: its agents are idle, perhaps for days, and their memory is already in the
 measured minute. The existing memory percentage limit supplies
 host headroom. Memory queue reasons name the repository estimate, measured free RAM and reservations.
-To prevent a genuinely oversized estimate from permanently blocking the FIFO, the oldest run
-may start alone only when its estimate exceeds the memory limit's share of total host RAM,
-there are no other active or starting runs, and measured memory is below the limit. The FIFO
-head check also applies during project selection, including older ready start retries.
-An ordinary estimate must fit alongside non-workflow memory use; an OS baseline is not an
-exception. CPU, load and
-telemetry checks still apply. Its full estimate stays reserved until it ends, so it cannot block
-the queue forever solely because the estimate exceeds host RAM. This is an advisory estimate,
+So that no estimate can block the FIFO for ever, the oldest run starts alone, whatever its
+estimate, when no other run is active or starting (a run waiting for Zach's reply does not count)
+and measured memory is below the limit. Otherwise memory used by other processes could keep an
+estimate that fits the host, but not beside them, queued for good, with every run behind it. The
+FIFO head check also applies during project selection, including older ready start retries and
+older runs that went back into the queue when they chose their project. CPU, load and
+telemetry checks still apply. Its full estimate stays reserved until it ends, so nothing else
+starts beside it until then. This is an advisory estimate,
 not a guarantee that an oversized workload will fit or avoid an OOM kill.
 Failed, canceled, finder-only and empty-repository runs do not teach the estimator; without a
 successful run for a selected non-empty repository, it keeps the 4 GiB fallback.
@@ -983,7 +984,8 @@ Without fresh telemetry the server cannot know the host's capacity:
 - a host that never sent its resources, or one connected now that has sent none for 30 minutes
   (its monitoring stopped), gives no sign of being near capacity, so its runs start.
 
-**Start now** bypasses the capacity hold and the queue for good (`workflow_runs.started_by_hand`):
+**Start now** bypasses the capacity hold and the queue for good (`workflow_runs.started_by_hand`;
+a queued run marked so starts on the queue's next pass, ahead of the others):
 a run started by hand that finds its project first starts its orchestrator as soon as the project
 is chosen, and its start retries go out as soon as its host is ready, never back behind the queue it
 skipped. Retries of runs the queue started wait for admission, in their original place.
