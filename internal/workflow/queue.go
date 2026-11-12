@@ -215,7 +215,7 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 		return false, err
 	}
 	if r.StartRetryAt != nil {
-		return e.dequeueRetry(ctx, tx, r)
+		return e.dequeueRetry(ctx, tx, r, host+" has room for the retry")
 	}
 	return true, e.dequeue(ctx, tx, r, host+" has room")
 }
@@ -237,13 +237,66 @@ func (e *Engine) recordDequeue(ctx context.Context, tx pgx.Tx, r run, why string
 }
 
 // StartNow starts account's queued run at once, ahead of its queue and whatever its host's load.
+// A run whose start retry waits in the queue sends that retry now: it counts as a retry, and a
+// failure is handled like any other failed retry.
 func (e *Engine) StartNow(ctx context.Context, account int64, runID string) error {
-	return e.forAccount(ctx, account, runID, func(tx pgx.Tx, r run) error {
+	if !uuidRe.MatchString(runID) {
+		return ErrNotFound
+	}
+	return pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		var host string
+		err := tx.QueryRow(ctx, "SELECT host FROM workflow_runs WHERE id = $1 AND account_id = $2", runID, account).Scan(&host)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		// Take the host's queue lock before the run row, in the same order as startNext.
+		if err := lockQueue(ctx, tx, host); err != nil {
+			return err
+		}
+		r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id = $1 AND r.account_id = $2 FOR UPDATE OF r", runID, account))
+		if err != nil {
+			return err
+		}
+		if r.StartRetryAt != nil {
+			return e.startRetryNow(ctx, tx, r)
+		}
 		if r.Status != Queued {
 			return conflict("this run is not queued (%s)", strings.ReplaceAll(r.Status, "_", " "))
 		}
 		return e.dequeue(ctx, tx, r, "started by hand, ahead of the queue")
 	})
+}
+
+// startRetryNow sends r's queued start retry at once, whatever its host's load. Only a retry in the
+// queue can go: one still in its backoff, or whose host is not ready (online, with a connected
+// Paseo daemon that supports retry keys), waits, as automatic retries do. The caller holds the
+// host's queue lock and the run's row.
+func (e *Engine) startRetryNow(ctx context.Context, tx pgx.Tx, r run) error {
+	now := e.Now()
+	if !now.Before(r.StartRetryAt.Add(RetryWaitLimit)) {
+		return conflict("this retry has waited 24 hours and is timing out")
+	}
+	if now.Before(*r.StartRetryAt) {
+		return conflict("this retry is not due until %s", r.StartRetryAt.UTC().Format("15:04:05 MST"))
+	}
+	ready, err := retryHostReady(ctx, tx, r.Host)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return conflict("this retry is waiting for %s to be ready (online, with a connected Paseo daemon that supports retry keys), not for room", r.Host)
+	}
+	sent, err := e.dequeueRetry(ctx, tx, r, "retry started by hand, ahead of the queue")
+	if err != nil {
+		return err
+	}
+	if !sent {
+		return conflict("the previous start attempt has just finished; reload the run")
+	}
+	return nil
 }
 
 // RunQueue starts queued runs as their hosts have room, every interval until ctx ends.

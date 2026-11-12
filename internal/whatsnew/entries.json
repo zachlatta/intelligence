@@ -1,5 +1,13 @@
 [
   {
+    "id": "start-retry-now",
+    "released": "2026-11-12",
+    "title": "Start a queued retry now",
+    "summary": "When a run's start retry is waiting in its host's queue for capacity, its run page has a Start retry now button. It sends the retry at once, ahead of the queue, and What happened records it. It still counts as one of the three retries, and if it fails it is handled like any other failed retry.",
+    "media": "start-retry-now.gif",
+    "mediaAlt": "A run page showing Retry 1 of 3 queued with a Start retry now button; after the click it shows Retry 1 of 3 sent and the timeline says the retry was started by hand, ahead of the queue"
+  },
+  {
     "id": "workflow-model-groups",
     "released": "2026-11-11",
     "title": "Choose worker models with reusable groups",

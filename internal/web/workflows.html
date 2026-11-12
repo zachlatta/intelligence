@@ -699,7 +699,7 @@ render();
       {{if .Run.Repo}}<span><b class="mono">{{.Run.Repo}}</b> @ <span class="mono">{{.Run.Branch}}</span></span>{{end}}
       {{if .Run.WorkspaceTitle}}<span>workspace <b>{{.Run.WorkspaceTitle}}</b></span>{{end}}
       <span>{{plural (len .Agents) "agent"}}</span><span>{{if eq .Run.Status "queued"}}queued{{else}}started{{end}} {{ago .Now .Run.CreatedAt}}</span></div></div>
-  <div class="actions">{{if eq .Run.Status "queued"}}<button class="btn sm primary" id="start-now">Start now</button>{{end}}{{if .Run.Live}}<button class="btn sm" id="cancel">Cancel run</button>{{end}}</div>
+  <div class="actions">{{if eq .Run.Status "queued"}}<button class="btn sm primary" id="start-now">Start now</button>{{else if .Run.RetryInQueue}}<button class="btn sm primary" id="start-now" title="Send this retry now, ahead of the queue, whatever the host's load">Start retry now</button>{{end}}{{if .Run.Live}}<button class="btn sm" id="cancel">Cancel run</button>{{end}}</div>
 </div>
 <div class="request">{{.Run.Input}}</div>
 {{if .VoiceMemos}}<section class="card"><div class="card-head"><h2>Voice memo that started this run</h2><span class="grow"></span><a class="btn sm ghost" href="/workflows/voice-memos">All voice memos</a></div><div class="card-body">{{template "voice-memo-rows" .VoiceMemos}}</div></section>{{end}}
@@ -713,6 +713,7 @@ render();
     {{if not .Run.HostOnline}}Waiting for the host to reconnect.{{else if not .Run.DaemonConnected}}Waiting for the Paseo daemon to reconnect.{{end}}
     {{if not .Run.RetryKeys}}Waiting for the host to support retry keys.{{end}}
     This queued retry can wait up to 24 hours, until {{.Run.RetryDeadline.Format "Jan 2, 2006 15:04:05 MST"}}.
+    {{if .Run.RetryInQueue}}<b>Start retry now</b> sends it anyway, ahead of the queue.{{end}}
   {{else}}Waiting for the host's result.{{end}}
   <div>Last start error: {{.Run.Error}}</div>
 </div>{{end}}

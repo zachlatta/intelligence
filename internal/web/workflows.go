@@ -212,7 +212,7 @@ func (a *app) cancelRun(v viewer) http.HandlerFunc {
 	}
 }
 
-// startQueuedRun: POST /api/workflow-runs/{id}/start {}: a queued run starts now, ahead of its
+// startQueuedRun: POST /api/workflow-runs/{id}/start {}: a queued run, or a queued start retry, starts now, ahead of its
 // queue, whatever its host's load.
 func (a *app) startQueuedRun(v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -423,6 +423,12 @@ func (r runRow) RetryStatus() string {
 		return fmt.Sprintf("Retry %d of %d queued", r.StartRetries+1, workflow.StartRetryLimit)
 	}
 	return fmt.Sprintf("Retry %d of %d sent", r.StartRetries, workflow.StartRetryLimit)
+}
+
+// RetryInQueue says r's start retry waits in its host's queue for room, so Start retry now can send
+// it ahead of the queue.
+func (r runRow) RetryInQueue() bool {
+	return r.Position > 0 && r.StartRetryAt != nil && r.Status != workflow.Queued
 }
 
 func (r runRow) RetryDeadline() time.Time {

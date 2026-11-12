@@ -67,9 +67,10 @@ func retryHostReady(ctx context.Context, tx pgx.Tx, host string) (bool, error) {
 	return ready, err
 }
 
-// dequeueRetry runs only after the FIFO admits r. Lock the old command so a
-// late success either wins before admission or is superseded by this delivery.
-func (e *Engine) dequeueRetry(ctx context.Context, tx pgx.Tx, r run) (bool, error) {
+// dequeueRetry runs only after the FIFO admits r, or a person starts it by hand (why says which).
+// Lock the old command so a late success either wins before admission or is superseded by this
+// delivery.
+func (e *Engine) dequeueRetry(ctx context.Context, tx pgx.Tx, r run, why string) (bool, error) {
 	var previous fleet.Command
 	err := tx.QueryRow(ctx, `SELECT c.id::text, c.kind, c.idempotency_key
 		FROM commands c JOIN workflow_runs r ON r.pending_command=c.id
@@ -104,7 +105,7 @@ func (e *Engine) dequeueRetry(ctx context.Context, tx pgx.Tx, r run) (bool, erro
 	if _, err := tx.Exec(ctx, "UPDATE commands SET idempotency_key=$2 WHERE id=$1", next.ID, key); err != nil {
 		return false, err
 	}
-	if err := e.recordDequeue(ctx, tx, r, r.Host+" has room for the retry"); err != nil {
+	if err := e.recordDequeue(ctx, tx, r, why); err != nil {
 		return false, err
 	}
 	if err := e.event(ctx, tx, r, "start_retry_sent", nil, nil, fmt.Sprintf("Retry %d of %d", r.StartRetries+1, StartRetryLimit)); err != nil {

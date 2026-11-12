@@ -744,7 +744,13 @@ error and archives any partial workspace. Cancellation removes the scheduled ret
 run starts with its own creation key and budget.
 
 The run page shows each queued or sent retry, its last error, its next scheduled time, and whether
-it is waiting for host recovery or capacity. Each queued retry
+it is waiting for host recovery or capacity. A retry waiting only for capacity (due, its host
+ready, in the queue) has a **Start retry now** button: the same `POST /api/workflow-runs/{id}/start`
+as **Start now**, which sends that retry at once, ahead of the queue, whatever the host's load. It
+is an ordinary retry: it reuses the creation key, counts toward the three, and a failure is
+handled like any other failed retry (the next backoff, or the run fails once the retries run out).
+The timeline records it as “Started: retry started by hand, ahead of the queue”. A retry still in
+its backoff or waiting for its host to be ready cannot be started by hand (`409`). Each queued retry
 has a deadline 24 hours after its scheduled time; at that deadline the run fails with the last
 start error and a timeout explanation. This allows a long outage or host update without leaving
 the run waiting forever. Queue and delivery events are recorded in the timeline. Reconciliation
@@ -877,7 +883,8 @@ Without fresh telemetry the server cannot know the host's capacity:
 - a host that never sent its resources, or one connected now that has sent none for 30 minutes
   (its monitoring stopped), gives no sign of being near capacity, so its runs start.
 
-**Start now** bypasses the capacity hold for a new run. Automatic retries wait for admission.
+**Start now** bypasses the capacity hold for a new run. Automatic retries wait for admission;
+**Start retry now** sends a queued retry by hand (The run queue, below).
 
 A run also queues while earlier runs wait in its host's queue, so the queue keeps its order. The
 decision and the start are made in one transaction holding the host's queue lock (an advisory
@@ -890,7 +897,8 @@ the queue through `workflow_runs.start_retry_queued`. `workflow_runs.queue_reaso
 `dequeued`, and `workflow_run_queue` lists each host's queue in order (`position` 1 is next). The
 runs list and the run page show it queued, where in line (“2nd in line for host-1”) and why, and
 the run page says when it was queued, not started; the run page's **Start now** starts it at once,
-whatever the host's load (`POST /api/workflow-runs/{id}/start`), and **Cancel run** cancels it.
+whatever the host's load (`POST /api/workflow-runs/{id}/start`; for a queued retry the button reads
+**Start retry now** and sends the retry), and **Cancel run** cancels it.
 
 The server starts queued runs on a host, oldest first, while the projection leaves room: every 15
 seconds, on each minute of resources the host sends, and when a run ends or fails to start. Runs
