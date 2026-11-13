@@ -110,9 +110,9 @@ func migrationNames(dir fs.FS) ([]string, error) {
 	return migrationOrder(names)
 }
 
-// legacyMigrations is the last four-digit migration number. Migrations 0001 to 0049 predate the
+// legacyMigrations is the last four-digit migration number. Migrations 0001 to 0050 predate the
 // timestamp scheme and keep their names, since production records them by name.
-const legacyMigrations = 49
+const legacyMigrations = 50
 
 var (
 	legacyName    = regexp.MustCompile(`^([0-9]{4})_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$`)
@@ -123,10 +123,10 @@ var (
 //
 // A new migration is named YYYYMMDDTHHMM_description.sql, the UTC time it was written (for example
 // 20261113T0930_add_widgets.sql). Different descriptions distinguish migrations written in the same
-// minute, so they need no renumbering when they merge. The legacy files 0001_... to 0049_... come
+// minute, so they need no renumbering when they merge. The legacy files 0001_... to 0050_... come
 // first, in number order, then the timestamped ones in time order. Two with the same timestamp
 // (perhaps from different branches) are both kept, ordered by full name. A four-digit number
-// above 0049, two legacy files with the same number, a timestamp before 2026 or a malformed name is
+// above 0050, two legacy files with the same number, a timestamp before 2026 or a malformed name is
 // an error.
 func migrationOrder(names []string) ([]string, error) {
 	legacy := map[string]string{}
@@ -168,7 +168,7 @@ func migrationOrder(names []string) ([]string, error) {
 const migrationTimestamp = "20060102T1504"
 
 // firstTimestampYear is the earliest year a migration timestamp may have: the scheme began in 2026,
-// and the bound keeps every timestamped name sorting after the legacy 0001 to 0049.
+// and the bound keeps every timestamped name sorting after the legacy 0001 to 0050.
 const firstTimestampYear = 2026
 
 // EnsureReadonlyRole creates or updates the login role the SQL API connects as: it can read every

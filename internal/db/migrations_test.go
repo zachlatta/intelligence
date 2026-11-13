@@ -10,14 +10,25 @@ import (
 	"github.com/zachlatta/intelligence/internal/dbtest"
 )
 
-// The shipped migrations are all well named: legacy four-digit files up to 0049, then timestamps.
+// The shipped migrations are all well named: legacy four-digit files up to 0050, then timestamps.
+// 0050 landed on main under a four-digit name while the timestamp scheme was in review, so it is
+// the last legacy file; production records it by that name, so it is never renamed.
 func TestShippedMigrationsAreWellNamed(t *testing.T) {
 	names, err := db.ShippedMigrations()
 	if err != nil {
 		t.Fatalf("shipped migrations: %v", err)
 	}
-	if len(names) < 49 || names[0] != "0001_devboxes.sql" {
+	if len(names) < 50 || names[0] != "0001_devboxes.sql" {
 		t.Fatalf("shipped migrations = %d, first %q", len(names), names[0])
+	}
+	var lastLegacy string
+	for _, name := range names {
+		if len(name) > 5 && name[4] == '_' {
+			lastLegacy = name
+		}
+	}
+	if lastLegacy != "0050_workflow_answer_resolutions.sql" {
+		t.Fatalf("last legacy migration = %q, want 0050_workflow_answer_resolutions.sql", lastLegacy)
 	}
 }
 
@@ -26,6 +37,7 @@ func TestMigrationOrderPutsLegacyFirstThenTimestamps(t *testing.T) {
 		"20261113T0930_b.sql",
 		"0049_voice_memo_poll_schedule.sql",
 		"20261112T2359_a.sql",
+		"0050_workflow_answer_resolutions.sql",
 		"0001_devboxes.sql",
 		"20261113T0931_c.sql",
 	})
@@ -35,6 +47,7 @@ func TestMigrationOrderPutsLegacyFirstThenTimestamps(t *testing.T) {
 	want := []string{
 		"0001_devboxes.sql",
 		"0049_voice_memo_poll_schedule.sql",
+		"0050_workflow_answer_resolutions.sql",
 		"20261112T2359_a.sql",
 		"20261113T0930_b.sql",
 		"20261113T0931_c.sql",
@@ -46,7 +59,7 @@ func TestMigrationOrderPutsLegacyFirstThenTimestamps(t *testing.T) {
 
 func TestMigrationOrderRejectsBadNames(t *testing.T) {
 	for name, wantErr := range map[string]string{
-		"0050_new_thing.sql":       "timestamp",    // above the legacy range: use a timestamp
+		"0051_new_thing.sql":       "timestamp",    // above the legacy range: use a timestamp
 		"0100_new_thing.sql":       "timestamp",    // likewise
 		"50_x.sql":                 "name",         // no recognised prefix
 		"20261113_x.sql":           "name",         // date without time
@@ -58,7 +71,7 @@ func TestMigrationOrderRejectsBadNames(t *testing.T) {
 		"20261113T0930_.sql":       "name",         // no description
 		"20261113T0930_x.sql.orig": "name",         // not .sql
 		"0000_x.sql":               "legacy range", // 0 is not a legacy number
-		"00491231T0000_x.sql":      "2026",         // would sort before the legacy files
+		"00501231T0000_x.sql":      "2026",         // would sort before the legacy files
 		"20251231T2359_x.sql":      "2026",         // before the scheme existed
 		"20261113T0930_x.SQL":      "name",         // upper-case extension
 		"README.md":                "name",         // not a migration
@@ -205,10 +218,10 @@ func TestMigrateRefusesFilesThatAreNotMigrations(t *testing.T) {
 func TestMigrateRefusesBadlyNamedFiles(t *testing.T) {
 	d := dbtest.New(t)
 	err := db.MigrateFrom(ctx, d.Owner, fstest.MapFS{
-		"0050_too_new.sql": {Data: []byte("CREATE TABLE mig_too_new (id int)")},
+		"0051_too_new.sql": {Data: []byte("CREATE TABLE mig_too_new (id int)")},
 	})
 	if err == nil {
-		t.Fatal("migrate accepted 0050_too_new.sql")
+		t.Fatal("migrate accepted 0051_too_new.sql")
 	}
 	var exists bool
 	if err := d.Owner.QueryRow(ctx, "SELECT to_regclass('mig_too_new') IS NOT NULL").Scan(&exists); err != nil || exists {
