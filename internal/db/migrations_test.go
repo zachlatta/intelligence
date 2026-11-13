@@ -89,24 +89,6 @@ func TestMigrationOrderAllowsEqualTimestamps(t *testing.T) {
 	}
 }
 
-func applied(t *testing.T, d dbtest.DB) []string {
-	t.Helper()
-	rows, err := d.Owner.Query(ctx, "SELECT version FROM schema_migrations ORDER BY version")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var v string
-		if err := rows.Scan(&v); err != nil {
-			t.Fatal(err)
-		}
-		out = append(out, v)
-	}
-	return out
-}
-
 // Production has recorded the legacy names (0001_... to 0049_...) as versions. After the deploy that
 // brings the timestamp scheme, those rows still match, nothing re-runs, and only new files apply.
 func TestLegacyRecordsUpgradeToTheTimestampScheme(t *testing.T) {
@@ -131,7 +113,7 @@ func TestLegacyRecordsUpgradeToTheTimestampScheme(t *testing.T) {
 		t.Fatalf("new deploy: %v", err)
 	}
 	want := []string{"0001_one", "0049_two", "20261113T0930_three"}
-	if got := applied(t, d); !slices.Equal(got, want) {
+	if got := strings1(t, d.Owner, "SELECT version FROM schema_migrations ORDER BY version"); !slices.Equal(got, want) {
 		t.Fatalf("applied = %v, want %v", got, want)
 	}
 }
@@ -164,7 +146,7 @@ func TestMigrationsFromParallelBranchesMergeWithoutRenaming(t *testing.T) {
 		t.Fatalf("deploy with A merged: %v", err)
 	}
 	want := []string{"0049_base", "20261113T0930_branch_a", "20261113T1015_branch_b"}
-	if got := applied(t, d); !slices.Equal(got, want) {
+	if got := strings1(t, d.Owner, "SELECT version FROM schema_migrations ORDER BY version"); !slices.Equal(got, want) {
 		t.Fatalf("applied = %v, want %v", got, want)
 	}
 	for _, table := range []string{"mig_base", "mig_a", "mig_b"} {
@@ -199,7 +181,7 @@ func TestSameMinuteMigrationsFromParallelBranchesMergeWithoutRenaming(t *testing
 		t.Fatalf("deploy with B merged: %v", err)
 	}
 	want := []string{"0049_base", "20261113T0930_gadgets", "20261113T0930_widgets"}
-	if got := applied(t, d); !slices.Equal(got, want) {
+	if got := strings1(t, d.Owner, "SELECT version FROM schema_migrations ORDER BY version"); !slices.Equal(got, want) {
 		t.Fatalf("applied = %v, want %v", got, want)
 	}
 }

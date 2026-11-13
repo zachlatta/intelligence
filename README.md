@@ -35,14 +35,15 @@ the account's state can be read and none written.
 Migrations are `.sql` files in `internal/db/migrations/`, applied once each in a transaction when
 the server starts and recorded by name (without `.sql`) in `schema_migrations`. Name a new one
 `YYYYMMDDTHHMM_lower_snake_description.sql`, the UTC time you write it (for example
-`20261113T0930_add_widgets.sql`; `date -u +%Y%m%dT%H%M`). Two branches that each add one never
-need to rename on merge, even within the same minute: equal timestamps are allowed and order by
-full file name. The legacy files `0001_` to `0049_` keep their names and apply first, in number
-order, then the timestamped ones in time order. A file with an older timestamp than ones already
-applied, as a merge of parallel branches gives, is applied on the next start, not refused, so write
+`20261113T0930_add_widgets.sql`; `date -u +%Y%m%dT%H%M`). Different descriptions distinguish
+migrations written in the same minute: equal timestamps are allowed and order by full file name,
+so they need no renaming on merge. The legacy files `0001_` to `0049_` keep their names and apply
+first, in number order, then the timestamped ones in time order. A file with an older timestamp
+than ones already applied, as a merge of parallel branches gives, is applied on the next start, so write
 each migration to stand on its own. A new four-digit name (`0050_` and up), a timestamp before 2026,
 a malformed name or any other file in the directory (`x.SQL`, `x.sql.orig`, notes) fails the tests
-and stops the server.
+and stops the server. Files and directories whose names start with `.` or `_` are ignored by Go
+embed and are not checked or applied.
 
 Each account reads only its own rows, and Postgres enforces it, not the app: every table has
 row-level security, and every view is `security_invoker`, so it reads as whoever queries it.

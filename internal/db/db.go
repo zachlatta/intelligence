@@ -20,7 +20,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Every file in migrations/ is embedded, not only *.sql, so migrationNames can refuse a stray one.
+// Embed migrations/ so migrationNames can refuse stray files, not only read *.sql.
+// Go embed ignores files and directories whose names start with . or _.
 //
 //go:embed migrations
 var migrations embed.FS
@@ -121,10 +122,10 @@ var (
 // migrationOrder checks migration file names and sorts them into the order they apply.
 //
 // A new migration is named YYYYMMDDTHHMM_description.sql, the UTC time it was written (for example
-// 20261113T0930_add_widgets.sql), so two branches that each add one never pick the same name and
-// need no renumbering when they merge. The legacy files 0001_... to 0049_... come first, in number
-// order, then the timestamped ones in time order; two with the same timestamp (written in the same
-// minute, perhaps on different branches) are both kept, ordered by full name. A four-digit number
+// 20261113T0930_add_widgets.sql). Different descriptions distinguish migrations written in the same
+// minute, so they need no renumbering when they merge. The legacy files 0001_... to 0049_... come
+// first, in number order, then the timestamped ones in time order. Two with the same timestamp
+// (perhaps from different branches) are both kept, ordered by full name. A four-digit number
 // above 0049, two legacy files with the same number, a timestamp before 2026 or a malformed name is
 // an error.
 func migrationOrder(names []string) ([]string, error) {
@@ -156,8 +157,8 @@ func migrationOrder(names []string) ([]string, error) {
 			return nil, fmt.Errorf("migration %s: bad name; want YYYYMMDDTHHMM_lower_snake_description.sql (UTC)", name)
 		}
 	}
-	// Prefixes are fixed-width, legacy ones start "00" and timestamps "2", so name order is apply
-	// order: legacy by number, then timestamps by time, equal timestamps by the rest of the name.
+	// Fixed-width prefixes put legacy numbers first, then timestamps from 2026 onward by time,
+	// with equal timestamps ordered by the rest of the name.
 	out := slices.Clone(names)
 	slices.Sort(out)
 	return out, nil
