@@ -32,6 +32,10 @@ All app state is readable with a read-only SQL query (`/api/sql`). So:
 
 - State lives in Postgres, in tables or views in the `public` schema, created by a migration in
   `internal/db/migrations/`. Never keep state only in memory, in files or in another schema.
+- Name a new migration `YYYYMMDDTHHMM_lower_snake_description.sql` with the current UTC time
+  (`date -u +%Y%m%dT%H%M`), never a four-digit number: `0001` to `0049` are legacy and closed. Never
+  rename a migration that has landed on `main`; its name is its record in `schema_migrations`.
+  When merging `main`, keep both sides' migrations as they are. README's State section has the rules.
 - `db.CheckContract` checks it: every relation in the database is in `public` and readable by the
   read-only role, and that role cannot write. It runs in the tests, in the image build (a failure
   fails the build, so nothing deploys) and when the server starts (a failure stops the server).

@@ -32,6 +32,16 @@ All app state is in Postgres (`internal/db/migrations/`), in the `public` schema
 runs a query as the signed-in account's own login role, which can only SELECT, so every piece of
 the account's state can be read and none written.
 
+Migrations are `.sql` files in `internal/db/migrations/`, applied once each in a transaction when
+the server starts and recorded by name (without `.sql`) in `schema_migrations`. Name a new one
+`YYYYMMDDTHHMM_lower_snake_description.sql`, the UTC time you write it (for example
+`20261113T0930_add_widgets.sql`; `date -u +%Y%m%dT%H%M`). Two branches that each add one get
+different names, so a merge needs no renumbering. The legacy files `0001_` to `0049_` keep their
+names and apply first, in number order, then the timestamped ones in time order. A file with an
+older timestamp than ones already applied, as a merge of parallel branches gives, is applied on the
+next start, not refused, so write each migration to stand on its own. A new four-digit name (`0050_`
+and up), a malformed name or two files with the same prefix fails the tests and stops the server.
+
 Each account reads only its own rows, and Postgres enforces it, not the app: every table has
 row-level security, and every view is `security_invoker`, so it reads as whoever queries it.
 Account *n*'s role is `<read-only role>_a<n>` (`db.AccountRoles`): a member of the read-only role
