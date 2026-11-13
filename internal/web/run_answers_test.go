@@ -111,6 +111,9 @@ func TestRequestTimeMigrationBackfillsAndToleratesBadDates(t *testing.T) {
 	voice := startRun(t, h, voiceWF, "Voice memo: Example\nRecorded: 2026-11-11T12:00:00Z\n")
 	bad := startRun(t, h, wf, "Example email\nDate: invalid date\n")
 	if _, err := d.Owner.Exec(t.Context(), `DROP VIEW workflow_runs_unanswered;
+ DROP VIEW workflow_run_answer_status;
+ DROP TABLE workflow_run_answer_resolutions;
+ DELETE FROM schema_migrations WHERE version='0050_workflow_answer_resolutions';
  DROP TABLE workflow_run_answers;
  ALTER TABLE workflow_runs DROP COLUMN requested_at;
  ALTER TABLE workflow_runs DROP COLUMN answer_expected;

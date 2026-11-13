@@ -334,6 +334,7 @@ type runRow struct {
 	AnsweredAt                                                           *time.Time
 	FirstUncheckedAt                                                     *time.Time
 	AnswerExpected                                                       bool
+	AnsweredVia, Resolution, SteeredTo, ResolutionReason                 string // workflow_run_answer_status
 	Answers                                                              []runAnswerRow
 	ID, Title, Input, Status, Host, Repo, Branch, Workflow, WorkflowID   string
 	WorkspaceID, WorkspaceTitle, Orchestrator, ProjectAgent, Note, Error string
@@ -358,18 +359,18 @@ const runRowSelect = `SELECT r.id::text, coalesce(nullif(r.task_summary, ''), r.
 	COALESCE((SELECT online AND connected FROM host_status WHERE name=r.host),false),
 	COALESCE((SELECT start_retry_keys FROM hosts WHERE name=r.host),false), r.queue_reason, coalesce(q.position, 0), r.estimated_memory_bytes,
 	r.project_selected, r.queued_at_creation, r.requested_at, r.answer_expected,
- (SELECT min(sent_at) FROM workflow_run_answers WHERE run_id=r.id AND checked),
+ st.answered_at, coalesce(st.answered_via::text, ''), coalesce(st.resolution, ''), coalesce(st.steered_to::text, ''), coalesce(st.reason, ''),
  (SELECT min(sent_at) FROM workflow_run_answers WHERE run_id=r.id AND NOT checked),
  (SELECT coalesce(jsonb_agg(jsonb_build_object('Channel',channel,'MessageID',message_id,'ThreadID',thread_id,'SentAt',sent_at,'Checked',checked) ORDER BY sent_at,id),'[]'::jsonb) FROM workflow_run_answers WHERE run_id=r.id)
 	FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id JOIN workflow_versions v ON v.workflow_id = r.workflow_id AND v.version = r.version
-	LEFT JOIN workflow_run_queue q ON q.run_id = r.id `
+	LEFT JOIN workflow_run_queue q ON q.run_id = r.id LEFT JOIN workflow_run_answer_status st ON st.id = r.id `
 
 func scanRunRow(row pgx.CollectableRow) (runRow, error) {
 	var r runRow
 	var steps, answers []byte
 	err := row.Scan(&r.ID, &r.Title, &r.Input, &r.Status, &r.Host, &r.Repo, &r.Branch, &r.Workflow, &r.WorkflowID, &r.WorkspaceID, &r.WorkspaceTitle,
 		&r.Orchestrator, &r.ProjectAgent, &r.Note, &r.Error, &r.Step, &r.Version, &steps, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt, &r.WorkflowDeleted,
-		&r.StartRetries, &r.StartRetryAt, &r.HostOnline, &r.DaemonConnected, &r.RetryKeys, &r.QueueReason, &r.Position, &r.EstimatedMemory, &r.ProjectSelected, &r.QueuedAtCreation, &r.RequestedAt, &r.AnswerExpected, &r.AnsweredAt, &r.FirstUncheckedAt, &answers)
+		&r.StartRetries, &r.StartRetryAt, &r.HostOnline, &r.DaemonConnected, &r.RetryKeys, &r.QueueReason, &r.Position, &r.EstimatedMemory, &r.ProjectSelected, &r.QueuedAtCreation, &r.RequestedAt, &r.AnswerExpected, &r.AnsweredAt, &r.AnsweredVia, &r.Resolution, &r.SteeredTo, &r.ResolutionReason, &r.FirstUncheckedAt, &answers)
 	if err == nil {
 		err = json.Unmarshal(steps, &r.Steps)
 		if err == nil {
@@ -1008,9 +1009,35 @@ func (a *app) recordRunAnswer(w http.ResponseWriter, r *http.Request) {
 	workflowResult(w, "Answer recorded", a.wf.RecordAnswer(r.Context(), host, r.PathValue("id"), answer))
 }
 
+// recordRunAnswerResolution: POST /api/workflow-runs/{id}/answer-resolution {"kind":"steered","steeredTo","reason","at"}
+// or {"kind":"not_needed","reason"}, from the run's host: how a run settled its answer without a send of its own.
+func (a *app) recordRunAnswerResolution(w http.ResponseWriter, r *http.Request) {
+	_, host, ok := a.hostCaller(w, r)
+	if !ok {
+		return
+	}
+	var res workflow.AnswerResolution
+	if !decodeWorkflowJSON(w, r, &res) {
+		return
+	}
+	workflowResult(w, "Answer resolution recorded", a.wf.RecordAnswerResolution(r.Context(), host, r.PathValue("id"), res))
+}
+
 func (r runRow) AnswerTiming() string {
 	if r.AnsweredAt != nil {
-		return fmt.Sprintf("Asked → answered: %.1f min", r.AnsweredAt.Sub(r.RequestedAt).Minutes())
+		s := fmt.Sprintf("Asked → answered: %.1f min", r.AnsweredAt.Sub(r.RequestedAt).Minutes())
+		if r.AnsweredVia != "" && r.AnsweredVia != r.ID {
+			s += " (via run " + runPrefix(r.AnsweredVia) + ")"
+		}
+		return s
+	}
+	switch r.Resolution {
+	case "not_needed":
+		return "No answer needed: " + r.ResolutionReason
+	case "legacy":
+		return "Before answer recording"
+	case "steered":
+		return "Steered to run " + runPrefix(r.SteeredTo) + "; awaiting its answer"
 	}
 	if r.FirstUncheckedAt != nil {
 		return "Only unchecked sends"
@@ -1028,7 +1055,7 @@ func (r runRow) AnswerTiming() string {
 }
 
 func (r runRow) MissingAnswer() bool {
-	return r.AnswerExpected && r.AnsweredAt == nil && (r.Status == workflow.Succeeded || r.Status == workflow.Failed)
+	return r.AnswerExpected && r.AnsweredAt == nil && r.Resolution != "not_needed" && r.Resolution != "legacy" && (r.Status == workflow.Succeeded || r.Status == workflow.Failed)
 }
 
 func (r runRow) UncheckedTiming() string {
@@ -1050,4 +1077,12 @@ func (a *app) resumeRun(v viewer) http.HandlerFunc {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// runPrefix is a run id cut to its first 8 characters, as runs are named in notes and search.
+func runPrefix(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }

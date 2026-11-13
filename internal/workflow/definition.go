@@ -275,6 +275,8 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 	}
 	fmt.Fprintf(&b, "\nYou get one step at a time. Move the run with these commands:\n\n"+
 		"  intelligence workflow answer --run %[1]s --channel email --message-id <sent-id> [--thread-id <thread-id>] [--sent-at <date>] [--checked]    record an answer to the requester\n"+
+		"  intelligence workflow answer --run %[1]s --steered-to <other run id> [--reason \"<text>\"] [--sent-at <handover time>]    another run took this request; its answer counts\n"+
+		"  intelligence workflow answer --run %[1]s --not-needed \"<reason>\"    no answer is due: the input is not a request\n"+
 		"  intelligence workflow next --run %[1]s --summary \"<one line>\"    this step is done; prints the next one\n"+
 		"  intelligence workflow back --run %[1]s <step id> --why \"<what is missing>\"    send the work back to an earlier step\n"+
 		"  intelligence workflow skip --run %[1]s --why \"<why>\"    skip a step its instructions let you skip\n"+
@@ -393,4 +395,9 @@ const UnattendedShellRule = "Agents run unattended. Pass this shell guidance to 
 const RunAnswerRule = "Record every answer sent to the requester, including requesters other than Zach, with intelligence workflow answer --run {{run}} --channel email --message-id <sent message id> [--thread-id <thread id>] [--sent-at <date>] [--checked]. " +
 	"The final step must do this before finishing. On an early exit (fail or skip to the end), the authorized worker that sends the answer must record it before the orchestrator ends the run. Only a step authorized to send may send. " +
 	"Use --checked only when the sent answer passed the required review. Record earlier unchecked sends too. Use the actual send time in RFC 3339 or RFC 5322 format when available; immediately after sending, omit --sent-at if the mail tool returns no timestamp, and the server defaults to now(). " +
-	"For an earlier delivery, inspect the message and supply its actual send date and identifiers; do not use the current time. For another response channel, use that channel and its message identifier. Do not invent a send or record an unsent draft. If no checked answer was delivered, report that explicitly. Pass this rule to every worker."
+	"For an earlier delivery, inspect the message and supply its actual send date and identifiers; do not use the current time. For another response channel, use that channel and its message identifier. Do not invent a send or record an unsent draft. If no checked answer was delivered, report that explicitly. " +
+	"Every run that owes an answer ends with exactly one of: a recorded checked answer, a steer, or not-needed. " +
+	"If this run hands its request to another run instead of answering it (for example, it steers a running run's agent to fold the request in), record that with intelligence workflow answer --run {{run}} --steered-to <the other run's id> [--reason \"<what was handed over>\"] [--sent-at <when it was handed over>] (find it in workflow_runs: the run whose orchestrator_id is the agent you steered, or that agent's parent); " +
+	"the other run's checked answer sent after the handover then counts for this one, so tell that run to answer with the request folded in. " +
+	"If no answer is due because the input is not a request (a recorded meeting or conversation, a retracted or duplicate request, a notification), record intelligence workflow answer --run {{run}} --not-needed \"<why no answer is due>\" instead of sending one. " +
+	"A request that was acted on still gets an answer; not-needed is not for work done but not reported. Pass this rule to every worker."

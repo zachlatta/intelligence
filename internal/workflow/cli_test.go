@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestProposalAnswerCLIValidation(t *testing.T) {
@@ -219,6 +220,45 @@ func TestRunAnswerCLI(t *testing.T) {
 	msg := StepMessage(Starting, 0, Vars{Run: id})
 	if !strings.Contains(msg, "workflow answer --run "+id) {
 		t.Fatal("missing answer instruction")
+	}
+}
+
+func TestAnswerCLIRecordsSteeredAndNotNeeded(t *testing.T) {
+	id := "11111111-1111-4111-8111-111111111111"
+	to := "22222222-2222-4222-8222-222222222222"
+	path, body, err := parseAnswerCLI([]string{"--run", id, "--steered-to", to, "--sent-at", "Thu, 12 Nov 2026 18:24:00 -0500", "--reason", "Folded into the deck run"})
+	if err != nil || path != "/api/workflow-runs/"+id+"/answer-resolution" {
+		t.Fatalf("steered: %s %v", path, err)
+	}
+	var r AnswerResolution
+	if json.Unmarshal(body, &r) != nil || r.Kind != "steered" || r.SteeredTo != to || r.Reason != "Folded into the deck run" || r.At.UTC().Format(time.RFC3339) != "2026-11-12T23:24:00Z" {
+		t.Fatalf("steered body: %s", body)
+	}
+	path, body, err = parseAnswerCLI([]string{"--run", id, "--not-needed", "A recorded meeting, not a request"})
+	if err != nil || path != "/api/workflow-runs/"+id+"/answer-resolution" {
+		t.Fatalf("not needed: %s %v", path, err)
+	}
+	r = AnswerResolution{}
+	if json.Unmarshal(body, &r) != nil || r.Kind != "not_needed" || r.Reason != "A recorded meeting, not a request" || !r.At.IsZero() {
+		t.Fatalf("not needed body: %s", body)
+	}
+	for _, args := range [][]string{
+		{"--run", id, "--steered-to", "not-a-run"},
+		{"--run", id, "--steered-to", id},
+		{"--run", id, "--not-needed", "  "},
+		{"--run", id, "--steered-to", to, "--not-needed", "both"},
+		{"--run", id, "--steered-to", to, "--channel", "email", "--message-id", "sent"},
+		{"--run", id, "--not-needed", "x", "--checked"},
+		{"--run", id, "--channel", "email", "--message-id", "sent", "--reason", "only with a resolution"},
+	} {
+		if _, _, err := parseAnswerCLI(args); err == nil {
+			t.Errorf("accepted %v", args)
+		}
+	}
+	for _, want := range []string{"--steered-to", "--not-needed"} {
+		if !strings.Contains(RunAnswerRule, want) || !strings.Contains(CLIUsage, want) {
+			t.Errorf("instructions or usage omit %s", want)
+		}
 	}
 }
 

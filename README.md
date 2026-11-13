@@ -938,6 +938,31 @@ unchecked sends. Succeeded/failed runs expecting an answer are flagged when none
 answer, including queued/starting runs, excluding canceled runs. Its `has_unchecked_sends` column
 distinguishes silence from unchecked sends. Unsent drafts never count as sends.
 
+A run can also settle its answer without a send of its own, once, in
+`workflow_run_answer_resolutions` (an identical retry is accepted, a different one refused):
+
+```sh
+intelligence workflow answer --run <UUID> --steered-to <other run UUID> [--reason <text>] [--sent-at <handover time>]
+intelligence workflow answer --run <UUID> --not-needed "<why no answer is due>"
+```
+
+- **Steered**: the run handed its request to another run of the account (for example, a voice memo
+  that steers a running deck run's agent). The other run's first checked answer sent at or after
+  the handover (`--sent-at`, default now) answers it too, following chains of steers; a steer that
+  would loop is refused. Until then the run stays in `workflow_runs_unanswered`, whose
+  `steered_to` column names the run it waits on.
+- **Not needed**: the input was not a request (a recorded meeting, a retracted or duplicate
+  request). The reason is required; the run leaves the view.
+- **Legacy**: migration 0050 marked, once, every run that expected an answer, was created before
+  migration 0047 ran (when runs were first told to record answers) and has no checked answer. They
+  can never be answered, so they leave the view. Agents cannot record this kind.
+
+These post `{"kind":"steered","steeredTo","reason","at"}` or `{"kind":"not_needed","reason"}` to
+`POST /api/workflow-runs/{id}/answer-resolution` with the run's host key. `workflow_run_answer_status`
+reads each run's `answered_at` (its own first checked answer or one through a steer), `answered_via`
+(the run that sent it) and its resolution; the Workflows and run pages use it, so a steered run
+shows the answer it got, and a not-needed or legacy run is not flagged as unanswered.
+
 #### Model groups
 
 Plans and Workflows share a model group editor. Each group generates a token, such as
