@@ -30,7 +30,9 @@ narrow the query. When truncated, continue with a stable key cursor, not an unbo
 | Runs, task input, current step, waiting note, errors | `workflow_runs` |
 | Request time and whether a reply is owed | `workflow_runs.requested_at`, `workflow_runs.answer_expected` |
 | Sent answer messages and review status | `workflow_run_answers` |
-| Expected requests overdue without a checked answer (excludes canceled) | `workflow_runs_unanswered` (includes has_unchecked_sends) |
+| Steered requests, no-answer-needed reasons, pre-recording (legacy) runs | `workflow_run_answer_resolutions` |
+| Each run's first checked answer, own or through runs it steered to | `workflow_run_answer_status` (answered_at, answered_via, resolution) |
+| Expected requests overdue without a checked answer (excludes canceled, not-needed, legacy) | `workflow_runs_unanswered` (includes has_unchecked_sends, steered_to) |
 | Run events, agents, step durations | `workflow_run_events`, `workflow_run_agents`, `workflow_run_step_times` |
 | Synced transcript metadata and full entries | `transcripts`, `transcript_entries` |
 | Commands and their results | `commands` |
@@ -93,16 +95,13 @@ SELECT id, coalesce(nullif(task_summary, ''), title) AS title, task_summary, inp
 FROM workflow_runs WHERE id = '00000000-0000-4000-8000-000000000001' LIMIT 1
 ```
 
-Measure request-to-answer time using the first checked answer, retaining unanswered runs:
+Measure request-to-answer time using the first checked answer (a steered run's comes from the
+run it handed its request to), retaining unanswered runs:
 
 ```sql
-SELECT r.id, r.requested_at, r.answer_expected, a.message_id, a.thread_id, a.sent_at,
-       extract(epoch FROM (a.sent_at-r.requested_at))/60 AS answered_minutes
-FROM workflow_runs r
-LEFT JOIN LATERAL (
-  SELECT message_id, thread_id, sent_at FROM workflow_run_answers
-  WHERE run_id=r.id AND checked ORDER BY sent_at, id LIMIT 1
-) a ON true
+SELECT r.id, r.requested_at, r.answer_expected, s.answered_at, s.answered_via, s.resolution, s.reason,
+       extract(epoch FROM (s.answered_at-r.requested_at))/60 AS answered_minutes
+FROM workflow_runs r JOIN workflow_run_answer_status s ON s.id = r.id
 ORDER BY r.requested_at DESC, r.id LIMIT 50
 ```
 
