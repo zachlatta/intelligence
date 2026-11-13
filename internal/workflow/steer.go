@@ -46,12 +46,6 @@ func DeliverableKey(s string) (string, error) {
 	return strings.Join(strings.Fields(strings.ToLower(s)), " "), nil
 }
 
-// sameDeliverable says whether claims a and b (keys) cover one thing: equal, or one a folder of
-// the other.
-func sameDeliverable(a, b string) bool {
-	return a == b || strings.HasPrefix(b, a+"/") || strings.HasPrefix(a, b+"/")
-}
-
 // LiveRun is another live run of the account, as an email or voice-memo run's orchestrator is
 // shown it before building.
 type LiveRun struct {
@@ -62,30 +56,50 @@ type LiveRun struct {
 	Emails                                      []string // for a run started by email: its threads' subjects and Gmail thread ids
 }
 
-const overStatuses = "('" + Succeeded + "','" + Failed + "','" + Canceled + "')"
+// LiveRuns is the newest of an account's live runs, at most liveRunsListed, and how many are live.
+type LiveRuns struct {
+	Runs  []LiveRun
+	Total int
+}
 
-// liveRuns is account's live runs other than run, oldest first, with their claims.
-func liveRuns(ctx context.Context, tx pgx.Tx, account int64, run string) ([]LiveRun, error) {
-	rows, err := tx.Query(ctx, `SELECT r.id::text, w.name, coalesce(nullif(r.task_summary, ''), r.title), r.status, r.orchestrator_id, r.step, r.created_at,
+const (
+	overStatuses   = "('" + Succeeded + "','" + Failed + "','" + Canceled + "')"
+	liveRunsListed = 30
+)
+
+// LiveRunsQuery is the read-only SQL that lists every live run with its claims, for when a
+// prompt's list stops at liveRunsListed.
+const LiveRunsQuery = "SELECT r.id, w.name, coalesce(nullif(r.task_summary, ''), r.title) AS summary, r.status, r.orchestrator_id, " +
+	"(SELECT array_agg(c.deliverable) FROM workflow_run_claims c WHERE c.run_id = r.id) AS claims, " +
+	"(SELECT array_agg(DISTINCT m.subject || ' (thread ' || m.thread_id || ')') FROM emails m WHERE m.run_id = r.id) AS emails " +
+	"FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id WHERE r.status NOT IN " + overStatuses + " ORDER BY r.created_at DESC"
+
+// liveRuns is account's live runs other than run, newest first and at most liveRunsListed, with
+// their claims and email threads, and how many there are in all.
+func liveRuns(ctx context.Context, tx pgx.Tx, account int64, run string) (LiveRuns, error) {
+	rows, err := tx.Query(ctx, `SELECT count(*) OVER (), r.id::text, w.name, coalesce(nullif(r.task_summary, ''), r.title), r.status, r.orchestrator_id, r.step, r.created_at,
 		coalesce((SELECT array_agg(c.deliverable ORDER BY c.claimed_at, c.deliverable) FROM workflow_run_claims c WHERE c.run_id = r.id), '{}'),
 		coalesce((SELECT array_agg(t.line ORDER BY t.first) FROM (SELECT '“' || (array_agg(m.subject ORDER BY m.id))[1] || '” (thread ' || m.thread_id || ')' AS line, min(m.id) AS first
 			FROM emails m WHERE m.run_id = r.id GROUP BY m.thread_id LIMIT 5) t), '{}')
 		FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id
 		WHERE r.account_id = $1 AND r.id::text <> $2 AND r.status NOT IN `+overStatuses+`
-		ORDER BY r.created_at LIMIT 30`, account, run)
+		ORDER BY r.created_at DESC LIMIT `+fmt.Sprint(liveRunsListed), account, run)
 	if err != nil {
-		return nil, err
+		return LiveRuns{}, err
 	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (LiveRun, error) {
+	var out LiveRuns
+	out.Runs, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (LiveRun, error) {
 		var l LiveRun
-		err := row.Scan(&l.ID, &l.Workflow, &l.Summary, &l.Status, &l.Orchestrator, &l.Step, &l.Started, &l.Claims, &l.Emails)
+		err := row.Scan(&out.Total, &l.ID, &l.Workflow, &l.Summary, &l.Status, &l.Orchestrator, &l.Step, &l.Started, &l.Claims, &l.Emails)
 		return l, err
 	})
+	return out, err
 }
 
 // liveRunsSection is what an email or voice-memo run's orchestrator reads before its steps: the
 // live runs, and to steer into one on the same deliverable or else claim before building.
-func liveRunsSection(run string, live []LiveRun) string {
+func liveRunsSection(run string, all LiveRuns) string {
+	live := all.Runs
 	var b strings.Builder
 	b.WriteString("Before building anything, check whether a live run is already working on the same deliverable: the same work item " +
 		"(a deck, report, page, site or document), the same public link or file, or the same email thread chain. ")
@@ -106,6 +120,10 @@ func liveRunsSection(run string, live []LiveRun) string {
 				fmt.Fprintf(&b, " · email: %s", oneLine(strings.Join(l.Emails, ", ")))
 			}
 			b.WriteString("\n")
+		}
+		if all.Total > len(live) {
+			fmt.Fprintf(&b, "\nThese are the %d newest of %d live runs. Find the rest, with their claims and email threads, through Intelligence's read-only SQL "+
+				"(the query tool of its MCP connection, or /api/sql):\n\n  %s\n\nA claim is checked against every live run, listed or not.\n", len(live), all.Total, LiveRunsQuery)
 		}
 		b.WriteString("\nWhen a live run may be on the same deliverable, read what it is doing (paseo logs <its orchestrator>) before deciding.\n\n")
 	}
@@ -143,18 +161,20 @@ func (e *Engine) claim(ctx context.Context, tx pgx.Tx, r run, deliverable string
 	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended('workflow_run_claims:' || $1::bigint, 0))", r.Account); err != nil {
 		return "", err
 	}
-	live, err := liveRuns(ctx, tx, r.Account, r.ID)
-	if err != nil {
+	// every live run's claims, under the lock: the same deliverable, a folder holding it, or one inside it
+	var holder, workflowName, summary, held string
+	err = tx.QueryRow(ctx, `SELECT r.id::text, w.name, coalesce(nullif(r.task_summary, ''), r.title), c.deliverable
+		FROM workflow_run_claims c JOIN workflow_runs r ON r.id = c.run_id JOIN workflows w ON w.id = r.workflow_id
+		WHERE c.account_id = $1 AND c.run_id::text <> $2 AND r.status NOT IN `+overStatuses+`
+		AND (c.deliverable = $3 OR starts_with($3, c.deliverable || '/') OR starts_with(c.deliverable, $3 || '/'))
+		ORDER BY c.claimed_at LIMIT 1`, r.Account, r.ID, key).Scan(&holder, &workflowName, &summary, &held)
+	switch {
+	case err == nil:
+		return "", conflict("Run %s (“%s”: %s) is already working on %s (its claim: %s). Do not build or publish it in parallel: "+
+			"steer into that run with intelligence workflow steer --run %s --into %s --note <file>|- --deliverable %s",
+			holder, workflowName, oneLine(summary), key, held, r.ID, holder, key)
+	case !errors.Is(err, pgx.ErrNoRows):
 		return "", err
-	}
-	for _, l := range live {
-		for _, c := range l.Claims {
-			if sameDeliverable(c, key) {
-				return "", conflict("Run %s (“%s”: %s) is already working on %s (its claim: %s). Do not build or publish it in parallel: "+
-					"steer into that run with intelligence workflow steer --run %s --into %s --note <file>|- --deliverable %s",
-					l.ID, l.Workflow, oneLine(l.Summary), key, c, r.ID, l.ID, key)
-			}
-		}
 	}
 	tag, err := tx.Exec(ctx, `INSERT INTO workflow_run_claims (run_id, account_id, deliverable, claimed_at) VALUES ($1, $2, $3, $4)
 		ON CONFLICT DO NOTHING`, r.ID, r.Account, key, e.Now())

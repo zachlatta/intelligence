@@ -971,7 +971,9 @@ dropped the earlier one's slide, and a map rebuilt under its old name kept showi
 
 - **Check, then steer or claim.** An email or voice-memo run's orchestrator starts with the
   account's other live runs in its prompt (id, workflow, summary, status and step, orchestrator,
-  claims, and for runs started by email their subjects and Gmail thread ids). If one works on the
+  claims, and for runs started by email their subjects and Gmail thread ids), newest first and at
+  most 30; a longer list says so and gives the read-only SQL (`workflow.LiveRunsQuery`) that
+  lists every live run with its claims and threads. If one works on the
   same deliverable (the same work item, public link or file, or email thread chain), it steers into
   it instead of building:
 
@@ -994,7 +996,9 @@ dropped the earlier one's slide, and a map rebuilt under its old name kept showi
   (`…/ns/map.png?v=2`) are one deliverable; a name is compared without case. Runs are told to
   claim the public link as soon as they know it, since two runs rarely pick the same name for one
   deck. A claim holds while its run is live; another live run's claim on the same thing, or on a
-  folder holding it, is refused (409) with the holding run's id and the steer command. Claims are
+  folder holding it, is refused (409) with the holding run's id and the steer command. The check
+  covers every live run's claims, in SQL, under a transaction-scoped advisory lock per account, so
+  two runs claiming one deliverable at once cannot both get it. Claims are
   in `workflow_run_claims`.
 - **Publishing guard.** Every step carries the shared-deliverable rule
   (`workflow.SharedDeliverableRule`): claim before changing anything another run may touch,

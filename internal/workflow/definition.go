@@ -184,7 +184,7 @@ func (d Definition) Index(id string) int {
 // is the account's other live runs, which an email or voice-memo run checks before building.
 type Vars struct {
 	Run, Input, Repo, Branch string
-	Live                     *[]LiveRun
+	Live                     *LiveRuns
 }
 
 func (v Vars) fill(s string) string {

@@ -23,20 +23,6 @@ func TestDeliverableKeysCompareOneThingInEveryForm(t *testing.T) {
 			t.Errorf("DeliverableKey(%q) accepted", in)
 		}
 	}
-	for _, c := range []struct {
-		a, b string
-		same bool
-	}{
-		{"https://f.example.com/ns", "https://f.example.com/ns", true},
-		{"https://f.example.com/ns", "https://f.example.com/ns/map.png", true},
-		{"https://f.example.com/ns/map.png", "https://f.example.com/ns", true},
-		{"https://f.example.com/ns", "https://f.example.com/ns2", false},
-		{"deck", "deck two", false},
-	} {
-		if sameDeliverable(c.a, c.b) != c.same {
-			t.Errorf("sameDeliverable(%q, %q) != %v", c.a, c.b, c.same)
-		}
-	}
 }
 
 func TestTheCLIClaimsAndSteers(t *testing.T) {
@@ -63,7 +49,7 @@ func TestEmailAndVoiceMemoRunsCheckLiveRunsBeforeBuilding(t *testing.T) {
 	live := []LiveRun{{ID: "run-deck", Workflow: "Zach Email Task", Summary: "Build grant map\nfor the deck", Status: Running, Orchestrator: "orch-1",
 		Started: time.Date(2026, 11, 13, 3, 39, 0, 0, time.UTC), Claims: []string{"https://files.example.com/ns"},
 		Emails: []string{"“Re: Grant map” (thread t-map)"}}}
-	p := OrchestratorPrompt("Voice Memo Received", d, Vars{Run: "run-quotes", Input: "Voice memo: quotes", Live: &live})
+	p := OrchestratorPrompt("Voice Memo Received", d, Vars{Run: "run-quotes", Input: "Voice memo: quotes", Live: &LiveRuns{Runs: live, Total: 1}})
 	for _, want := range []string{"run-deck · “Zach Email Task” · Build grant map for the deck · running, step 1 · started 2026-11-13T03:39:00Z · orchestrator orch-1 · claims: https://files.example.com/ns",
 		"intelligence workflow steer --run run-quotes --into <run id>", "email: “Re: Grant map” (thread t-map)", "intelligence workflow claim --run run-quotes <link or name>", "same email thread chain", "Claim the public link (or folder) as soon as you know it"} {
 		if !strings.Contains(p, want) {
@@ -82,5 +68,18 @@ func TestEmailAndVoiceMemoRunsCheckLiveRunsBeforeBuilding(t *testing.T) {
 	}
 	if task := OrchestratorPrompt("Factory Task", Starting, Vars{Run: "run-x"}); strings.Contains(task, "Before building anything") {
 		t.Error("a task run has no live-run check")
+	}
+}
+
+func TestATruncatedLiveRunListSaysHowToFindTheRest(t *testing.T) {
+	live := LiveRuns{Runs: []LiveRun{{ID: "run-new", Workflow: "Zach Email Task", Summary: "Deck", Status: Running}}, Total: 31}
+	p := liveRunsSection("run-x", live)
+	for _, want := range []string{"These are the 1 newest of 31 live runs", LiveRunsQuery, "A claim is checked against every live run"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("section misses %q:\n%s", want, p)
+		}
+	}
+	if p := liveRunsSection("run-x", LiveRuns{Runs: live.Runs, Total: 1}); strings.Contains(p, "newest of") {
+		t.Error("a complete list says it is truncated")
 	}
 }

@@ -2,8 +2,11 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/zachlatta/intelligence/internal/db"
@@ -302,5 +305,76 @@ func TestASteeredRunIsAnsweredOnlyThroughItsTarget(t *testing.T) {
 	}
 	if p := page("s2"); !strings.Contains(p, "ended (canceled) without a checked answer") {
 		t.Fatal("the steered run's page does not say its target ended without answering")
+	}
+}
+
+// A claim is checked against every live run's claims, not only the runs an orchestrator's prompt
+// lists, and two runs claiming one deliverable at once cannot both get it.
+func TestClaimsHoldAcrossEveryLiveRunAndAtOnce(t *testing.T) {
+	h, d := dbServer(t)
+	sendReport(t, h, wfReport())
+	key := keyOf(t, h, "host-1")
+	wf := createWorkflow(t, h, workflow.Starting)
+	var runs []string
+	for i := range 34 {
+		runs = append(runs, startRun(t, h, wf, fmt.Sprintf("Deck change %d", i)))
+	}
+	if _, err := d.Owner.Exec(t.Context(), `UPDATE workflow_runs SET status='running'`); err != nil {
+		t.Fatal(err)
+	}
+	for i, run := range runs { // oldest first, a minute apart
+		if _, err := d.Owner.Exec(t.Context(), `UPDATE workflow_runs SET created_at=now()-($2 * interval '1 minute') WHERE id=$1`, run, 100-i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// the oldest and the newest run each hold a deck: whichever 30 runs a prompt lists, one of
+	// them is outside it, and both still hold their decks
+	for i, run := range map[int]string{0: runs[0], 33: runs[33]} {
+		if code, msg := move(t, h, key, run, map[string]string{"move": "claim", "deliverable": fmt.Sprintf("https://files.example.com/deck-%d", i)}); code != http.StatusOK {
+			t.Fatalf("first claim: %d %s", code, msg)
+		}
+	}
+	for i, holder := range map[int]string{0: runs[0], 33: runs[33]} {
+		code, msg := move(t, h, key, runs[16], map[string]string{"move": "claim", "deliverable": fmt.Sprintf("https://files.example.com/deck-%d/index.html", i)})
+		if code != http.StatusConflict || !strings.Contains(msg, holder) {
+			t.Fatalf("deck-%d, held by a live run, was granted again: %d %s", i, code, msg)
+		}
+	}
+
+	// the lookup a truncated prompt gives finds every live run, with its claims
+	code, all := sqlPost(t, h, q(workflow.LiveRunsQuery))
+	if code != http.StatusOK || len(all.Rows) != 34 {
+		t.Fatalf("live runs lookup: %d %+v", code, all)
+	}
+
+	// two runs claim one deliverable at the same moment: exactly one gets it
+	other := "https://files.example.com/other"
+	codes := make(chan int, 2)
+	var wg sync.WaitGroup
+	for _, run := range []string{runs[1], runs[2]} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			body, _ := json.Marshal(map[string]string{"move": "claim", "deliverable": other})
+			req := httptest.NewRequest(http.MethodPost, "/api/workflow-runs/"+run+"/moves", strings.NewReader(string(body)))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+key)
+			rec := httptest.NewRecorder()
+			anon(h).ServeHTTP(rec, req)
+			codes <- rec.Code
+		}()
+	}
+	wg.Wait()
+	close(codes)
+	got := map[int]int{}
+	for c := range codes {
+		got[c]++
+	}
+	if got[http.StatusOK] != 1 || got[http.StatusConflict] != 1 {
+		t.Fatalf("concurrent claims: %v", got)
+	}
+	code, r := sqlPost(t, h, q(`SELECT count(*) FROM workflow_run_claims WHERE deliverable='`+other+`'`))
+	if code != http.StatusOK || r.Rows[0][0] != float64(1) {
+		t.Fatalf("claims on one deliverable: %+v", r)
 	}
 }
