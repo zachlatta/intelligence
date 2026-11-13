@@ -93,7 +93,7 @@ func TestSteeredRunIsAnsweredByTheRunItWasHandedTo(t *testing.T) {
 	if code != 200 || len(r.Rows) != 1 || r.Rows[0][0] != b {
 		t.Fatalf("steered_to: %+v", r)
 	}
-	if page := get(t, h, "/workflow-runs/"+a, nil).Body.String(); !strings.Contains(page, "Steered to run") || !strings.Contains(page, b) {
+	if page := get(t, h, "/workflow-runs/"+a, nil).Body.String(); !strings.Contains(page, "Steered to run "+b[:8]+"; awaiting") {
 		t.Fatal("run page does not say where the request went")
 	}
 	// An answer c sent before b's request reached it does not answer b (or a, which came through b).
@@ -115,7 +115,7 @@ func TestSteeredRunIsAnsweredByTheRunItWasHandedTo(t *testing.T) {
 	if code != 200 || len(r.Rows) != 1 || r.Rows[0][0] != c || r.Rows[0][1] != "steered" || r.Rows[0][2] != true {
 		t.Fatalf("answer status: %+v", r)
 	}
-	if page := get(t, h, "/workflow-runs/"+a, nil).Body.String(); !strings.Contains(page, "answered via run") || strings.Contains(page, "No answer recorded") {
+	if page := get(t, h, "/workflow-runs/"+a, nil).Body.String(); !strings.Contains(page, "(via run "+c[:8]+")") || strings.Contains(page, "No answer recorded") {
 		t.Fatal("run page does not credit the receiving run's answer")
 	}
 }

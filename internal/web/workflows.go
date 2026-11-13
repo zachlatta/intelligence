@@ -1027,7 +1027,7 @@ func (r runRow) AnswerTiming() string {
 	if r.AnsweredAt != nil {
 		s := fmt.Sprintf("Asked → answered: %.1f min", r.AnsweredAt.Sub(r.RequestedAt).Minutes())
 		if r.AnsweredVia != "" && r.AnsweredVia != r.ID {
-			s += " (answered via run " + r.AnsweredVia + ")"
+			s += " (via run " + runPrefix(r.AnsweredVia) + ")"
 		}
 		return s
 	}
@@ -1037,7 +1037,7 @@ func (r runRow) AnswerTiming() string {
 	case "legacy":
 		return "Before answer recording"
 	case "steered":
-		return "Steered to run " + r.SteeredTo + "; awaiting its answer"
+		return "Steered to run " + runPrefix(r.SteeredTo) + "; awaiting its answer"
 	}
 	if r.FirstUncheckedAt != nil {
 		return "Only unchecked sends"
@@ -1077,4 +1077,12 @@ func (a *app) resumeRun(v viewer) http.HandlerFunc {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// runPrefix is a run id cut to its first 8 characters, as runs are named in notes and search.
+func runPrefix(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }

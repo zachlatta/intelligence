@@ -1,5 +1,13 @@
 [
   {
+    "id": "workflow-answer-resolutions",
+    "released": "2026-11-13",
+    "title": "Runs that hand off or need no answer stop showing as unanswered",
+    "summary": "A run that hands its request to another run (a voice memo folded into a running deck run) now counts as answered when that run answers, and Workflows shows which run answered it. A run whose input was not a request records why, and Workflows shows the reason instead of flagging it. Runs from before answer tracking no longer count as unanswered.",
+    "media": "workflow-answer-resolutions.png",
+    "mediaAlt": "Workflows runs table: one run answered via another run, one steered run still awaiting that run's answer, and one marked No answer needed: A recorded meeting, not a request"
+  },
+  {
     "id": "plans-older-weeks",
     "released": "2026-11-12",
     "title": "Plans shows the last four weekly peaks",
