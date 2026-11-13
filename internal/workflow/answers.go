@@ -182,7 +182,7 @@ func parseAnswerCLI(args []string) (string, []byte, error) {
 	}
 	if set["steered-to"] || set["not-needed"] {
 		if set["steered-to"] == set["not-needed"] || set["channel"] || set["message-id"] || set["thread-id"] || set["checked"] || (set["not-needed"] && set["reason"]) {
-			return "", nil, bad("use one of: --steered-to <run> [--reason <text>] [--sent-at <date>], --not-needed <reason>, or a sent answer's flags")
+			return "", nil, bad("use one of: --steered-to <run> [--reason <text>] [--sent-at <handover time>], --not-needed <reason>, or a sent answer's flags")
 		}
 		res := AnswerResolution{Kind: ResolutionSteered, SteeredTo: *steeredTo, Reason: *reason, At: at}
 		if set["not-needed"] {

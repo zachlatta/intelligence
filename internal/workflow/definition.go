@@ -275,7 +275,7 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 	}
 	fmt.Fprintf(&b, "\nYou get one step at a time. Move the run with these commands:\n\n"+
 		"  intelligence workflow answer --run %[1]s --channel email --message-id <sent-id> [--thread-id <thread-id>] [--sent-at <date>] [--checked]    record an answer to the requester\n"+
-		"  intelligence workflow answer --run %[1]s --steered-to <other run id> [--reason \"<text>\"] [--sent-at <date>]    another run took this request; its answer counts\n"+
+		"  intelligence workflow answer --run %[1]s --steered-to <other run id> [--reason \"<text>\"] [--sent-at <handover time>]    another run took this request; its answer counts\n"+
 		"  intelligence workflow answer --run %[1]s --not-needed \"<reason>\"    no answer is due: the input is not a request\n"+
 		"  intelligence workflow next --run %[1]s --summary \"<one line>\"    this step is done; prints the next one\n"+
 		"  intelligence workflow back --run %[1]s <step id> --why \"<what is missing>\"    send the work back to an earlier step\n"+

@@ -929,7 +929,7 @@ A run can also settle its answer without a send of its own, once, in
 `workflow_run_answer_resolutions` (an identical retry is accepted, a different one refused):
 
 ```sh
-intelligence workflow answer --run <UUID> --steered-to <other run UUID> [--reason <text>] [--sent-at <date>]
+intelligence workflow answer --run <UUID> --steered-to <other run UUID> [--reason <text>] [--sent-at <handover time>]
 intelligence workflow answer --run <UUID> --not-needed "<why no answer is due>"
 ```
 
