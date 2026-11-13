@@ -335,6 +335,7 @@ type runRow struct {
 	FirstUncheckedAt                                                     *time.Time
 	AnswerExpected                                                       bool
 	AnsweredVia, Resolution, SteeredTo, ResolutionReason                 string // workflow_run_answer_status
+	SteerLive                                                            bool   // its steer chain ends in a live run, which may still answer
 	Answers                                                              []runAnswerRow
 	ID, Title, Input, Status, Host, Repo, Branch, Workflow, WorkflowID   string
 	WorkspaceID, WorkspaceTitle, Orchestrator, ProjectAgent, Note, Error string
@@ -359,7 +360,7 @@ const runRowSelect = `SELECT r.id::text, coalesce(nullif(r.task_summary, ''), r.
 	COALESCE((SELECT online AND connected FROM host_status WHERE name=r.host),false),
 	COALESCE((SELECT start_retry_keys FROM hosts WHERE name=r.host),false), r.queue_reason, coalesce(q.position, 0), r.estimated_memory_bytes,
 	r.project_selected, r.queued_at_creation, r.requested_at, r.answer_expected,
- st.answered_at, coalesce(st.answered_via::text, ''), coalesce(st.resolution, ''), coalesce(st.steered_to::text, ''), coalesce(st.reason, ''),
+ st.answered_at, coalesce(st.answered_via::text, ''), coalesce(st.resolution, ''), coalesce(st.steered_to::text, ''), coalesce(st.reason, ''), coalesce(st.steer_live, false),
  (SELECT min(sent_at) FROM workflow_run_answers WHERE run_id=r.id AND NOT checked),
  (SELECT coalesce(jsonb_agg(jsonb_build_object('Channel',channel,'MessageID',message_id,'ThreadID',thread_id,'SentAt',sent_at,'Checked',checked) ORDER BY sent_at,id),'[]'::jsonb) FROM workflow_run_answers WHERE run_id=r.id)
 	FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id JOIN workflow_versions v ON v.workflow_id = r.workflow_id AND v.version = r.version
@@ -370,7 +371,7 @@ func scanRunRow(row pgx.CollectableRow) (runRow, error) {
 	var steps, answers []byte
 	err := row.Scan(&r.ID, &r.Title, &r.Input, &r.Status, &r.Host, &r.Repo, &r.Branch, &r.Workflow, &r.WorkflowID, &r.WorkspaceID, &r.WorkspaceTitle,
 		&r.Orchestrator, &r.ProjectAgent, &r.Note, &r.Error, &r.Step, &r.Version, &steps, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt, &r.WorkflowDeleted,
-		&r.StartRetries, &r.StartRetryAt, &r.HostOnline, &r.DaemonConnected, &r.RetryKeys, &r.QueueReason, &r.Position, &r.EstimatedMemory, &r.ProjectSelected, &r.QueuedAtCreation, &r.RequestedAt, &r.AnswerExpected, &r.AnsweredAt, &r.AnsweredVia, &r.Resolution, &r.SteeredTo, &r.ResolutionReason, &r.FirstUncheckedAt, &answers)
+		&r.StartRetries, &r.StartRetryAt, &r.HostOnline, &r.DaemonConnected, &r.RetryKeys, &r.QueueReason, &r.Position, &r.EstimatedMemory, &r.ProjectSelected, &r.QueuedAtCreation, &r.RequestedAt, &r.AnswerExpected, &r.AnsweredAt, &r.AnsweredVia, &r.Resolution, &r.SteeredTo, &r.ResolutionReason, &r.SteerLive, &r.FirstUncheckedAt, &answers)
 	if err == nil {
 		err = json.Unmarshal(steps, &r.Steps)
 		if err == nil {
@@ -940,6 +941,14 @@ func modelSuggestionLine(selected []byte, token *string) string {
 	return fmt.Sprintf("Suggested %s on %s for {{%s}}", choice.Label, choice.LoginLabel, *token)
 }
 
+var runID = regexp.MustCompile(`\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
+
+// linkRuns makes the run ids in an event line (a steer's, or a message from a run that steered)
+// links to their runs.
+func linkRuns(text string) string {
+	return runID.ReplaceAllString(text, "[$0](/workflow-runs/$0)")
+}
+
 // Line is how one event reads on the run page.
 func (e runEvent) Line() string {
 	switch e.Kind {
@@ -965,7 +974,7 @@ func (e runEvent) Line() string {
 	case "next":
 		return "Done: " + orDash(e.Text)
 	case "done":
-		return "Finished: " + orDash(e.Text)
+		return "Finished: " + linkRuns(orDash(e.Text))
 	case "skip":
 		return "Skipped: " + orDash(e.Text)
 	case "back":
@@ -975,11 +984,15 @@ func (e runEvent) Line() string {
 	case "reply":
 		return "Zach replied: " + e.Text
 	case "message":
-		return e.Text
+		return linkRuns(e.Text)
 	case "fail":
 		return "Failed: " + e.Text
 	case "cancel":
 		return "Canceled"
+	case "claim":
+		return "Claimed " + e.Text
+	case "steer", "steer_unanswered":
+		return linkRuns(e.Text)
 	case "error", "stalled", "continuation", "resume":
 		return e.Text
 	case "start_retry":
@@ -1037,7 +1050,9 @@ func (r runRow) AnswerTiming() string {
 	case "legacy":
 		return "Before answer recording"
 	case "steered":
-		return "Steered to run " + runPrefix(r.SteeredTo) + "; awaiting its answer"
+		if r.SteerLive {
+			return "Steered to run " + runPrefix(r.SteeredTo) + "; awaiting its answer"
+		}
 	}
 	if r.FirstUncheckedAt != nil {
 		return "Only unchecked sends"
@@ -1055,7 +1070,7 @@ func (r runRow) AnswerTiming() string {
 }
 
 func (r runRow) MissingAnswer() bool {
-	return r.AnswerExpected && r.AnsweredAt == nil && r.Resolution != "not_needed" && r.Resolution != "legacy" && (r.Status == workflow.Succeeded || r.Status == workflow.Failed)
+	return r.AnswerExpected && r.AnsweredAt == nil && r.Resolution != "not_needed" && r.Resolution != "legacy" && !r.SteerLive && (r.Status == workflow.Succeeded || r.Status == workflow.Failed)
 }
 
 func (r runRow) UncheckedTiming() string {

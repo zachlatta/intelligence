@@ -1,5 +1,13 @@
 [
   {
+    "id": "runs-steer-into-one-deliverable",
+    "released": "2026-11-13",
+    "title": "Runs on one deliverable steer instead of racing",
+    "summary": "An email or voice memo run now checks the runs already going before it builds. When one is working on the same deck, link or thread, it hands its request to that run instead of rebuilding in parallel. A run's page shows what it claimed and which runs steered into it; a steered run says which run answers it.",
+    "media": "runs-steer-into-one-deliverable.png",
+    "mediaAlt": "A run page's first step: Claimed a deck link, then another run steered into this run because it is about the same deck, with its request"
+  },
+  {
     "id": "workflow-answer-resolutions",
     "released": "2026-11-13",
     "title": "Runs that hand off or need no answer stop showing as unanswered",

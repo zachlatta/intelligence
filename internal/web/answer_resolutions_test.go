@@ -53,7 +53,7 @@ func unanswered(t *testing.T, h http.Handler) []string {
 }
 
 func TestSteeredRunIsAnsweredByTheRunItWasHandedTo(t *testing.T) {
-	h, runs, key, _ := answerRuns(t, 4)
+	h, runs, key, d := answerRuns(t, 4)
 	a, b, c, other := runs[0], runs[1], runs[2], runs[3]
 	steer := func(from, to, at string) *httptest.ResponseRecorder {
 		return resolve(t, h, key, from, `{"kind":"steered","steeredTo":"`+to+`","at":"`+at+`"}`)
@@ -92,6 +92,10 @@ func TestSteeredRunIsAnsweredByTheRunItWasHandedTo(t *testing.T) {
 	code, r := sqlPost(t, h, q(`SELECT steered_to::text FROM workflow_runs_unanswered WHERE id='`+a+`'`))
 	if code != 200 || len(r.Rows) != 1 || r.Rows[0][0] != b {
 		t.Fatalf("steered_to: %+v", r)
+	}
+	// a waits while its chain ends in a live run (c); the fixture's runs are all finished
+	if _, err := d.Owner.Exec(t.Context(), `UPDATE workflow_runs SET status='running', finished_at=NULL WHERE id=$1`, c); err != nil {
+		t.Fatal(err)
 	}
 	if page := get(t, h, "/workflow-runs/"+a, nil).Body.String(); !strings.Contains(page, "Steered to run "+b[:8]+"; awaiting") {
 		t.Fatal("run page does not say where the request went")
@@ -173,7 +177,8 @@ func TestRunsFromBeforeAnswerRecordingAreMarkedLegacyOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := d.Owner.Exec(t.Context(), `DROP VIEW workflow_runs_unanswered; DROP VIEW workflow_run_answer_status; DROP TABLE workflow_run_answer_resolutions;
- DELETE FROM schema_migrations WHERE version='0050_workflow_answer_resolutions'`); err != nil {
+ DROP TABLE workflow_run_claims;
+ DELETE FROM schema_migrations WHERE version IN ('0050_workflow_answer_resolutions', '20261113T1617_workflow_run_claims')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Migrate(t.Context(), d.Owner); err != nil {

@@ -963,6 +963,48 @@ reads each run's `answered_at` (its own first checked answer or one through a st
 (the run that sent it) and its resolution; the Workflows and run pages use it, so a steered run
 shows the answer it got, and a not-needed or legacy run is not flagged as unanswered.
 
+#### One deliverable, one run
+
+Two runs must not rebuild and republish one deliverable in parallel. On 2026-11-12 an email run
+and a voice-memo run both rebuilt and republished one public deck in place; the later publish
+dropped the earlier one's slide, and a map rebuilt under its old name kept showing from caches. So:
+
+- **Check, then steer or claim.** An email or voice-memo run's orchestrator starts with the
+  account's other live runs in its prompt (id, workflow, summary, status and step, orchestrator,
+  claims, and for runs started by email their subjects and Gmail thread ids). If one works on the
+  same deliverable (the same work item, public link or file, or email thread chain), it steers into
+  it instead of building:
+
+  ```sh
+  intelligence workflow steer --run <UUID> --into <live run UUID> --note <file>|- [--deliverable <link or name>]
+  ```
+
+  The server sends the note and the steering run's whole request to the live run's
+  orchestrator (as a message, or into its input while it is queued or finding its project),
+  records the handover as the run's `steered` answer resolution (above: `steered_to` and the
+  handover time, so only answers the other run sends from then on answer it), adds `steer` and
+  message events to both runs and finishes the steering run. Steering into a run that itself
+  steered on reaches the live run at the end of that chain. When a run ends without a checked
+  answer while requests steered to it wait unanswered, each of those runs gets an event saying so.
+  A later email in the steered run's thread goes to the run it steered into while that run is
+  live. Run ids in steer lines link to the runs.
+- **Claims.** Before building, a run claims each deliverable it will change or publish:
+  `intelligence workflow claim --run <UUID> <link or name>`. A link is compared without query,
+  fragment, trailing slash or `/index.html`, so a folder, its index page and an asset in it
+  (`…/ns/map.png?v=2`) are one deliverable; a name is compared without case. Runs are told to
+  claim the public link as soon as they know it, since two runs rarely pick the same name for one
+  deck. A claim holds while its run is live; another live run's claim on the same thing, or on a
+  folder holding it, is refused (409) with the holding run's id and the steer command. Claims are
+  in `workflow_run_claims`.
+- **Publishing guard.** Every step carries the shared-deliverable rule
+  (`workflow.SharedDeliverableRule`): claim before changing anything another run may touch,
+  replace files.zachlatta.com files with `expected_version` and stop on a stale-version refusal
+  instead of overwriting, and give rebuilt assets whose content changed new file names (a content
+  hash or version suffix) so caches cannot show the old one.
+
+Both moves post to `POST /api/workflow-runs/{id}/moves` as `{"move":"claim","deliverable"}` and
+`{"move":"steer","into","note","deliverable"}`.
+
 #### Model groups
 
 Plans and Workflows share a model group editor. Each group generates a token, such as
@@ -1191,7 +1233,8 @@ it once:
    `replies` decides: `run` (the default) adds it to the run as a message to its orchestrator; if
    the run waits on a question and the email is from one of the account holder's own addresses,
    it is the answer; if the run is over, it starts a new run of the workflow. `new` starts a new
-   run; `ignore` does nothing.
+   run; `ignore` does nothing. When the thread's run steered into another run that is still
+   live, the email goes to that run instead (One deliverable, one run, above).
 2. **Otherwise** it starts the workflow whose filter (`definition.email`: `from` addresses or
    `@domain`s, `to`, `subject`, `words`, `without`, `attachment`) it matches, like a Gmail filter:
    every filled field must match. When two match, the narrower wins (more fields; an address beats
@@ -1571,7 +1614,7 @@ origin (another site's request is refused with 403), and those with a body must 
   409 when it waits on none). `POST /api/workflow-runs/{id}/cancel` with `{}`: ends the run and
   stops its orchestrator (204).
 - `POST /api/workflow-runs/{id}/moves` with `{"move", "directory", "step", "summary", "why",
-  "note"}` and `Authorization: Bearer <the run's host's key>`: `intelligence workflow`. Answers
+  "note", "deliverable", "into"}` and `Authorization: Bearer <the run's host's key>`: `intelligence workflow`. Answers
   `{"message"}`, what the agent reads next; 400 or 409 (with the reason as the message) for a move
   that cannot be made, 404 for a run not on that host.
 - `GET /workflows/email`: the mailbox (connect, the account holder's own addresses, disconnect) and

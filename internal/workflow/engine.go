@@ -567,9 +567,17 @@ func (e *Engine) orchestratorStartArgs(ctx context.Context, tx pgx.Tx, r run) (j
 		return nil, err
 	}
 	wsTitle, _ := runNames(r.ID, r.Name, r.Title)
+	v := r.vars()
+	if d.Trigger == TriggerEmail || d.Trigger == TriggerVoiceMemo {
+		live, err := liveRuns(ctx, tx, r.Account, r.ID)
+		if err != nil {
+			return nil, err
+		}
+		v.Live = &live
+	}
 	o := r.Def.Orchestrator
 	agent := &hostclient.CreateAgentArgs{Provider: o.Provider, Model: o.Model, Thinking: o.Thinking, Mode: agentMode(o.Provider),
-		Title: agentTitle("Orchestrator", r.Name, r.Title), Prompt: OrchestratorPrompt(r.Name, d, r.vars()),
+		Title: agentTitle("Orchestrator", r.Name, r.Title), Prompt: OrchestratorPrompt(r.Name, d, v),
 		Labels: map[string]string{"intelligence.run": r.ID, "intelligence.role": "orchestrator"}}
 	ws := hostclient.CreateWorkspaceArgs{Cwd: "~", Title: wsTitle, Agent: agent}
 	if r.Repo != "" {
@@ -686,7 +694,7 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 
 // Move is what `intelligence workflow` asks of a run.
 type Move struct {
-	Move      string `json:"move"`                // summarize, project, next, skip, back, ask, done, fail
+	Move      string `json:"move"`                // summarize, project, next, skip, back, ask, done, fail, claim, steer
 	Directory string `json:"directory,omitempty"` // project: a repository, or "none"
 	Step      string `json:"step,omitempty"`      // back: the step's id
 	Summary   string `json:"summary,omitempty"`
@@ -694,6 +702,9 @@ type Move struct {
 	Note      string `json:"note,omitempty"`    // ask: Markdown, for Zach
 	Token     string `json:"token,omitempty"`   // suggest: a model group's stable token
 	Exclude   string `json:"exclude,omitempty"` // suggest: comma-separated provider/model routes to skip
+	// claim: what the run will change or publish; steer: optionally, what the two runs share
+	Deliverable string `json:"deliverable,omitempty"`
+	Into        string `json:"into,omitempty"` // steer: the live run on the same deliverable
 }
 
 // MoveRun makes m on run, for host (whose key the caller checked): the run must be on host. It
@@ -824,6 +835,9 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 			if err := fleet.CaptureWorkflowAgents(ctx, tx, r.Host, r.ID, e.Now()); err != nil {
 				return err
 			}
+			if err := e.noteUnansweredSteers(ctx, tx, r, status); err != nil {
+				return err
+			}
 		}
 		_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, step = $3, note = $4, error = $5, updated_at = $6,
 			finished_at = $7 WHERE id = $1`, r.ID, status, step, note, errText, e.Now(), finished)
@@ -836,6 +850,18 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		return nil
 	}
 	switch m.Move {
+	case "claim":
+		return e.claim(ctx, tx, r, m.Deliverable)
+	case "steer":
+		if err := e.steer(ctx, tx, r, &m); err != nil {
+			return "", err
+		}
+		into := m.Into // steer resolved it to the live run at the end of a steer chain
+		if err := e.event(ctx, tx, r, "done", ptr(r.Step), nil, "Steered into run "+into+"."); err != nil {
+			return "", err
+		}
+		return "Steered: run " + into + " has this request now, and it delivers and answers it. This run is finished: send nothing more for it. " +
+			"Archive any sub-agents you started outside this workspace, then end your turn.", set(Succeeded, r.Step, "")
 	case "next", "skip", "done":
 		text := m.Summary
 		if m.Move == "skip" {
@@ -888,7 +914,7 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		}
 		return "The run is marked failed. The workspace stays for inspection. Archive any sub-agents you started outside this workspace, then end your turn.", set(Failed, r.Step, "")
 	}
-	return "", bad("unknown move %q: want next, back, skip, ask, done or fail.", m.Move)
+	return "", bad("unknown move %q: want next, back, skip, ask, done, fail, claim or steer.", m.Move)
 }
 
 const sameTurnReminder = "\n\nContinue in this same turn. Wait for sub-agents in the foreground; end your turn only after a successful ask or when the run is finished. Leave every gate to its instructions."
@@ -1038,6 +1064,9 @@ func (e *Engine) Cancel(ctx context.Context, account int64, runID string) error 
 			return err
 		}
 		if err := e.event(ctx, tx, r, "cancel", nil, nil, ""); err != nil {
+			return err
+		}
+		if err := e.noteUnansweredSteers(ctx, tx, r, Canceled); err != nil {
 			return err
 		}
 		_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, pending_command = NULL, start_retry_at=NULL, start_retry_queued=false, updated_at = $3, finished_at = $3 WHERE id = $1`,

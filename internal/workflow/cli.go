@@ -33,6 +33,9 @@ The agents of a workflow run move it with these, on the run's host:
   done      --run <id> [--summary <text>]  finish the run now
   fail      --run <id> --why <text>
   suggest   --run <id> <group_token> [--exclude <provider/model>]  record a fresh suggestion without moving
+  claim     --run <id> <link or name>      claim a deliverable before building; refused, naming the run, when a live run holds it
+  steer     --run <id> --into <run id> --note <file>|- [--deliverable <link or name>]
+                                       hand this request to the live run on the same deliverable; finishes this run
 
   propose <file.json>|-                propose a workflow change or run; prints its approval URL
   withdraw <id> --reason <text>        withdraw your pending proposal with a reason
@@ -199,6 +202,8 @@ func parseCLI(args []string, stdin io.Reader) (Move, string, error) {
 	fs.StringVar(&m.Summary, "summary", "", "")
 	fs.StringVar(&m.Why, "why", "", "")
 	fs.StringVar(&m.Exclude, "exclude", "", "comma-separated provider/model routes to skip")
+	fs.StringVar(&m.Into, "into", "", "steer: the live run on the same deliverable")
+	fs.StringVar(&m.Deliverable, "deliverable", "", "steer: what the two runs share")
 	note := fs.String("note", "", "")
 	var pos []string
 	rest := args[1:]
@@ -233,10 +238,16 @@ func parseCLI(args []string, stdin io.Reader) (Move, string, error) {
 		if strings.TrimSpace(m.Summary) == "" {
 			err = errors.New("summarize needs --summary <text>")
 		}
-	case "ask":
+	case "claim":
+		m.Deliverable, err = one("the deliverable: its public link or folder, or a short name for the work item")
+	case "ask", "steer":
+		if m.Move == "steer" && m.Into == "" {
+			err = errors.New("steer needs --into <run id>")
+			break
+		}
 		switch *note {
 		case "":
-			err = errors.New("ask needs --note <file> (or - for standard input)")
+			err = fmt.Errorf("%s needs --note <file> (or - for standard input)", m.Move)
 		case "-":
 			b, rerr := io.ReadAll(bufio.NewReader(stdin))
 			m.Note, err = string(b), rerr
@@ -248,7 +259,7 @@ func parseCLI(args []string, stdin io.Reader) (Move, string, error) {
 	default:
 		err = fmt.Errorf("unknown move %q", m.Move)
 	}
-	if err == nil && len(pos) > 0 && m.Move != "project" && m.Move != "back" && m.Move != "suggest" {
+	if err == nil && len(pos) > 0 && m.Move != "project" && m.Move != "back" && m.Move != "suggest" && m.Move != "claim" {
 		err = fmt.Errorf("%s takes no argument %q", m.Move, pos[0])
 	}
 	return m, *run, err

@@ -108,6 +108,15 @@ func (e *Engine) RecordAnswerResolution(ctx context.Context, host, id string, a 
 		if err != nil {
 			return err
 		}
+		return recordResolution(ctx, tx, r, a)
+	})
+}
+
+// recordResolution is RecordAnswerResolution for r, locked in tx; a is valid for r.
+func recordResolution(ctx context.Context, tx pgx.Tx, r run, a AnswerResolution) error {
+	id := r.ID
+	var err error
+	{
 		var to *string
 		if a.Kind == ResolutionSteered {
 			to = &a.SteeredTo
@@ -143,7 +152,7 @@ func (e *Engine) RecordAnswerResolution(ctx context.Context, host, id string, a 
 			return bad("this run already records a different answer resolution")
 		}
 		return err
-	})
+	}
 }
 
 // parseAnswerCLI reads `intelligence workflow answer`: a sent answer (--channel, --message-id, ...),

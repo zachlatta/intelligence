@@ -432,6 +432,18 @@ func (s *Service) route(ctx context.Context, tx pgx.Tx, account int64, owners []
 		return decision{}, err
 	}
 	if runID != "" {
+		// a run that steered into another handed it its thread: while that run is live, it gets the email
+		into, intoWF, steered, err := s.Engine.SteeredInto(ctx, tx, account, runID)
+		if err != nil {
+			return decision{}, err
+		}
+		if steered {
+			status, _, err := s.Engine.RunStatus(ctx, tx, account, into)
+			if err != nil {
+				return decision{}, err
+			}
+			return s.reply(ctx, tx, account, fromZach, m, into, intoWF, status)
+		}
 		status, _, err := s.Engine.RunStatus(ctx, tx, account, runID)
 		if err == nil {
 			return s.reply(ctx, tx, account, fromZach, m, runID, wfID, status)

@@ -180,9 +180,11 @@ func (d Definition) Index(id string) int {
 	return -1
 }
 
-// Vars fill a step's instructions: {{run}}, {{input}}, {{repo}} and {{branch}}.
+// Vars fill a step's instructions: {{run}}, {{input}}, {{repo}} and {{branch}}. Live, when set,
+// is the account's other live runs, which an email or voice-memo run checks before building.
 type Vars struct {
 	Run, Input, Repo, Branch string
+	Live                     *[]LiveRun
 }
 
 func (v Vars) fill(s string) string {
@@ -268,6 +270,9 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 	}
 	b.WriteString(".\n\nBefore starting workers, find this agent's workspace ID with Paseo's workspace listing. Pass --workspace <id> explicitly to every worker so it uses this workspace's working directory; --cwd alone can inherit the parent's workspace. Verify each worker with paseo inspect before it edits files. Stop a misplaced worker and relaunch it in the correct workspace. Do not create a replacement worktree in another repository or fall back to a main checkout; if the task names a repository that differs from this run's project, ask Zach before proceeding")
 	fmt.Fprintf(&b, ".\n\nWhat started it:\n\n%s\n\n", strings.TrimSpace(v.Input))
+	if v.Live != nil {
+		b.WriteString(liveRunsSection(v.Run, *v.Live) + "\n\n")
+	}
 	fmt.Fprintf(&b, "Before starting work, summarize the whole task above as a concise action title (3–8 words, at most 80 characters). Describe the requested outcome, not just the prompt's opening words. Preserve important constraints and negations. For example: \"Summarize workflow run titles\". Save it with:\n\n  intelligence workflow summarize --run %s --summary \"<short task summary>\"\n\nUse proper shell quoting for your text. This only labels the run and does not advance a step. If saving the summary fails, continue with the workflow; do not block the task on it.\n\n", v.Run)
 	b.WriteString("Its steps:\n\n")
 	for i, s := range d.Steps {
@@ -302,7 +307,7 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 // StepMessage is step i's title and filled instructions, as the orchestrator gets them.
 func StepMessage(d Definition, i int, v Vars) string {
 	s := d.Steps[i]
-	return fmt.Sprintf("Step %d of %d: %s\n\n%s", i+1, len(d.Steps), s.Title, strings.TrimSpace(v.fill(s.Instructions))+"\n\n"+UnattendedShellRule+"\n\n"+FileDeliveryRule+"\n\n"+DeliverableEmailRule+"\n\n"+v.fill(RunAnswerRule))
+	return fmt.Sprintf("Step %d of %d: %s\n\n%s", i+1, len(d.Steps), s.Title, strings.TrimSpace(v.fill(s.Instructions))+"\n\n"+UnattendedShellRule+"\n\n"+v.fill(SharedDeliverableRule)+"\n\n"+FileDeliveryRule+"\n\n"+DeliverableEmailRule+"\n\n"+v.fill(RunAnswerRule))
 }
 
 // DeliverableEmailRule is appended at runtime, like FileDeliveryRule, so saved workflows get it
@@ -397,7 +402,8 @@ const RunAnswerRule = "Record every answer sent to the requester, including requ
 	"Use --checked only when the sent answer passed the required review. Record earlier unchecked sends too. Use the actual send time in RFC 3339 or RFC 5322 format when available; immediately after sending, omit --sent-at if the mail tool returns no timestamp, and the server defaults to now(). " +
 	"For an earlier delivery, inspect the message and supply its actual send date and identifiers; do not use the current time. For another response channel, use that channel and its message identifier. Do not invent a send or record an unsent draft. If no checked answer was delivered, report that explicitly. " +
 	"Every run that owes an answer ends with exactly one of: a recorded checked answer, a steer, or not-needed. " +
-	"If this run hands its request to another run instead of answering it (for example, it steers a running run's agent to fold the request in), record that with intelligence workflow answer --run {{run}} --steered-to <the other run's id> [--reason \"<what was handed over>\"] [--sent-at <when it was handed over>] (find it in workflow_runs: the run whose orchestrator_id is the agent you steered, or that agent's parent); " +
+	"If this run hands its request to another live run instead of answering it, do it with intelligence workflow steer --run {{run}} --into <the other run's id> --note <file>, which sends that run the request and records the steer; nothing more to record. " +
+	"If it was handed over some other way (for example, by messaging a running run's agent directly), record that with intelligence workflow answer --run {{run}} --steered-to <the other run's id> [--reason \"<what was handed over>\"] [--sent-at <when it was handed over>] (find it in workflow_runs: the run whose orchestrator_id is the agent you steered, or that agent's parent); " +
 	"the other run's checked answer sent after the handover then counts for this one, so tell that run to answer with the request folded in. " +
 	"If no answer is due because the input is not a request (a recorded meeting or conversation, a retracted or duplicate request, a notification), record intelligence workflow answer --run {{run}} --not-needed \"<why no answer is due>\" instead of sending one. " +
 	"A request that was acted on still gets an answer; not-needed is not for work done but not reported. Pass this rule to every worker."

@@ -33,6 +33,7 @@ narrow the query. When truncated, continue with a stable key cursor, not an unbo
 | Steered requests, no-answer-needed reasons, pre-recording (legacy) runs | `workflow_run_answer_resolutions` |
 | Each run's first checked answer, own or through runs it steered to | `workflow_run_answer_status` (answered_at, answered_via, resolution) |
 | Expected requests overdue without a checked answer (excludes canceled, not-needed, legacy) | `workflow_runs_unanswered` (includes has_unchecked_sends, steered_to) |
+| Deliverables a run claimed before changing or publishing them | `workflow_run_claims` |
 | Run events, agents, step durations | `workflow_run_events`, `workflow_run_agents`, `workflow_run_step_times` |
 | Synced transcript metadata and full entries | `transcripts`, `transcript_entries` |
 | Commands and their results | `commands` |
