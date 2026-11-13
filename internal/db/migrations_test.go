@@ -58,6 +58,10 @@ func TestMigrationOrderRejectsBadNames(t *testing.T) {
 		"20261113T0930_.sql":       "name",         // no description
 		"20261113T0930_x.sql.orig": "name",         // not .sql
 		"0000_x.sql":               "legacy range", // 0 is not a legacy number
+		"00491231T0000_x.sql":      "2026",         // would sort before the legacy files
+		"20251231T2359_x.sql":      "2026",         // before the scheme existed
+		"20261113T0930_x.SQL":      "name",         // upper-case extension
+		"README.md":                "name",         // not a migration
 	} {
 		_, err := db.MigrationOrder([]string{"0001_devboxes.sql", name})
 		if err == nil || !strings.Contains(err.Error(), wantErr) {
@@ -66,15 +70,22 @@ func TestMigrationOrderRejectsBadNames(t *testing.T) {
 	}
 }
 
-func TestMigrationOrderRejectsDuplicatePrefixes(t *testing.T) {
-	for _, pair := range [][2]string{
-		{"0040_a.sql", "0040_b.sql"},
-		{"20261113T0930_a.sql", "20261113T0930_b.sql"},
-	} {
-		_, err := db.MigrationOrder(pair[:])
-		if err == nil || !strings.Contains(err.Error(), "same prefix") {
-			t.Errorf("%v: err = %v, want a duplicate-prefix error", pair, err)
-		}
+func TestMigrationOrderRejectsDuplicateLegacyNumbers(t *testing.T) {
+	_, err := db.MigrationOrder([]string{"0040_a.sql", "0040_b.sql"})
+	if err == nil || !strings.Contains(err.Error(), "same number") {
+		t.Errorf("err = %v, want a duplicate-number error", err)
+	}
+}
+
+// Two branches can write a migration in the same UTC minute: both are kept, ordered by full name.
+func TestMigrationOrderAllowsEqualTimestamps(t *testing.T) {
+	got, err := db.MigrationOrder([]string{"20261113T0930_b.sql", "20261113T0930_a.sql", "0049_x.sql"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"0049_x.sql", "20261113T0930_a.sql", "20261113T0930_b.sql"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("order = %v, want %v", got, want)
 	}
 }
 
@@ -160,6 +171,50 @@ func TestMigrationsFromParallelBranchesMergeWithoutRenaming(t *testing.T) {
 		var ok bool
 		if err := d.Owner.QueryRow(ctx, "SELECT to_regclass($1) IS NOT NULL", table).Scan(&ok); err != nil || !ok {
 			t.Fatalf("table %s missing (err %v)", table, err)
+		}
+	}
+}
+
+// Two branches that each add a migration in the same UTC minute merge without renaming either.
+func TestSameMinuteMigrationsFromParallelBranchesMergeWithoutRenaming(t *testing.T) {
+	d := dbtest.New(t)
+	if _, err := d.Owner.Exec(ctx, "DROP TABLE schema_migrations"); err != nil {
+		t.Fatal(err)
+	}
+	branchA := "20261113T0930_widgets.sql"
+	branchB := "20261113T0930_gadgets.sql"
+	mainAfterA := fstest.MapFS{
+		"0049_base.sql": {Data: []byte("CREATE TABLE mig_base (id int)")},
+		branchA:         {Data: []byte("CREATE TABLE mig_widgets (id int)")},
+	}
+	if err := db.MigrateFrom(ctx, d.Owner, mainAfterA); err != nil {
+		t.Fatalf("deploy with A: %v", err)
+	}
+	mainAfterB := fstest.MapFS{
+		"0049_base.sql": mainAfterA["0049_base.sql"],
+		branchA:         mainAfterA[branchA],
+		branchB:         {Data: []byte("CREATE TABLE mig_gadgets (id int)")},
+	}
+	if err := db.MigrateFrom(ctx, d.Owner, mainAfterB); err != nil {
+		t.Fatalf("deploy with B merged: %v", err)
+	}
+	want := []string{"0049_base", "20261113T0930_gadgets", "20261113T0930_widgets"}
+	if got := applied(t, d); !slices.Equal(got, want) {
+		t.Fatalf("applied = %v, want %v", got, want)
+	}
+}
+
+// Every file in the migrations directory must be a migration: a stray x.SQL or x.sql.orig would
+// otherwise be skipped without a word.
+func TestMigrateRefusesFilesThatAreNotMigrations(t *testing.T) {
+	for _, stray := range []string{"20261113T0930_x.SQL", "20261113T0930_x.sql.orig", "notes.txt"} {
+		d := dbtest.New(t)
+		err := db.MigrateFrom(ctx, d.Owner, fstest.MapFS{
+			"0049_base.sql": {Data: []byte("CREATE TABLE mig_base (id int)")},
+			stray:           {Data: []byte("CREATE TABLE mig_stray (id int)")},
+		})
+		if err == nil || !strings.Contains(err.Error(), stray) {
+			t.Errorf("%s: err = %v, want one naming the stray file", stray, err)
 		}
 	}
 }

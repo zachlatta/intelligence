@@ -20,7 +20,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-//go:embed migrations/*.sql
+// Every file in migrations/ is embedded, not only *.sql, so migrationNames can refuse a stray one.
+//
+//go:embed migrations
 var migrations embed.FS
 
 // migrateLock serializes migrations across app instances starting at once.
@@ -89,11 +91,20 @@ func migrateFrom(ctx context.Context, p *pgxpool.Pool, dir fs.FS) error {
 	return nil
 }
 
-// migrationNames lists the .sql files at the top of dir in the order they apply.
+// migrationNames lists the migrations in dir in the order they apply. Every entry in dir must be a
+// well-named migration file: a stray one (x.SQL, x.sql.orig, notes.txt, a directory) is an error,
+// not silently skipped.
 func migrationNames(dir fs.FS) ([]string, error) {
-	names, err := fs.Glob(dir, "*.sql")
+	entries, err := fs.ReadDir(dir, ".")
 	if err != nil {
 		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			return nil, fmt.Errorf("migration directory holds a directory, %s: only .sql files belong there", e.Name())
+		}
+		names = append(names, e.Name())
 	}
 	return migrationOrder(names)
 }
@@ -112,14 +123,15 @@ var (
 // A new migration is named YYYYMMDDTHHMM_description.sql, the UTC time it was written (for example
 // 20261113T0930_add_widgets.sql), so two branches that each add one never pick the same name and
 // need no renumbering when they merge. The legacy files 0001_... to 0049_... come first, in number
-// order, then the timestamped ones in time order. A four-digit number above 0049, a malformed name
-// or two files with the same prefix is an error.
+// order, then the timestamped ones in time order; two with the same timestamp (written in the same
+// minute, perhaps on different branches) are both kept, ordered by full name. A four-digit number
+// above 0049, two legacy files with the same number, a timestamp before 2026 or a malformed name is
+// an error.
 func migrationOrder(names []string) ([]string, error) {
-	seen := map[string]string{}
+	legacy := map[string]string{}
 	for _, name := range names {
-		var prefix string
 		if m := legacyName.FindStringSubmatch(name); m != nil {
-			prefix = m[1]
+			prefix := m[1]
 			n, _ := strconv.Atoi(prefix)
 			if n > legacyMigrations {
 				return nil, fmt.Errorf("migration %s: four-digit numbers end at %04d; name a new migration with a UTC timestamp, like %s_%s",
@@ -128,20 +140,24 @@ func migrationOrder(names []string) ([]string, error) {
 			if n < 1 {
 				return nil, fmt.Errorf("migration %s: outside the legacy range 0001 to %04d", name, legacyMigrations)
 			}
+			if other, ok := legacy[prefix]; ok {
+				return nil, fmt.Errorf("migrations %s and %s have the same number", other, name)
+			}
+			legacy[prefix] = name
 		} else if m := timestampName.FindStringSubmatch(name); m != nil {
-			prefix = m[1]
-			if _, err := time.Parse(migrationTimestamp, prefix); err != nil {
-				return nil, fmt.Errorf("migration %s: bad timestamp %s: %w", name, prefix, err)
+			at, err := time.Parse(migrationTimestamp, m[1])
+			if err != nil {
+				return nil, fmt.Errorf("migration %s: bad timestamp %s: %w", name, m[1], err)
+			}
+			if at.Year() < firstTimestampYear {
+				return nil, fmt.Errorf("migration %s: timestamp before %d; use the current UTC time", name, firstTimestampYear)
 			}
 		} else {
 			return nil, fmt.Errorf("migration %s: bad name; want YYYYMMDDTHHMM_lower_snake_description.sql (UTC)", name)
 		}
-		if other, ok := seen[prefix]; ok {
-			return nil, fmt.Errorf("migrations %s and %s have the same prefix; give one a later timestamp", other, name)
-		}
-		seen[prefix] = name
 	}
-	// With distinct, fixed-width prefixes and legacy ones starting "00", name order is apply order.
+	// Prefixes are fixed-width, legacy ones start "00" and timestamps "2", so name order is apply
+	// order: legacy by number, then timestamps by time, equal timestamps by the rest of the name.
 	out := slices.Clone(names)
 	slices.Sort(out)
 	return out, nil
@@ -149,6 +165,10 @@ func migrationOrder(names []string) ([]string, error) {
 
 // migrationTimestamp is the layout of a new migration's prefix (UTC).
 const migrationTimestamp = "20060102T1504"
+
+// firstTimestampYear is the earliest year a migration timestamp may have: the scheme began in 2026,
+// and the bound keeps every timestamped name sorting after the legacy 0001 to 0049.
+const firstTimestampYear = 2026
 
 // EnsureReadonlyRole creates or updates the login role the SQL API connects as: it can read every
 // table and view in the public schema, now and later, and its sessions are read-only by default.
