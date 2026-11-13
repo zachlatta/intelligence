@@ -115,44 +115,41 @@ func (e *Engine) RecordAnswerResolution(ctx context.Context, host, id string, a 
 // recordResolution is RecordAnswerResolution for r, locked in tx; a is valid for r.
 func recordResolution(ctx context.Context, tx pgx.Tx, r run, a AnswerResolution) error {
 	id := r.ID
-	var err error
-	{
-		var to *string
-		if a.Kind == ResolutionSteered {
-			to = &a.SteeredTo
-			var exists, loops bool
-			// The run it went to must be this account's (any host), and must not lead back here.
-			err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workflow_runs WHERE id=$1 AND account_id=$2),
+	var to *string
+	if a.Kind == ResolutionSteered {
+		to = &a.SteeredTo
+		var exists, loops bool
+		// The run it went to must be this account's (any host), and must not lead back here.
+		err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workflow_runs WHERE id=$1 AND account_id=$2),
  EXISTS (WITH RECURSIVE chain (id, path) AS (SELECT $1::uuid, ARRAY[$1::uuid]
   UNION ALL SELECT s.steered_to, c.path || s.steered_to FROM chain c JOIN workflow_run_answer_resolutions s ON s.run_id=c.id AND s.kind='steered' WHERE s.steered_to <> ALL (c.path))
   SELECT 1 FROM chain WHERE id=$3::uuid)`, a.SteeredTo, r.Account, id).Scan(&exists, &loops)
-			if err != nil {
-				return err
-			}
-			if !exists {
-				return bad("no run %s in this account to steer to", a.SteeredTo)
-			}
-			if loops {
-				return bad("run %s already hands its request back to this run", a.SteeredTo)
-			}
-		}
-		var at *time.Time
-		if !a.At.IsZero() {
-			at = &a.At
-		}
-		tag, err := tx.Exec(ctx, `INSERT INTO workflow_run_answer_resolutions (run_id,account_id,kind,steered_to,reason,at)
- VALUES ($1,$2,$3,$4,$5,coalesce($6,now())) ON CONFLICT (run_id) DO NOTHING`, id, r.Account, a.Kind, to, strings.TrimSpace(a.Reason), at)
-		if err != nil || tag.RowsAffected() > 0 {
+		if err != nil {
 			return err
 		}
-		var same bool
-		err = tx.QueryRow(ctx, `SELECT kind=$2 AND steered_to IS NOT DISTINCT FROM $3::uuid AND reason=$4 AND ($5::timestamptz IS NULL OR at=$5)
- FROM workflow_run_answer_resolutions WHERE run_id=$1`, id, a.Kind, to, strings.TrimSpace(a.Reason), at).Scan(&same)
-		if err == nil && !same {
-			return bad("this run already records a different answer resolution")
+		if !exists {
+			return bad("no run %s in this account to steer to", a.SteeredTo)
 		}
+		if loops {
+			return bad("run %s already hands its request back to this run", a.SteeredTo)
+		}
+	}
+	var at *time.Time
+	if !a.At.IsZero() {
+		at = &a.At
+	}
+	tag, err := tx.Exec(ctx, `INSERT INTO workflow_run_answer_resolutions (run_id,account_id,kind,steered_to,reason,at)
+ VALUES ($1,$2,$3,$4,$5,coalesce($6,now())) ON CONFLICT (run_id) DO NOTHING`, id, r.Account, a.Kind, to, strings.TrimSpace(a.Reason), at)
+	if err != nil || tag.RowsAffected() > 0 {
 		return err
 	}
+	var same bool
+	err = tx.QueryRow(ctx, `SELECT kind=$2 AND steered_to IS NOT DISTINCT FROM $3::uuid AND reason=$4 AND ($5::timestamptz IS NULL OR at=$5)
+ FROM workflow_run_answer_resolutions WHERE run_id=$1`, id, a.Kind, to, strings.TrimSpace(a.Reason), at).Scan(&same)
+	if err == nil && !same {
+		return bad("this run already records a different answer resolution")
+	}
+	return err
 }
 
 // parseAnswerCLI reads `intelligence workflow answer`: a sent answer (--channel, --message-id, ...),
