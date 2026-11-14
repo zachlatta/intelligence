@@ -1271,3 +1271,46 @@ func TestDeletingAWorkflowKeepsItsRuns(t *testing.T) {
 		}
 	}
 }
+
+func TestMoveRepliesControlTurnLifetime(t *testing.T) {
+	for _, ending := range []string{"next", "skip", "done", "fail", "ask"} {
+		t.Run(ending, func(t *testing.T) {
+			h, _ := dbServer(t)
+			sendReport(t, h, wfReport())
+			key := keyOf(t, h, "host-1")
+			b := openStream(t, h, "host-1")
+			def := workflow.Starting
+			def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+			def.Steps = def.Steps[:2]
+			run := startRun(t, h, createWorkflow(t, h, def), "turn lifetime")
+			succeed(t, b, b.command(), `{"workspaceId":"w-run","agentId":"orch-1"}`)
+			for _, m := range []map[string]string{{"move": "next"}, {"move": "back", "step": "build", "why": "retry"}, {"move": "skip", "why": "allowed"}} {
+				code, msg := move(t, h, key, run, m)
+				if code != 200 || !strings.Contains(msg, "Continue in this same turn") {
+					t.Fatalf("%v: %d %s", m, code, msg)
+				}
+			}
+			code, msg := move(t, h, key, run, map[string]string{"move": ending, "why": "reason", "note": "question"})
+			if code != 200 || !strings.Contains(strings.ToLower(msg), "end your turn") || strings.Contains(msg, "Continue in this same turn") {
+				t.Fatalf("ending: %d %s", code, msg)
+			}
+		})
+	}
+}
+
+func TestWorkflowsPageStylesWaitingCalloutAndStickyInspector(t *testing.T) {
+	run := runRow{ID: "r1", Status: "waiting", Workflow: "Task", Title: "Approve deploy", CreatedAt: t0, Version: 1, Host: "host-1", Repo: "acme/app"}
+	rec := httptest.NewRecorder()
+	renderWorkflows(rec, "list", map[string]any{
+		"Workflows": []map[string]any{{"ID": "w1", "Name": "Task", "Version": 1, "IsDefault": true, "Description": "", "Definition": workflow.Starting}},
+		"Waiting":   []runRow{run},
+		"List":      runsPage{Runs: []runRow{run}, Page: 1, Total: 1},
+		"Now":       t0,
+	})
+	body := rec.Body.String()
+	for _, want := range []string{`class="banner callout"`, "<thead>", "top: calc(var(--topbar-h) + 1rem)"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("workflows page misses %q", want)
+		}
+	}
+}

@@ -21,6 +21,9 @@ const CLIUsage = `usage: intelligence workflow <move> --run <id> [...]
 
 The agents of a workflow run move it with these, on the run's host:
 
+  answer    --run <id> --channel email --message-id <id> [--sent-at <RFC3339 or RFC5322>] [--thread-id <id>] [--checked]
+  answer    --run <id> --steered-to <run id> [--reason <text>] [--sent-at <handover time>]   another run took the request; its answer counts
+  answer    --run <id> --not-needed <reason>   no answer is due (not a request)
   project   --run <id> <directory>|none   the project finder's answer
   summarize --run <id> --summary <text>   save a short task summary without moving the run
   status    --run <id> --now <sentence> [--eta <RFC3339>]   report current activity without advancing
@@ -31,6 +34,9 @@ The agents of a workflow run move it with these, on the run's host:
   done      --run <id> [--summary <text>]  finish the run now
   fail      --run <id> --why <text>
   suggest   --run <id> <group_token> [--exclude <provider/model>]  record a fresh suggestion without moving
+  claim     --run <id> <link or name>      claim a deliverable before building; refused, naming the run, when a live run holds it
+  steer     --run <id> --into <run id> --note <file>|- [--deliverable <link or name>]
+                                       hand this request to the live run on the same deliverable; finishes this run
 
   propose <file.json>|-                propose a workflow change or run; prints its approval URL
   withdraw <id> --reason <text>        withdraw your pending proposal with a reason
@@ -44,7 +50,9 @@ func CLI(ctx context.Context, args []string, getenv func(string) string, stdin i
 	var body []byte
 	var path string
 	var err error
-	if len(args) > 0 && args[0] == "answer-proposal" {
+	if len(args) > 0 && args[0] == "answer" {
+		path, body, err = parseAnswerCLI(args[1:])
+	} else if len(args) > 0 && args[0] == "answer-proposal" {
 		path, body, err = parseAnswerProposalCLI(args[1:], stdin)
 	} else if len(args) > 0 && (args[0] == "propose" || args[0] == "withdraw") {
 		path, body, err = parseProposalCLI(args, stdin)
@@ -197,6 +205,8 @@ func parseCLI(args []string, stdin io.Reader) (Move, string, error) {
 	fs.StringVar(&m.ETA, "eta", "", "")
 	fs.StringVar(&m.Why, "why", "", "")
 	fs.StringVar(&m.Exclude, "exclude", "", "comma-separated provider/model routes to skip")
+	fs.StringVar(&m.Into, "into", "", "steer: the live run on the same deliverable")
+	fs.StringVar(&m.Deliverable, "deliverable", "", "steer: what the two runs share")
 	note := fs.String("note", "", "")
 	var pos []string
 	rest := args[1:]
@@ -233,10 +243,16 @@ func parseCLI(args []string, stdin io.Reader) (Move, string, error) {
 		if strings.TrimSpace(m.Summary) == "" {
 			err = errors.New("summarize needs --summary <text>")
 		}
-	case "ask":
+	case "claim":
+		m.Deliverable, err = one("the deliverable: its public link or folder, or a short name for the work item")
+	case "ask", "steer":
+		if m.Move == "steer" && m.Into == "" {
+			err = errors.New("steer needs --into <run id>")
+			break
+		}
 		switch *note {
 		case "":
-			err = errors.New("ask needs --note <file> (or - for standard input)")
+			err = fmt.Errorf("%s needs --note <file> (or - for standard input)", m.Move)
 		case "-":
 			b, rerr := io.ReadAll(bufio.NewReader(stdin))
 			m.Note, err = string(b), rerr
@@ -248,7 +264,7 @@ func parseCLI(args []string, stdin io.Reader) (Move, string, error) {
 	default:
 		err = fmt.Errorf("unknown move %q", m.Move)
 	}
-	if err == nil && len(pos) > 0 && m.Move != "project" && m.Move != "back" && m.Move != "suggest" {
+	if err == nil && len(pos) > 0 && m.Move != "project" && m.Move != "back" && m.Move != "suggest" && m.Move != "claim" {
 		err = fmt.Errorf("%s takes no argument %q", m.Move, pos[0])
 	}
 	return m, *run, err

@@ -17,6 +17,7 @@ import (
 // call send its session cookie, and openStream streams with each host's key. anon(h) is the same
 // server with no one signed in.
 type testServer struct {
+	local *app
 	http.Handler
 	d dbtest.DB
 	*fixture

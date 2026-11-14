@@ -28,6 +28,7 @@ type Client struct {
 	// sets its Send, and its Reader's PaseoPID from the Watcher); nil sends none.
 	Resources *resources.Collector
 
+	ReportEvery time.Duration // periodic full snapshot; default 30s
 	StatusEvery time.Duration // re-read the daemon's status (a change is reported); default 15s
 	LiveEvery   time.Duration // copy running agents' transcripts; default 2s
 	DiffEvery   time.Duration // re-read the diffs of workspaces an agent works in; default 5s
@@ -36,11 +37,15 @@ type Client struct {
 
 	schedules       *ScheduleSync
 	scheduleMu      sync.Mutex
-	lastScheduleErr string // syncSchedules logs an error once
+	lastScheduleErr string           // syncSchedules logs an error once
+	reportTicks     <-chan time.Time // nil uses ReportEvery; tests can advance reporting explicitly
 }
 
 // Run runs the host until ctx ends.
 func (b *Client) Run(ctx context.Context) error {
+	if b.ReportEvery == 0 {
+		b.ReportEvery = 30 * time.Second
+	}
 	if b.StatusEvery == 0 {
 		b.StatusEvery = 15 * time.Second
 	}
@@ -103,6 +108,12 @@ func (b *Client) Run(ctx context.Context) error {
 func (b *Client) report(ctx context.Context, reported ...*latest) {
 	status := time.NewTicker(b.StatusEvery)
 	defer status.Stop()
+	heartbeat := b.reportTicks
+	if heartbeat == nil {
+		ticker := time.NewTicker(b.ReportEvery)
+		defer ticker.Stop()
+		heartbeat = ticker.C
+	}
 	due, fresh := false, false // a report is due; the next one is the first on a new stream
 	lastDaemon, lastErr := "", ""
 	for {
@@ -119,6 +130,8 @@ func (b *Client) report(ctx context.Context, reported ...*latest) {
 				return
 			case <-time.After(b.Settle):
 			}
+			due = true
+		case <-heartbeat:
 			due = true
 		case <-status.C:
 			b.Watcher.RefreshStatus(ctx) // a change comes back through Changed

@@ -45,8 +45,7 @@
     {{if $t.Output.Text}}{{template "cut" (pair $d (pair $e $t.Output))}}{{end}}
   {{else if eq $t.Type "edit"}}
     <div class="path"><code>{{$t.Path}}</code></div>
-    <pre class="diff">{{range $t.Diff}}<span class="{{.Class}}">{{.Text}}</span>
-{{end}}</pre>
+    <pre class="diff">{{range $t.Diff}}<span class="{{.Class}}">{{.Text}}</span>{{end}}</pre>
     {{if $t.DiffCut}}<div class="more"><a href="{{$d.Base}}/entries/{{$e.SeqStart}}">{{$t.DiffCut}} more lines</a></div>{{end}}
   {{else if or (eq $t.Type "read") (eq $t.Type "write")}}
     <div class="path"><code>{{$t.Path}}</code></div>

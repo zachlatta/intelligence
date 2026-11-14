@@ -60,6 +60,7 @@ func proposalChanges(a, b *workflow.WorkflowState) []proposalChange {
 	x, y := a.Definition, b.Definition
 	add("Host", x.Host, y.Host)
 	add("Trigger", x.Trigger, y.Trigger)
+	add("Priority", x.Priority, y.Priority)
 	add("Email filter", prettyProposal(x.Email), prettyProposal(y.Email))
 	add("Voice memo filter", prettyProposal(x.VoiceMemo), prettyProposal(y.VoiceMemo))
 	add("Project mode", x.Project.Mode, y.Project.Mode)
@@ -328,4 +329,4 @@ func workflowVersionPage(v viewer) http.HandlerFunc {
 
 //go:embed proposals.html
 var proposalsHTML string
-var proposalTmpl = template.Must(template.New("proposals").Funcs(template.FuncMap{"markdown": markdown, "inlineDiff": proposalInlineDiff, "stamp": func(t time.Time) string { return t.Format("Jan 2, 2006 · 15:04 MST") }}).Parse(proposalsHTML + layoutHTML))
+var proposalTmpl = template.Must(template.New("proposals").Funcs(localFuncs).Funcs(template.FuncMap{"markdown": markdown, "inlineDiff": proposalInlineDiff}).Parse(proposalsHTML + layoutHTML))

@@ -56,8 +56,11 @@ func TestRunActivityAPIAndDisplay(t *testing.T) {
 			t.Fatalf("missing fresh activity on %s", path)
 		}
 		// the ETA shows in the viewer's zone, not the server's
-		if !strings.Contains(page, `ETA <time data-local datetime="`) || !strings.Contains(page, "localTimes") {
+		if !strings.Contains(page, `ETA <time datetime="2026-12-01T22:00:00Z" data-format="minute"`) || !strings.Contains(page, `/localtime.js`) || strings.Contains(page, "const localTimes") {
 			t.Fatalf("ETA not localized on %s", path)
+		}
+		if path == "/workflows" && (!strings.Contains(page, `class="table runs-table"`) || strings.Contains(page, ".runs-table tr:first-child")) {
+			t.Fatal("paged runs must retain activity on the first row on phones")
 		}
 	}
 	if _, err := d.Owner.Exec(t.Context(), "UPDATE workflow_runs SET activity_updated_at=now()-interval '31 minutes',status='waiting' WHERE id=$1", run); err != nil {

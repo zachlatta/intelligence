@@ -51,7 +51,7 @@ func TestMCPProposalTokenIdentityAndApprovalBoundary(t *testing.T) {
 	}
 	for _, path := range []string{"/workflow-proposals/" + id, "/workflow-proposals"} {
 		page := get(t, h, path, nil).Body.String()
-		if !strings.Contains(page, "mcp:"+tokenID) || !strings.Contains(page, "MCP token created Nov 1, 2026") {
+		if !strings.Contains(page, "mcp:"+tokenID) || !strings.Contains(page, `MCP token created <time datetime="2026-11-01T`) {
 			t.Errorf("%s lacks readable token attribution: %s", path, page)
 		}
 	}

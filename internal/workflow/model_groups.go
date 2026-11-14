@@ -274,7 +274,10 @@ func (e *Engine) fillModels(ctx context.Context, tx pgx.Tx, r run, step int) (De
 	return d, nil
 }
 
-type modelSuggestion struct{ Inline, Note string }
+// modelSuggestion is one allocation: Inline replaces the token; Note goes under Model suggestions.
+type modelSuggestion struct {
+	Inline, Note string
+}
 
 func (e *Engine) suggestModel(ctx context.Context, tx pgx.Tx, r run, step int, token string, exclude []string) (modelSuggestion, error) {
 	if err := lockModels(ctx, tx, r.Account); err != nil {

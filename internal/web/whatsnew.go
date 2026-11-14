@@ -21,7 +21,7 @@ var whatsNewHTML string
 var whatsNewJS []byte
 
 var (
-	whatsNewTmpl   = template.Must(template.New("whatsnew").Funcs(template.FuncMap{"short": short}).Parse(whatsNewHTML + layoutHTML))
+	whatsNewTmpl   = template.Must(template.New("whatsnew").Funcs(localFuncs).Funcs(template.FuncMap{"short": short}).Parse(whatsNewHTML + layoutHTML))
 	whatsNewScript = asset("whatsnew.js", "text/javascript; charset=utf-8", whatsNewJS)
 )
 
