@@ -243,11 +243,13 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 	b.WriteString(".\n\nBefore starting workers, find this agent's workspace ID with Paseo's workspace listing. Pass --workspace <id> explicitly to every worker so it uses this workspace's working directory; --cwd alone can inherit the parent's workspace. Verify each worker with paseo inspect before it edits files. Stop a misplaced worker and relaunch it in the correct workspace. Do not create a replacement worktree in another repository or fall back to a main checkout; if the task names a repository that differs from this run's project, ask Zach before proceeding")
 	fmt.Fprintf(&b, ".\n\nWhat started it:\n\n%s\n\n", strings.TrimSpace(v.Input))
 	fmt.Fprintf(&b, "Before starting work, summarize the whole task above as a concise action title (3–8 words, at most 80 characters). Describe the requested outcome, not just the prompt's opening words. Preserve important constraints and negations. For example: \"Summarize workflow run titles\". Save it with:\n\n  intelligence workflow summarize --run %s --summary \"<short task summary>\"\n\nUse proper shell quoting for your text. This only labels the run and does not advance a step. If saving the summary fails, continue with the workflow; do not block the task on it.\n\n", v.Run)
+	b.WriteString("Report current activity at the start and at each step change, and whenever you wait on an outside party or a long job for more than 10 minutes. Say what you are waiting on and since when (with timezone), in one plain sentence. Refresh while a long wait continues; do not leave an old line pretending to be current. Include an honest completion ETA as RFC3339 when known; omit --eta when unknown to clear the previous estimate. Do not invent an ETA. This reports activity without advancing the run.\n\n")
 	b.WriteString("Its steps:\n\n")
 	for i, s := range d.Steps {
 		fmt.Fprintf(&b, "%d. %s (%s, id %s)\n", i+1, s.Title, s.Kind, s.ID)
 	}
 	fmt.Fprintf(&b, "\nYou get one step at a time. Move the run with these commands:\n\n"+
+		"  intelligence workflow status --run %[1]s --now \"<one plain sentence>\" [--eta <RFC3339>]    save current activity and ETA\n"+
 		"  intelligence workflow next --run %[1]s --summary \"<one line>\"    this step is done; prints the next one\n"+
 		"  intelligence workflow back --run %[1]s <step id> --why \"<what is missing>\"    send the work back to an earlier step\n"+
 		"  intelligence workflow skip --run %[1]s --why \"<why>\"    skip a step its instructions let you skip\n"+

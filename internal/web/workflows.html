@@ -8,6 +8,9 @@
 {{template "css"}}
 <script src="/model-groups.js" defer></script>
 <style>
+  .run-activity { overflow-wrap: anywhere; white-space: normal; }
+  td.run-activity { min-width: 14rem; max-width: 24rem; }
+  .run-activity .meta { display: block; margin-top: .35rem; }
   .status { display: inline-flex; align-items: center; justify-content: center; gap: .3rem; height: 1.3rem; min-width: 4.6rem; padding: 0 .45rem;
     border-radius: 4px; border: 1px solid var(--line-strong); background: var(--bg-subtle); color: var(--fg-2); font-size: 12px; font-weight: 500;
     flex: none; white-space: nowrap; }
@@ -51,6 +54,12 @@
   .composer .banner { margin: .5rem 1rem; }
   .composer #task-status:empty { display: none; }
   @media (max-width: 40rem) {
+    .runs-table, .runs-table tbody, .runs-table tr, .runs-table td { display: block; width: auto; }
+    .runs-table tr:first-child { display: none; }
+    .runs-table tr { padding: .6rem; border-bottom: 1px solid var(--line); }
+    .runs-table td { border: 0; padding: .25rem; text-align: left; }
+    .runs-table td:nth-child(5), .runs-table td:nth-child(6) { display: none; }
+    .runs-table td.run-activity { min-width: 0; max-width: none; }
     .composer .pick { flex: 1 1 100%; order: -1; }
     .composer .pick select { flex: 1; max-width: none; }
     .composer #submit-task { margin-left: auto; }
@@ -196,13 +205,13 @@
 {{end}}
 <h2 class="section-title">Runs</h2>
 <div id="runs">
-{{if .Runs}}<div class="table-wrap"><table class="table">
+{{if .Runs}}<div class="table-wrap"><table class="table runs-table">
   <tr><th>Status</th><th>What</th><th>Workflow</th><th>Now</th><th>Host</th><th>Project</th><th class="n">Started</th></tr>
   {{range .Runs}}<tr>
     <td><span class="status {{.StatusClass}}">{{.StatusLabel}}</span></td>
     <td><a href="/workflow-runs/{{.ID}}">{{.Title}}</a></td>
     <td>{{.Workflow}} <span class="meta">v{{.Version}}{{if .WorkflowDeleted}} (deleted){{end}}</span></td>
-    <td class="meta">{{.Where}}</td>
+    <td class="run-activity">{{if .CurrentActivity}}{{template "activity" (activityView . $.Now)}}{{else}}<span class="meta">{{.Where}}</span>{{end}}</td>
     <td class="mono" style="white-space:nowrap">{{.Host}}</td>
     <td class="mono">{{.Repo}}</td>
     <td class="n meta">{{ago $.Now .CreatedAt}}</td></tr>{{end}}
@@ -688,6 +697,10 @@ render();
 </script>{{end}}
 {{template "wffoot" .}}{{end}}
 
+{{define "activity"}}<div>{{if not .Run.Live}}Last activity: {{end}}{{.Run.CurrentActivity}}</div>
+<span class="meta">{{if .Run.ActivityStale .Now}}Stale · {{end}}Updated {{with .Run.ActivityUpdatedAt}}<time datetime="{{.Format "2006-01-02T15:04:05Z07:00"}}">{{ago $.Now .}}</time>{{end}}</span>
+<span class="meta">ETA {{with .Run.ActivityETA}}<time datetime="{{.Format "2006-01-02T15:04:05Z07:00"}}">{{.Format "Jan 2, 15:04 MST"}}</time>{{else}}unknown{{end}}</span>{{end}}
+
 {{define "run"}}{{template "wfhead" .Run.Title}}
 <main class="container page">
 <div class="crumbs"><a href="/workflows">Workflows</a><span class="sep">/</span>{{if .Run.WorkflowDeleted}}<span>{{.Run.Workflow}} (deleted)</span>{{else}}<a href="/workflows/{{.Run.WorkflowID}}">{{.Run.Workflow}}</a>{{end}}<span class="sep">/</span>run</div>
@@ -701,6 +714,7 @@ render();
       <span>{{plural (len .Agents) "agent"}}</span><span>{{if eq .Run.Status "queued"}}queued{{else}}started{{end}} {{ago .Now .Run.CreatedAt}}</span></div></div>
   <div class="actions">{{if eq .Run.Status "queued"}}<button class="btn sm primary" id="start-now">Start now</button>{{end}}{{if .Run.Live}}<button class="btn sm" id="cancel">Cancel run</button>{{end}}</div>
 </div>
+{{if .Run.CurrentActivity}}<section class="card card-body run-activity" aria-label="Current activity">{{template "activity" .}}</section>{{end}}
 <div class="request">{{.Run.Input}}</div>
 {{if .VoiceMemos}}<section class="card"><div class="card-head"><h2>Voice memo that started this run</h2><span class="grow"></span><a class="btn sm ghost" href="/workflows/voice-memos">All voice memos</a></div><div class="card-body">{{template "voice-memo-rows" .VoiceMemos}}</div></section>{{end}}
 {{if .Emails}}<section class="card"><div class="card-head"><h2>Email thread</h2><span class="meta grow">what each email in it did</span><a class="btn sm ghost" href="/workflows/email">All email</a></div>

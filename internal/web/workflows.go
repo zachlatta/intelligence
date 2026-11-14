@@ -29,6 +29,12 @@ import (
 var workflowsHTML string
 
 var workflowsTmpl = template.Must(template.New("workflows").Funcs(template.FuncMap{
+	"activityView": func(r runRow, now time.Time) any {
+		return struct {
+			Run runRow
+			Now time.Time
+		}{r, now}
+	},
 	"short": short, "ago": ago, "markdown": markdown, "plural": plural, "emailSummary": emailSummary, "voiceMemoSummary": voiceMemoSummary,
 	"json": func(v any) (template.JS, error) {
 		b, err := json.Marshal(v)
@@ -320,6 +326,8 @@ func readWorkflows(ctx context.Context, p *pgxpool.Pool, id string) ([]workflowR
 
 // runRow is a run as the pages show it.
 type runRow struct {
+	CurrentActivity                                                      string
+	ActivityUpdatedAt, ActivityETA                                       *time.Time
 	ID, Title, Input, Status, Host, Repo, Branch, Workflow, WorkflowID   string
 	WorkspaceID, WorkspaceTitle, Orchestrator, ProjectAgent, Note, Error string
 	QueueReason                                                          string
@@ -339,7 +347,7 @@ const runRowSelect = `SELECT r.id::text, coalesce(nullif(r.task_summary, ''), r.
 	w.deleted_at IS NOT NULL, r.start_retries, r.start_retry_at,
 	COALESCE((SELECT online FROM host_status WHERE name=r.host),false),
 	COALESCE((SELECT online AND connected FROM host_status WHERE name=r.host),false),
-	COALESCE((SELECT start_retry_keys FROM hosts WHERE name=r.host),false), r.queue_reason, coalesce(q.position, 0)
+	COALESCE((SELECT start_retry_keys FROM hosts WHERE name=r.host),false), r.queue_reason, coalesce(q.position, 0), r.current_activity, r.activity_updated_at, r.activity_eta
 	FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id JOIN workflow_versions v ON v.workflow_id = r.workflow_id AND v.version = r.version
 	LEFT JOIN workflow_run_queue q ON q.run_id = r.id `
 
@@ -348,11 +356,15 @@ func scanRunRow(row pgx.CollectableRow) (runRow, error) {
 	var steps []byte
 	err := row.Scan(&r.ID, &r.Title, &r.Input, &r.Status, &r.Host, &r.Repo, &r.Branch, &r.Workflow, &r.WorkflowID, &r.WorkspaceID, &r.WorkspaceTitle,
 		&r.Orchestrator, &r.ProjectAgent, &r.Note, &r.Error, &r.Step, &r.Version, &steps, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt, &r.WorkflowDeleted,
-		&r.StartRetries, &r.StartRetryAt, &r.HostOnline, &r.DaemonConnected, &r.RetryKeys, &r.QueueReason, &r.Position)
+		&r.StartRetries, &r.StartRetryAt, &r.HostOnline, &r.DaemonConnected, &r.RetryKeys, &r.QueueReason, &r.Position, &r.CurrentActivity, &r.ActivityUpdatedAt, &r.ActivityETA)
 	if err == nil {
 		err = json.Unmarshal(steps, &r.Steps)
 	}
 	return r, err
+}
+
+func (r runRow) ActivityStale(now time.Time) bool {
+	return r.ActivityUpdatedAt != nil && now.Sub(*r.ActivityUpdatedAt) > 30*time.Minute
 }
 
 // Where reads as: what a run is doing now.
@@ -872,6 +884,8 @@ func modelSuggestionLine(selected []byte, token *string) string {
 // Line is how one event reads on the run page.
 func (e runEvent) Line() string {
 	switch e.Kind {
+	case "status":
+		return "Activity: " + e.Text
 	case "model_suggestion":
 		return e.Text
 	case "started":

@@ -662,6 +662,19 @@ host-authenticated JSON moves API (`{"move":"summarize","summary":"..."}`), with
 the run. The summary is stored in `workflow_runs.task_summary`, readable through `/api/sql` with
 the run's usual account isolation. It does not rename the workspace or branch.
 
+The **Now** column and the top of each run page show the orchestrator's latest activity,
+when it was reported and its estimated completion time (or “ETA unknown”). Report it with
+`intelligence workflow status --run <id> --now "Running the checks." --eta <RFC3339>`.
+Omit `--eta` to clear a previous estimate. Activity must be one visible line of 1–280 characters.
+The host-authenticated moves route accepts `{"move":"status","now":"...","eta":"..."}`;
+it saves `workflow_runs.current_activity`, `activity_updated_at` and `activity_eta`, plus a
+`status` event, in one transaction without advancing the run. Normal account SQL isolation applies.
+Queued and ended runs refuse this move; a run waiting for a reply can still report activity.
+Lines older than 30 minutes are marked stale. Ended runs show “Last activity”.
+The generated contract tells every orchestrator, including saved workflows, to report at
+step changes and during outside-party or long-job waits exceeding 10 minutes, saying what
+it is waiting on and since when. New runs receive this contract; existing agents keep their prompts.
+
 Summary generation uses the workflow's existing orchestrator model and requires no extra API key.
 It happens asynchronously after the orchestrator starts; until then, or if the agent cannot save
 it, the pages fall back to `workflow_runs.title` (the cleaned, shortened prompt). The task proceeds

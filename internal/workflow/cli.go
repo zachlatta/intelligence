@@ -23,6 +23,7 @@ The agents of a workflow run move it with these, on the run's host:
 
   project   --run <id> <directory>|none   the project finder's answer
   summarize --run <id> --summary <text>   save a short task summary without moving the run
+  status    --run <id> --now <sentence> [--eta <RFC3339>]   report current activity without advancing
   next      --run <id> [--summary <text>]  this step is done; prints the next step (after the last, finishes the run)
   back      --run <id> <step id> --why <text>
   skip      --run <id> --why <text>
@@ -192,6 +193,8 @@ func parseCLI(args []string, stdin io.Reader) (Move, string, error) {
 	fs.SetOutput(io.Discard)
 	run := fs.String("run", "", "the run's id")
 	fs.StringVar(&m.Summary, "summary", "", "")
+	fs.StringVar(&m.Now, "now", "", "")
+	fs.StringVar(&m.ETA, "eta", "", "")
 	fs.StringVar(&m.Why, "why", "", "")
 	fs.StringVar(&m.Exclude, "exclude", "", "comma-separated provider/model routes to skip")
 	note := fs.String("note", "", "")
@@ -218,6 +221,8 @@ func parseCLI(args []string, stdin io.Reader) (Move, string, error) {
 	}
 	var err error
 	switch m.Move {
+	case "status":
+		_, _, err = activityValues(m)
 	case "project":
 		m.Directory, err = one("a directory, or none")
 	case "back":

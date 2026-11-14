@@ -646,6 +646,8 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 
 // Move is what `intelligence workflow` asks of a run.
 type Move struct {
+	Now       string `json:"now,omitempty"`
+	ETA       string `json:"eta,omitempty"`
 	Move      string `json:"move"`                // summarize, project, next, skip, back, ask, done, fail
 	Directory string `json:"directory,omitempty"` // project: a repository, or "none"
 	Step      string `json:"step,omitempty"`      // back: the step's id
@@ -699,6 +701,21 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		return "", conflict("This run is over (%s). Do nothing more for it.", r.Status)
 	case Queued:
 		return "", conflict("This run is queued for room on its host: it has no agents yet. Do nothing for it.")
+	}
+	if m.Move == "status" {
+		line, eta, err := activityValues(m)
+		if err != nil {
+			return "", err
+		}
+		at := e.Now()
+		if _, err := tx.Exec(ctx, "UPDATE workflow_runs SET current_activity=$2, activity_updated_at=$3, activity_eta=$4, updated_at=$3 WHERE id=$1", r.ID, line, at, eta); err != nil {
+			return "", err
+		}
+		text := line + " · ETA unknown"
+		if eta != nil {
+			text = line + " · ETA " + eta.Format(time.RFC3339)
+		}
+		return "Current activity saved; run status and step are unchanged.", e.event(ctx, tx, r, "status", nil, nil, text)
 	}
 	if m.Move == "project" {
 		if r.Status != FindingProject {
