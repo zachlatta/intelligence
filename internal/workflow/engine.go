@@ -646,9 +646,7 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 
 // Move is what `intelligence workflow` asks of a run.
 type Move struct {
-	Now       string `json:"now,omitempty"`
-	ETA       string `json:"eta,omitempty"`
-	Move      string `json:"move"`                // summarize, project, next, skip, back, ask, done, fail
+	Move      string `json:"move"`                // summarize, status, project, next, skip, back, ask, done, fail
 	Directory string `json:"directory,omitempty"` // project: a repository, or "none"
 	Step      string `json:"step,omitempty"`      // back: the step's id
 	Summary   string `json:"summary,omitempty"`
@@ -656,6 +654,8 @@ type Move struct {
 	Note      string `json:"note,omitempty"`    // ask: Markdown, for Zach
 	Token     string `json:"token,omitempty"`   // suggest: a model group's stable token
 	Exclude   string `json:"exclude,omitempty"` // suggest: comma-separated provider/model routes to skip
+	Now       string `json:"now,omitempty"`     // status: one plain sentence on what the run is doing
+	ETA       string `json:"eta,omitempty"`     // status: RFC3339 estimated completion, "" for unknown
 }
 
 // MoveRun makes m on run, for host (whose key the caller checked): the run must be on host. It

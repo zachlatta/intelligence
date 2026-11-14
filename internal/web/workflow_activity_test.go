@@ -55,6 +55,10 @@ func TestRunActivityAPIAndDisplay(t *testing.T) {
 		if !strings.Contains(page, line) || !strings.Contains(page, "ETA") || !strings.Contains(page, "Updated") || strings.Contains(page, "Stale · Updated") {
 			t.Fatalf("missing fresh activity on %s", path)
 		}
+		// the ETA shows in the viewer's zone, not the server's
+		if !strings.Contains(page, `ETA <time data-local datetime="`) || !strings.Contains(page, "localTimes") {
+			t.Fatalf("ETA not localized on %s", path)
+		}
 	}
 	if _, err := d.Owner.Exec(t.Context(), "UPDATE workflow_runs SET activity_updated_at=now()-interval '31 minutes',status='waiting' WHERE id=$1", run); err != nil {
 		t.Fatal(err)

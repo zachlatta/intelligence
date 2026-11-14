@@ -4,7 +4,7 @@
     "released": "2026-11-14",
     "title": "See what each run is doing now",
     "summary": "The runs table and run page now show the latest activity, when it was reported and an ETA. Updates older than 30 minutes are marked stale. Orchestrators report progress with the workflow status command, including during long waits.",
-    "media": "workflow-activity.png",
+    "media": "workflow-activity-eta.png",
     "mediaAlt": "Phone-sized run page showing release checks in progress, the age of the activity update and an estimated completion time"
   },
   {

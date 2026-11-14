@@ -7,6 +7,20 @@
 <script src="/attachments.js"></script>
 {{template "css"}}
 <script src="/model-groups.js" defer></script>
+<script>
+// <time data-local> shows its moment in the viewer's zone; the server's text is the fallback.
+// Live refreshes swap in new markup, so convert again whenever the page changes.
+const localTimes = (root) => root.querySelectorAll("time[data-local]:not([data-localized])").forEach((t) => {
+  const at = new Date(t.dateTime);
+  if (isNaN(at)) return;
+  t.dataset.localized = "";
+  t.textContent = at.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+});
+document.addEventListener("DOMContentLoaded", () => {
+  localTimes(document);
+  new MutationObserver(() => localTimes(document)).observe(document.body, { childList: true, subtree: true });
+});
+</script>
 <style>
   .run-activity { overflow-wrap: anywhere; white-space: normal; }
   td.run-activity { min-width: 14rem; max-width: 24rem; }
@@ -699,7 +713,7 @@ render();
 
 {{define "activity"}}<div>{{if not .Run.Live}}Last activity: {{end}}{{.Run.CurrentActivity}}</div>
 <span class="meta">{{if .Run.ActivityStale .Now}}Stale · {{end}}Updated {{with .Run.ActivityUpdatedAt}}<time datetime="{{.Format "2006-01-02T15:04:05Z07:00"}}">{{ago $.Now .}}</time>{{end}}</span>
-<span class="meta">ETA {{with .Run.ActivityETA}}<time datetime="{{.Format "2006-01-02T15:04:05Z07:00"}}">{{.Format "Jan 2, 15:04 MST"}}</time>{{else}}unknown{{end}}</span>{{end}}
+<span class="meta">ETA {{with .Run.ActivityETA}}<time data-local datetime="{{.Format "2006-01-02T15:04:05Z07:00"}}">{{.Format "Jan 2, 15:04 MST"}}</time>{{else}}unknown{{end}}</span>{{end}}
 
 {{define "run"}}{{template "wfhead" .Run.Title}}
 <main class="container page">
