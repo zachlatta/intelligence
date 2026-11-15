@@ -479,11 +479,37 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 // records when (launched_at) and the command that starts it (launch_command), which reserve the
 // run's footprint in its host's projected load until the host has carried it out (queue.go).
 func (e *Engine) launch(ctx context.Context, tx pgx.Tx, r run) error {
-	if err := e.startFirst(ctx, tx, r); err != nil {
+	_, err := e.startAttempt(ctx, tx, r, func(start pgx.Tx) error {
+		if err := checkWorkflowProviders(ctx, start, r.Def); err != nil {
+			return err
+		}
+		if err := e.startFirst(ctx, start, r); err != nil {
+			return err
+		}
+		_, err := start.Exec(ctx, "UPDATE workflow_runs SET launched_at = $2, launch_command = pending_command WHERE id = $1", r.ID, e.Now())
+		return err
+	})
+	return err
+}
+
+// Check both startup roles before starting either. Fixed projects have no finder.
+func checkWorkflowProviders(ctx context.Context, tx pgx.Tx, d Definition) error {
+	disabled, err := fleet.DisabledProviders(ctx, tx)
+	if err != nil {
 		return err
 	}
-	_, err := tx.Exec(ctx, "UPDATE workflow_runs SET launched_at = $2, launch_command = pending_command WHERE id = $1", r.ID, e.Now())
-	return err
+	providers := []string{d.Orchestrator.Provider}
+	if d.Project.Mode == ProjectMatch {
+		providers = append(providers, d.Project.Provider)
+	}
+	for _, provider := range providers {
+		for _, name := range disabled {
+			if strings.EqualFold(strings.TrimSpace(provider), name) {
+				return &fleet.DisabledProviderError{Provider: name}
+			}
+		}
+	}
+	return nil
 }
 
 // startFirst queues the command that starts run r, its pending_command.
@@ -716,11 +742,26 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 				return "", bad("%q is not one of this host's repositories: %s, or none.", repo, strings.Join(repos, ", "))
 			}
 		}
-		if err := e.archiveFinder(ctx, tx, r); err != nil {
+		var startErr error
+		terminal, err := e.startAttempt(ctx, tx, r, func(start pgx.Tx) error {
+			startErr = checkWorkflowProviders(ctx, start, r.Def)
+			if startErr != nil {
+				return startErr
+			}
+			if err := e.archiveFinder(ctx, start, r); err != nil {
+				return err
+			}
+			startErr = e.startOrchestrator(ctx, start, r, repo)
+			return startErr
+		})
+		if err != nil {
 			return "", err
 		}
-		if err := e.startOrchestrator(ctx, tx, r, repo); err != nil {
-			return "", err
+		if terminal {
+			if err := e.archiveFinder(ctx, tx, r); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("This run failed: %s. Stop now: do nothing more for it.", startErr), nil
 		}
 		return fmt.Sprintf("Thanks: the project is %s. The orchestrator takes it from here. Stop now.", orNone(repo)), nil
 	}

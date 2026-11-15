@@ -224,13 +224,10 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 
 // dequeue starts queued run r, saying why it starts now.
 func (e *Engine) dequeue(ctx context.Context, tx pgx.Tx, r run, why string) error {
-	_, err := e.startAttempt(ctx, tx, r, func(start pgx.Tx) error {
-		if err := e.recordDequeue(ctx, start, r, why); err != nil {
-			return err
-		}
-		return e.launch(ctx, start, r)
-	})
-	return err
+	if err := e.recordDequeue(ctx, tx, r, why); err != nil {
+		return err
+	}
+	return e.launch(ctx, tx, r)
 }
 
 // startAttempt rolls back partial startup writes (including model allocations) in a

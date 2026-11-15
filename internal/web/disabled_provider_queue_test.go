@@ -1,6 +1,7 @@
 package web
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,76 @@ import (
 	"github.com/zachlatta/intelligence/internal/hostclient"
 	"github.com/zachlatta/intelligence/internal/workflow"
 )
+
+func TestDisabledOrchestratorCannotStrandProjectFinder(t *testing.T) {
+	for _, provider := range []string{"muse", "antigravity", "gemini"} {
+		for _, alreadyRunning := range []bool{false, true} {
+			name := provider + "/before_launch"
+			if alreadyRunning {
+				name = provider + "/finder_running"
+			}
+			t.Run(name, func(t *testing.T) {
+				h, d := dbServer(t)
+				b := sendReport(t, h, wfReport())
+				def := workflow.Starting
+				def.Orchestrator.Provider = provider
+				if alreadyRunning {
+					if _, err := d.Owner.Exec(t.Context(), `UPDATE provider_plan_settings SET enabled=true WHERE provider=$1`, provider); err != nil {
+						t.Fatal(err)
+					}
+				}
+				run := startRun(t, h, createWorkflow(t, h, def), "Match a project")
+				if alreadyRunning {
+					finder := b.command()
+					ack := b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{ID: finder.ID, Status: hostclient.CommandSucceeded, Result: []byte(`{"agentId":"finder-1"}`)}})
+					if ack.Error != "" {
+						t.Fatal(ack.Error)
+					}
+					if _, err := d.Owner.Exec(t.Context(), `UPDATE provider_plan_settings SET enabled=false WHERE provider=$1`, provider); err != nil {
+						t.Fatal(err)
+					}
+					code, msg := move(t, h, keyOf(t, h, "host-1"), run, map[string]string{"move": "project", "directory": "none"})
+					if code != http.StatusOK || !strings.Contains(msg, "Stop") || !strings.Contains(msg, "provider "+provider+" is disabled") {
+						t.Errorf("finder response: %d %s", code, msg)
+					}
+				}
+				if status := runField(t, h, run, "status"); status != workflow.Failed {
+					t.Errorf("status: %v", status)
+				}
+				if msg, _ := runField(t, h, run, "error").(string); !strings.Contains(msg, "provider "+provider+" is disabled") {
+					t.Errorf("failure reason: %q", msg)
+				}
+				if runField(t, h, run, "finished_at") == nil {
+					t.Error("missing completion time")
+				}
+				if runField(t, h, run, "pending_command") != nil {
+					t.Error("startup command retained")
+				}
+				var starts, archives int
+				if err := d.Owner.QueryRow(t.Context(), `SELECT count(*) FROM commands WHERE kind IN ('create_agent','create_workspace')`).Scan(&starts); err != nil {
+					t.Fatal(err)
+				}
+				if err := d.Owner.QueryRow(t.Context(), `SELECT count(*) FROM commands WHERE kind='archive_agent' AND args->>'agentId'='finder-1'`).Scan(&archives); err != nil {
+					t.Fatal(err)
+				}
+				want := 0
+				if alreadyRunning {
+					want = 1
+				}
+				if starts != want || archives != want {
+					t.Errorf("starts=%d archives=%d, want %d", starts, archives, want)
+				}
+				// At 70% there is room for one run, provided the failed finder
+				// no longer reserves capacity as a finding_project run.
+				hostMinute(t, b, time.Now().UTC().Truncate(time.Minute).Add(-time.Minute), 70, 0.3)
+				next := startRun(t, h, fixedWorkflow(t, h), "Next subscribed run")
+				if status := runField(t, h, next, "status"); status != workflow.StartingOrchestrator {
+					t.Errorf("failed finder retained capacity: next run %v", status)
+				}
+			})
+		}
+	}
+}
 
 func TestDisabledProviderDoesNotBlockHostQueue(t *testing.T) {
 	for _, provider := range []string{"muse", "antigravity", "gemini"} {

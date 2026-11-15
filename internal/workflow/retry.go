@@ -91,6 +91,9 @@ func (e *Engine) launchRetry(ctx context.Context, tx pgx.Tx, r run) (bool, error
 	if err != nil {
 		return false, err
 	}
+	if err := checkWorkflowProviders(ctx, tx, r.Def); err != nil {
+		return false, err
+	}
 	// Reuse Paseo's creation key, but give this delivery a new ID: the host caches completed
 	// deliveries, including failures.
 	var args json.RawMessage
