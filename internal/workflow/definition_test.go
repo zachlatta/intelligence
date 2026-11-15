@@ -15,6 +15,26 @@ func TestOrchestratorSummarizesTheTaskBeforeStartingWork(t *testing.T) {
 	}
 }
 
+func TestSavedOrchestratorPreservesNamesBeforeSummarizing(t *testing.T) {
+	d := clone(Starting)
+	d.Orchestrator.Instructions = "Custom saved workflow instructions"
+	p := OrchestratorPrompt("Saved", d, Vars{Run: "run-1", Input: "Send the transcript to Maxwell"})
+	for _, want := range []string{
+		"In summaries, run titles and email subjects, keep people's names as Zach said or wrote them",
+		"never add a surname or identity unless this run verified it with evidence",
+		"Cite the source used to verify an identity in the reply",
+		"Generated titles and summaries are not identity evidence",
+		"Leave unresolved names as given",
+		"If you choose among ambiguous names, say who and why in one reply line, citing the source",
+		"Pass this names rule to every worker",
+	} {
+		at := strings.Index(p, want)
+		if at < 0 || at > strings.Index(p, "intelligence workflow summarize --run") {
+			t.Errorf("names rule must precede summarize command: missing %q", want)
+		}
+	}
+}
+
 func TestStartingWorkflowRecommendsSubscribedPlans(t *testing.T) {
 	if strings.Contains(OrchestratorInstructions, "antigravity/") || strings.Contains(OrchestratorInstructions, "muse/") {
 		t.Error("starting guidance recommends an unsubscribed provider")

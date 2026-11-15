@@ -756,6 +756,12 @@ host-authenticated JSON moves API (`{"move":"summarize","summary":"..."}`), with
 the run. The summary is stored in `workflow_runs.task_summary`, readable through `/api/sql` with
 the run's usual account isolation. It does not rename the workspace or branch.
 
+Summaries, run titles and email subjects keep names as Zach said or wrote them unless the run
+verifies an identity with evidence and cites the source in the reply. Generated titles and summaries
+are not identity evidence; unresolved names stay as given. When choosing among ambiguous names,
+the reply explains who and why in one line and cites the source. The orchestrator passes this rule
+to its workers.
+
 The **Now** column and the top of each run page show the orchestrator's latest activity,
 when it was reported and its estimated completion time (or “ETA unknown”). Report it with
 `intelligence workflow status --run <id> --now "Running the checks." --eta <RFC3339>`.
@@ -1772,6 +1778,10 @@ restarts. An outage longer than the feed's 48-hour window can lose recordings.
 Run input contains the title, recording time, duration, PDW identity, at most the first 1000
 Unicode characters of transcript, its total character count, and a truncation notice when
 needed. PDW's summary is included when available, also capped at 1000 Unicode characters.
+The transcript preview comes first. The title is labelled `Voice memo title (generated)` and
+the summary `PDW summary (generated)`; neither is identity evidence. Initial run, workspace,
+agent and branch names come from the transcript preview alone, using the usual task naming
+rules. An empty preview is named “Voice memo”. Generated metadata never supplies fallback names.
 It includes exact SQL and a shell-quoted `pdw sql` command to fetch the full transcript
 by source, account and recording ID. Agents use their own normal PDW access for that command;
 the server's feed key cannot run SQL. Full transcripts are used for matching but never stored
