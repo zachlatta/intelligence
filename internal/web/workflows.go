@@ -647,6 +647,34 @@ func renderWorkflows(w http.ResponseWriter, name string, data map[string]any) {
 	}
 }
 
+type runStatusTab struct {
+	Key, Label string
+	Statuses   []string
+	Count      int
+	Selected   bool
+}
+
+func runStatusTabs(selected string) []runStatusTab {
+	tabs := []runStatusTab{
+		{Key: "all", Label: "All"},
+		{Key: "running", Label: "Running", Statuses: []string{workflow.FindingProject, workflow.StartingOrchestrator, workflow.Running}},
+		{Key: "queued", Label: "Queued", Statuses: []string{workflow.Queued}},
+		{Key: "waiting", Label: "Needs you", Statuses: []string{workflow.Waiting}},
+		{Key: "completed", Label: "Completed", Statuses: []string{workflow.Succeeded}},
+		{Key: "failed", Label: "Failed", Statuses: []string{workflow.Failed}},
+		{Key: "canceled", Label: "Canceled", Statuses: []string{workflow.Canceled}},
+	}
+	found := false
+	for i := range tabs {
+		tabs[i].Selected = tabs[i].Key == selected
+		found = found || tabs[i].Selected
+	}
+	if !found {
+		tabs[0].Selected = true
+	}
+	return tabs
+}
+
 // workflowsPage: GET /workflows: a new task, the account's workflows and their runs.
 func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -656,7 +684,42 @@ func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		rows, err := v.pool.Query(ctx, runRowSelect+"ORDER BY r.created_at DESC LIMIT 100")
+		tabs := runStatusTabs(r.URL.Query().Get("status"))
+		// Both the counts and list read as the account's SQL role, including its RLS.
+		counts, err := v.pool.Query(ctx, "SELECT status, count(*) FROM workflow_runs GROUP BY status")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		type statusCount struct {
+			Status string
+			Count  int
+		}
+		byStatus, err := pgx.CollectRows(counts, pgx.RowToStructByPos[statusCount])
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		statuses := []string{}
+		var selected runStatusTab
+		for i := range tabs {
+			for _, c := range byStatus {
+				if tabs[i].Key == "all" {
+					tabs[i].Count += c.Count
+				} else {
+					for _, status := range tabs[i].Statuses {
+						if c.Status == status {
+							tabs[i].Count += c.Count
+						}
+					}
+				}
+			}
+			if tabs[i].Selected {
+				selected = tabs[i]
+				statuses = append(statuses, tabs[i].Statuses...)
+			}
+		}
+		rows, err := v.pool.Query(ctx, runRowSelect+"WHERE (cardinality($1::text[]) = 0 OR r.status = ANY($1)) ORDER BY r.created_at DESC, r.id DESC LIMIT 100", statuses)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -678,7 +741,7 @@ func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 			}
 		}
 		renderWorkflows(w, "list", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Workflows": wfs, "Runs": runs,
-			"Hosts": hosts, "Tasks": tasks, "Starting": workflow.Starting, "Dictation": dictationPath(cfg)})
+			"RunTabs": tabs, "RunFilter": selected, "Hosts": hosts, "Tasks": tasks, "Starting": workflow.Starting, "Dictation": dictationPath(cfg)})
 	}
 }
 

@@ -1,5 +1,13 @@
 [
   {
+    "id": "workflow-run-status-tabs",
+    "released": "2026-11-15",
+    "title": "Filter workflow runs by status",
+    "summary": "On Workflows, use the tabs above Runs to see Running, Queued, Needs you, Completed, Failed or Canceled runs. Each tab counts the full history, and the selected filter stays in the URL so you can bookmark or share it.",
+    "media": "run-status-tabs.gif",
+    "mediaAlt": "The Runs list switching between Running, Queued and Completed with counts on every status tab"
+  },
+  {
     "id": "workflow-model-groups",
     "released": "2026-11-11",
     "title": "Choose worker models with reusable groups",

@@ -134,6 +134,10 @@
   .menu button:hover { background: var(--bg-muted); }
   .menu .d { display: block; font-size: 12px; color: var(--muted); }
   .model-token-chips button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+  .run-tabs { display: flex; flex-wrap: wrap; gap: .35rem; margin: 0 0 1rem; }
+  .run-tabs a { display: flex; align-items: center; gap: .4rem; padding: .5rem .7rem; border: 1px solid var(--line); border-radius: var(--radius); color: var(--muted); text-decoration: none; }
+  .run-tabs a:hover, .run-tabs a[aria-current="page"] { color: var(--fg); background: var(--bg-muted); border-color: var(--line-strong); }
+  .run-tabs a[aria-current="page"] { font-weight: 600; }
 </style>
 </head>
 <body>
@@ -194,8 +198,12 @@
 {{end}}
 </div>
 {{end}}
-<h2 class="section-title">Runs</h2>
 <div id="runs">
+<h2 class="section-title">Runs</h2>
+<nav class="run-tabs" aria-label="Filter runs by status">
+{{range .RunTabs}}<a href="?status={{.Key}}#runs" data-run-status="{{.Key}}"{{if .Selected}} aria-current="page"{{end}}>{{.Label}} <span class="badge" data-run-count="{{.Key}}">{{.Count}}</span></a>{{end}}
+</nav>
+{{if gt .RunFilter.Count 100}}<p class="hint">Showing the latest 100 of {{.RunFilter.Count}} runs.</p>{{end}}
 {{if .Runs}}<div class="table-wrap"><table class="table">
   <tr><th>Status</th><th>What</th><th>Workflow</th><th>Now</th><th>Host</th><th>Project</th><th class="n">Started</th></tr>
   {{range .Runs}}<tr>
@@ -206,7 +214,7 @@
     <td class="mono" style="white-space:nowrap">{{.Host}}</td>
     <td class="mono">{{.Repo}}</td>
     <td class="n meta">{{ago $.Now .CreatedAt}}</td></tr>{{end}}
-</table></div>{{else}}<p class="empty-state">No runs yet.</p>{{end}}
+</table></div>{{else}}<p class="empty-state">{{if eq .RunFilter.Key "all"}}No runs yet.{{else}}No {{.RunFilter.Label}} runs.{{end}}</p>{{end}}
 </div>
 <script>
 const starting = {{json .Starting}};
