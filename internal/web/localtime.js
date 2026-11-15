@@ -6,6 +6,7 @@
   const clock = { hour: "numeric", minute: "2-digit" };
   const FORMATS = {
     time: clock,
+    clock: { hour: "2-digit", minute: "2-digit", hourCycle: "h23" },
     day: { month: "short", day: "numeric" },
     short: { month: "short", day: "numeric", ...clock },
     seconds: { month: "short", day: "numeric", ...clock, second: "2-digit", timeZoneName: "short" },

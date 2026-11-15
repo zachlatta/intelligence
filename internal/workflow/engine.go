@@ -727,7 +727,8 @@ type Move struct {
 	Token     string `json:"token,omitempty"`   // suggest: a model group's stable token
 	Exclude   string `json:"exclude,omitempty"` // suggest: comma-separated provider/model routes to skip
 	Now       string `json:"now,omitempty"`     // status: one plain sentence on what the run is doing
-	ETA       string `json:"eta,omitempty"`     // status: RFC3339 estimated completion, "" for unknown
+	WaitingOn string `json:"waitingOn,omitempty"`
+	ETA       string `json:"eta,omitempty"` // status: RFC3339 estimated completion, "" for unknown
 	// claim: what the run will change or publish; steer: optionally, what the two runs share
 	Deliverable string `json:"deliverable,omitempty"`
 	Into        string `json:"into,omitempty"` // steer: the live run on the same deliverable
@@ -794,12 +795,32 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 			return "", err
 		}
 		at := e.Now()
-		if _, err := tx.Exec(ctx, "UPDATE workflow_runs SET current_activity=$2, activity_updated_at=$3, activity_eta=$4, updated_at=$3 WHERE id=$1", r.ID, line, at, eta); err != nil {
+		waiting := strings.TrimSpace(m.WaitingOn)
+		if r.Status == Waiting || (r.Step >= 0 && r.Step < len(r.Def.Steps) && r.Def.Steps[r.Step].Kind == KindSignoff) {
+			waiting = "Zach"
+		}
+		estimated := false
+		if waiting != "" {
+			eta = nil
+		} else if eta == nil && r.Step >= 0 {
+			eta, err = historyETA(ctx, tx, r, at)
+			if err != nil {
+				return "", err
+			}
+			estimated = eta != nil
+		}
+		if _, err := tx.Exec(ctx, "UPDATE workflow_runs SET current_activity=$2, activity_updated_at=$3, activity_eta=$4, updated_at=$3, activity_eta_estimated=$5, activity_waiting_on=$6 WHERE id=$1", r.ID, line, at, eta, estimated, waiting); err != nil {
 			return "", err
 		}
 		text := line + " · ETA unknown"
 		if eta != nil {
 			text = line + " · ETA " + eta.Format(time.RFC3339)
+		}
+		if estimated {
+			text += " (estimate)"
+		}
+		if waiting != "" {
+			text = line + " · waiting on " + waiting
 		}
 		return "Current activity saved; run status and step are unchanged.", e.event(ctx, tx, r, "status", nil, nil, text)
 	}
@@ -900,7 +921,12 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 			}
 		}
 		_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, step = $3, note = $4, error = $5, updated_at = $6,
-			finished_at = $7 WHERE id = $1`, r.ID, status, step, note, errText, e.Now(), finished)
+			finished_at = $7,
+            activity_waiting_on = CASE WHEN $8 THEN 'Zach' WHEN step<>$3 THEN '' ELSE activity_waiting_on END,
+            activity_eta = CASE WHEN $8 OR step<>$3 THEN NULL ELSE activity_eta END,
+            activity_eta_estimated = CASE WHEN $8 OR step<>$3 THEN false ELSE activity_eta_estimated END
+            WHERE id = $1`, r.ID, status, step, note, errText, e.Now(), finished,
+			status == Waiting || (step >= 0 && step < len(r.Def.Steps) && r.Def.Steps[step].Kind == KindSignoff))
 		if err != nil {
 			return err
 		}

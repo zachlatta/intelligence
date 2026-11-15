@@ -336,6 +336,8 @@ type runAnswerRow struct {
 
 // runRow is a run as the pages show it.
 type runRow struct {
+	ActivityETAEstimated                                                 bool
+	ActivityWaitingOn                                                    string
 	CurrentActivity                                                      string
 	ActivityUpdatedAt, ActivityETA                                       *time.Time
 	RequestedAt                                                          time.Time
@@ -370,7 +372,7 @@ const runRowSelect = `SELECT r.id::text, coalesce(nullif(r.task_summary, ''), r.
 	r.project_selected, r.queued_at_creation, r.requested_at, r.answer_expected,
  st.answered_at, coalesce(st.answered_via::text, ''), coalesce(st.resolution, ''), coalesce(st.steered_to::text, ''), coalesce(st.reason, ''), coalesce(st.steer_live, false),
  (SELECT min(sent_at) FROM workflow_run_answers WHERE run_id=r.id AND NOT checked),
- (SELECT coalesce(jsonb_agg(jsonb_build_object('Channel',channel,'MessageID',message_id,'ThreadID',thread_id,'SentAt',sent_at,'Checked',checked) ORDER BY sent_at,id),'[]'::jsonb) FROM workflow_run_answers WHERE run_id=r.id), r.current_activity, r.activity_updated_at, r.activity_eta
+ (SELECT coalesce(jsonb_agg(jsonb_build_object('Channel',channel,'MessageID',message_id,'ThreadID',thread_id,'SentAt',sent_at,'Checked',checked) ORDER BY sent_at,id),'[]'::jsonb) FROM workflow_run_answers WHERE run_id=r.id), r.current_activity, r.activity_updated_at, r.activity_eta, r.activity_eta_estimated, r.activity_waiting_on
 	FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id JOIN workflow_versions v ON v.workflow_id = r.workflow_id AND v.version = r.version
 	LEFT JOIN workflow_run_queue q ON q.run_id = r.id LEFT JOIN workflow_run_answer_status st ON st.id = r.id `
 
@@ -379,8 +381,9 @@ func scanRunRow(row pgx.CollectableRow) (runRow, error) {
 	var steps, answers []byte
 	err := row.Scan(&r.ID, &r.Title, &r.Input, &r.Status, &r.Host, &r.Repo, &r.Branch, &r.Workflow, &r.WorkflowID, &r.WorkspaceID, &r.WorkspaceTitle,
 		&r.Orchestrator, &r.ProjectAgent, &r.Note, &r.Error, &r.Step, &r.Version, &steps, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt, &r.WorkflowDeleted,
-		&r.StartRetries, &r.StartRetryAt, &r.HostOnline, &r.DaemonConnected, &r.RetryKeys, &r.QueueReason, &r.Position, &r.EstimatedMemory, &r.ProjectSelected, &r.QueuedAtCreation, &r.RequestedAt, &r.AnswerExpected, &r.AnsweredAt, &r.AnsweredVia, &r.Resolution, &r.SteeredTo, &r.ResolutionReason, &r.SteerLive, &r.FirstUncheckedAt, &answers, &r.CurrentActivity, &r.ActivityUpdatedAt, &r.ActivityETA)
+		&r.StartRetries, &r.StartRetryAt, &r.HostOnline, &r.DaemonConnected, &r.RetryKeys, &r.QueueReason, &r.Position, &r.EstimatedMemory, &r.ProjectSelected, &r.QueuedAtCreation, &r.RequestedAt, &r.AnswerExpected, &r.AnsweredAt, &r.AnsweredVia, &r.Resolution, &r.SteeredTo, &r.ResolutionReason, &r.SteerLive, &r.FirstUncheckedAt, &answers, &r.CurrentActivity, &r.ActivityUpdatedAt, &r.ActivityETA, &r.ActivityETAEstimated, &r.ActivityWaitingOn)
 	if err == nil {
+		r.CurrentActivity = workflow.CleanActivity(r.CurrentActivity)
 		err = json.Unmarshal(steps, &r.Steps)
 		if err == nil {
 			err = json.Unmarshal(answers, &r.Answers)
@@ -982,7 +985,12 @@ func linkRuns(text string) string {
 func (e runEvent) Line() string {
 	switch e.Kind {
 	case "status":
-		return "Activity: " + e.Text
+		line, suffix, found := strings.Cut(e.Text, " · ")
+		line = workflow.CleanActivity(line)
+		if found {
+			line += " · " + suffix
+		}
+		return "Activity: " + line
 	case "model_suggestion":
 		return e.Text
 	case "started":

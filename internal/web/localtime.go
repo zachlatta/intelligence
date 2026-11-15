@@ -22,6 +22,7 @@ var localTimeScript = asset("localtime.js", "text/javascript; charset=utf-8", lo
 // localFormats are the formats a page can ask for (data-format), each with its UTC fallback.
 // localtime.js has the same names, with what each shows in the browser.
 var localFormats = map[string]string{
+	"clock":   "15:04",
 	"time":    "15:04 MST",                // a clock time, in a list of one day's events
 	"day":     "Jan 2",                    // a day, on a chart's axis
 	"short":   "Jan 2 15:04 MST",          // a day and time

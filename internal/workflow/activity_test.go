@@ -17,9 +17,18 @@ func TestSavedOrchestratorsGetActivityContract(t *testing.T) {
 	d := Starting
 	d.Orchestrator.Instructions = "Saved custom instructions."
 	prompt := OrchestratorPrompt("Saved workflow", d, Vars{Run: "run-1"})
-	for _, want := range []string{"at each step change", "outside party", "more than 10 minutes", "since when", "omit --eta", "intelligence workflow status --run run-1 --now"} {
+	for _, want := range []string{"at each step change", "outside party", "more than 10 minutes", "never type clock times", "omit --eta", "intelligence workflow status --run run-1 --now"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("missing %q", want)
+		}
+	}
+}
+
+func TestActivityRemovesTypedTimes(t *testing.T) {
+	for _, line := range []string{"Building since 2026-11-14 23:00 EST.", "Building since 23:00 EST.", "Building at 23:00 EST.", "Building 23:00 EST", "Building (since 23:00 EST)"} {
+		got, _, err := activityValues(Move{Now: line})
+		if err != nil || got != "Building" {
+			t.Errorf("%q => %q, %v", line, got, err)
 		}
 	}
 }

@@ -1,5 +1,13 @@
 [
   {
+    "id": "workflow-history-estimates",
+    "released": "2026-11-15",
+    "title": "Run estimates from workflow history",
+    "summary": "The runs table and run page fill missing ETAs from recent workflow step times, marked as estimates. Sign-off shows waiting on Zach; external waits name the person or party. Activity updates record their own time and hide old typed time annotations.",
+    "media": "workflow-history-estimate.png",
+    "mediaAlt": "Run page with an activity update and a history-based completion time marked as an estimate"
+  },
+  {
     "id": "workflow-current-activity",
     "released": "2026-11-14",
     "title": "See what each run is doing now",

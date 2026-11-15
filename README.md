@@ -1222,6 +1222,23 @@ The server starts queued runs on a host, oldest first, while the projection leav
 seconds, on each minute of resources the host sends, and when a run ends or fails to start. Runs
 already going are never stopped or paused. The queue is rows in Postgres, so it survives restarts.
 
+### Activity estimates
+
+The workflow status command records the activity timestamp. Activity lines contain no clock
+annotations or “since” suffix; old suffixes are also removed when displayed. With no agent ETA,
+the server sums the median duration of each remaining non-signoff step from successful runs of
+the same workflow completed in the last 30 days (`workflow_run_step_times`). It prefers the same
+repository for each step, falls back to that workflow in other repositories, and subtracts time
+already spent on the current step. Missing history for any remaining step leaves ETA unknown.
+These estimates exclude human sign-off time and appear as “about HH:MM (estimate)” in the runs
+table and run page. `workflow_runs.activity_eta_estimated` distinguishes them from agent ETAs.
+
+Use `status --now "Waiting for review" --waiting-on "reviewer"` for an external wait.
+`activity_waiting_on` records who holds it up, and replaces the ETA on both pages. Sign-off
+steps and runs waiting for a reply show “waiting on Zach”. Step changes clear the old ETA.
+All activity fields are readable through `/api/sql`; status writes use the existing moves API
+(`waitingOn` is the JSON name for `--waiting-on`).
+
 ### Attachments
 
 Workflow task submission (including the Run dialog), new agent/workspace forms, and existing-session
