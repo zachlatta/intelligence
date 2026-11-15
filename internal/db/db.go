@@ -10,21 +10,48 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-//go:embed migrations/*.sql
+// Embed migrations/ so migrationNames can refuse stray files, not only read *.sql.
+// Go embed ignores files and directories whose names start with . or _.
+//
+//go:embed migrations
 var migrations embed.FS
 
 // migrateLock serializes migrations across app instances starting at once.
 const migrateLock = 7356216601
 
-// Migrate applies the migrations not yet recorded in schema_migrations, in name order.
+// Migrate applies the migrations not yet recorded in schema_migrations, in order (migrationOrder).
 func Migrate(ctx context.Context, p *pgxpool.Pool) error {
+	return migrateFrom(ctx, p, migrationDir())
+}
+
+// migrationDir is the shipped migrations, rooted at internal/db/migrations.
+func migrationDir() fs.FS {
+	dir, err := fs.Sub(migrations, "migrations")
+	if err != nil {
+		panic(err) // a constant, valid path
+	}
+	return dir
+}
+
+// migrateFrom applies the .sql files in dir not yet recorded in schema_migrations. Each is recorded by
+// its name without ".sql" (its version), so a file that was applied is never run again, wherever it
+// sorts. A file that sorts before ones already applied (an older timestamp merged from a parallel
+// branch) is applied, not refused: parallel branches produce exactly that.
+func migrateFrom(ctx context.Context, p *pgxpool.Pool, dir fs.FS) error {
+	names, err := migrationNames(dir)
+	if err != nil {
+		return err
+	}
 	conn, err := p.Acquire(ctx)
 	if err != nil {
 		return err
@@ -38,13 +65,8 @@ func Migrate(ctx context.Context, p *pgxpool.Pool) error {
 		version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`); err != nil {
 		return err
 	}
-	names, err := fs.Glob(migrations, "migrations/*.sql")
-	if err != nil {
-		return err
-	}
-	slices.Sort(names)
 	for _, name := range names {
-		version := strings.TrimSuffix(strings.TrimPrefix(name, "migrations/"), ".sql")
+		version := strings.TrimSuffix(name, ".sql")
 		var done bool
 		if err := conn.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = $1)", version).Scan(&done); err != nil {
 			return err
@@ -52,7 +74,7 @@ func Migrate(ctx context.Context, p *pgxpool.Pool) error {
 		if done {
 			continue
 		}
-		sql, err := migrations.ReadFile(name)
+		sql, err := fs.ReadFile(dir, name)
 		if err != nil {
 			return err
 		}
@@ -69,6 +91,85 @@ func Migrate(ctx context.Context, p *pgxpool.Pool) error {
 	}
 	return nil
 }
+
+// migrationNames lists the migrations in dir in the order they apply. Every entry in dir must be a
+// well-named migration file: a stray one (x.SQL, x.sql.orig, notes.txt, a directory) is an error,
+// not silently skipped.
+func migrationNames(dir fs.FS) ([]string, error) {
+	entries, err := fs.ReadDir(dir, ".")
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			return nil, fmt.Errorf("migration directory holds a directory, %s: only .sql files belong there", e.Name())
+		}
+		names = append(names, e.Name())
+	}
+	return migrationOrder(names)
+}
+
+// legacyMigrations is the last four-digit migration number. Migrations 0001 to 0050 predate the
+// timestamp scheme and keep their names, since production records them by name.
+const legacyMigrations = 50
+
+var (
+	legacyName    = regexp.MustCompile(`^([0-9]{4})_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$`)
+	timestampName = regexp.MustCompile(`^([0-9]{8}T[0-9]{4})_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$`)
+)
+
+// migrationOrder checks migration file names and sorts them into the order they apply.
+//
+// A new migration is named YYYYMMDDTHHMM_description.sql, the UTC time it was written (for example
+// 20261113T0930_add_widgets.sql). Different descriptions distinguish migrations written in the same
+// minute, so they need no renumbering when they merge. The legacy files 0001_... to 0050_... come
+// first, in number order, then the timestamped ones in time order. Two with the same timestamp
+// (perhaps from different branches) are both kept, ordered by full name. A four-digit number
+// above 0050, two legacy files with the same number, a timestamp before 2026 or a malformed name is
+// an error.
+func migrationOrder(names []string) ([]string, error) {
+	legacy := map[string]string{}
+	for _, name := range names {
+		if m := legacyName.FindStringSubmatch(name); m != nil {
+			prefix := m[1]
+			n, _ := strconv.Atoi(prefix)
+			if n > legacyMigrations {
+				return nil, fmt.Errorf("migration %s: four-digit numbers end at %04d; name a new migration with a UTC timestamp, like %s_%s",
+					name, legacyMigrations, time.Now().UTC().Format(migrationTimestamp), strings.SplitN(name, "_", 2)[1])
+			}
+			if n < 1 {
+				return nil, fmt.Errorf("migration %s: outside the legacy range 0001 to %04d", name, legacyMigrations)
+			}
+			if other, ok := legacy[prefix]; ok {
+				return nil, fmt.Errorf("migrations %s and %s have the same number", other, name)
+			}
+			legacy[prefix] = name
+		} else if m := timestampName.FindStringSubmatch(name); m != nil {
+			at, err := time.Parse(migrationTimestamp, m[1])
+			if err != nil {
+				return nil, fmt.Errorf("migration %s: bad timestamp %s: %w", name, m[1], err)
+			}
+			if at.Year() < firstTimestampYear {
+				return nil, fmt.Errorf("migration %s: timestamp before %d; use the current UTC time", name, firstTimestampYear)
+			}
+		} else {
+			return nil, fmt.Errorf("migration %s: bad name; want YYYYMMDDTHHMM_lower_snake_description.sql (UTC)", name)
+		}
+	}
+	// Fixed-width prefixes put legacy numbers first, then timestamps from 2026 onward by time,
+	// with equal timestamps ordered by the rest of the name.
+	out := slices.Clone(names)
+	slices.Sort(out)
+	return out, nil
+}
+
+// migrationTimestamp is the layout of a new migration's prefix (UTC).
+const migrationTimestamp = "20060102T1504"
+
+// firstTimestampYear is the earliest year a migration timestamp may have: the scheme began in 2026,
+// and the bound keeps every timestamped name sorting after the legacy 0001 to 0050.
+const firstTimestampYear = 2026
 
 // EnsureReadonlyRole creates or updates the login role the SQL API connects as: it can read every
 // table and view in the public schema, now and later, and its sessions are read-only by default.

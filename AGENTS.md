@@ -7,6 +7,11 @@ Read `README.md` first.
 - Go, test-first: write the failing test, watch it fail, then make the change.
 - `make test` (gofmt, `go vet ./...`, `go test -race ./...` against a throwaway Postgres) passes
   before every commit.
+- Builders and reviewers run heavy suites through the host-wide lease: use `make test`, including
+  with `TEST_DATABASE_URL` set. For a custom full suite, use `scripts/with-test-capacity go test
+  -race -timeout=30m ./...`. The whole web package is also heavy: run it through that wrapper.
+  Narrow package tests with `-run` can run directly while iterating. Do not bypass the lease with
+  an unwrapped full `go test -race ./...`.
 - Keep `main` deployable: every push to `main` deploys to production.
 - Prefer the standard library. Add a dependency only when it clearly earns its place.
 - Do all work in the repo, never in `/tmp`. Transient scratch goes in `.factory-scratch/` (git-ignored).
@@ -27,6 +32,10 @@ All app state is readable with a read-only SQL query (`/api/sql`). So:
 
 - State lives in Postgres, in tables or views in the `public` schema, created by a migration in
   `internal/db/migrations/`. Never keep state only in memory, in files or in another schema.
+- Name a new migration `YYYYMMDDTHHMM_lower_snake_description.sql` with the current UTC time
+  (`date -u +%Y%m%dT%H%M`), never a four-digit number: `0001` to `0050` are legacy and closed. Never
+  rename a migration that has landed on `main`; its name is its record in `schema_migrations`.
+  When merging `main`, keep both sides' migrations as they are. README's State section has the rules.
 - `db.CheckContract` checks it: every relation in the database is in `public` and readable by the
   read-only role, and that role cannot write. It runs in the tests, in the image build (a failure
   fails the build, so nothing deploys) and when the server starts (a failure stops the server).

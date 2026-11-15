@@ -28,6 +28,8 @@ import (
 type Config struct {
 	// PDWURL, PDWKey and PDWAccount turn voice memo triggers on for the account named PDWAccount.
 	PDWURL, PDWKey, PDWAccount string
+	// VoiceMemoInterval is how often PDW's voice memo feed is read (default voicememo.Interval).
+	VoiceMemoInterval time.Duration
 	// Context is the server's lifetime: its listener for fleet changes stops when it ends. Default: never.
 	Context    context.Context
 	Version    string        // the deployed commit, shown on every page and by /healthz
@@ -65,7 +67,7 @@ type app struct {
 //go:embed index.html
 var indexHTML string
 
-var indexTmpl = template.Must(template.Must(template.New("index").Funcs(template.FuncMap{
+var indexTmpl = template.Must(template.Must(template.New("index").Funcs(localFuncs).Funcs(template.FuncMap{
 	"ago":            ago,
 	"agents":         agentSummary,
 	"short":          short,
@@ -81,6 +83,11 @@ var indexTmpl = template.Must(template.Must(template.New("index").Funcs(template
 
 // New returns the app's HTTP handler.
 func New(cfg Config) http.Handler {
+	return newHandler(cfg, true)
+}
+
+// newHandler can leave workers to a synchronous test driver. New always starts them.
+func newHandler(cfg Config, workers bool) http.Handler {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
@@ -95,7 +102,9 @@ func New(cfg Config) http.Handler {
 	}
 	reg := fleet.New(cfg.DB)
 	changes := fleet.NewChanges(cfg.DB)
-	go changes.Run(cfg.Context)
+	if workers {
+		go changes.Run(cfg.Context)
+	}
 	roles := db.NewAccountRoles(cfg.DB, cfg.Readonly)
 	context.AfterFunc(cfg.Context, roles.Close)
 	store := accounts.New(cfg.DB, roles)
@@ -106,11 +115,16 @@ func New(cfg Config) http.Handler {
 	if cfg.QueueInterval == 0 {
 		cfg.QueueInterval = workflow.QueueEvery
 	}
-	go a.wf.RunQueue(cfg.Context, cfg.QueueInterval)
-	go a.wf.RunStartRetries(cfg.Context)
+	if workers {
+		go a.wf.RunQueue(cfg.Context, cfg.QueueInterval)
+		go a.wf.RunStartRetries(cfg.Context)
+		go a.wf.RunStallWatchdog(cfg.Context)
+	}
 	if cfg.PDWURL != "" && cfg.PDWKey != "" && cfg.PDWAccount != "" {
-		voice := &voicememo.Service{DB: cfg.DB, Engine: a.wf, URL: cfg.PDWURL, Key: cfg.PDWKey, Username: cfg.PDWAccount}
-		go voice.Run(cfg.Context)
+		voice := &voicememo.Service{DB: cfg.DB, Engine: a.wf, URL: cfg.PDWURL, Key: cfg.PDWKey, Username: cfg.PDWAccount, Interval: cfg.VoiceMemoInterval}
+		if workers {
+			go voice.Run(cfg.Context)
+		}
 	}
 	if cfg.Google != nil && cfg.EmailKey != nil {
 		a.mail = &email.Service{DB: cfg.DB, Engine: a.wf, Google: cfg.Google, Key: cfg.EmailKey, Now: cfg.Now}
@@ -118,7 +132,9 @@ func New(cfg Config) http.Handler {
 		if interval == 0 {
 			interval = email.Interval
 		}
-		go a.mail.Run(cfg.Context, interval)
+		if workers {
+			go a.mail.Run(cfg.Context, interval)
+		}
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -149,6 +165,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /submitkeys.js", submitKeysScript)
 	// What's New: the release notes (whatsnew), and which of them the account has seen
 	mux.HandleFunc("GET /whatsnew.js", whatsNewScript)
+	mux.HandleFunc("GET /localtime.js", localTimeScript)
 	mux.HandleFunc("GET /whats-new/media/{name}", whatsNewMedia())
 	mux.HandleFunc("GET /whats-new", a.page(func(v viewer) http.HandlerFunc { return whatsNewPage(cfg, v) }))
 	mux.HandleFunc("POST /api/whats-new/seen", a.write(a.markWhatsNewSeen))
@@ -198,7 +215,7 @@ func New(cfg Config) http.Handler {
 		return func(w http.ResponseWriter, r *http.Request) { transcriptResources(cfg, v.reg, w, r) }
 	}))
 	mux.HandleFunc("GET /hosts/{host}/agents/{agent}/entries/{seq}", a.page(func(v viewer) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) { transcriptEntry(v.reg, w, r) }
+		return func(w http.ResponseWriter, r *http.Request) { transcriptEntry(cfg, v.reg, w, r) }
 	}))
 	mux.HandleFunc("GET /schedules", a.page(func(v viewer) http.HandlerFunc { return schedulesPage(cfg, v.reg) }))
 	mux.HandleFunc("GET /hosts/{host}/schedules/new", a.page(func(v viewer) http.HandlerFunc { return newSchedulePage(cfg, v.reg) }))
@@ -228,7 +245,10 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("POST /api/workflow-runs/{id}/reply", a.write(a.replyToRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/cancel", a.write(a.cancelRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/start", a.write(a.startQueuedRun))
+	mux.HandleFunc("POST /api/workflow-runs/{id}/resume", a.write(a.resumeRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/moves", a.moveRun)
+	mux.HandleFunc("POST /api/workflow-runs/{id}/answers", a.recordRunAnswer)
+	mux.HandleFunc("POST /api/workflow-runs/{id}/answer-resolution", a.recordRunAnswerResolution)
 	mux.HandleFunc("GET /workflows", a.page(func(v viewer) http.HandlerFunc { return workflowsPage(cfg, v) }))
 	// email triggers: the account's Gmail mailbox, connected through Google's sign-in
 	mux.HandleFunc("POST /api/gmail/sign-in", a.write(a.gmailSignIn))

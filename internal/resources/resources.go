@@ -25,7 +25,12 @@ type Sample struct {
 	SwapUsed      uint64
 	DiskTotal     uint64 // the home filesystem
 	DiskAvailable uint64
-	PSICPUSome    *float64 // pressure: % of the last 10s some tasks waited for CPU
+	DiskReadBps   *float64     // the physical disks since the sample before: bytes read and written a second,
+	DiskWriteBps  *float64     // reads and writes a second,
+	DiskIOPS      *float64     // and the busiest disk's % of the time with I/O in flight (Linux only)
+	DiskBusyPct   *float64     //
+	Filesystems   []Filesystem // each local filesystem's space, read once a minute (nil between)
+	PSICPUSome    *float64     // pressure: % of the last 10s some tasks waited for CPU
 	PSIMemSome    *float64
 	PSIMemFull    *float64
 	PSIIOSome     *float64
@@ -38,29 +43,37 @@ type Sample struct {
 
 // Minute is a minute of samples: averages, extremes, and the change in the kernel's counters.
 type Minute struct {
-	Minute           time.Time `json:"minute"`
-	Samples          int       `json:"samples"`
-	CPUs             int       `json:"cpus"`
-	CPUAvgPct        *float64  `json:"cpuAvgPct,omitempty"`
-	CPUMaxPct        *float64  `json:"cpuMaxPct,omitempty"`
-	Load1            float64   `json:"load1"`
-	Load5            float64   `json:"load5"`
-	Load15           float64   `json:"load15"`
-	MemTotal         uint64    `json:"memTotal"`
-	MemAvailableMin  uint64    `json:"memAvailableMin"`
-	SwapTotal        uint64    `json:"swapTotal"`
-	SwapUsedMax      uint64    `json:"swapUsedMax"`
-	DiskTotal        uint64    `json:"diskTotal"`
-	DiskAvailableMin uint64    `json:"diskAvailableMin"`
-	PSICPUSome       *float64  `json:"psiCpuSome,omitempty"` // the most of the minute's 10-second averages
-	PSIMemSome       *float64  `json:"psiMemSome,omitempty"`
-	PSIMemFull       *float64  `json:"psiMemFull,omitempty"`
-	PSIIOSome        *float64  `json:"psiIoSome,omitempty"`
-	PSIIOFull        *float64  `json:"psiIoFull,omitempty"`
-	OOMKills         *uint64   `json:"oomKills,omitempty"` // during the minute
-	PaseoMemMax      *uint64   `json:"paseoMemMax,omitempty"`
-	PaseoMemPeak     *uint64   `json:"paseoMemPeak,omitempty"`
-	PaseoOOMKills    *uint64   `json:"paseoOomKills,omitempty"` // during the minute
+	Minute           time.Time    `json:"minute"`
+	Samples          int          `json:"samples"`
+	CPUs             int          `json:"cpus"`
+	CPUAvgPct        *float64     `json:"cpuAvgPct,omitempty"`
+	CPUMaxPct        *float64     `json:"cpuMaxPct,omitempty"`
+	Load1            float64      `json:"load1"`
+	Load5            float64      `json:"load5"`
+	Load15           float64      `json:"load15"`
+	MemTotal         uint64       `json:"memTotal"`
+	MemAvailableMin  uint64       `json:"memAvailableMin"`
+	SwapTotal        uint64       `json:"swapTotal"`
+	SwapUsedMax      uint64       `json:"swapUsedMax"`
+	DiskTotal        uint64       `json:"diskTotal"`
+	DiskAvailableMin uint64       `json:"diskAvailableMin"`
+	DiskReadBps      *float64     `json:"diskReadBps,omitempty"` // averages of the minute's samples
+	DiskWriteBps     *float64     `json:"diskWriteBps,omitempty"`
+	DiskIOPS         *float64     `json:"diskIops,omitempty"`
+	DiskReadBpsMax   *float64     `json:"diskReadBpsMax,omitempty"`
+	DiskWriteBpsMax  *float64     `json:"diskWriteBpsMax,omitempty"`
+	DiskBusyAvgPct   *float64     `json:"diskBusyAvgPct,omitempty"`
+	DiskBusyMaxPct   *float64     `json:"diskBusyMaxPct,omitempty"`
+	Filesystems      []Filesystem `json:"filesystems,omitempty"` // the minute's newest reading
+	PSICPUSome       *float64     `json:"psiCpuSome,omitempty"`  // the most of the minute's 10-second averages
+	PSIMemSome       *float64     `json:"psiMemSome,omitempty"`
+	PSIMemFull       *float64     `json:"psiMemFull,omitempty"`
+	PSIIOSome        *float64     `json:"psiIoSome,omitempty"`
+	PSIIOFull        *float64     `json:"psiIoFull,omitempty"`
+	OOMKills         *uint64      `json:"oomKills,omitempty"` // during the minute
+	PaseoMemMax      *uint64      `json:"paseoMemMax,omitempty"`
+	PaseoMemPeak     *uint64      `json:"paseoMemPeak,omitempty"`
+	PaseoOOMKills    *uint64      `json:"paseoOomKills,omitempty"` // during the minute
 }
 
 // aggregate summarizes the samples of the minute starting at m; before is the last sample of an
@@ -72,6 +85,7 @@ func aggregate(m time.Time, samples []Sample, before Sample) Minute {
 	}
 	var cpuSum float64
 	var cpuN int
+	var read, write, iops, busy mean
 	out.MemAvailableMin, out.DiskAvailableMin = math.MaxUint64, math.MaxUint64
 	for _, s := range samples {
 		out.CPUs = s.CPUs
@@ -92,7 +106,18 @@ func aggregate(m time.Time, samples []Sample, before Sample) Minute {
 		out.PSIIOFull = maxF(out.PSIIOFull, s.PSIIOFull)
 		out.PaseoMemMax = maxU(out.PaseoMemMax, s.PaseoMem)
 		out.PaseoMemPeak = maxU(out.PaseoMemPeak, s.PaseoMemPeak)
+		read.add(s.DiskReadBps)
+		write.add(s.DiskWriteBps)
+		iops.add(s.DiskIOPS)
+		busy.add(s.DiskBusyPct)
+		out.DiskReadBpsMax = maxF(out.DiskReadBpsMax, s.DiskReadBps)
+		out.DiskWriteBpsMax = maxF(out.DiskWriteBpsMax, s.DiskWriteBps)
+		out.DiskBusyMaxPct = maxF(out.DiskBusyMaxPct, s.DiskBusyPct)
+		if s.Filesystems != nil {
+			out.Filesystems = s.Filesystems
+		}
 	}
+	out.DiskReadBps, out.DiskWriteBps, out.DiskIOPS, out.DiskBusyAvgPct = read.avg(), write.avg(), iops.avg(), busy.avg()
 	if cpuN > 0 {
 		avg := cpuSum / float64(cpuN)
 		out.CPUAvgPct = &avg
@@ -101,6 +126,27 @@ func aggregate(m time.Time, samples []Sample, before Sample) Minute {
 	out.OOMKills = counterChange(before.OOMKills, samples[0].OOMKills, last.OOMKills)
 	out.PaseoOOMKills = counterChange(before.PaseoOOMKills, samples[0].PaseoOOMKills, last.PaseoOOMKills)
 	return out
+}
+
+// mean averages the values that are known.
+type mean struct {
+	sum float64
+	n   int
+}
+
+func (m *mean) add(v *float64) {
+	if v != nil {
+		m.sum += *v
+		m.n++
+	}
+}
+
+func (m *mean) avg() *float64 {
+	if m.n == 0 {
+		return nil
+	}
+	v := m.sum / float64(m.n)
+	return &v
 }
 
 // counterChange is how much a counter rose to last: from before, or else from first.

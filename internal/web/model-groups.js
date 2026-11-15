@@ -1,5 +1,11 @@
 "use strict";
 
+// localInputValue is d as a datetime-local input's value, in the reader's own zone.
+function localInputValue(d) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 // The pools a login can be assigned to: each pool's longest observed window. IDs do not encode
 // billing policy; the server checks a pool's shorter windows live.
 function modelGroupPools(windows, provider, login) {
@@ -388,7 +394,7 @@ function modelGroupPools(windows, provider, login) {
         );
         field("enabled").checked = m.enabled;
         field("eligibleUntil").value = m.eligibleUntil
-          ? new Date(m.eligibleUntil).toISOString().slice(0, 16)
+          ? localInputValue(new Date(m.eligibleUntil))
           : "";
         row.querySelectorAll("[data-field]").forEach(
           (el) =>
@@ -419,7 +425,7 @@ function modelGroupPools(windows, provider, login) {
               } else if (key === "enabled") m.enabled = el.checked;
               else if (key === "eligibleUntil")
                 m.eligibleUntil = el.value
-                  ? new Date(el.value + "Z").toISOString()
+                  ? new Date(el.value).toISOString() // the reader's own zone
                   : null;
               else m[key] = el.value;
             }),

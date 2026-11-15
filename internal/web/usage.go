@@ -39,7 +39,7 @@ var usageFuncs = template.FuncMap{
 	"list":      func(xs ...int) []int { return xs },
 }
 
-var usageTmpl = template.Must(template.Must(template.New("usage").Funcs(usageFuncs).Parse(usageHTML)).Parse(planHTML + layoutHTML + modelGroupsHTML))
+var usageTmpl = template.Must(template.Must(template.New("usage").Funcs(localFuncs).Funcs(usageFuncs).Parse(usageHTML)).Parse(planHTML + layoutHTML + modelGroupsHTML))
 
 // usagePage shows every login's plan, a chart of each over the last ?days= (default 7), and how
 // much of each week each login used.
@@ -73,9 +73,10 @@ func usagePage(cfg Config, reg *fleet.Registry) http.HandlerFunc {
 		}
 		type card struct {
 			fleet.Plan
-			Chart  template.HTML
-			Legend []legend
-			Peaks  []fleet.Cycle
+			Chart       template.HTML
+			Legend      []legend
+			RecentPeaks []fleet.Cycle // the four newest weeks; the page folds the rest
+			OlderPeaks  []fleet.Cycle
 		}
 		var cards []card
 		for _, p := range plans.Plans {
@@ -92,11 +93,13 @@ func usagePage(cfg Config, reg *fleet.Registry) http.HandlerFunc {
 					c.Legend = append(c.Legend, legend{Window: s.Window, Color: chartColors[i%len(chartColors)]})
 				}
 			}
+			var own []fleet.Cycle
 			for _, pk := range peaks {
 				if pk.Provider == p.Provider && pk.Account == p.Account {
-					c.Peaks = append(c.Peaks, pk)
+					own = append(own, pk)
 				}
 			}
+			c.RecentPeaks, c.OlderPeaks = own[:min(4, len(own))], own[min(4, len(own)):]
 			cards = append(cards, c)
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -120,7 +123,7 @@ func usageAPI(reg *fleet.Registry) http.HandlerFunc {
 
 type legend struct{ Window, Color string }
 
-var chartColors = []string{"#4b70cc", "#e0803a", "#1f9d63", "#8a63d2", "#d04841", "#8e8b8a"}
+var chartColors = []string{"#78716c", "#d97706", "#3f8f5f", "#b4536a", "#5b7db8", "#a8a29e"}
 
 // The chart's geometry: the plot is plotW by plotH at (chartLeft, chartTop), in a 640x150 host.
 const (
@@ -130,12 +133,12 @@ const (
 
 // usageChart draws each series' used % from from to to: 0% at the bottom, 100% at the top.
 func usageChart(series []fleet.Series, from, to time.Time) template.HTML {
-	return valueChart(series, from, to, 100, func(v float64) string { return fmt.Sprintf("%.0f%%", v) }, from.UTC().Format("Jan 2"), "now")
+	return valueChart(series, from, to, 100, func(v float64) string { return fmt.Sprintf("%.0f%%", v) }, labelAt(from, "day"), labelText("now"))
 }
 
 // valueChart draws each series from from to to, 0 at the bottom and top at the top, the axis
 // labelled by label, its start by fromLabel and its end by toLabel.
-func valueChart(series []fleet.Series, from, to time.Time, top float64, label func(float64) string, fromLabel, toLabel string) template.HTML {
+func valueChart(series []fleet.Series, from, to time.Time, top float64, label func(float64) string, fromLabel, toLabel chartLabel) template.HTML {
 	span := to.Sub(from).Seconds()
 	if span <= 0 {
 		span = 1
@@ -156,8 +159,10 @@ func valueChart(series []fleet.Series, from, to time.Time, top float64, label fu
 		fmt.Fprintf(&b, `<line x1="%.1f" x2="%.1f" y1="%.1f" y2="%.1f" class="grid"/><text x="%.1f" y="%.1f" class="axis" text-anchor="end">%s</text>`,
 			chartLeft, chartLeft+plotW, y(g), y(g), chartLeft-4, y(g)+4, template.HTMLEscapeString(label(g)))
 	}
-	fmt.Fprintf(&b, `<text x="%.1f" y="146" class="axis">%s</text><text x="%.1f" y="146" class="axis" text-anchor="end">%s</text>`,
-		chartLeft, template.HTMLEscapeString(fromLabel), chartLeft+plotW, template.HTMLEscapeString(toLabel))
+	fromAttrs, fromText := fromLabel.svg()
+	toAttrs, toText := toLabel.svg()
+	fmt.Fprintf(&b, `<text x="%.1f" y="146" class="axis"%s>%s</text><text x="%.1f" y="146" class="axis" text-anchor="end"%s>%s</text>`,
+		chartLeft, fromAttrs, fromText, chartLeft+plotW, toAttrs, toText)
 	for i, s := range series {
 		pts := make([]string, 0, len(s.Points))
 		for _, p := range s.Points {

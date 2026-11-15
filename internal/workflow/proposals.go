@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -255,7 +256,7 @@ func (e *Engine) Decide(ctx context.Context, account int64, id, action string) e
 			return set("stale")
 		}
 		if operation == "run" {
-			run, err := e.StartRunTx(ctx, tx, account, *wid, input)
+			run, err := e.StartRunTx(ctx, tx, account, *wid, input, time.Time{})
 			if err != nil {
 				return err
 			}
