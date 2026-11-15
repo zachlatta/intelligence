@@ -921,15 +921,16 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 			}
 		}
 		_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, step = $3, note = $4, error = $5, updated_at = $6,
-			finished_at = $7,
-            activity_waiting_on = CASE WHEN $8 THEN 'Zach' WHEN step<>$3 THEN '' ELSE activity_waiting_on END,
-            activity_eta = CASE WHEN $8 OR step<>$3 THEN NULL ELSE activity_eta END,
-            activity_eta_estimated = CASE WHEN $8 OR step<>$3 THEN false ELSE activity_eta_estimated END
-            WHERE id = $1`, r.ID, status, step, note, errText, e.Now(), finished,
-			status == Waiting || (step >= 0 && step < len(r.Def.Steps) && r.Def.Steps[step].Kind == KindSignoff))
+            finished_at = $7 WHERE id = $1`, r.ID, status, step, note, errText, e.Now(), finished)
 		if err != nil {
 			return err
 		}
+		updated := r
+		updated.Status, updated.Step = status, step
+		if err := e.refreshActivity(ctx, tx, updated); err != nil {
+			return err
+		}
+
 		if status == Succeeded {
 			return e.archiveRun(ctx, tx, r)
 		}
@@ -1074,8 +1075,11 @@ func (e *Engine) ReplyTx(ctx context.Context, tx pgx.Tx, account int64, runID, t
 	if err := e.event(ctx, tx, r, "reply", ptr(r.Step), nil, text); err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, "UPDATE workflow_runs SET status = $2, note = '', updated_at = $3 WHERE id = $1", r.ID, Running, e.Now())
-	return err
+	if _, err = tx.Exec(ctx, "UPDATE workflow_runs SET status = $2, note = '', updated_at = $3 WHERE id = $1", r.ID, Running, e.Now()); err != nil {
+		return err
+	}
+	r.Status = Running
+	return e.refreshActivity(ctx, tx, r)
 }
 
 // MessageTx gives account's live run more to go on: what arrived later in the thread that started

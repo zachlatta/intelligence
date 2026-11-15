@@ -12,7 +12,18 @@ import (
 )
 
 // Remove old agent-authored clock annotations; the status command owns the timestamp.
-var activityClock = regexp.MustCompile(`(?i)\s+(?:[·—(]\s*)?(?:since\b.*|(?:at\s+)?(?:\d{4}-\d\d-\d\d[T ]+)?\d{1,2}:\d\d.*)$`)
+const activityTime = `(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?`
+const activityZone = `(?:UTC|GMT|[ECMP][DS]?T|[ECMP]T|JST|CET|CEST|BST|Z|[+-]\d\d:\d\d)`
+const activityDate = `\d{4}-\d\d-\d\d[T ]+`
+const activityMeridiem = `(?:AM|PM)`
+
+// Only a complete trailing annotation is removed. Bare colon-separated numbers
+// can be durations or versions, so they require a date, zone or meridiem.
+var activityClock = regexp.MustCompile(`(?i)\s+(?:[·—(]\s*)?(?:` +
+	`(?:since|at)\s+(?:` + activityDate + `)?` + activityTime + `(?:\s*` + activityMeridiem + `)?(?:\s*` + activityZone + `)?|` +
+	activityDate + activityTime + `(?:\s*` + activityZone + `)?|` +
+	activityTime + `\s*(?:` + activityMeridiem + `(?:\s*` + activityZone + `)?|` + activityZone + `)` +
+	`)\s*\)?\.?$`)
 
 func CleanActivity(line string) string {
 	return strings.TrimSpace(activityClock.ReplaceAllString(line, ""))
@@ -73,7 +84,9 @@ func historyETA(ctx context.Context, tx pgx.Tx, r run, at time.Time) (*time.Time
 		remaining := *seconds
 		if i == r.Step {
 			var elapsed float64
-			if err := tx.QueryRow(ctx, `SELECT coalesce(extract(epoch from time_spent),0)::double precision FROM workflow_run_step_times WHERE run_id=$1 AND step=$2`, r.ID, i).Scan(&elapsed); err != nil && err != pgx.ErrNoRows {
+			if err := tx.QueryRow(ctx, `SELECT greatest(extract(epoch from ($3::timestamptz-started_at)),0)::double precision
+ FROM workflow_run_step_visits WHERE run_id=$1 AND step=$2 AND ended_at IS NULL
+ ORDER BY visit DESC LIMIT 1`, r.ID, i, at).Scan(&elapsed); err != nil && err != pgx.ErrNoRows {
 				return nil, err
 			}
 			remaining -= elapsed
@@ -83,6 +96,41 @@ func historyETA(ctx context.Context, tx pgx.Tx, r run, at time.Time) (*time.Time
 		}
 		total += remaining
 	}
+	if total <= 0 {
+		return nil, nil
+	}
 	eta := at.Add(time.Duration(total * float64(time.Second)))
 	return &eta, nil
+}
+
+// refreshActivity follows lifecycle changes without pretending the orchestrator
+// reported a new activity line. Agent ETAs survive transitions and human waits;
+// the read projection hides them while waiting and restores them after a reply.
+func (e *Engine) refreshActivity(ctx context.Context, tx pgx.Tx, r run) error {
+	var eta *time.Time
+	var estimated bool
+	var line string
+	if err := tx.QueryRow(ctx, `SELECT activity_eta,activity_eta_estimated,current_activity FROM workflow_runs WHERE id=$1`, r.ID).Scan(&eta, &estimated, &line); err != nil {
+		return err
+	}
+	live := r.Status == Running || r.Status == Waiting || r.Status == Stalled
+	waiting := ""
+	if live && (r.Status == Waiting || (r.Step >= 0 && r.Step < len(r.Def.Steps) && r.Def.Steps[r.Step].Kind == KindSignoff)) {
+		waiting = "Zach"
+	}
+	if waiting != "" || !live {
+		if estimated {
+			eta = nil
+			estimated = false
+		}
+	} else if line != "" && (eta == nil || estimated) {
+		var err error
+		eta, err = historyETA(ctx, tx, r, e.Now())
+		if err != nil {
+			return err
+		}
+		estimated = eta != nil
+	}
+	_, err := tx.Exec(ctx, `UPDATE workflow_runs SET activity_eta=$2,activity_eta_estimated=$3,activity_waiting_on=$4 WHERE id=$1`, r.ID, eta, estimated, waiting)
+	return err
 }

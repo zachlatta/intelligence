@@ -163,7 +163,8 @@ func TestLocalTimeScriptUsesBrowserZone(t *testing.T) {
 		["time",{"datetime":"2026-11-11T18:57:05Z","data-format":"short"},"Nov 11 18:57 UTC"],
 		["time",{"datetime":"2026-11-11T18:57:05Z"},"5m ago"],
 		["text",{"data-datetime":"2026-11-11T18:57:05Z","data-format":"day"},"Nov 11"],
-		["time",{"datetime":"2026-11-10"},"November 10, 2026"]]`
+		["time",{"datetime":"2026-11-10"},"November 10, 2026"],
+        ["time",{"datetime":"2026-11-11T18:57:05Z","data-format":"clock"},"18:57"]]`
 	run := func(zone string) [][2]string {
 		cmd := exec.Command(node, "-e", localTimeHarness, "localtime.js", spec)
 		cmd.Env = append(os.Environ(), "TZ="+zone, "LANG=en_US.UTF-8", "LC_ALL=en_US.UTF-8")
@@ -178,12 +179,12 @@ func TestLocalTimeScriptUsesBrowserZone(t *testing.T) {
 		return got
 	}
 	ny, tokyo := run("America/New_York"), run("Asia/Tokyo")
-	for i, want := range []string{"1:57 PM", "Nov 11, 1:57 PM", "5m ago", "Nov 11", "November 10, 2026"} {
+	for i, want := range []string{"1:57 PM", "Nov 11, 1:57 PM", "5m ago", "Nov 11", "November 10, 2026", "13:57"} {
 		if ny[i][0] != want {
 			t.Errorf("New York %d = %q, want %q", i, ny[i][0], want)
 		}
 	}
-	for i, want := range []string{"3:57 AM", "Nov 12, 3:57 AM", "5m ago", "Nov 12", "November 10, 2026"} {
+	for i, want := range []string{"3:57 AM", "Nov 12, 3:57 AM", "5m ago", "Nov 12", "November 10, 2026", "03:57"} {
 		if tokyo[i][0] != want {
 			t.Errorf("Tokyo %d = %q, want %q", i, tokyo[i][0], want)
 		}

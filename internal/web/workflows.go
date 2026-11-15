@@ -372,8 +372,9 @@ const runRowSelect = `SELECT r.id::text, coalesce(nullif(r.task_summary, ''), r.
 	r.project_selected, r.queued_at_creation, r.requested_at, r.answer_expected,
  st.answered_at, coalesce(st.answered_via::text, ''), coalesce(st.resolution, ''), coalesce(st.steered_to::text, ''), coalesce(st.reason, ''), coalesce(st.steer_live, false),
  (SELECT min(sent_at) FROM workflow_run_answers WHERE run_id=r.id AND NOT checked),
- (SELECT coalesce(jsonb_agg(jsonb_build_object('Channel',channel,'MessageID',message_id,'ThreadID',thread_id,'SentAt',sent_at,'Checked',checked) ORDER BY sent_at,id),'[]'::jsonb) FROM workflow_run_answers WHERE run_id=r.id), r.current_activity, r.activity_updated_at, r.activity_eta, r.activity_eta_estimated, r.activity_waiting_on
+ (SELECT coalesce(jsonb_agg(jsonb_build_object('Channel',channel,'MessageID',message_id,'ThreadID',thread_id,'SentAt',sent_at,'Checked',checked) ORDER BY sent_at,id),'[]'::jsonb) FROM workflow_run_answers WHERE run_id=r.id), r.current_activity, r.activity_updated_at, activity.activity_eta, activity.activity_eta_estimated, activity.activity_waiting_on
 	FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id JOIN workflow_versions v ON v.workflow_id = r.workflow_id AND v.version = r.version
+ JOIN workflow_run_activity activity ON activity.run_id=r.id
 	LEFT JOIN workflow_run_queue q ON q.run_id = r.id LEFT JOIN workflow_run_answer_status st ON st.id = r.id `
 
 func scanRunRow(row pgx.CollectableRow) (runRow, error) {
@@ -393,6 +394,14 @@ func scanRunRow(row pgx.CollectableRow) (runRow, error) {
 		}
 	}
 	return r, err
+}
+
+// ActivityETAAt also honors the page clock (including an injected engine clock).
+func (r runRow) ActivityETAAt(now time.Time) *time.Time {
+	if r.ActivityWaitingOn != "" || (r.ActivityETAEstimated && r.ActivityETA != nil && !r.ActivityETA.After(now)) {
+		return nil
+	}
+	return r.ActivityETA
 }
 
 func (r runRow) ActivityStale(now time.Time) bool {

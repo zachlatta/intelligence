@@ -728,7 +728,7 @@ render();
 
 {{define "activity"}}<div>{{if not .Run.Live}}Last activity: {{end}}{{.Run.CurrentActivity}}</div>
 <span class="meta">{{if .Run.ActivityStale .Now}}Stale · {{end}}Updated {{with .Run.ActivityUpdatedAt}}{{agoAt $.Now .}}{{end}}</span>
-<span class="meta">{{if .Run.ActivityWaitingOn}}waiting on {{.Run.ActivityWaitingOn}}{{else}}{{if .Run.ActivityETAEstimated}}about {{with .Run.ActivityETA}}{{at . "clock"}}{{end}} (estimate){{else}}ETA {{with .Run.ActivityETA}}{{at . "minute"}}{{else}}unknown{{end}}{{end}}{{end}}</span>{{end}}
+<span class="meta">{{if .Run.ActivityWaitingOn}}waiting on {{.Run.ActivityWaitingOn}}{{else}}{{if and .Run.ActivityETAEstimated (.Run.ActivityETAAt .Now)}}about {{with .Run.ActivityETAAt .Now}}{{at . "clock"}}{{end}} (estimate){{else}}ETA {{with .Run.ActivityETAAt .Now}}{{at . "minute"}}{{else}}unknown{{end}}{{end}}{{end}}</span>{{end}}
 
 {{define "run"}}{{template "wfhead" .Run.Title}}
 <main class="container page">

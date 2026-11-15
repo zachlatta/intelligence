@@ -32,3 +32,16 @@ func TestActivityRemovesTypedTimes(t *testing.T) {
 		}
 	}
 }
+
+func TestActivityPreservesProseDurationsAndVersions(t *testing.T) {
+	for _, line := range []string{"Checking changes since the last review", "Testing 10:30 duration parser", "Testing version 10:30", "Checking changes since v1.2.3", "Testing duration 10:30", "Testing at 10:30 duration parser"} {
+		if got := CleanActivity(line); got != line {
+			t.Errorf("%q became %q", line, got)
+		}
+	}
+	for _, line := range []string{"Checking since 2026-11-14 23:00 EST", "Checking since 23:15", "Checking (since 9:05 PM ET)"} {
+		if got := CleanActivity(line); got != "Checking" {
+			t.Errorf("annotation: %q became %q", line, got)
+		}
+	}
+}

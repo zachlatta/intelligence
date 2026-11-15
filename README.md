@@ -759,7 +759,7 @@ the run's usual account isolation. It does not rename the workspace or branch.
 The **Now** column and the top of each run page show the orchestrator's latest activity,
 when it was reported and its estimated completion time (or “ETA unknown”). Report it with
 `intelligence workflow status --run <id> --now "Running the checks." --eta <RFC3339>`.
-Omit `--eta` to clear a previous estimate. Activity must be one visible line of 1–280 characters.
+Omit `--eta` to replace a previous ETA with a history estimate when available. Activity must be one visible line of 1–280 characters.
 The host-authenticated moves route accepts `{"move":"status","now":"...","eta":"..."}`;
 it saves `workflow_runs.current_activity`, `activity_updated_at` and `activity_eta`, plus a
 `status` event, in one transaction without advancing the run. Normal account SQL isolation applies.
@@ -767,7 +767,7 @@ Queued and ended runs refuse this move; a run waiting for a reply can still repo
 Lines older than 30 minutes are marked stale. Ended runs show “Last activity”.
 The generated contract tells every orchestrator, including saved workflows, to report at
 step changes and during outside-party or long-job waits exceeding 10 minutes, saying what
-it is waiting on and since when. New runs receive this contract; existing agents keep their prompts.
+it is doing or waiting on, with no typed clock times or “since” annotations. New runs receive this contract; existing agents keep their prompts.
 
 Summary generation uses the workflow's existing orchestrator model and requires no extra API key.
 It happens asynchronously after the orchestrator starts; until then, or if the agent cannot save
@@ -1229,13 +1229,16 @@ annotations or “since” suffix; old suffixes are also removed when displayed.
 the server sums the median duration of each remaining non-signoff step from successful runs of
 the same workflow completed in the last 30 days (`workflow_run_step_times`). It prefers the same
 repository for each step, falls back to that workflow in other repositories, and subtracts time
-already spent on the current step. Missing history for any remaining step leaves ETA unknown.
+already spent on the current visit to the step. Missing history for any remaining step leaves ETA unknown.
 These estimates exclude human sign-off time and appear as “about HH:MM (estimate)” in the runs
 table and run page. `workflow_runs.activity_eta_estimated` distinguishes them from agent ETAs.
 
 Use `status --now "Waiting for review" --waiting-on "reviewer"` for an external wait.
 `activity_waiting_on` records who holds it up, and replaces the ETA on both pages. Sign-off
-steps and runs waiting for a reply show “waiting on Zach”. Step changes clear the old ETA.
+steps and runs waiting for a reply show “waiting on Zach”. Step changes and replies recompute server estimates; agent-provided ETAs survive transitions.
+The `workflow_run_activity` view is the display projection used by the pages and SQL clients:
+it hides completion times during waits and invalidates expired server estimates. Stored ETAs
+remain readable in `workflow_runs`, including agent ETAs held through a human wait.
 All activity fields are readable through `/api/sql`; status writes use the existing moves API
 (`waitingOn` is the JSON name for `--waiting-on`).
 
