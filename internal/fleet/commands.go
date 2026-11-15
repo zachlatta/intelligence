@@ -101,13 +101,16 @@ func (r *Registry) Enqueue(ctx context.Context, host, kind string, args json.Raw
 // EnqueueTx is Enqueue in tx, so a command is queued with whatever else tx changes, or not at
 // all. The host hears of it when tx commits.
 func EnqueueTx(ctx context.Context, tx pgx.Tx, host, kind string, args json.RawMessage, ttl time.Duration, at time.Time) (Command, error) {
-	if _, err := hostclient.ParseCommand(kind, args); err != nil {
+	parsed, err := hostclient.ParseCommand(kind, args)
+	if err != nil {
 		return Command{}, &BadCommandError{err}
 	}
-	var policyErr error
-	args, policyErr = checkCommandProviders(ctx, tx, host, kind, args)
-	if policyErr != nil {
-		return Command{}, &BadCommandError{policyErr}
+	if err := checkCommandProvider(ctx, tx, host, kind, parsed); err != nil {
+		var disabled *DisabledProviderError
+		if errors.As(err, &disabled) {
+			return Command{}, &BadCommandError{err}
+		}
+		return Command{}, err
 	}
 	var resolveErr error
 	args, resolveErr = resolveImages(ctx, tx, host, kind, args)

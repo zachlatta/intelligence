@@ -275,7 +275,9 @@ func (e *Engine) fillModels(ctx context.Context, tx pgx.Tx, r run, step int) (De
 	if err != nil {
 		return d, err
 	}
-	text += "\n\n" + fleet.ProviderRule(disabled)
+	if rule := fleet.ProviderRule(disabled); rule != "" {
+		text += "\n\n" + rule
+	}
 	d.Steps[step].Instructions = text
 	return d, nil
 }

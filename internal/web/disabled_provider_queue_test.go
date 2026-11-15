@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -10,6 +11,37 @@ import (
 	"github.com/zachlatta/intelligence/internal/hostclient"
 	"github.com/zachlatta/intelligence/internal/workflow"
 )
+
+// TestOrchestratorGetsSubscriptionPolicyOnce: the policy overrides saved model lists, so the
+// orchestrator's first prompt carries it, once; with nothing disabled it carries none.
+func TestOrchestratorGetsSubscriptionPolicyOnce(t *testing.T) {
+	for _, disabled := range []bool{true, false} {
+		t.Run(map[bool]string{true: "disabled", false: "all_enabled"}[disabled], func(t *testing.T) {
+			h, d := dbServer(t)
+			if !disabled {
+				if _, err := d.Owner.Exec(t.Context(), `UPDATE provider_plan_settings SET enabled=true`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			b := sendReport(t, h, wfReport())
+			startRun(t, h, fixedWorkflow(t, h), "Policy run")
+			var ws hostclient.CreateWorkspaceArgs
+			if err := json.Unmarshal(b.command().Args, &ws); err != nil || ws.Agent == nil {
+				t.Fatalf("orchestrator start: %v", err)
+			}
+			want := 0
+			if disabled {
+				want = 1
+			}
+			if n := strings.Count(ws.Agent.Prompt, "Subscription policy:"); n != want {
+				t.Errorf("policy appears %d times, want %d", n, want)
+			}
+			if strings.HasSuffix(ws.Agent.Prompt, "\n\n") {
+				t.Error("prompt ends with an empty policy")
+			}
+		})
+	}
+}
 
 func TestDisabledOrchestratorCannotStrandProjectFinder(t *testing.T) {
 	for _, provider := range []string{"muse", "antigravity", "gemini"} {

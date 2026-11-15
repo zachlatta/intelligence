@@ -2,7 +2,6 @@ package fleet
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -36,55 +35,46 @@ func ProviderRule(providers []string) string {
 	return "Subscription policy: these providers are disabled: " + strings.Join(providers, ", ") + ". Do not select, suggest or launch them, including through paseo or sub-agents. This overrides any model lists in saved workflow instructions. Pass this policy to every worker."
 }
 
-func checkCommandProviders(ctx context.Context, tx pgx.Tx, host, kind string, args json.RawMessage) (json.RawMessage, error) {
+// CheckProvider refuses provider if it is one of disabled (from DisabledProviders).
+func CheckProvider(disabled []string, provider string) error {
+	for _, p := range disabled {
+		if strings.EqualFold(strings.TrimSpace(provider), p) {
+			return &DisabledProviderError{Provider: p}
+		}
+	}
+	return nil
+}
+
+// checkCommandProvider refuses a command that would start or resume work on a disabled provider.
+func checkCommandProvider(ctx context.Context, tx pgx.Tx, host, kind string, parsed any) error {
 	disabled, err := DisabledProviders(ctx, tx)
 	if err != nil || len(disabled) == 0 {
-		return args, err
+		return err
 	}
-	parsed, err := hostclient.ParseCommand(kind, args)
-	if err != nil {
-		return args, err
-	}
-	provider := ""
-	var agent *hostclient.CreateAgentArgs
+	provider, scheduleID := "", ""
 	switch a := parsed.(type) {
 	case hostclient.CreateAgentArgs:
-		agent = &a
+		provider = a.Provider
 	case hostclient.CreateWorkspaceArgs:
-		agent = a.Agent
+		if a.Agent != nil {
+			provider = a.Agent.Provider
+		}
 	case hostclient.ScheduleArgs:
 		if a.Agent != nil {
 			provider = a.Agent.Provider
 		}
 		if provider == "" && kind == hostclient.UpdateScheduleKind {
-			if err := tx.QueryRow(ctx, `SELECT coalesce((SELECT provider FROM schedules WHERE host=$1 AND id=$2),'')`, host, a.ScheduleID).Scan(&provider); err != nil {
-				return args, err
-			}
+			scheduleID = a.ScheduleID
 		}
 	case hostclient.ScheduleIDArgs:
 		if kind == hostclient.ResumeScheduleKind || kind == hostclient.RunScheduleKind {
-			if err := tx.QueryRow(ctx, `SELECT coalesce((SELECT provider FROM schedules WHERE host=$1 AND id=$2),'')`, host, a.ScheduleID).Scan(&provider); err != nil {
-				return args, err
-			}
+			scheduleID = a.ScheduleID
 		}
 	}
-	if agent != nil {
-		provider = agent.Provider
-	}
-	for _, p := range disabled {
-		if strings.EqualFold(strings.TrimSpace(provider), p) {
-			return args, &DisabledProviderError{Provider: p}
+	if scheduleID != "" {
+		if err := tx.QueryRow(ctx, `SELECT coalesce((SELECT provider FROM schedules WHERE host=$1 AND id=$2),'')`, host, scheduleID).Scan(&provider); err != nil {
+			return err
 		}
 	}
-	if agent != nil && agent.Labels["intelligence.run"] != "" {
-		agent.Prompt += "\n\n" + ProviderRule(disabled)
-		switch a := parsed.(type) {
-		case hostclient.CreateAgentArgs:
-			return json.Marshal(agent)
-		case hostclient.CreateWorkspaceArgs:
-			a.Agent = agent
-			return json.Marshal(a)
-		}
-	}
-	return args, nil
+	return CheckProvider(disabled, provider)
 }

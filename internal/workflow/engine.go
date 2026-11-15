@@ -503,10 +503,8 @@ func checkWorkflowProviders(ctx context.Context, tx pgx.Tx, d Definition) error 
 		providers = append(providers, d.Project.Provider)
 	}
 	for _, provider := range providers {
-		for _, name := range disabled {
-			if strings.EqualFold(strings.TrimSpace(provider), name) {
-				return &fleet.DisabledProviderError{Provider: name}
-			}
+		if err := fleet.CheckProvider(disabled, provider); err != nil {
+			return err
 		}
 	}
 	return nil

@@ -484,11 +484,13 @@ workspace.
 ### Plan usage
 
 `provider_plan_settings` holds deployment-wide subscription availability. Unlisted providers
-are enabled; Muse and Gemini (including Antigravity) are disabled because their subscriptions ended. Disabled providers stay supported:
-their meters and history are retained, but Plans, quota totals, model-group suggestions and new
-launches exclude them. Saved workflow model lists are overridden by a runtime subscription policy.
-Active schedules for a disabled provider are paused through host commands. Re-enable a paid plan
-with a new migration setting `enabled = true`; this does not resume paused schedules automatically.
+are enabled; Muse and Gemini (including Antigravity) are disabled because their subscriptions
+ended. Disabled providers stay supported: their meters and history are retained, but Plans, quota
+totals, model-group suggestions and new launches exclude them, and a command that would start or
+resume one is refused. Each step's instructions end with a subscription policy naming the disabled
+providers, which overrides model lists in saved workflows. Active schedules for a disabled provider
+are paused through host commands. Re-enable a paid plan with a new migration setting
+`enabled = true`; this does not resume paused schedules automatically.
 
 Every 5 minutes each host reads every provider's own meter (`internal/usage`) and sends it up its
 stream as a `usage` frame. Paseo's own usage report is not used: it shows only the logged-in Claude
