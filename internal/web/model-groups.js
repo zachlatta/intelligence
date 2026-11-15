@@ -91,10 +91,10 @@ function modelGroupPools(windows, provider, login) {
         "SELECT g.id,g.name,g.token,g.revision,coalesce((SELECT jsonb_agg(to_jsonb(m) ORDER BY position) FROM model_group_members m WHERE m.group_id=g.id),'[]'::jsonb) AS members,(SELECT count(*) FROM workflows w JOIN workflow_versions v ON v.workflow_id=w.id AND v.version=w.version WHERE w.deleted_at IS NULL AND position('{{'||g.token||'}}' in v.definition::text)>0) AS used_by FROM model_groups g WHERE g.deleted_at IS NULL ORDER BY g.name,g.id",
       ),
       sql(
-        "SELECT DISTINCT host,provider,id,label,thinking,default_thinking FROM provider_models ORDER BY provider,id,host",
+        "SELECT DISTINCT host,provider,id,label,thinking,default_thinking FROM provider_models p WHERE NOT EXISTS (SELECT 1 FROM provider_plan_settings ps WHERE ps.provider=p.provider AND NOT ps.enabled) ORDER BY provider,id,host",
       ),
       sql(
-        "SELECT a.provider,a.account,a.label,c.window_id,c.window_seconds FROM usage_accounts a LEFT JOIN usage_current c ON c.provider=a.provider AND c.account=a.account ORDER BY a.provider,a.account,c.window_id",
+        "SELECT a.provider,a.account,a.label,c.window_id,c.window_seconds FROM usage_accounts a LEFT JOIN usage_current c ON c.provider=a.provider AND c.account=a.account WHERE NOT EXISTS (SELECT 1 FROM provider_plan_settings ps WHERE ps.provider=a.provider AND NOT ps.enabled) ORDER BY a.provider,a.account,c.window_id",
       ),
       sql(
         "SELECT group_id,host,provider,model,thinking,login,eligible,reason,score,last_observed,position FROM model_group_candidates ORDER BY eligible DESC,score DESC NULLS LAST,position",

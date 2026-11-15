@@ -171,6 +171,10 @@ func (r *Registry) ListWithHistory(ctx context.Context) ([]Host, error) {
 }
 
 func (r *Registry) list(ctx context.Context, history bool) ([]Host, error) {
+	disabled, err := DisabledProviders(ctx, r.p)
+	if err != nil {
+		return nil, err
+	}
 	agentTable, workspaceTable := "agents", "workspace_status"
 	if history {
 		agentTable, workspaceTable = "recorded_agents", "recorded_workspace_status"
@@ -199,6 +203,13 @@ func (r *Registry) list(ctx context.Context, history bool) ([]Host, error) {
 		}
 		if err := json.Unmarshal(projects, &p.Projects); err != nil {
 			return b, err
+		}
+		for i := range p.Providers {
+			for _, name := range disabled {
+				if p.Providers[i].Name == name {
+					p.Providers[i].Available = false
+				}
+			}
 		}
 		if len(p.Providers) == 0 {
 			p.Providers = nil

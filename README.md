@@ -483,6 +483,13 @@ workspace.
 
 ### Plan usage
 
+`provider_plan_settings` holds deployment-wide subscription availability. Unlisted providers
+are enabled; Muse and Gemini (including Antigravity) are disabled because their subscriptions ended. Disabled providers stay supported:
+their meters and history are retained, but Plans, quota totals, model-group suggestions and new
+launches exclude them. Saved workflow model lists are overridden by a runtime subscription policy.
+Active schedules for a disabled provider are paused through host commands. Re-enable a paid plan
+with a new migration setting `enabled = true`; this does not resume paused schedules automatically.
+
 Every 5 minutes each host reads every provider's own meter (`internal/usage`) and sends it up its
 stream as a `usage` frame. Paseo's own usage report is not used: it shows only the logged-in Claude
 login and misses providers.
@@ -823,8 +830,8 @@ Group writes use `POST /api/model-groups`, `PUT /api/model-groups/{id}` (with `r
 rankings and history through SQL (`model_groups`, `model_group_members`, `model_group_candidates`,
 `workflow_model_suggestions`). Detailed audit data stays in SQL; the run page shows a short summary.
 
-The starting workflow spreads frontier work across Claude Opus 5.5, Codex and Gemini 4 Carbon
-(`antigravity/gemini-4-carbon-high`). Antigravity encodes effort in the model ID; Carbon also has
+The starting workflow spreads frontier work across the subscribed Claude Opus 5.5 and Codex plans.
+Gemini remains supported for later reactivation. Antigravity encodes effort in the model ID; Carbon has
 `gemini-4-carbon-medium` and `gemini-4-carbon-low`. Models are read from the host's Paseo catalog,
 with “other…” for an ID not yet listed. Argon remains usable for existing agents and explicit choices.
 Migration `0028_carbon_frontier` makes new versions of saved workflows that recommend Argon

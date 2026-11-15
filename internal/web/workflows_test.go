@@ -512,7 +512,7 @@ func TestWorkflowPages(t *testing.T) {
 		t.Errorf("the editor should show the workflow's host and offer the account's")
 	}
 	// the editor offers the providers whose agents can run without asking, and only those
-	providers, _ := json.Marshal(workflow.Providers())
+	providers, _ := json.Marshal([]string{"claude", "codex"})
 	if !strings.Contains(ed.Body.String(), "const providers = "+string(providers)+";") || strings.Contains(ed.Body.String(), "<option>claude</option>") {
 		t.Errorf("the editor's providers should be workflow.Providers() = %s", providers)
 	}

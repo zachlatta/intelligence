@@ -285,6 +285,9 @@ func TestModelGroupNames(t *testing.T) {
 
 func TestModelGroupCanConfigureUnknownMeters(t *testing.T) {
 	h, d := dbServer(t)
+	if _, err := d.Owner.Exec(t.Context(), `UPDATE provider_plan_settings SET enabled=true WHERE provider='muse'`); err != nil {
+		t.Fatal(err)
+	}
 	rep := wfReport()
 	rep.Paseo.Providers = []hostclient.Provider{{Name: "muse", Available: true, Models: []hostclient.Model{{ID: "wonder", Thinking: []string{"high"}}}}}
 	sendReport(t, h, rep)

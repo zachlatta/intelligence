@@ -735,9 +735,26 @@ func workflowPage(cfg Config, a *app, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), 500)
 			return
 		}
+		disabled, err := fleet.DisabledProviders(r.Context(), v.pool)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		providers := []string{}
+		for _, provider := range workflow.Providers() {
+			enabled := true
+			for _, name := range disabled {
+				if name == provider {
+					enabled = false
+				}
+			}
+			if enabled {
+				providers = append(providers, provider)
+			}
+		}
 		renderWorkflows(w, "editor", map[string]any{"Version": cfg.Version, "Workflow": wfs[0], "Hosts": hosts, "Repos": repos,
 			"VoiceStatus": voiceStatus, "EmailOn": a.mail != nil, "Mailbox": mb.Address, "Emails": previews(emails), "Others": others,
-			"Dictation": dictationPath(cfg), "Providers": workflow.Providers()})
+			"Dictation": dictationPath(cfg), "Providers": providers})
 	}
 }
 

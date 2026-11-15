@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/zachlatta/intelligence/internal/fleet"
 )
 
 // ModelGroup is a shared allowlist. Token is immutable, including after a rename.
@@ -270,6 +271,11 @@ func (e *Engine) fillModels(ctx context.Context, tx pgx.Tx, r run, step int) (De
 	if len(notes) > 0 {
 		text += "\n\nModel suggestions:\n" + strings.Join(notes, "\n")
 	}
+	disabled, err := fleet.DisabledProviders(ctx, tx)
+	if err != nil {
+		return d, err
+	}
+	text += "\n\n" + fleet.ProviderRule(disabled)
 	d.Steps[step].Instructions = text
 	return d, nil
 }

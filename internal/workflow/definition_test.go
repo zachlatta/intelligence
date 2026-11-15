@@ -15,9 +15,12 @@ func TestOrchestratorSummarizesTheTaskBeforeStartingWork(t *testing.T) {
 	}
 }
 
-func TestStartingWorkflowRecommendsCarbon(t *testing.T) {
+func TestStartingWorkflowRecommendsSubscribedPlans(t *testing.T) {
+	if strings.Contains(OrchestratorInstructions, "antigravity/") || strings.Contains(OrchestratorInstructions, "muse/") {
+		t.Error("starting guidance recommends an unsubscribed provider")
+	}
 	p := OrchestratorPrompt("task", Starting, Vars{Run: "r"})
-	for _, want := range []string{"antigravity/gemini-4-carbon-high", "claude/claude-opus-5-5", "codex"} {
+	for _, want := range []string{"claude/claude-opus-5-5", "codex"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("frontier guidance missing %q", want)
 		}
