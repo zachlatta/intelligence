@@ -10,6 +10,13 @@ import (
 	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
+// DisabledProviderError is a terminal launch refusal, not a transient host failure.
+type DisabledProviderError struct{ Provider string }
+
+func (e *DisabledProviderError) Error() string {
+	return fmt.Sprintf("provider %s is disabled", e.Provider)
+}
+
 // DisabledProviders reads deployment plan policy; installed CLIs do not imply paid subscriptions.
 func DisabledProviders(ctx context.Context, q interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
@@ -66,7 +73,7 @@ func checkCommandProviders(ctx context.Context, tx pgx.Tx, host, kind string, ar
 	}
 	for _, p := range disabled {
 		if strings.EqualFold(strings.TrimSpace(provider), p) {
-			return args, fmt.Errorf("provider %s is disabled", p)
+			return args, &DisabledProviderError{Provider: p}
 		}
 	}
 	if agent != nil && agent.Labels["intelligence.run"] != "" {

@@ -70,6 +70,16 @@ func retryHostReady(ctx context.Context, tx pgx.Tx, host string) (bool, error) {
 // dequeueRetry runs only after the FIFO admits r. Lock the old command so a
 // late success either wins before admission or is superseded by this delivery.
 func (e *Engine) dequeueRetry(ctx context.Context, tx pgx.Tx, r run) (bool, error) {
+	var started bool
+	terminal, err := e.startAttempt(ctx, tx, r, func(start pgx.Tx) error {
+		var err error
+		started, err = e.launchRetry(ctx, start, r)
+		return err
+	})
+	return started || terminal, err
+}
+
+func (e *Engine) launchRetry(ctx context.Context, tx pgx.Tx, r run) (bool, error) {
 	var previous fleet.Command
 	err := tx.QueryRow(ctx, `SELECT c.id::text, c.kind, c.idempotency_key
 		FROM commands c JOIN workflow_runs r ON r.pending_command=c.id

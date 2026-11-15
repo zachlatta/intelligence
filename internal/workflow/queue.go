@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/zachlatta/intelligence/internal/fleet"
 )
 
 // Limits are when a host is near capacity: a run queues when the host's projected load would reach
@@ -222,10 +224,33 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 
 // dequeue starts queued run r, saying why it starts now.
 func (e *Engine) dequeue(ctx context.Context, tx pgx.Tx, r run, why string) error {
-	if err := e.recordDequeue(ctx, tx, r, why); err != nil {
-		return err
+	_, err := e.startAttempt(ctx, tx, r, func(start pgx.Tx) error {
+		if err := e.recordDequeue(ctx, start, r, why); err != nil {
+			return err
+		}
+		return e.launch(ctx, start, r)
+	})
+	return err
+}
+
+// startAttempt rolls back partial startup writes (including model allocations) in a
+// savepoint. A disabled subscription ends this run in the outer transaction, freeing
+// its FIFO position. Other errors still roll back the caller's transaction.
+func (e *Engine) startAttempt(ctx context.Context, tx pgx.Tx, r run, attempt func(pgx.Tx) error) (bool, error) {
+	err := pgx.BeginFunc(ctx, tx, attempt)
+	var disabled *fleet.DisabledProviderError
+	if !errors.As(err, &disabled) {
+		return false, err
 	}
-	return e.launch(ctx, tx, r)
+	if err := e.event(ctx, tx, r, "error", nil, nil, disabled.Error()); err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET status=$2, error=$3, pending_command=NULL,
+		start_retry_at=NULL, start_retry_queued=false, queue_reason='', updated_at=$4, finished_at=$4
+		WHERE id=$1`, r.ID, Failed, disabled.Error(), e.Now()); err != nil {
+		return false, err
+	}
+	return true, e.archiveRun(ctx, tx, r)
 }
 
 func (e *Engine) recordDequeue(ctx context.Context, tx pgx.Tx, r run, why string) error {
