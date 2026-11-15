@@ -106,3 +106,62 @@ func TestPruneHostHistory(t *testing.T) {
 }
 
 func dbtestOwner(t *testing.T) *pgxpool.Pool { return dbtest.New(t).Owner }
+
+func TestRecordHostStoresDiskIOLoadAndFilesystems(t *testing.T) {
+	r := New(dbtestOwner(t))
+	now := time.Now().UTC().Truncate(time.Minute)
+	first := hostReport(now.Add(-2 * time.Minute))
+	m := &first.Minutes[0]
+	m.Load5, m.Load15 = 2, 1
+	m.DiskReadBps, m.DiskWriteBps, m.DiskIOPS = pf(10<<20), pf(5<<20), pf(300)
+	m.DiskReadBpsMax, m.DiskWriteBpsMax, m.DiskBusyAvgPct, m.DiskBusyMaxPct = pf(40<<20), pf(20<<20), pf(35), pf(90)
+	m.Filesystems = []resources.Filesystem{
+		{Mount: "/", Device: "/dev/sda1", Type: "ext4", Total: 100 << 30, Available: 40 << 30},
+		{Mount: "/data", Device: "/dev/sdb1", Type: "xfs", Total: 1000 << 30, Available: 900 << 30}}
+	if err := r.RecordHost(ctx, "host-1", first, now); err != nil {
+		t.Fatal(err)
+	}
+	// the next minute's reading replaces the host's filesystems: /data was unmounted
+	second := hostReport(now.Add(-time.Minute))
+	second.Minutes[0].Filesystems = []resources.Filesystem{{Mount: "/", Device: "/dev/sda1", Type: "ext4", Total: 100 << 30, Available: 30 << 30}}
+	if err := r.RecordHost(ctx, "host-1", second, now); err != nil {
+		t.Fatal(err)
+	}
+	// an older reading sent late (a retry) does not undo a newer one
+	if err := r.RecordHost(ctx, "host-1", first, now); err != nil {
+		t.Fatal(err)
+	}
+	res, err := r.HostResources(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := res["host-1"]
+	if len(h.Filesystems) != 1 || h.Filesystems[0].Mount != "/" || h.Filesystems[0].Available != 30<<30 || h.Filesystems[0].Type != "ext4" {
+		t.Errorf("filesystems = %+v", h.Filesystems)
+	}
+	hist, err := r.HostHistory(ctx, "host-1", now.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hist) != 2 {
+		t.Fatalf("history = %+v", hist)
+	}
+	d := hist[0]
+	if d.Load5 != 2 || d.Load15 != 1 || d.DiskReadBps == nil || *d.DiskReadBps != 10<<20 || *d.DiskWriteBps != 5<<20 || *d.DiskIOPS != 300 ||
+		*d.DiskReadBpsMax != 40<<20 || *d.DiskWriteBpsMax != 20<<20 || *d.DiskBusyAvgPct != 35 || *d.DiskBusyMaxPct != 90 {
+		t.Errorf("minute = %+v", d)
+	}
+	if hist[1].DiskReadBps != nil || hist[1].DiskBusyMaxPct != nil {
+		t.Errorf("a minute without disk I/O has some: %+v", hist[1])
+	}
+	// SQL reads it all: load per CPU now, the day's busiest disk and bytes moved, each filesystem's use
+	var loadPerCPU, busyMax, readBytes, usedFrac float64
+	if err := r.p.QueryRow(ctx, `SELECT (SELECT load1_per_cpu FROM host_current WHERE host = 'host-1'),
+		(SELECT disk_busy_max_pct FROM host_days WHERE host = 'host-1'), (SELECT disk_read_bytes FROM host_days WHERE host = 'host-1'),
+		(SELECT used_frac FROM host_filesystems WHERE host = 'host-1' AND mount = '/')`).Scan(&loadPerCPU, &busyMax, &readBytes, &usedFrac); err != nil {
+		t.Fatal(err)
+	}
+	if loadPerCPU != 0.125 || busyMax != 90 || readBytes != 60*(10<<20) || usedFrac != 0.7 {
+		t.Errorf("sql: load per CPU %v, busiest %v, read %v, used %v", loadPerCPU, busyMax, readBytes, usedFrac)
+	}
+}

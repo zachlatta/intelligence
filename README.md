@@ -32,6 +32,19 @@ All app state is in Postgres (`internal/db/migrations/`), in the `public` schema
 runs a query as the signed-in account's own login role, which can only SELECT, so every piece of
 the account's state can be read and none written.
 
+Migrations are `.sql` files in `internal/db/migrations/`, applied once each in a transaction when
+the server starts and recorded by name (without `.sql`) in `schema_migrations`. Name a new one
+`YYYYMMDDTHHMM_lower_snake_description.sql`, the UTC time you write it (for example
+`20261113T0930_add_widgets.sql`; `date -u +%Y%m%dT%H%M`). Different descriptions distinguish
+migrations written in the same minute: equal timestamps are allowed and order by full file name,
+so they need no renaming on merge. The legacy files `0001_` to `0050_` keep their names and apply
+first, in number order, then the timestamped ones in time order. A file with an older timestamp
+than ones already applied, as a merge of parallel branches gives, is applied on the next start, so write
+each migration to stand on its own. A new four-digit name (`0051_` and up), a timestamp before 2026,
+a malformed name or any other file in the directory (`x.SQL`, `x.sql.orig`, notes) fails the tests
+and stops the server. Files and directories whose names start with `.` or `_` are ignored by Go
+embed and are not checked or applied.
+
 Each account reads only its own rows, and Postgres enforces it, not the app: every table has
 row-level security, and every view is `security_invoker`, so it reads as whoever queries it.
 Account *n*'s role is `<read-only role>_a<n>` (`db.AccountRoles`): a member of the read-only role
@@ -80,8 +93,9 @@ The hierarchy is hosts > workspaces > agents:
 - `schedules` and `schedule_runs`: each host's Paseo schedules and their runs (below), with the view
   `schedule_status` (each schedule's run counts and newest run). `hosts.schedules_at` and
   `schedules_error` say when the host last listed them, and why it could not.
-- `host_minutes`, `agent_minutes`, `oom_kills` and `host_probes`: each host's resources over time
-  (below), with the views `host_current`, `host_days` and `agent_days`.
+- `host_minutes`, `agent_minutes`, `oom_kills`, `host_probes` and `host_filesystems`: each host's
+  resources over time and its filesystems now (below), with the views `host_current`, `host_days`
+  and `agent_days`.
 - `usage_accounts`, `usage_readings`, `usage_active` and `usage_sources`: subscription plans' usage
   over time (below), with the views `usage_current`, `usage_pace`, `usage_cycles` and `usage_totals`.
 - `accounts` (username, argon2id password hash, its role), `sessions` (signed-in browsers; a hash
@@ -108,6 +122,63 @@ so nothing stale reads as current. The `host_status` view adds `online` (the hos
 to the server, `stream_id`, which was seen within the last minute) and counts; `workspace_status`
 adds each workspace's agent counts.
 
+Orchestrators continue in the same turn after `next`, `skip` and `back`, and wait for workers
+in the foreground. They end the turn after a successful `ask` or when the run is over.
+This lifecycle rule wraps every definition, including saved workflows.
+
+A server watchdog checks up to 100 running runs each minute, oldest checked first. For an
+unchanged eligible idle snapshot, attempts are due at two and ten minutes and the run becomes
+**Stalled** at twelve minutes, measured from `idle_since`. These are idle-window thresholds,
+not deadlines measured from the first detection of a stuck run.
+
+A continuation normally wakes the orchestrator and changes its reported activity. Once it
+becomes idle again, the next observation starts a new idle window. The remaining second attempt
+then needs ten unchanged idle minutes; after that attempt wakes it again, marking it stalled
+needs twelve unchanged idle minutes. There are still at most two attempts per lifecycle
+transition. For example, brief wakeups can produce attempts at minutes 2 and 13, then a stall at
+minute 26. The minute worker and host reporting can add their normal scheduling delay.
+
+Running or initializing workers and permission blocks prevent automatic recovery. Worker or
+agent snapshot changes and stale/offline hosts reset the idle window; pending commands pause
+reconciliation until they clear. No gate is skipped and no replacement agent starts. Hosts send
+a full snapshot every 30 seconds; the watchdog requires a heartbeat and a report received within
+the last minute. Older host clients must update before their idle runs can be recovered.
+Provider-error, closed or missing orchestrators require inspection of the agent/provider;
+automatic recovery only handles idle orchestrators and does not restart or replace them.
+
+`workflow_runs.idle_since`, `idle_observation`, `stall_checked_at`, status and error, and
+`workflow_run_continuations` (event, attempt, command and creation time) expose recovery through SQL.
+Run row locks and the unique `(run_id, event_id, attempt)` key coordinate server instances.
+Each continuation attempt and the stalled transition write an event and update `updated_at`, so
+both appear in What happened. Finished-turn attention is not a permission block; only a current
+`permission` attention reason or an open pending/error/stuck permission audit prevents recovery.
+Admission-waiting runs and startup retries are excluded before scanning and again under the run
+lock; this watchdog neither calls admission nor spends a startup retry. Each run reconciles in
+its own transaction, and failures are reported together so one bad run cannot roll back healthy
+recoveries. The minute worker lives beside `RunStartRetries` and stops with the server.
+`workflow_run_latest_transition` is a security-invoker view of the latest lifecycle event;
+label edits and message events do not create a new recovery epoch. Agent activity still resets
+the idle grace period. Runs without a lifecycle event are skipped until a transition provides
+the epoch needed to deduplicate recovery attempts.
+Attempts survive server restarts. Continuations expire after one minute; progress, asking,
+cancellation or completion invalidates them before delivery. An already delivered message cannot
+be recalled. The agent must check prior outcomes before repeating work.
+
+Stalled is a watchdog diagnosis, not a permission gate. Accepted run replies and forwarded
+thread messages clear the stalled reason, record a resume event and start a fresh recovery
+generation before sending the input to the existing orchestrator. An authenticated valid move
+also clears it in the same transaction, then applies normally; invalid moves roll everything
+back. This includes a new ask, completion or failure, whose normal resulting status still applies.
+These paths neither send an extra continuation nor create an agent. Direct agent conversations
+can carry on and clear the run's marker with their next valid move; they do not require a web-only
+unlock. A running run's label edits and messages still do not reset its recovery budget.
+
+**Resume** on the runs list or run page calls `POST /api/workflow-runs/{id}/resume` with `{}`.
+It starts a new recovery generation on the same idle orchestrator at the same step, only on a
+fresh online host without active or permission-blocked workers or pending commands. It returns
+204 on success, 409 when unsafe or not stalled, and 404 outside the account. Missing, closed or
+permission-blocked agents need inspection; Resume never replaces them or approves tools.
+
 ### The stream
 
 A host dials `GET /api/hosts/{host}/stream` (a WebSocket, with its own key) and keeps it
@@ -116,8 +187,8 @@ open, dialing again 5 seconds after it drops. Each frame is a JSON `hostclient.F
 - server to host: `hello` first (where its transcript copies end), then `command`s. The server's
   version is in the dial's `X-Intelligence-Version` header.
 - host to server: `report` (on each new stream, and within a second of a change; the host re-reads
-  the daemon's status every 15 seconds and reports it if it changed), `transcript` batches, `usage`
-  (every 5 minutes), `host` (every minute), `schedules` (when they changed, below), `diff` (a workspace's diff, when it
+  the daemon's status every 15 seconds and sends a full snapshot every 30 seconds), `transcript`
+  batches, `usage` (every 5 minutes), `host` (every minute), `schedules` (when they changed, below), `diff` (a workspace's diff, when it
   changed, below) and `command_update`s. Each carries an `id`, and the server answers each with an
   `ack` once it is stored (or with why not), transcript batches on their own so a large one holds up
   nothing else.
@@ -130,6 +201,7 @@ server instance holds it.
 Server instances learn of each other's changes through Postgres `NOTIFY` on the `fleet` channel
 (`fleet.Changes`): a queued command, a command's update and a stream taking a host over.
 Workflow start retries additionally reconcile finished startup commands every five seconds.
+The stall watchdog checks idle orchestrators each minute through the same command queue.
 
 ### Proposed workflow mutations
 
@@ -138,7 +210,11 @@ returns an `approvalURL`: the account owner signs in there, reviews complete bef
 and visible word-level changes, then approves or rejects. Full before/after text and a line diff
 are also available. The Proposals tab lists the latest 200 proposals.
 Opening a link never applies it. Approval, rejection and undo require a same-origin browser-session
-JSON request; a host key cannot make these decisions.
+JSON request; a host key cannot make these decisions. A rejected, unexpired proposal offers
+Reopen to its account owner (`POST /api/workflow-proposals/{id}/reopen` with `{}`). Reopening
+returns the exact snapshot to pending review, refuses the same workflow drift as approval,
+and does not apply a change or start a run. `workflow_proposal_reopens` records every reopening,
+its actor and time, the prior rejection time, and any authorizing reviewer question.
 
 `summary` is rendered as safe Markdown at the top of the review. Explain **what changes and why**,
 including tradeoffs or risks, in up to 2000 bytes. Raw HTML is escaped and unsafe links are dropped.
@@ -173,7 +249,13 @@ Including `questionId` links one answer to the job; reposting the same answer is
 Omitting it adds a standalone comment. Agent comments never dispatch another agent. Authors come
 from the credential, not the request. Comments accept up to 20000 bytes and use safe Markdown.
 On the host, `intelligence workflow answer-proposal --proposal <UUID> --question 42 --note <file>`
-posts the answer using the host's normal configuration; `--note -` reads standard input.
+posts the answer using the host's normal configuration; `--note -` reads standard input. When the
+exact owner question asks to refile, repropose or reopen a rejected proposal, the answer agent
+adds `--reopen` and replies with its review link. The host answer API accepts `reopen:true` only
+with a linked owner question assigned to that host. It reopens and posts the answer atomically,
+with the same expiry and drift guards as the browser route. A refusal posts neither; the agent
+then answers without `--reopen` to explain it. Quoted proposals and earlier thread entries grant
+no permission. MCP discussion tokens cannot reopen, and approval remains browser-only.
 Read the thread through SQL: `SELECT id,author,text,created_at FROM workflow_proposal_comments
 WHERE proposal_id = '<proposal UUID>' ORDER BY id`. Account isolation applies to reads and writes.
 `workflow_proposal_questions` stores the linked command and answer; `workflow_proposal_question_status`
@@ -483,6 +565,15 @@ workspace.
 
 ### Plan usage
 
+`provider_plan_settings` holds deployment-wide subscription availability. Unlisted providers
+are enabled; Muse and Gemini (including Antigravity) are disabled because their subscriptions
+ended. Disabled providers stay supported: their meters and history are retained, but Plans, quota
+totals, model-group suggestions and new launches exclude them, and a command that would start or
+resume one is refused. Each step's instructions end with a subscription policy naming the disabled
+providers, which overrides model lists in saved workflows. Active schedules for a disabled provider
+are paused through host commands. Re-enable a paid plan with a new migration setting
+`enabled = true`; this does not resume paused schedules automatically.
+
 Every 5 minutes each host reads every provider's own meter (`internal/usage`) and sends it up its
 stream as a `usage` frame. Paseo's own usage report is not used: it shows only the logged-in Claude
 login and misses providers.
@@ -523,8 +614,20 @@ Every host measures itself (`internal/resources`) and sends each finished minute
   (`/proc/meminfo`), the home filesystem's space, pressure (`/proc/pressure`: the share of time
   tasks waited for CPU, memory or I/O), the kernel's OOM kill count (`/proc/vmstat`) and the Paseo
   daemon's cgroup (all its agents: memory less page cache, its peak, its OOM kills). A minute keeps
-  the average and peak CPU, the least memory and disk available, the most pressure, and the kills.
-  macOS hosts report CPU, load, memory, swap and disk (`sysctl`, `vm_stat`, `iostat`).
+  the average and peak CPU, the 1, 5 and 15-minute load, the least memory and disk available, the
+  most pressure, and the kills. macOS hosts report CPU, load, memory, swap and disk (`sysctl`,
+  `vm_stat`, `iostat`).
+- Disk I/O, every 5 seconds: across the physical disks (`/proc/diskstats`, keeping the devices
+  `/sys/block` gives a `device`, so partitions, device mapper, RAID and loop devices are not
+  counted twice, and leaving out optical drives), bytes read and written a second, operations a second, and the busiest disk's
+  share of the time it had I/O in flight (Linux's %util: near 100% the disk is saturated). A minute
+  keeps the averages, the fastest read and write, and the average and peak busy time
+  (`host_minutes.disk_*`). macOS reports bytes and operations (`ioreg`), not busy time.
+- Filesystems, once a minute: each local filesystem's total and available space (Linux:
+  `/proc/self/mounts`, each device once, a ZFS pool once, network filesystems left out, as statfs
+  on one whose server is gone can hang; macOS: `df -kPl`, its Data volume and external volumes,
+  not Xcode's read-only simulator images).
+  The newest reading replaces the host's rows in `host_filesystems` (`used_frac` is how full).
 - Each agent, every 15 seconds: its processes are those whose environment names it
   (`PASEO_AGENT_ID`, which commands inherit); a minute keeps their most memory (proportional set
   size, so shared pages count once) and how many there were.
@@ -533,7 +636,8 @@ Every host measures itself (`internal/resources`) and sends each finished minute
   commands (`cpu_source` says which).
 
 The server keeps 90 days of minutes (OOM kills are kept). `host_current` is each host's newest
-minute; `host_days` and `agent_days` sum days.
+minute (with `load1_per_cpu`); `host_days` and `agent_days` sum days (`host_days` has the day's
+highest load, fullest home filesystem, busiest disk and bytes read and written).
 
 ### The eBPF probe
 
@@ -662,6 +766,25 @@ host-authenticated JSON moves API (`{"move":"summarize","summary":"..."}`), with
 the run. The summary is stored in `workflow_runs.task_summary`, readable through `/api/sql` with
 the run's usual account isolation. It does not rename the workspace or branch.
 
+Summaries, run titles and email subjects keep names as Zach said or wrote them unless the run
+verifies an identity with evidence and cites the source in the reply. Generated titles and summaries
+are not identity evidence; unresolved names stay as given. When choosing among ambiguous names,
+the reply explains who and why in one line and cites the source. The orchestrator passes this rule
+to its workers.
+
+The **Now** column and the top of each run page show the orchestrator's latest activity,
+when it was reported and its estimated completion time (or “ETA unknown”). Report it with
+`intelligence workflow status --run <id> --now "Running the checks." --eta <RFC3339>`.
+Omit `--eta` to replace a previous ETA with a history estimate when available. Activity must be one visible line of 1–280 characters.
+The host-authenticated moves route accepts `{"move":"status","now":"...","eta":"..."}`;
+it saves `workflow_runs.current_activity`, `activity_updated_at` and `activity_eta`, plus a
+`status` event, in one transaction without advancing the run. Normal account SQL isolation applies.
+Queued and ended runs refuse this move; a run waiting for a reply can still report activity.
+Lines older than 30 minutes are marked stale. Ended runs show “Last activity”.
+The generated contract tells every orchestrator, including saved workflows, to report at
+step changes and during outside-party or long-job waits exceeding 10 minutes, saying what
+it is doing or waiting on, with no typed clock times or “since” annotations. New runs receive this contract; existing agents keep their prompts.
+
 Summary generation uses the workflow's existing orchestrator model and requires no extra API key.
 It happens asynchronously after the orchestrator starts; until then, or if the agent cannot save
 it, the pages fall back to `workflow_runs.title` (the cleaned, shortened prompt). The task proceeds
@@ -729,8 +852,8 @@ workspace) through their results. A failed or expired start queues up to three r
 15, 30 and 60 seconds. The server checks every five seconds. A retry waits until the host is
 online and reports both a connected Paseo daemon and support for retry keys
 (`hosts.start_retry_keys`). Once ready, it joins the same capacity queue as new runs in
-original run creation order. A replacement stream must report support again before it can
-receive queued or unfinished retries. Each retry reuses the original Paseo creation key so a
+original run creation order; a run started by hand (Start now) retries at once instead. A
+replacement stream must report support again before it can receive queued or unfinished retries. Each retry reuses the original Paseo creation key so a
 lost response does not create a second workspace or agent.
 
 The existing durable `commands` queue handles host reconnects. `workflow_runs.start_retries`,
@@ -744,12 +867,27 @@ error and archives any partial workspace. Cancellation removes the scheduled ret
 run starts with its own creation key and budget.
 
 The run page shows each queued or sent retry, its last error, its next scheduled time, and whether
-it is waiting for host recovery or capacity. Each queued retry
-has a deadline 24 hours after its scheduled time; at that deadline the run fails with the last
-start error and a timeout explanation. This allows a long outage or host update without leaving
-the run waiting forever. Queue and delivery events are recorded in the timeline. Reconciliation
-processes the other runs even when one run is broken, then logs all errors with their command IDs.
-Reconciliation also expires overdue startup commands when the host has no stream. An expired
+it is waiting for host recovery or capacity. A due retry waits at most `workflow.RetryWaitLimit`
+(5 minutes) past its scheduled time, for its host to be ready or for room in its host's queue.
+Its run keeps its memory reservation meanwhile, so the next queued run cannot take the room the
+retry needs. Then, if the host is ready and has room, it is sent; if not, the run fails with the
+last start error and why: the host was not ready (offline, Paseo daemon not connected, or no retry
+keys), or it had no room (with the queue reason). No automatic retry is sent beyond the host's
+capacity; only a run started by hand or with immediate priority skips the queue.
+
+A retry waiting only for capacity (due, its host ready, in the queue) has a **Start retry now**
+button: the same `POST /api/workflow-runs/{id}/start` as **Start now**, which sends that retry at
+once, ahead of the queue, whatever the host's load. It is an ordinary retry: it reuses the creation
+key, counts toward the three, and a failure is handled like any other failed retry (the next
+backoff, or the run fails once the retries run out). Like Start now, it marks the run
+`started_by_hand`, so a later retry goes out as soon as its host is ready instead of back behind the
+queue. The timeline records it as “Started: retry started by hand, ahead of the queue”. A retry
+still in its backoff, waiting for its host to be ready, or past `RetryWaitLimit` cannot be started
+by hand (`409`). All retry state is in Postgres and the retry worker reconciles it every 5 seconds,
+so a restart does not lose a retry. Queue and delivery events are recorded in the timeline.
+Reconciliation processes the other runs even when one run is broken, then logs all errors with
+their command IDs. Reconciliation also expires overdue startup commands when the host has no
+stream. An expired
 command's retry wait starts from its original expiry, so a long server outage cannot reset the
 deadline.
 
@@ -791,13 +929,123 @@ agents and descendants. Known creation times exclude agents started after the ru
 finished run without snapshots also falls back to its live agent tree, so legacy links remain
 available. This cannot recover metadata or transcripts already removed before the upgrade.
 
-Report-time capture runs once, before replacing live rows, and uses only unfinished runs with a listed workspace or live project finder,
+Report-time capture runs before and after replacing live rows, preserving departing agents and
+including new workers immediately. It uses only unfinished runs with a listed workspace or live project finder,
 with an index on unfinished runs. It takes a final snapshot when a run ends, then freezes membership
 and stops recapturing it. Agents started later in a failed or canceled run's retained workspace
 belong to later work, not that ended run's history. The history follows its run and host when
 either is deleted.
 
 Variables in instructions: `{{input}}`, `{{repo}}`, `{{branch}}` and `{{run}}`.
+
+#### Request and answer tracking
+
+Every run stores `workflow_runs.requested_at`: the Gmail Date header, a voice memo’s
+recorded_at, or task submission time. Missing or invalid source times fall back to run creation.
+Migration 0047 backfills stored Date:/Recorded: lines when parseable, otherwise created_at;
+it does not infer historical answer messages from free-text summaries.
+
+Email and voice memo triggers set `workflow_runs.answer_expected` to true, including
+email workflows that reply to someone other than Zach. Task submissions (including code-landing
+Factory Tasks) set it to false. Migration 0047 backfills this flag from each run’s saved trigger.
+Task runs can still record answers and show timing. Canceled runs never count as unanswered.
+
+The final authorized step, or the sending worker on an early fail/skip exit, records every sent
+answer to the requester, including earlier unchecked sends:
+
+```sh
+intelligence workflow answer --run <UUID> --channel email --message-id <sent-id> --thread-id <thread-id> --checked
+```
+
+Supply `--sent-at` with RFC 3339 or RFC 5322 dates (including a trailing zone comment)
+when the send time is known. Immediately after sending, omit it if the mail tool returned no
+time; the server defaults to now(). The CLI normalizes supplied dates to RFC 3339 for JSON.
+For an earlier delivery, fetch and supply its actual date.
+Omit `--checked` for a send that has not passed review. A draft that was never sent is not
+an answer. This host-authenticated command posts JSON `{"channel","messageId","threadId","sentAt","checked"}`
+to `POST /api/workflow-runs/{id}/answers`. It accepts finished runs too, so a verified prior
+delivery can be recorded later. Exact retries are idempotent; conflicting details for the same
+run/channel/message are refused. The app has no email-send credential; recording attests delivery,
+it does not send or independently verify mail.
+
+Read all sends through `workflow_run_answers`, scoped to the run’s account. Workflows and the
+run page measure asked-to-answered minutes to the first **checked** answer, with the earlier
+unchecked send time shown separately when it differs. Both pages visibly mark runs with only
+unchecked sends. Succeeded/failed runs expecting an answer are flagged when none is checked.
+`workflow_runs_unanswered` lists expected requests older than 30 minutes without a checked
+answer, including queued/starting runs, excluding canceled runs. Its `has_unchecked_sends` column
+distinguishes silence from unchecked sends. Unsent drafts never count as sends.
+
+A run can also settle its answer without a send of its own, once, in
+`workflow_run_answer_resolutions` (an identical retry is accepted, a different one refused):
+
+```sh
+intelligence workflow answer --run <UUID> --steered-to <other run UUID> [--reason <text>] [--sent-at <handover time>]
+intelligence workflow answer --run <UUID> --not-needed "<why no answer is due>"
+```
+
+- **Steered**: the run handed its request to another run of the account (for example, a voice memo
+  that steers a running deck run's agent). The other run's first checked answer sent at or after
+  the handover (`--sent-at`, default now) answers it too, following chains of steers; a steer that
+  would loop is refused. Until then the run stays in `workflow_runs_unanswered`, whose
+  `steered_to` column names the run it waits on.
+- **Not needed**: the input was not a request (a recorded meeting, a retracted or duplicate
+  request). The reason is required; the run leaves the view.
+- **Legacy**: migration 0050 marked, once, every run that expected an answer, was created before
+  migration 0047 ran (when runs were first told to record answers) and has no checked answer. They
+  can never be answered, so they leave the view. Agents cannot record this kind.
+
+These post `{"kind":"steered","steeredTo","reason","at"}` or `{"kind":"not_needed","reason"}` to
+`POST /api/workflow-runs/{id}/answer-resolution` with the run's host key. `workflow_run_answer_status`
+reads each run's `answered_at` (its own first checked answer or one through a steer), `answered_via`
+(the run that sent it) and its resolution; the Workflows and run pages use it, so a steered run
+shows the answer it got, and a not-needed or legacy run is not flagged as unanswered.
+
+#### One deliverable, one run
+
+Two runs must not rebuild and republish one deliverable in parallel. On 2026-11-12 an email run
+and a voice-memo run both rebuilt and republished one public deck in place; the later publish
+dropped the earlier one's slide, and a map rebuilt under its old name kept showing from caches. So:
+
+- **Check, then steer or claim.** An email or voice-memo run's orchestrator starts with the
+  account's other live runs in its prompt (id, workflow, summary, status and step, orchestrator,
+  claims, and for runs started by email their subjects and Gmail thread ids), newest first and at
+  most 30; a longer list says so and gives the read-only SQL (`workflow.LiveRunsQuery`) that
+  lists every live run with its claims and threads. If one works on the
+  same deliverable (the same work item, public link or file, or email thread chain), it steers into
+  it instead of building:
+
+  ```sh
+  intelligence workflow steer --run <UUID> --into <live run UUID> --note <file>|- [--deliverable <link or name>]
+  ```
+
+  The server sends the note and the steering run's whole request to the live run's
+  orchestrator (as a message, or into its input while it is queued or finding its project),
+  records the handover as the run's `steered` answer resolution (above: `steered_to` and the
+  handover time, so only answers the other run sends from then on answer it), adds `steer` and
+  message events to both runs and finishes the steering run. Steering into a run that itself
+  steered on reaches the live run at the end of that chain. When a run ends without a checked
+  answer while requests steered to it wait unanswered, each of those runs gets an event saying so.
+  A later email in the steered run's thread goes to the run it steered into while that run is
+  live. Run ids in steer lines link to the runs.
+- **Claims.** Before building, a run claims each deliverable it will change or publish:
+  `intelligence workflow claim --run <UUID> <link or name>`. A link is compared without query,
+  fragment, trailing slash or `/index.html`, so a folder, its index page and an asset in it
+  (`…/ns/map.png?v=2`) are one deliverable; a name is compared without case. Runs are told to
+  claim the public link as soon as they know it, since two runs rarely pick the same name for one
+  deck. A claim holds while its run is live; another live run's claim on the same thing, or on a
+  folder holding it, is refused (409) with the holding run's id and the steer command. The check
+  covers every live run's claims, in SQL, under a transaction-scoped advisory lock per account, so
+  two runs claiming one deliverable at once cannot both get it. Claims are
+  in `workflow_run_claims`.
+- **Publishing guard.** Every step carries the shared-deliverable rule
+  (`workflow.SharedDeliverableRule`): claim before changing anything another run may touch,
+  replace files.zachlatta.com files with `expected_version` and stop on a stale-version refusal
+  instead of overwriting, and give rebuilt assets whose content changed new file names (a content
+  hash or version suffix) so caches cannot show the old one.
+
+Both moves post to `POST /api/workflow-runs/{id}/moves` as `{"move":"claim","deliverable"}` and
+`{"move":"steer","into","note","deliverable"}`.
 
 #### Model groups
 
@@ -817,14 +1065,20 @@ future suggestions, not delivered ones. Before another worker, refresh with
 Queued runs allocate when they launch; startup retries rebuild the prompt with fresh suggestions.
 Direct edits and proposal approvals validate group tokens before saving a workflow.
 
+Worker model preferences belong in step instructions, including group tokens; steps have no
+separate model or thinking fields. Migration `0044_remove_step_models` moves earlier step model
+choices into instructions in all saved versions and proposal snapshots. Group choices become
+tokens (without duplicating an existing token); catalog choices become plain-text model and
+thinking instructions. Finder and orchestrator model settings stay unchanged.
+
 Group writes use `POST /api/model-groups`, `PUT /api/model-groups/{id}` (with `revision`) and
 `DELETE /api/model-groups/{id}`. A host records a suggestion with
 `POST /api/workflow-runs/{id}/suggestions`, JSON `{"token", "exclude": []}`. Read groups, members,
 rankings and history through SQL (`model_groups`, `model_group_members`, `model_group_candidates`,
 `workflow_model_suggestions`). Detailed audit data stays in SQL; the run page shows a short summary.
 
-The starting workflow spreads frontier work across Claude Opus 5.5, Codex and Gemini 4 Carbon
-(`antigravity/gemini-4-carbon-high`). Antigravity encodes effort in the model ID; Carbon also has
+The starting workflow spreads frontier work across the subscribed Claude Opus 5.5 and Codex plans.
+Gemini remains supported for later reactivation. Antigravity encodes effort in the model ID; Carbon has
 `gemini-4-carbon-medium` and `gemini-4-carbon-low`. Models are read from the host's Paseo catalog,
 with “other…” for an ID not yet listed. Argon remains usable for existing agents and explicit choices.
 Migration `0028_carbon_frontier` makes new versions of saved workflows that recommend Argon
@@ -837,14 +1091,16 @@ its host is near capacity; with room, it starts at once. There is no fixed count
 host's measured load decides.
 
 The server projects the host's load from its newest minute of resources (Host resources, above):
-that minute's CPU, memory used (by the minute's least available) and 1-minute load per CPU, plus
-one run's footprint for each run still starting, whose load the minute cannot show yet, and one
-for the run about to start. A run is starting from its launch (`workflow_runs.launched_at`) until
+that minute's CPU, memory used (by the minute's least available) and 1-minute load per CPU.
+CPU and load add one run's footprint for each run still starting, whose load the minute cannot
+show yet, and one for the run about to start. Memory reservations persist throughout active runs,
+as described below. A run is starting from its launch (`workflow_runs.launched_at`) until
 its orchestrator has started: for its whole start-up. A run that finds its project first is
 starting all the while it finds it (its orchestrator is still to come), and every run is starting
 until the host reports its workspace and orchestrator command (`launch_command`) done and the
-newest minute began after that. A failed or expired launch releases its reservation. A retry
-reserves capacity when admitted, updating `launched_at` and `launch_command` with the new attempt
+newest minute began after that. A failed or expired launch keeps its memory reservation while its
+retry is pending, at most `RetryWaitLimit` past the retry's time, and releases it when the run fails.
+A retry reserves capacity when admitted, updating `launched_at` and `launch_command` with the new attempt
 in the same transaction. An admitted command waiting for a slow or absent host holds capacity
 until it finishes or expires. Runs that succeeded, failed or were canceled no longer count.
 The run queues when
@@ -855,16 +1111,63 @@ until the host has made them and a newer minute shows their load. The reason say
 capacity: CPU 70% now, about 90% with 1 run starting and this one (queues at 85%)”, or “over
 100%” when the projection is past all of it.
 
-A run's footprint is learned per host (`host_run_footprint`, readable with SQL): over the host's
-last 3 days, each minute's CPU, memory and load per CPU against how many runs were going then
+A run's memory estimate is learned from its own workflow's runs in its selected repository on that
+host, within its account (`workflow_memory_estimate`): an email answer in a repository is not
+charged like that repository's Factory Task runs. A workflow with no successful run there yet
+takes the repository's estimate (`workflow_repository_memory`, below: the same view's rows with a
+null `workflow_id`, one rule for both), then 4 GiB. Unfinished runs were re-estimated this way when it changed (migration
+`0048_workflow_memory_estimate`).
+`workflow_run_memory` sums the recorded agents' memory in each minute, then takes the run's peak.
+`workflow_repository_memory` takes what nine in ten successful-run peaks for that selected, non-empty
+repository root stayed under (the 90th percentile; the largest, until it has ten runs), adds 25%
+headroom, and applies a 1 GiB floor, so one unusually heavy run does not size every later run.
+Unfinished runs were re-estimated this way when it changed (migration
+`0043_workflow_queue_progress`). Without history the estimate is 4 GiB. A run still finding its
+project reserves 1 GiB (its finder is small), and its project's estimate is checked when it is
+chosen. Agent samples expire after 90 days, so older history eventually falls back. These views and `workflow_runs.estimated_memory_bytes` expose the evidence
+and estimate through SQL; the run page shows the estimate. Estimates are fixed at repository
+selection and reused for reservations and retries. Every starting or running run reserves
+`max(estimate - resident memory, 0)` in addition to the host's measured memory usage. Resident memory
+is the sum for that run's known agents in the exact newest host minute; without a matching sample,
+its full estimate stays reserved. This prevents a run's quiet phase from admitting another heavy
+run, without counting its resident memory twice. A run waiting for Zach's reply reserves nothing
+beyond what it uses: its agents are idle, perhaps for days, and their memory is already in the
+measured minute. When the queue waits on memory and waiting runs hold some of it, the reason says
+so: “2 runs waiting for sign-off hold 10.5 GiB”, and “: waiting for 2 sign-offs to free memory”
+when the run would fit without them. The Workflows page shows each host's queue head, how many
+runs are queued there and its reason. The existing memory percentage limit supplies host headroom.
+Memory queue reasons name the run's estimate and repository, measured free RAM and reservations.
+So that no estimate can block the FIFO for ever, the oldest run starts alone, whatever its
+estimate, when no other run is active or starting (a run waiting for Zach's reply does not count)
+and measured memory is below the limit. Otherwise memory used by other processes could keep an
+estimate that fits the host, but not beside them, queued for good, with every run behind it. The
+FIFO head check also applies during project selection, including older ready start retries and
+older runs that went back into the queue when they chose their project. CPU, load and
+telemetry checks still apply. Its full estimate stays reserved until it ends, so nothing else
+starts beside it until then. This is an advisory estimate,
+not a guarantee that an oversized workload will fit or avoid an OOM kill.
+Failed, canceled, finder-only and empty-repository runs do not teach the estimator; without a
+successful run for a selected non-empty repository, it keeps the 4 GiB fallback.
+After a finder selects a repository, admission replaces its reservation with that estimate,
+without counting the finder twice. If it no longer fits, the same run re-enters the existing FIFO
+and resumes with its selected repository when room returns; it never repeats project finding.
+`project_selected` distinguishes a selected `none` from a finder still to run.
+Project selection is recorded before a capacity wait. `queued_at_creation` distinguishes an
+initial submission from a run that already started finding its project and later requeued;
+its initial Started event is only shown as Submitted for an initial queue.
+
+CPU and load footprints remain learned per host (`host_run_footprint`, readable with SQL): over the host's
+last 3 days, each minute's CPU and load per CPU against how many runs were going then
 (launched, not finished), fitted with a straight line; its slope is what one run adds. Each metric
-is learned on its own (`cpu_learned`, `mem_learned`, `load_learned`) only when its fit can be
+is learned on its own (`cpu_learned`, `load_learned`) only when its fit can be
 trusted: 60 minutes or more, more than one count of runs among them, a slope above zero (history
 that says runs lighten the host is contradictory, not a footprint) and a fit explaining at least a
 fifth of the metric's variation (`regr_r2` at least 0.2). A learned footprint is kept between a
 quarter and three times the default. Otherwise the default stands, deliberately generous: 10% CPU,
-5% memory and 0.15 load per CPU a run. The view also has the raw fits (`cpu_pct_learned`,
-`mem_pct_learned`, `load_per_cpu_learned`) with their `*_r2`, the minutes and the run counts.
+and 0.15 load per CPU a run. The view also retains its legacy memory fit for SQL readers,
+but admission uses repository memory estimates. It includes raw fits with their `*_r2`,
+the minutes and the run counts. RAM estimates are not hard limits: unsampled spikes and
+processes outside recorded agent trees can be missed.
 
 Without fresh telemetry the server cannot know the host's capacity:
 
@@ -872,29 +1175,88 @@ Without fresh telemetry the server cannot know the host's capacity:
   from host-1”), so a host whose monitoring stops does not release its queue on no evidence;
 - a host that has sent none for 30 minutes and is away (not connected: no stream seen in the last
   minute, as `host_status.online`) keeps holding, however long it is gone (“waiting for host-1 to
-  report again (last measured 14:05 UTC)”): a host that went quiet because it was overloaded, or
+  report again (last measured 2026-11-12T14:05:00Z)”, an instant the run page shows in the
+  reader's own time): a host that went quiet because it was overloaded, or
   rebooted, or lost its network, would otherwise get every queued run at once when it came back;
 - a host that never sent its resources, or one connected now that has sent none for 30 minutes
   (its monitoring stopped), gives no sign of being near capacity, so its runs start.
 
-**Start now** bypasses the capacity hold for a new run. Automatic retries wait for admission.
+In the workflow editor's Trigger panel, **Priority** chooses **Normal** (wait for capacity)
+or **Immediate** (skip the queue and capacity hold). Save it through the existing
+`POST /api/workflows` or `PUT /api/workflows/{id}` JSON route as `definition.priority`:
+`"normal"`, `"immediate"`, or `""` for Automatic. Automatic stays unset in the saved definition
+and follows the trigger: immediate for email and voice memos, normal otherwise, including
+after changing a task workflow to an email or voice-memo trigger. An explicit normal setting always wins.
+Migration `0046_workflow_priority` versions existing active email and voice-memo workflows
+with explicit Immediate priority;
+email requests, including voice emails, and voice memos start immediately after deployment.
+Each new run snapshots its resolved priority in `workflow_runs.priority`, so later workflow
+edits cannot change its queue or retry behavior. Existing runs without an explicit priority,
+including email and voice-memo runs already queued at deployment, retain Normal; use **Start now**
+to launch one immediately. Read the configured setting and effective run snapshot through `/api/sql`:
 
-A run also queues while earlier runs wait in its host's queue, so the queue keeps its order. The
+```sql
+SELECT coalesce(v.definition->>'priority', '') AS configured_priority, r.priority AS effective_priority
+FROM workflow_runs r JOIN workflow_versions v USING (workflow_id, version);
+```
+
+An empty configured priority means Automatic. `workflow_run_queue.priority` also exposes the
+effective snapshot. The saved definition remains available for future workflow edits.
+
+Immediate runs launch even with older runs waiting or missing capacity measurements. Like a run
+started by hand, a run that finds its project starts its orchestrator as soon as the project is
+chosen, and its startup retries go out as soon as its host is ready, bypassing capacity, but still
+respecting retry backoff, deadlines and host/daemon readiness. Immediate starts can increase host
+load; they do not interrupt running work or make an offline host execute commands. Normal runs
+retain FIFO order.
+
+**Start now** bypasses the capacity hold and the queue for good (`workflow_runs.started_by_hand`;
+a queued run marked so starts on the queue's next pass, ahead of the others):
+a run started by hand that finds its project first starts its orchestrator as soon as the project
+is chosen, and its start retries go out as soon as its host is ready, never back behind the queue it
+skipped. Retries of runs the queue started wait for admission, in their original place.
+**Start retry now** does the same for a run whose queued retry waits for admission (The run queue,
+below).
+
+A run also queues while earlier runs wait in its host's queue, so the queue keeps strict FIFO
+order: light runs wait behind heavy ones. The
 decision and the start are made in one transaction holding the host's queue lock (an advisory
 lock per host), so runs started at the same moment are judged one after another, each counting
 those just before it.
 
-A new queued run has no agents or commands yet. A ready retry keeps its startup phase and joins
+A new queued run has no agents or commands yet; a run queued after repository selection retains
+its archived finder history. A ready retry keeps its startup phase and joins
 the queue through `workflow_runs.start_retry_queued`. `workflow_runs.queue_reason` says why it waits
-(kept current while it waits, and kept after), its events say when it was `queued` and
+(kept current while it waits, and cleared on dequeue), its events say when it was `queued` and
 `dequeued`, and `workflow_run_queue` lists each host's queue in order (`position` 1 is next). The
 runs list and the run page show it queued, where in line (“2nd in line for host-1”) and why, and
 the run page says when it was queued, not started; the run page's **Start now** starts it at once,
-whatever the host's load (`POST /api/workflow-runs/{id}/start`), and **Cancel run** cancels it.
+whatever the host's load (`POST /api/workflow-runs/{id}/start`; for a queued retry the button reads
+**Start retry now** and sends the retry), and **Cancel run** cancels it.
 
 The server starts queued runs on a host, oldest first, while the projection leaves room: every 15
 seconds, on each minute of resources the host sends, and when a run ends or fails to start. Runs
 already going are never stopped or paused. The queue is rows in Postgres, so it survives restarts.
+
+### Activity estimates
+
+The workflow status command records the activity timestamp. Activity lines contain no clock
+annotations or “since” suffix; old suffixes are also removed when displayed. With no agent ETA,
+the server sums the median duration of each remaining non-signoff step from successful runs of
+the same workflow completed in the last 30 days (`workflow_run_step_times`). It prefers the same
+repository for each step, falls back to that workflow in other repositories, and subtracts time
+already spent on the current visit to the step. Missing history for any remaining step leaves ETA unknown.
+These estimates exclude human sign-off time and appear as “about HH:MM (estimate)” in the runs
+table and run page. `workflow_runs.activity_eta_estimated` distinguishes them from agent ETAs.
+
+Use `status --now "Waiting for review" --waiting-on "reviewer"` for an external wait.
+`activity_waiting_on` records who holds it up, and replaces the ETA on both pages. Sign-off
+steps and runs waiting for a reply show “waiting on Zach”. Step changes and replies recompute server estimates; agent-provided ETAs survive transitions.
+The `workflow_run_activity` view is the display projection used by the pages and SQL clients:
+it hides completion times during waits and invalidates expired server estimates. Stored ETAs
+remain readable in `workflow_runs`, including agent ETAs held through a human wait.
+All activity fields are readable through `/api/sql`; status writes use the existing moves API
+(`waitingOn` is the JSON name for `--waiting-on`).
 
 ### Attachments
 
@@ -933,7 +1295,8 @@ it once:
    `replies` decides: `run` (the default) adds it to the run as a message to its orchestrator; if
    the run waits on a question and the email is from one of the account holder's own addresses,
    it is the answer; if the run is over, it starts a new run of the workflow. `new` starts a new
-   run; `ignore` does nothing.
+   run; `ignore` does nothing. When the thread's run steered into another run that is still
+   live, the email goes to that run instead (One deliverable, one run, above).
 2. **Otherwise** it starts the workflow whose filter (`definition.email`: `from` addresses or
    `@domain`s, `to`, `subject`, `words`, `without`, `attachment`) it matches, like a Gmail filter:
    every filled field must match. When two match, the narrower wins (more fields; an address beats
@@ -1051,8 +1414,9 @@ When investigating a stalled workflow, check the host's `client_version` against
 server before assuming this recovery is active. Check both the orchestrator and its workers
 for pending permissions, then follow their audit rows and transcripts: a cleared prompt proves
 the request disappeared, while a completed tool or workflow move proves work resumed. An idle
-orchestrator can be waiting on a live background command whose completion starts its next turn;
-idle status alone is not evidence of abandonment and does not trigger an automatic reminder.
+orchestrator can be waiting on a live background command whose completion starts its next turn.
+The stall watchdog also checks worker activity, permission blocks, pending fleet commands and
+host freshness before sending a continuation; inspect prior outcomes before repeating work.
 
 Each attempt first stores a `permission_resolutions` row through the authenticated host stream.
 The row is account-scoped and readable through `/api/sql`; it survives agent removal.
@@ -1126,7 +1490,8 @@ Every page and read route needs a signed-in account and shows only its own hosts
 browser that is not signed in to `/login`, and an API route answers 401. Only `/healthz`, `/login`,
 the account and enrollment routes, the host binaries and the streams (with a host key) are open.
 
-- `GET /`: a collapsible tree of hosts > workspaces (with their project) > agents (with their status),
+- `GET /`: a collapsible tree of hosts > workspaces (with their project, branch and diff stat) >
+  agents (with their status; sub-agents indented),
   with links to make a workspace on each host and start an agent in each workspace, and an Archive
   button on each workspace (with its agents) and each agent, through the commands API. Archiving
   that would stop a running agent, or remove a worktree with uncommitted changes, asks again: the
@@ -1149,12 +1514,13 @@ the account and enrollment routes, the host binaries and the streams (with a hos
   The prompt takes dictation as the new agent form does.
   Each of these pages sends its commands to the commands API and follows them through `/api/sql`.
 - `GET /usage?days=7` (1 to 365): every login with a chart of each window's used % over the days,
-  and its weekly peaks.
+  and its weekly peaks (the four newest, with older weeks folded).
 - `GET /api/usage`: the logins and their windows, as JSON.
-- `GET /resources?hours=1` (1 to 2160; it was `/hosts`, which sends here), the Host monitoring tab: each host's CPU and
-  memory charts, its OOM kills and its agents ranked by CPU, with their most memory and commands
-  started. The home page shows each host's CPU, memory, disk and pressure under its name, and each
-  agent's memory beside it.
+- `GET /resources?hours=1` (1 to 2160; it was `/hosts`, which sends here), the Host monitoring tab: each host's CPU, memory,
+  load, disk busy time and disk throughput charts, its load averages, disk I/O now and filesystems
+  (used, free, total), its OOM kills and its agents ranked by CPU, with their most memory and
+  commands started. The home page shows each host's CPU, load, memory, disk (and how much is free),
+  a busy disk and pressure under its name, and each agent's memory beside it.
 - `GET /api/hosts/resources`: each host's newest minute, probe and agents' memory, as JSON.
 - `GET /hosts/{host}/workspaces/{ws}/agents/new`: the form that starts an agent in a workspace.
   `GET /hosts/{host}/workspaces/new`: the form that makes a workspace with an agent in it, by
@@ -1168,7 +1534,8 @@ the account and enrollment routes, the host binaries and the streams (with a hos
   commands API, follows it through `/api/sql`, then opens the new agent's transcript; a failure
   shows Paseo's reason. The prompt takes dictation as the chat box does (below): ⌘D or Enter again
   in an empty prompt starts the agent.
-- `GET /login`: signs a browser in, or makes an account, through the account APIs.
+- `GET /login`: signs a browser in, or makes an account, through the account APIs. Its top bar has
+  no tabs, as a signed-out visitor can open none of them.
 - `GET /account`: the account's hosts (online, when each joined and last used its key), how to
   install one, the form that adds a host by its code, and the password form.
 - `GET /hosts/{host}/agents/{id}`: one agent's transcript as turns: messages rendered as Markdown
@@ -1250,15 +1617,31 @@ origin (another site's request is refused with 403), and those with a body must 
 - `GET /whatsnew.js`: loaded by every page with its stylesheet: the unseen count on the What's New
   tab and the note under the top bar.
 - `GET /whats-new/media/{name}`: an entry's demo, built into the binary; no sign-in needed.
+- `GET /localtime.js`: loaded by every page with its stylesheet. Pages show every time in the
+  reader's own time zone and locale: the server writes each as an instant
+  (`<time datetime="<RFC 3339, UTC>" data-format="…">`, with the time in UTC as its text for a
+  browser that runs no script, or `data-datetime` on a chart's SVG label) through `localTime`
+  (`internal/web/localtime.go`), and the script rewrites it with the browser's
+  `Intl.DateTimeFormat`, titling each `<time>` with the full local instant (relative times such as
+  "5m ago" keep their words), also in content a page adds later. No page formats a clock time on
+  the server (`TestNoServerFormattedClockTimes`, which reads every package): text stored for a page
+  to show (a queued run's reason, a mailbox's error) names its instant in RFC 3339, UTC, which the
+  page shows locally. Other API and SQL values stay as they are.
 - `GET /ui.css`: the one stylesheet every page shares, with the top bar (`layout.html`) that links the
   pages.
 - `GET /workflows`: a new task (for workflows triggered by a task: pick the workflow, which names
   its host, with the default first and selected), the account's workflows and their runs. Without
   workflows, a button adds the starting one (`workflow.Starting`) on the account's first host.
-  Tabs above Runs filter by All, Running, Queued, Needs you, Completed, Failed or Canceled,
+  Tabs above Runs filter by All, Running, Queued, Needs you, Stalled, Completed, Failed or Canceled,
   with counts across the account's full run history. The linkable `?status=` filter accepts
-  `all`, `running`, `queued`, `waiting`, `completed`, `failed` or `canceled` (default: `all`).
-  Each list shows the latest 100 matching runs. Waiting-run banners stay visible on every filter.
+  `all`, `running`, `queued`, `waiting`, `stalled`, `completed`, `failed` or `canceled` (default: `all`).
+  Waiting-run banners stay visible on every filter.
+  Runs are listed newest first, 50 a page (`?page=2`, with Newer and Older links), so all of
+  history is reachable. The search box above them (`?q=`) finds runs, across all pages, that
+  hold every word typed, in any case, in their summary or title, prompt, workflow name, status,
+  host, project, branch (which holds the run's id) or workspace; `%` and `_` match themselves.
+  Both are plain reads of `workflow_runs` and `workflows` through the account's role, the same
+  rows `/api/sql` returns. A waiting run's note shows above, whatever page it is on.
   The task composer has a full-width prompt and an action bar for images, dictation (when enabled),
   workflow selection and submission. Cmd/Ctrl+Enter submits; Enter keeps its newline. Images can be
   picked, dropped or pasted, and appear as removable thumbnail chips; image limits open on demand.
@@ -1290,12 +1673,14 @@ origin (another site's request is refused with 403), and those with a body must 
   (201, with its `Location`), or queues it while the host is near capacity; 400 for a workflow
   saved without one.
 - `POST /api/workflow-runs/{id}/start` with `{}`: starts a queued run now, ahead of its queue and
-  whatever its host's load (204; 409 for a run that is not queued).
+  whatever its host's load, or sends a run's queued start retry the same way (it still counts as
+  a retry) (204; 409 for a run that is not queued, or a retry still in its backoff, past its
+  deadline or whose host is not ready).
 - `POST /api/workflow-runs/{id}/reply` with `{"text"}`: answers the note the run waits on (204;
   409 when it waits on none). `POST /api/workflow-runs/{id}/cancel` with `{}`: ends the run and
   stops its orchestrator (204).
 - `POST /api/workflow-runs/{id}/moves` with `{"move", "directory", "step", "summary", "why",
-  "note"}` and `Authorization: Bearer <the run's host's key>`: `intelligence workflow`. Answers
+  "note", "deliverable", "into"}` and `Authorization: Bearer <the run's host's key>`: `intelligence workflow`. Answers
   `{"message"}`, what the agent reads next; 400 or 409 (with the reason as the message) for a move
   that cannot be made, 404 for a run not on that host.
 - `GET /workflows/email`: the mailbox (connect, the account holder's own addresses, disconnect) and
@@ -1350,6 +1735,37 @@ Notes, step reports and transcripts render file-share images inline; other image
 paths remain placeholders. Existing local-path notes must be republished by an agent on the host
 that still holds the files; the server cannot recover them from a path alone.
 
+## Test capacity
+
+`make test` holds one of two host-wide leases for its entire suite, including `go vet` and the
+throwaway Postgres. Direct `scripts/with-test-postgres` calls use the same lease; nested calls
+share it. To run a full suite against an existing test database, use `make test` with
+`TEST_DATABASE_URL` set, or `scripts/with-test-capacity go test -race -timeout=30m ./...`.
+Reviewers use these leased entry points too. The entire web package is heavy; run
+`scripts/with-test-capacity go test -race -timeout=30m ./internal/web` for it.
+Narrow tests with `-run` can run directly during iteration. `make test` sets a 30-minute
+package timeout so a slow shared host does not hit Go's ten-minute default.
+
+`scripts/with-test-capacity` uses standard-library Go advisory file locks in `/var/lock`, shared
+across users and worktrees. Existing files open without `O_CREATE`, so Linux
+`protected_regular` does not reject another user's lease in the shared sticky directory.
+Missing files use exclusive creation and readable permissions. It prints **waiting for test capacity (2 host-wide slots)** while
+blocked, then **test capacity acquired**. These messages are visible in terminal output and
+agent transcripts. The wrapper and suite inherit the lock descriptor; exiting or crashing releases
+it when the last holder exits. It never evicts another suite. Lock files must not be deleted while
+suites run. These local process leases are independent of workflow admission and application state.
+They supplement the existing CPU, memory and load admission limits; they do not alter those
+thresholds, FIFO reservations or startup retry limits, and do not start an admission-waiting run.
+Test subprocesses inherit the agent environment, so normal host resource reports still charge
+their work to that agent and admission continues to observe that load.
+
+Every checkout must use this entry point to participate. Direct unwrapped `go test` calls and
+container builds with separate filesystems cannot share a host-local lock. For another operating
+system or container, provision one shared, readable lock directory and set
+`INTELLIGENCE_TEST_CAPACITY_DIR` consistently for every runner, mounting it into containers if
+needed. The directory must already exist. `INTELLIGENCE_TEST_CAPACITY_HELD` is an internal marker
+for nested entry points; do not set it yourself.
+
 ## Configuration
 
 ### Voice memo workflow triggers
@@ -1362,7 +1778,11 @@ Each optional field is a case-insensitive substring; all filled fields must matc
 One memo starts one run: the matching workflow with the most filled fields wins, with the
 oldest workflow winning ties. Deleted workflows do not match.
 
-The server reads PDW's scoped `GET /api/external-feeds/voice-memos` feed every 30 seconds.
+The server reads PDW's scoped `GET /api/external-feeds/voice-memos` feed every second
+(`VOICE_MEMO_POLL_INTERVAL`), one read at a time. A read PDW takes long to answer is followed
+by a wait as long again, and failed reads back off from 2 to 64 seconds. The next read's time
+and the failures in a row are in `voice_memo_polling` (`next_poll_at`, `retry_count`), shared by
+every server instance.
 PDW supplies transcribed, enriched recordings from the last 48 hours (including separate
 parts of stopped and restarted recordings). The first scan establishes a baseline and does
 not start runs for existing recordings. Later arrivals start runs; feed updates and retries
@@ -1372,13 +1792,17 @@ restarts. An outage longer than the feed's 48-hour window can lose recordings.
 Run input contains the title, recording time, duration, PDW identity, at most the first 1000
 Unicode characters of transcript, its total character count, and a truncation notice when
 needed. PDW's summary is included when available, also capped at 1000 Unicode characters.
+The transcript preview comes first. The title is labelled `Voice memo title (generated)` and
+the summary `PDW summary (generated)`; neither is identity evidence. Initial run, workspace,
+agent and branch names come from the transcript preview alone, using the usual task naming
+rules. An empty preview is named “Voice memo”. Generated metadata never supplies fallback names.
 It includes exact SQL and a shell-quoted `pdw sql` command to fetch the full transcript
 by source, account and recording ID. Agents use their own normal PDW access for that command;
 the server's feed key cannot run SQL. Full transcripts are used for matching but never stored
 in Intelligence or embedded in run input.
 
-Read `voice_memo_polling` through `/api/sql` for the cursor, initialization, last check and
-poll error. Read `voice_memos` for previews, lengths, decisions and linked workflow/run IDs.
+Read `voice_memo_polling` through `/api/sql` for the cursor, initialization, last check, next
+check and poll error. Read `voice_memos` for previews, lengths, decisions and linked workflow/run IDs.
 Both tables are restricted to their owning Intelligence account.
 The workflow editor shows whether PDW is configured for the signed-in account, the last check
 and the last poll error. `/workflows/voice-memos` shows the latest 200 receipts with their
@@ -1400,6 +1824,8 @@ Set all three server variables to enable polling:
   Only this account's workflows can receive its memos; other accounts never receive this data.
 
 Unset all three to disable polling. Removing configuration preserves cursors and receipts.
+
+`VOICE_MEMO_POLL_INTERVAL` is optional: a Go duration, default `1s`, minimum `1s`.
 
 Server:
 

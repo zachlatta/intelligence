@@ -101,8 +101,16 @@ func (r *Registry) Enqueue(ctx context.Context, host, kind string, args json.Raw
 // EnqueueTx is Enqueue in tx, so a command is queued with whatever else tx changes, or not at
 // all. The host hears of it when tx commits.
 func EnqueueTx(ctx context.Context, tx pgx.Tx, host, kind string, args json.RawMessage, ttl time.Duration, at time.Time) (Command, error) {
-	if _, err := hostclient.ParseCommand(kind, args); err != nil {
+	parsed, err := hostclient.ParseCommand(kind, args)
+	if err != nil {
 		return Command{}, &BadCommandError{err}
+	}
+	if err := checkCommandProvider(ctx, tx, host, kind, parsed); err != nil {
+		var disabled *DisabledProviderError
+		if errors.As(err, &disabled) {
+			return Command{}, &BadCommandError{err}
+		}
+		return Command{}, err
 	}
 	var resolveErr error
 	args, resolveErr = resolveImages(ctx, tx, host, kind, args)
@@ -173,6 +181,9 @@ func (r *Registry) Claim(ctx context.Context, host string, options ClaimOptions,
 				AND CASE WHEN idempotency_key = '' THEN $3::boolean ELSE $6::boolean END))
 			AND (idempotency_key = '' OR ($5 AND EXISTS (
 				SELECT 1 FROM hosts WHERE name = $1 AND stream_id = NULLIF($4, '')::uuid AND start_retry_keys)))
+            AND NOT EXISTS (SELECT 1 FROM workflow_run_continuations k JOIN workflow_runs r ON r.id=k.run_id
+              WHERE k.command_id=commands.id AND (r.status<>'running'
+                OR k.event_id<>(SELECT event_id FROM workflow_run_latest_transition WHERE run_id=r.id)))
 			FOR UPDATE SKIP LOCKED)
 		RETURNING `+commandColumns, host, at, options.Replay, options.StreamID, options.RetryReady, options.ReplayRetries)
 	if err != nil {

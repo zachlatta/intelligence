@@ -268,6 +268,23 @@ func TestVoiceMemoConfigRequiresAnOriginKeyAndAccount(t *testing.T) {
 	}
 }
 
+func TestVoiceMemoPollInterval(t *testing.T) {
+	base := map[string]string{"DATABASE_URL": "postgres://app:p@db/app", "READONLY_DATABASE_URL": "postgres://ro:p@db/app"}
+	for _, tt := range []struct {
+		value string
+		want  time.Duration
+		bad   bool
+	}{
+		{"", time.Second, false}, {"5s", 5 * time.Second, false}, {"500ms", 0, true}, {"0", 0, true}, {"bad", 0, true},
+	} {
+		base["VOICE_MEMO_POLL_INTERVAL"] = tt.value
+		c, err := serverConfig(env(base))
+		if (err != nil) != tt.bad || (!tt.bad && c.VoiceMemoInterval != tt.want) {
+			t.Fatalf("%q: interval=%v, error=%v", tt.value, c.VoiceMemoInterval, err)
+		}
+	}
+}
+
 func TestEmailPollInterval(t *testing.T) {
 	base := map[string]string{"DATABASE_URL": "postgres://app:p@db/app", "READONLY_DATABASE_URL": "postgres://ro:p@db/app"}
 	for _, tt := range []struct {

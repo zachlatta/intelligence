@@ -15,9 +15,32 @@ func TestOrchestratorSummarizesTheTaskBeforeStartingWork(t *testing.T) {
 	}
 }
 
-func TestStartingWorkflowRecommendsCarbon(t *testing.T) {
+func TestSavedOrchestratorPreservesNamesBeforeSummarizing(t *testing.T) {
+	d := clone(Starting)
+	d.Orchestrator.Instructions = "Custom saved workflow instructions"
+	p := OrchestratorPrompt("Saved", d, Vars{Run: "run-1", Input: "Send the transcript to Maxwell"})
+	for _, want := range []string{
+		"In summaries, run titles and email subjects, keep people's names as Zach said or wrote them",
+		"never add a surname or identity unless this run verified it with evidence",
+		"Cite the source used to verify an identity in the reply",
+		"Generated titles and summaries are not identity evidence",
+		"Leave unresolved names as given",
+		"If you choose among ambiguous names, say who and why in one reply line, citing the source",
+		"Pass this names rule to every worker",
+	} {
+		at := strings.Index(p, want)
+		if at < 0 || at > strings.Index(p, "intelligence workflow summarize --run") {
+			t.Errorf("names rule must precede summarize command: missing %q", want)
+		}
+	}
+}
+
+func TestStartingWorkflowRecommendsSubscribedPlans(t *testing.T) {
+	if strings.Contains(OrchestratorInstructions, "antigravity/") || strings.Contains(OrchestratorInstructions, "muse/") {
+		t.Error("starting guidance recommends an unsubscribed provider")
+	}
 	p := OrchestratorPrompt("task", Starting, Vars{Run: "r"})
-	for _, want := range []string{"antigravity/gemini-4-carbon-high", "claude/claude-opus-5-5", "codex"} {
+	for _, want := range []string{"claude/claude-opus-5-5", "codex"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("frontier guidance missing %q", want)
 		}
@@ -410,5 +433,26 @@ func TestPublicRepositoryChecksReadEveryOutgoingCommit(t *testing.T) {
 	}
 	if !strings.Contains(gate, "reports outside work/") {
 		t.Error("gate does not look for reports outside work/")
+	}
+}
+
+func TestOrchestratorLifecycleForEveryDefinition(t *testing.T) {
+	for _, d := range []Definition{Starting, {Orchestrator: Orchestrator{Instructions: "Custom"}, Steps: []Step{{ID: "one", Title: "One"}}}} {
+		p := OrchestratorPrompt("Saved", d, Vars{})
+		for _, want := range []string{"after next, skip or back", "same turn", "foreground", "only after a successful ask"} {
+			if !strings.Contains(p, want) {
+				t.Errorf("missing lifecycle rule %q", want)
+			}
+		}
+	}
+}
+
+func TestParseRejectsRemovedStepModelFields(t *testing.T) {
+	b, _ := json.Marshal(onHost(clone(Starting)))
+	for _, field := range []string{`"model":"{{frontier_model}}"`, `"model":"codex/sol"`, `"thinking":"high"`} {
+		raw := strings.Replace(string(b), `"steps":[{`, `"steps":[{`+field+",", 1)
+		if _, err := Parse([]byte(raw)); err == nil || !strings.Contains(err.Error(), "unknown field") {
+			t.Errorf("removed step field %s: %v", field, err)
+		}
 	}
 }
