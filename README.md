@@ -1255,6 +1255,10 @@ origin (another site's request is refused with 403), and those with a body must 
 - `GET /workflows`: a new task (for workflows triggered by a task: pick the workflow, which names
   its host, with the default first and selected), the account's workflows and their runs. Without
   workflows, a button adds the starting one (`workflow.Starting`) on the account's first host.
+  Tabs above Runs filter by All, Running, Queued, Needs you, Completed, Failed or Canceled,
+  with counts across the account's full run history. The linkable `?status=` filter accepts
+  `all`, `running`, `queued`, `waiting`, `completed`, `failed` or `canceled` (default: `all`).
+  Each list shows the latest 100 matching runs. Waiting-run banners stay visible on every filter.
   The task composer has a full-width prompt and an action bar for images, dictation (when enabled),
   workflow selection and submission. Cmd/Ctrl+Enter submits; Enter keeps its newline. Images can be
   picked, dropped or pasted, and appear as removable thumbnail chips; image limits open on demand.

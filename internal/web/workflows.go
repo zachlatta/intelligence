@@ -729,6 +729,17 @@ func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		// Attention banners must not depend on the list's filter or its 100-run limit.
+		waitingRows, err := v.pool.Query(ctx, runRowSelect+"WHERE r.status = $1 ORDER BY r.created_at, r.id", workflow.Waiting)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		waitingRuns, err := pgx.CollectRows(waitingRows, scanRunRow)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		hosts, err := readHosts(ctx, v.pool)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -741,7 +752,7 @@ func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 			}
 		}
 		renderWorkflows(w, "list", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Workflows": wfs, "Runs": runs,
-			"RunTabs": tabs, "RunFilter": selected, "Hosts": hosts, "Tasks": tasks, "Starting": workflow.Starting, "Dictation": dictationPath(cfg)})
+			"WaitingRuns": waitingRuns, "RunTabs": tabs, "RunFilter": selected, "Hosts": hosts, "Tasks": tasks, "Starting": workflow.Starting, "Dictation": dictationPath(cfg)})
 	}
 }
 

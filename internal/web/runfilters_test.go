@@ -11,6 +11,37 @@ import (
 	"github.com/zachlatta/intelligence/internal/workflow"
 )
 
+func TestWaitingRunBannerIgnoresStatusFilter(t *testing.T) {
+	d := dbtest.New(t)
+	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
+	sendReport(t, h, wfReport())
+	run := startRun(t, h, createWorkflow(t, h, workflow.Starting), "Review this task")
+	if _, err := d.Owner.Exec(t.Context(), "UPDATE workflow_runs SET status='waiting' WHERE id=$1", run); err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []string{"completed", "all", "running", "queued", "waiting", "failed", "canceled"} {
+		page := get(t, h, "/workflows?status="+status, nil)
+		if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "is asking you:") || !strings.Contains(page.Body.String(), `href="/workflow-runs/`+run+`">Read the note`) {
+			t.Fatalf("%s: waiting run's banner is missing", status)
+		}
+	}
+	bob, err := h.store.Create(t.Context(), "bob", testPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := call(t, h, http.MethodGet, "/workflows?status=completed", "", nil, sessionFor(t, h.store, bob))
+	if strings.Contains(page.Body.String(), "is asking you:") {
+		t.Fatal("other account can see waiting banner")
+	}
+	if _, err := d.Owner.Exec(t.Context(), "UPDATE workflow_runs SET status='succeeded' WHERE id=$1", run); err != nil {
+		t.Fatal(err)
+	}
+	page = get(t, h, "/workflows?status=completed", nil)
+	if strings.Contains(page.Body.String(), "is asking you:") {
+		t.Fatal("resolved waiting banner remains in refreshed page")
+	}
+}
+
 func TestRunStatusTabsFilterBeforeLimitAndCountAllRuns(t *testing.T) {
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })

@@ -160,6 +160,9 @@
 </div>
 {{template "modelgroups" "dialog"}}
 <p class="banner" id="error" hidden></p>
+<div id="waiting-runs">
+{{range .WaitingRuns}}<p class="banner note"><b>{{.Workflow}}</b> is asking you: “{{.Title}}” · <a href="/workflow-runs/{{.ID}}">Read the note →</a></p>{{end}}
+</div>
 {{if not .Workflows}}
 <div class="empty-state">
   <p>No workflows yet. Start with the starting workflow: find the project, do the work, three gates, your sign-off for broader changes, then land.</p>
@@ -182,7 +185,6 @@
     </div>
   </section>
 {{end}}
-{{range .Runs}}{{if eq .Status "waiting"}}<p class="banner note"><b>{{.Workflow}}</b> is asking you: “{{.Title}}” · <a href="/workflow-runs/{{.ID}}">Read the note →</a></p>{{end}}{{end}}
 <h2 class="section-title">Workflows</h2>
 <div class="wf-grid">
 {{range .Workflows}}
@@ -286,8 +288,11 @@ setInterval(async () => {
   try {
     const res = await fetch(location.href, { cache: "no-store" });
     if (!res.ok) return;
-    const next = new DOMParser().parseFromString(await res.text(), "text/html").getElementById("runs");
-    if (next) document.getElementById("runs").replaceWith(next);
+    const page = new DOMParser().parseFromString(await res.text(), "text/html");
+    for (const id of ["runs", "waiting-runs"]) {
+      const next = page.getElementById(id);
+      if (next) document.getElementById(id).replaceWith(next);
+    }
   } catch {}
 }, 10000);
 </script>
