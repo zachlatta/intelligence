@@ -1,5 +1,13 @@
 [
   {
+    "id": "reopen-rejected-proposals",
+    "released": "2026-11-15",
+    "title": "Reopen a rejected proposal",
+    "summary": "Rejected a proposal by mistake? Open it in Proposals and choose Reopen to return the same snapshot to review. You can also ask its answer agent to reopen or repropose it in the discussion. Reopening checks for workflow changes and expiry; approval is still required.",
+    "media": "proposal-reopen.png",
+    "mediaAlt": "A rejected proposal in a local demo showing the Reopen button next to Ask a question"
+  },
+  {
     "id": "workflow-history-estimates",
     "released": "2026-11-15",
     "title": "Run estimates from workflow history",

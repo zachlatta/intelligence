@@ -54,7 +54,13 @@ func (a *app) decideProposal(action string) func(viewer) http.HandlerFunc {
 			if !decodeJSON(w, r, &body) {
 				return
 			}
-			if err := a.wf.Decide(r.Context(), v.acct.ID, r.PathValue("id"), action); err != nil {
+			var err error
+			if action == "reopen" {
+				err = a.wf.Reopen(r.Context(), v.acct.ID, r.PathValue("id"))
+			} else {
+				err = a.wf.Decide(r.Context(), v.acct.ID, r.PathValue("id"), action)
+			}
+			if err != nil {
 				workflowError(w, err)
 				return
 			}

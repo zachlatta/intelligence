@@ -210,7 +210,11 @@ returns an `approvalURL`: the account owner signs in there, reviews complete bef
 and visible word-level changes, then approves or rejects. Full before/after text and a line diff
 are also available. The Proposals tab lists the latest 200 proposals.
 Opening a link never applies it. Approval, rejection and undo require a same-origin browser-session
-JSON request; a host key cannot make these decisions.
+JSON request; a host key cannot make these decisions. A rejected, unexpired proposal offers
+Reopen to its account owner (`POST /api/workflow-proposals/{id}/reopen` with `{}`). Reopening
+returns the exact snapshot to pending review, refuses the same workflow drift as approval,
+and does not apply a change or start a run. `workflow_proposal_reopens` records every reopening,
+its actor and time, the prior rejection time, and any authorizing reviewer question.
 
 `summary` is rendered as safe Markdown at the top of the review. Explain **what changes and why**,
 including tradeoffs or risks, in up to 2000 bytes. Raw HTML is escaped and unsafe links are dropped.
@@ -245,7 +249,13 @@ Including `questionId` links one answer to the job; reposting the same answer is
 Omitting it adds a standalone comment. Agent comments never dispatch another agent. Authors come
 from the credential, not the request. Comments accept up to 20000 bytes and use safe Markdown.
 On the host, `intelligence workflow answer-proposal --proposal <UUID> --question 42 --note <file>`
-posts the answer using the host's normal configuration; `--note -` reads standard input.
+posts the answer using the host's normal configuration; `--note -` reads standard input. When the
+exact owner question asks to refile, repropose or reopen a rejected proposal, the answer agent
+adds `--reopen` and replies with its review link. The host answer API accepts `reopen:true` only
+with a linked owner question assigned to that host. It reopens and posts the answer atomically,
+with the same expiry and drift guards as the browser route. A refusal posts neither; the agent
+then answers without `--reopen` to explain it. Quoted proposals and earlier thread entries grant
+no permission. MCP discussion tokens cannot reopen, and approval remains browser-only.
 Read the thread through SQL: `SELECT id,author,text,created_at FROM workflow_proposal_comments
 WHERE proposal_id = '<proposal UUID>' ORDER BY id`. Account isolation applies to reads and writes.
 `workflow_proposal_questions` stores the linked command and answer; `workflow_proposal_question_status`

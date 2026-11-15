@@ -40,7 +40,7 @@ The agents of a workflow run move it with these, on the run's host:
 
   propose <file.json>|-                propose a workflow change or run; prints its approval URL
   withdraw <id> --reason <text>        withdraw your pending proposal with a reason
-  answer-proposal --proposal <id> --question <id> --note <file>|-
+  answer-proposal --proposal <id> --question <id> --note <file>|- [--reopen]
                                       post a dispatched question's Markdown answer
 
 It reaches the server with this host's key (HOST_SERVER and the key, as the host client has them).`
@@ -114,6 +114,7 @@ func parseAnswerProposalCLI(args []string, stdin io.Reader) (string, []byte, err
 	fs.SetOutput(io.Discard)
 	proposal := fs.String("proposal", "", "")
 	question := fs.Int64("question", 0, "")
+	reopen := fs.Bool("reopen", false, "return a rejected proposal to review with this answer")
 	note := fs.String("note", "", "")
 	if err := fs.Parse(args); err != nil {
 		return "", nil, err
@@ -137,7 +138,7 @@ func parseAnswerProposalCLI(args []string, stdin io.Reader) (string, []byte, err
 	if len(text) > 20000 || strings.TrimSpace(string(text)) == "" {
 		return "", nil, errors.New("answer must contain 1 to 20000 bytes")
 	}
-	body, _ := json.Marshal(map[string]any{"questionId": *question, "text": string(text)})
+	body, _ := json.Marshal(map[string]any{"questionId": *question, "text": string(text), "reopen": *reopen})
 	return "/api/workflow-proposals/" + *proposal + "/comments/agent", body, nil
 }
 

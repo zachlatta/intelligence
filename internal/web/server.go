@@ -226,7 +226,7 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	mux.HandleFunc("POST /api/workflow-proposals/{id}/comments/agent", a.hostWrite(a.agentComment))
 	mux.HandleFunc("POST /api/workflow-proposals/{id}/questions/{question}/retry", a.write(a.retryProposalAnswer))
 	mux.HandleFunc("POST /api/workflow-proposals/{id}/withdraw", a.hostWrite(a.withdrawProposal))
-	for _, action := range []string{"approve", "reject", "undo"} {
+	for _, action := range []string{"approve", "reject", "undo", "reopen"} {
 		mux.HandleFunc("POST /api/workflow-proposals/{id}/"+action, a.write(a.decideProposal(action)))
 	}
 	mux.HandleFunc("GET /workflow-proposals", a.page(proposalsPage))

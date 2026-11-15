@@ -113,7 +113,8 @@ type proposalView struct {
 	RawBefore, RawAfter                                                                         string
 	Target, Dictation                                                                           string
 	BaseVersion, ResultVersion                                                                  int
-	Pending, Applied                                                                            bool
+	Pending, Applied, Reopenable                                                                bool
+	Reopens                                                                                     []proposalReopen
 	Changes                                                                                     []proposalChange
 	Comments                                                                                    []proposalComment
 }
@@ -181,6 +182,11 @@ func (p proposalView) HasPendingAnswers() bool {
 	return false
 }
 
+type proposalReopen struct {
+	Actor              string
+	Rejected, Reopened time.Time
+}
+
 type proposalComment struct {
 	ID                                          int64
 	Author, Text                                string
@@ -225,6 +231,7 @@ func readProposalViews(ctx context.Context, v viewer, id, wid string) ([]proposa
 		p.RawBefore = prettyProposal(p.BeforeState)
 		p.RawAfter = prettyProposal(p.AfterState)
 		p.Pending = p.Status == "pending"
+		p.Reopenable = p.Status == "rejected" && time.Now().Before(p.Expiry)
 		p.Applied = p.Status == "applied" && p.Operation != "run"
 		if p.BeforeState != nil {
 			p.Target = p.BeforeState.Name
@@ -270,6 +277,20 @@ func proposalPage(cfg Config, v viewer) http.HandlerFunc {
 			var c proposalComment
 			err := row.Scan(&c.ID, &c.Author, &c.Text, &c.Created, &c.State, &c.AnswerHost, &c.AnswerAgent, &c.AnswerError, &c.AnswerOnline, &c.AnswerLocation)
 			return c, err
+		})
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		rows, err = v.pool.Query(r.Context(), `SELECT actor,rejected_at,reopened_at FROM workflow_proposal_reopens WHERE proposal_id=$1 ORDER BY id`, id)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		ps[0].Reopens, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (proposalReopen, error) {
+			var r proposalReopen
+			err := row.Scan(&r.Actor, &r.Rejected, &r.Reopened)
+			return r, err
 		})
 		if err != nil {
 			http.Error(w, err.Error(), 500)

@@ -35,6 +35,21 @@ func TestProposalAnswerCLIValidation(t *testing.T) {
 	}
 }
 
+func TestProposalAnswerCLIReopen(t *testing.T) {
+	id := "11111111-1111-4111-8111-111111111111"
+	_, body, err := parseAnswerProposalCLI([]string{"--proposal", id, "--question", "42", "--note", "-", "--reopen"}, strings.NewReader("Reopened for review."))
+	var got struct {
+		Reopen     bool
+		QuestionID int64
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(body, &got); err != nil || !got.Reopen || got.QuestionID != 42 {
+		t.Fatalf("reopen body: %s %v", body, err)
+	}
+}
+
 func TestProposalCLIUsesHostConfiguration(t *testing.T) {
 	var paths []string
 	var bodies []map[string]any

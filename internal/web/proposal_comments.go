@@ -11,6 +11,7 @@ import (
 func (a *app) commentProposal(account int64, author string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
+			Reopen     bool   `json:"reopen,omitempty"`
 			Text       string `json:"text"`
 			QuestionID int64  `json:"questionId,omitempty"`
 		}
@@ -20,13 +21,16 @@ func (a *app) commentProposal(account int64, author string) http.HandlerFunc {
 		var err error
 		var id int64
 		switch {
+		case body.Reopen && (author == "reviewer" || body.QuestionID <= 0):
+			http.Error(w, "reopen requires an assigned answer question", 400)
+			return
 		case body.QuestionID < 0 || (author == "reviewer" && body.QuestionID != 0):
 			http.Error(w, "invalid questionId", 400)
 			return
 		case author == "reviewer":
 			id, err = a.wf.AskProposal(r.Context(), account, r.PathValue("id"), body.Text)
 		case body.QuestionID > 0:
-			err = a.wf.AnswerProposal(r.Context(), account, r.PathValue("id"), body.QuestionID, author, body.Text)
+			err = a.wf.AnswerProposalReview(r.Context(), account, r.PathValue("id"), body.QuestionID, author, body.Text, body.Reopen)
 		default:
 			err = a.wf.Comment(r.Context(), account, r.PathValue("id"), author, body.Text)
 		}
