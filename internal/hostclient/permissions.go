@@ -9,7 +9,7 @@ import (
 	"github.com/zachlatta/intelligence/internal/paseo"
 )
 
-const permissionRewrite = "Intelligence denied this permission prompt automatically because this agent is in a never-ask mode. Do the authorized step another way: use the Write/Edit tool for files instead of shell heredocs, split compound shell commands, and use git -C instead of cd && git. Write rm only with literal absolute paths (no glob, variable, substitution or ~, and no cd earlier in the same command). Do not retry the same blocked command or broaden your task. If no safe approach works, report the blocker."
+const permissionRewrite = "Intelligence denied this permission prompt automatically because this agent is in a never-ask mode. Do the authorized step another way: use the Write/Edit tool for files instead of shell heredocs, split compound shell commands, and use git -C instead of cd && git. Deleting files or directories with rm or rmdir is denied in this mode; leave git-ignored scratch (.factory-scratch/) in place, since archiving the workspace removes the worktree. Do not retry the same blocked command or broaden your task. If no safe approach works, report the blocker."
 
 // PermissionResolution is an audit of one prompt. pending is stored before the
 // daemon is contacted; denied means the daemon acknowledged, error means retry.

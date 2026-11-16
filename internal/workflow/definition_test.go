@@ -317,6 +317,34 @@ func TestWorkflowPromptsAvoidPermissionTraps(t *testing.T) {
 	}
 }
 
+func TestWorkflowPromptsDenyRemovalAndPreserveScratch(t *testing.T) {
+	saved := clone(Starting)
+	saved.Orchestrator.Instructions = "Coordinate this task."
+	for i := range saved.Steps {
+		saved.Steps[i].Instructions = "Do the authorized step."
+	}
+	for name, d := range map[string]Definition{"starting": Starting, "saved": saved} {
+		t.Run(name, func(t *testing.T) {
+			prompts := []string{OrchestratorPrompt("task", d, Vars{Run: "r"})}
+			for i := range d.Steps {
+				prompts = append(prompts, StepMessage(d, i, Vars{Run: "r"}))
+			}
+			for i, p := range prompts {
+				for _, want := range []string{"Deleting files or directories with rm or rmdir is denied in this mode", "leave git-ignored scratch (.factory-scratch/) in place", "archiving the workspace removes the worktree", "Do not retry the same blocked command"} {
+					if !strings.Contains(p, want) {
+						t.Errorf("prompt %d misses %q", i, want)
+					}
+				}
+				for _, bad := range []string{"literal absolute paths", "delete scratch", "remove scratch"} {
+					if strings.Contains(p, bad) {
+						t.Errorf("prompt %d contains %q", i, bad)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestUnattendedModeGuidanceIsNotDuplicated(t *testing.T) {
 	p := OrchestratorPrompt("task", Starting, Vars{Run: "r"})
 	for _, provider := range Providers() {
