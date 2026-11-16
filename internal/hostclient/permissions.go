@@ -9,7 +9,11 @@ import (
 	"github.com/zachlatta/intelligence/internal/paseo"
 )
 
-const permissionRewrite = "Intelligence denied this permission prompt automatically because this agent is in a never-ask mode. Do the authorized step another way: use the Write/Edit tool for files instead of shell heredocs, split compound shell commands, and use git -C instead of cd && git. Deleting files or directories with rm or rmdir is denied in this mode; leave git-ignored scratch (.factory-scratch/) in place, since archiving the workspace removes the worktree. Do not retry the same blocked command or broaden your task. If no safe approach works, report the blocker."
+// RemovalRule is the never-ask removal guidance. Generated workflow instructions
+// reuse it so the denial and the prompts say the same thing.
+const RemovalRule = "Deleting files or directories with rm or rmdir is denied in this mode; leave git-ignored scratch (.factory-scratch/) in place, since archiving the workspace removes the worktree."
+
+const permissionRewrite = "Intelligence denied this permission prompt automatically because this agent is in a never-ask mode. Do the authorized step another way: use the Write/Edit tool for files instead of shell heredocs, split compound shell commands, and use git -C instead of cd && git. " + RemovalRule + " Do not retry the same blocked command or broaden your task. If no safe approach works, report the blocker."
 
 // PermissionResolution is an audit of one prompt. pending is stored before the
 // daemon is contacted; denied means the daemon acknowledged, error means retry.

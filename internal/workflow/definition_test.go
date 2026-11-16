@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
 func TestOrchestratorSummarizesTheTaskBeforeStartingWork(t *testing.T) {
@@ -330,7 +332,8 @@ func TestWorkflowPromptsDenyRemovalAndPreserveScratch(t *testing.T) {
 				prompts = append(prompts, StepMessage(d, i, Vars{Run: "r"}))
 			}
 			for i, p := range prompts {
-				for _, want := range []string{"Deleting files or directories with rm or rmdir is denied in this mode", "leave git-ignored scratch (.factory-scratch/) in place", "archiving the workspace removes the worktree", "Do not retry the same blocked command"} {
+				// The wording is pinned once, in hostclient; prompts reuse the denial's own text.
+				for _, want := range []string{hostclient.RemovalRule, "Do not retry the same blocked command"} {
 					if !strings.Contains(p, want) {
 						t.Errorf("prompt %d misses %q", i, want)
 					}
