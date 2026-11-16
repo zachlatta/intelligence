@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -64,13 +65,36 @@ func TestUsagePageChartsHistoryAndWeeklyPeaks(t *testing.T) {
 		t.Fatalf("status %d", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"<svg", "<polyline", "ada@example.com", "Weekly peaks", "95%", "30%"} {
+	for _, want := range []string{"<svg", "<polyline", "ada@example.com", "Weekly peaks", "95%", "30%", "<thead>"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("usage page misses %q", want)
 		}
 	}
 	if rec := get(t, h, "/usage?days=0", nil); rec.Code != 400 {
 		t.Errorf("days=0: %d", rec.Code)
+	}
+}
+
+func TestUsagePageFoldsOlderWeeklyPeaks(t *testing.T) {
+	h, d := dbServer(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	fixtureFor(t, d).keyFor(t, "host-1")
+	reg := fleet.New(d.Owner)
+	for w := 6; w >= 1; w-- {
+		at := now.Add(-time.Duration(w*7) * 24 * time.Hour)
+		rep := usage.Report{CollectedAt: at, Sources: []usage.Source{{Provider: usage.Claude, Accounts: []usage.Account{{
+			ID: "ada@example.com", Label: "ada@example.com", Slot: 1, Active: true, ObservedAt: at,
+			Windows: []usage.Window{{ID: "7d", Seconds: usage.Week, UsedPct: float64(30 + w), ResetsAt: at.Add(24 * time.Hour)}},
+		}}}}}
+		if err := reg.RecordUsage(t.Context(), "host-1", rep, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	body := get(t, h, "/usage", nil).Body.String()
+	for _, want := range []string{`class="more-peaks"`, "Show 2 older weeks", "31%", "36%"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("usage page misses %q", want)
+		}
 	}
 }
 
@@ -93,5 +117,32 @@ func TestChartScalesUsedPercentOverTime(t *testing.T) {
 	// x from the left edge to the middle, y from the bottom to the top
 	if !strings.Contains(svg, `points="40.0,130.0 340.0,10.0"`) {
 		t.Errorf("svg = %s", svg)
+	}
+}
+
+// TestChartColorsAreNotMostlyBlue: the first series (and so host monitoring's average and used
+// lines) is a neutral stone, and at most one series leans blue.
+func TestChartColorsAreNotMostlyBlue(t *testing.T) {
+	blue := 0
+	for i, c := range chartColors {
+		v, err := strconv.ParseUint(strings.TrimPrefix(c, "#"), 16, 32)
+		if err != nil {
+			t.Fatalf("chart colour %q: %v", c, err)
+		}
+		if r, g, b := int(v>>16), int(v>>8&0xff), int(v&0xff); b > r && b > g {
+			blue++
+			if i == 0 {
+				t.Errorf("the first series is %s, which leans blue", c)
+			}
+		}
+	}
+	if blue > 1 {
+		t.Errorf("%d of %d chart colours lean blue; want at most one", blue, len(chartColors))
+	}
+	for _, want := range []string{`<i style="background: ` + chartColors[0] + `"></i>average`, `<i style="background: ` + chartColors[1] + `"></i>peak`,
+		`<i style="background: ` + chartColors[0] + `"></i>used`} {
+		if !strings.Contains(hostResourcesHTML, want) {
+			t.Errorf("host monitoring's legend lacks %s", want)
+		}
 	}
 }

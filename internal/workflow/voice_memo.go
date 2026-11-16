@@ -57,11 +57,28 @@ func (m VoiceMemo) Input() string {
 	command := "pdw sql '" + strings.ReplaceAll(sql, "'", "'\"'\"'") + "'"
 	summary := ""
 	if text := []rune(strings.TrimSpace(m.Summary)); len(text) > 0 {
-		label := "PDW summary"
+		label := "PDW summary (generated)"
 		if len(text) > 1000 {
 			label += " (truncated to first 1000 characters)"
 		}
 		summary = label + ":\n" + string(text[:min(1000, len(text))]) + "\n\n"
 	}
-	return fmt.Sprintf("Voice memo: %s\nRecorded: %s\nDuration (seconds): %s\nPDW source: %s; account: %s; recording ID: %s\n\n%sTranscript preview (%s):\n%s\n\nFetch the full transcript from PDW before acting on details beyond this preview. Exact SQL:\n%s\nCommand:\n%s\n", m.Title, m.RecordedAt, m.Duration, m.Source, m.Account, m.ID, summary, note, string(r[:min(len(r), 1000)]), sql, command)
+	return fmt.Sprintf("Voice memo transcript preview (%s):\n%s\n\nVoice memo title (generated): %s\nRecorded: %s\nDuration (seconds): %s\nPDW source: %s; account: %s; recording ID: %s\n\n%sFetch the full transcript from PDW before acting on details beyond this preview. Exact SQL:\n%s\nCommand:\n%s\n", note, string(r[:min(len(r), 1000)]), m.Title, m.RecordedAt, m.Duration, m.Source, m.Account, m.ID, summary, sql, command)
+}
+
+// voiceMemoTaskInput isolates the spoken text before generic task naming can
+// fall through to generated metadata (even for an empty or greeting-only memo).
+func voiceMemoTaskInput(input string) string {
+	if !strings.HasPrefix(input, "Voice memo transcript preview (") {
+		return input
+	}
+	_, preview, ok := strings.Cut(input, ":\n")
+	if !ok {
+		return "Voice memo"
+	}
+	preview, _, _ = strings.Cut(preview, "\n\nVoice memo title (generated):")
+	if strings.TrimSpace(preview) == "" {
+		return "Voice memo"
+	}
+	return preview
 }

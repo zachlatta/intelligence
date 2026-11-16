@@ -30,7 +30,7 @@ var spawnHTML string
 //go:embed account.html
 var accountHTML string
 
-var spawnTmpl = template.Must(template.New("spawn").Funcs(template.FuncMap{"short": short, "ago": ago}).
+var spawnTmpl = template.Must(template.New("spawn").Funcs(localFuncs).Funcs(template.FuncMap{"short": short, "ago": ago}).
 	Parse(spawnHTML + layoutHTML + accountHTML))
 
 // localPath is next if it is a path on this site, else "/".

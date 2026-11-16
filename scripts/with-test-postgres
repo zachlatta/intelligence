@@ -2,6 +2,9 @@
 # Run a command with TEST_DATABASE_URL pointing at a throwaway Postgres 18 in Docker, removed after.
 #   scripts/with-test-postgres go test -race ./...
 set -euo pipefail
+if [ "${INTELLIGENCE_TEST_CAPACITY_HELD:-}" != 1 ]; then
+  exec scripts/with-test-capacity "$0" "$@"
+fi
 name="intelligence-test-pg-$$"
 docker run -d --rm --name "$name" -e POSTGRES_PASSWORD=test -p 127.0.0.1::5432 postgres:18-alpine >/dev/null
 trap 'docker stop "$name" >/dev/null 2>&1 || true' EXIT

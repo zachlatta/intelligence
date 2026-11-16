@@ -55,3 +55,43 @@ func TestVoiceMemoIncludesBoundedPDWSummary(t *testing.T) {
 		t.Fatal("missing or unbounded summary")
 	}
 }
+
+// November 13 regression: generated metadata expanded a spoken first name.
+// Surnames and source identifiers here are fictional.
+func TestVoiceMemoNamesUseTranscriptInsteadOfGeneratedIdentity(t *testing.T) {
+	m := VoiceMemo{
+		Source: "recorder", Account: "owner", ID: "memo-1",
+		Title:      "Send transcript to Maxwell Reed",
+		Summary:    "Send the transcript to Maxwell Reed.",
+		Transcript: "Send the transcript to Maxwell with me.",
+	}
+	input := m.Input()
+	for _, want := range []string{
+		"Voice memo transcript preview (39 characters):\n" + m.Transcript + "\n\n",
+		"Voice memo title (generated): " + m.Title,
+		"PDW summary (generated):\n" + m.Summary,
+	} {
+		if !strings.Contains(input, want) {
+			t.Errorf("input missing %q", want)
+		}
+	}
+	title := taskName(input)
+	if title != "Send the transcript to Maxwell with me" {
+		t.Errorf("run title = %q", title)
+	}
+	workspace, branch := runNames("00000000-0000-4000-8000-000000000001", "Voice Memo Received", title)
+	for _, name := range []string{title, workspace, branch, agentTitle("Orchestrator", "Voice Memo Received", title)} {
+		if strings.Contains(strings.ToLower(name), "reed") || !strings.Contains(strings.ToLower(name), "maxwell") {
+			t.Errorf("name derived from generated metadata: %q", name)
+		}
+	}
+}
+
+func TestVoiceMemoNamesNeverFallThroughToGeneratedMetadata(t *testing.T) {
+	for _, transcript := range []string{"", "\n", "🙏", "Task:", "Hi!", "Hello!\nSend it to Maxwell."} {
+		m := VoiceMemo{Title: "Maxwell Reed", Summary: "Maxwell Reed", Transcript: transcript}
+		if name := taskName(m.Input()); strings.Contains(name, "Reed") || strings.Contains(name, "Recorded:") {
+			t.Errorf("transcript %q: title fell through to metadata: %q", transcript, name)
+		}
+	}
+}

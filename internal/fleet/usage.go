@@ -206,7 +206,7 @@ func (r *Registry) Plans(ctx context.Context) (PlansView, error) {
 			AND s.received_at > now() - interval '`+recent+`' ORDER BY s.received_at DESC LIMIT 1), ''),
 		coalesce((SELECT s.note FROM usage_sources s WHERE s.provider = a.provider AND s.account = a.account AND s.ok
 			ORDER BY s.received_at DESC LIMIT 1), '')
-		FROM usage_accounts a`)
+		FROM usage_accounts a WHERE NOT EXISTS (SELECT 1 FROM provider_plan_settings ps WHERE ps.provider=a.provider AND NOT ps.enabled)`)
 	if err != nil {
 		return v, err
 	}
@@ -255,7 +255,8 @@ func (r *Registry) Plans(ctx context.Context) (PlansView, error) {
 		sort.SliceStable(ws, func(a, b int) bool { return windowRank(ws[a].ID) < windowRank(ws[b].ID) })
 	}
 	rows, err = r.p.Query(ctx, `SELECT host || ': ' || provider || ': ' || error FROM usage_sources
-		WHERE account = '' AND NOT ok AND received_at > now() - interval '`+recent+`' ORDER BY host, provider`)
+		WHERE account = '' AND NOT ok AND received_at > now() - interval '`+recent+`'
+		AND NOT EXISTS (SELECT 1 FROM provider_plan_settings ps WHERE ps.provider=usage_sources.provider AND NOT ps.enabled) ORDER BY host, provider`)
 	if err != nil {
 		return v, err
 	}
