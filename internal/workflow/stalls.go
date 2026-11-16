@@ -135,7 +135,11 @@ func (e *Engine) continueRun(ctx context.Context, tx pgx.Tx, r run, event int64,
 	if err != nil {
 		return err
 	}
-	text := "Continue this workflow in the same turn. Inspect worker outcomes before moving; follow the current step and all gates. Never skip a gate or repeat an external action without checking its result.\n\n" + StepMessage(d, r.Step, r.vars()) + sameTurnReminder
+	step, err := StepMessage(d, r.Step, r.vars())
+	if err != nil {
+		return credentialRefusal(err)
+	}
+	text := "Continue this workflow in the same turn. Inspect worker outcomes before moving; follow the current step and all gates. Never skip a gate or repeat an external action without checking its result.\n\n" + step + sameTurnReminder
 	args, _ := json.Marshal(hostclient.AgentArgs{AgentID: r.Orchestrator, Text: text, Behavior: "queue"})
 	c, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.SendMessageKind, args, time.Minute, e.Now())
 	if err != nil {

@@ -759,6 +759,16 @@ version it started with. A run:
      His reply (typed or dictated there) goes to the orchestrator as a message, which decides what
      it means and moves on.
 
+Workflow prompts tell orchestrators to pass credentials by environment variable name or a
+0600 file path on the worker's host, never by value. Intelligence does not issue PDW credentials.
+Prompt rendering and host command validation refuse PDW access tokens, Intelligence host keys
+and Intelligence MCP keys in agent text, returning an error without repeating the credential.
+This includes step transitions, replies, additional messages and schedule prompts.
+Email input names the receiving Gmail connection's address, rather than a recipient alias.
+For the zrl-bot mailbox it gives the mailbox control tool's exact thread read command; other
+mailboxes get a SQL command for their received messages in Intelligence. PDW sync status is
+not recorded by Intelligence, so PDW context is suggested only after sync is verified.
+
 The runs list's **What** and the run page's heading show a short task summary. As its first
 action, the orchestrator summarizes the whole request in 3–8 words (at most 80 characters) and
 saves it with `intelligence workflow summarize --run <id> --summary "..."`. This uses the existing

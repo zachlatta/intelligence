@@ -276,14 +276,41 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 		_, err := tx.Exec(ctx, "UPDATE workflow_runs SET queue_reason = $2 WHERE id = $1 AND queue_reason <> $2", r.ID, why)
 		return false, err
 	}
+	// A permanent refusal must not leave this oldest run blocking the host.
+	// Roll back any partial launch (including model allocations and commands)
+	// before recording its terminal failure in the outer transaction.
+	sp, err := tx.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	var started bool
 	if r.StartRetryAt != nil {
-		return e.dequeueRetry(ctx, tx, r, host+" has room for the retry")
+		started, err = e.dequeueRetry(ctx, sp, r, host+" has room for the retry")
+	} else {
+		reason := host + " has room"
+		if r.Priority == PriorityImmediate {
+			reason = "immediate priority, ahead of the queue"
+		}
+		err = e.dequeue(ctx, sp, r, reason)
+		started = err == nil
 	}
-	reason := host + " has room"
-	if r.Priority == PriorityImmediate {
-		reason = "immediate priority, ahead of the queue"
+	if err == nil {
+		return started, sp.Commit(ctx)
 	}
-	return true, e.dequeue(ctx, tx, r, reason)
+	if rollbackErr := sp.Rollback(ctx); rollbackErr != nil {
+		return false, rollbackErr
+	}
+	var refusal *Refusal
+	if !errors.As(err, &refusal) {
+		return false, err
+	}
+	if err := e.event(ctx, tx, r, "error", nil, nil, refusal.Error()); err != nil {
+		return false, err
+	}
+	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET status=$2,error=$3,pending_command=NULL,
+		start_retry_at=NULL,start_retry_queued=false,queue_reason='',updated_at=$4,finished_at=$4 WHERE id=$1`,
+		r.ID, Failed, refusal.Error(), e.Now())
+	return err == nil, err // progressed: continue with the next queued run
 }
 
 // dequeue starts queued run r, saying why it starts now.

@@ -168,7 +168,7 @@ func (e *Engine) launchRetry(ctx context.Context, tx pgx.Tx, r run, why string) 
 	at := e.Now()
 	next, err := fleet.EnqueueTx(ctx, tx, r.Host, previous.Kind, args, commandTTL, at)
 	if err != nil {
-		return false, err
+		return false, credentialRefusal(err)
 	}
 	key := previous.IdempotencyKey
 	if key == "" {

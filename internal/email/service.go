@@ -423,6 +423,9 @@ func orEmpty(s []string) []string {
 // route decides what m does: in the thread of a run, what that workflow says of replies;
 // otherwise, it starts the workflow whose trigger matches it best, if any.
 func (s *Service) route(ctx context.Context, tx pgx.Tx, account int64, owners []string, g GmailMessage, m workflow.Mail) (decision, error) {
+	if err := tx.QueryRow(ctx, "SELECT coalesce((SELECT address FROM gmail_connections WHERE account_id=$1), '')", account).Scan(&m.Mailbox); err != nil {
+		return decision{}, err
+	}
 	fromZach := m.Verified && slices.Contains(owners, m.From)
 	var runID, wfID string
 	err := tx.QueryRow(ctx, `SELECT run_id::text, workflow_id::text FROM emails

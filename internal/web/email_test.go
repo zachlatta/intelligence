@@ -165,6 +165,7 @@ func TestEmailStartsTheWorkflowThatMatchesItAndRepliesGoToItsRun(t *testing.T) {
 	json.Unmarshal(ws.Args, &wa)
 	if ws.Kind != hostclient.CreateWorkspaceKind || wa.Agent == nil || !strings.Contains(wa.Agent.Prompt, "Numbers for slide 6") ||
 		!strings.Contains(wa.Agent.Prompt, "not from Zach") ||
+		!strings.Contains(wa.Agent.Prompt, "in bot@example.com") || !strings.Contains(wa.Agent.Prompt, "intelligence__query") ||
 		wa.Title != "Task from Intelligence: Q4 board deck · "+strings.ReplaceAll(run, "-", "")[:12] ||
 		wa.Branch != "wf-task-from-intelligence-q4-board-deck-"+strings.ReplaceAll(run, "-", "")[:12] {
 		t.Fatalf("command = %s %s", ws.Kind, ws.Args)
@@ -190,7 +191,7 @@ func TestEmailStartsTheWorkflowThatMatchesItAndRepliesGoToItsRun(t *testing.T) {
 	msg := b.command()
 	var ma hostclient.AgentArgs
 	json.Unmarshal(msg.Args, &ma)
-	if msg.Kind != hostclient.SendMessageKind || ma.AgentID != "orch-1" || !strings.Contains(ma.Text, "November 1") || strings.Contains(ma.Text, "Draft attached") {
+	if msg.Kind != hostclient.SendMessageKind || ma.AgentID != "orch-1" || !strings.Contains(ma.Text, "November 1") || strings.Contains(ma.Text, "Draft attached") || !strings.Contains(ma.Text, "in bot@example.com") {
 		t.Fatalf("message = %s %s", msg.Kind, msg.Args)
 	}
 

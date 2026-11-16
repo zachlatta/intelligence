@@ -233,7 +233,7 @@ func TestRunAnswerCLI(t *testing.T) {
 			t.Fatalf("accepted %v", args)
 		}
 	}
-	msg := StepMessage(Starting, 0, Vars{Run: id})
+	msg := mustStepMessage(t, Starting, 0, Vars{Run: id})
 	if !strings.Contains(msg, "workflow answer --run "+id) {
 		t.Fatal("missing answer instruction")
 	}
@@ -308,7 +308,7 @@ func TestAnswerInstructionsCoverRequestersAndEarlyExits(t *testing.T) {
 	if !strings.Contains(DeliverableEmailRule, "intelligence workflow answer") {
 		t.Error("email delivery instructions omit recording")
 	}
-	prompt := OrchestratorPrompt("Example", Starting, Vars{Run: "run-example"})
+	prompt := mustOrchestratorPrompt(t, "Example", Starting, Vars{Run: "run-example"})
 	commandList, _, _ := strings.Cut(prompt, "next after the last step")
 	if !strings.Contains(commandList, "intelligence workflow answer --run run-example") {
 		t.Error("command list omits answer")

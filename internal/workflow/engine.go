@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/zachlatta/intelligence/internal/agenttext"
 	"github.com/zachlatta/intelligence/internal/fleet"
 	"github.com/zachlatta/intelligence/internal/hostclient"
 )
@@ -50,6 +51,15 @@ type Refusal struct {
 func (r *Refusal) Error() string { return r.Msg }
 
 func bad(format string, a ...any) error { return &Refusal{Msg: fmt.Sprintf(format, a...)} }
+
+// Credential errors are permanent input refusals, including when wrapped by
+// fleet command validation. Leave infrastructure errors retryable.
+func credentialRefusal(err error) error {
+	if errors.Is(err, agenttext.ErrCredential) {
+		return bad("%s", agenttext.ErrCredential)
+	}
+	return err
+}
 func conflict(format string, a ...any) error {
 	return &Refusal{Conflict: true, Msg: fmt.Sprintf(format, a...)}
 }
@@ -424,6 +434,9 @@ func (e *Engine) StartRun(ctx context.Context, account int64, workflowID, input 
 
 // StartRunTx is StartRun in tx, for a request sent at requestedAt (zero: now).
 func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workflowID, input string, requestedAt time.Time) (string, error) {
+	if err := agenttext.Validate(input); err != nil {
+		return "", credentialRefusal(err)
+	}
 	if requestedAt.IsZero() {
 		requestedAt = e.Now()
 	}
@@ -556,7 +569,7 @@ func (e *Engine) startFirst(ctx context.Context, tx pgx.Tx, r run) error {
 	}
 	c, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.CreateAgentKind, args, commandTTL, e.Now())
 	if err != nil {
-		return err
+		return credentialRefusal(err)
 	}
 	_, err = tx.Exec(ctx, "UPDATE workflow_runs SET status = $2, pending_command = $3, project_command = $3, updated_at = $4 WHERE id = $1",
 		r.ID, FindingProject, c.ID, e.Now())
@@ -579,9 +592,13 @@ func projectStartArgs(ctx context.Context, tx pgx.Tx, r run) (json.RawMessage, e
 	if err != nil {
 		return nil, err
 	}
+	prompt, err := ProjectPrompt(r.ID, r.Def, r.Input, repos)
+	if err != nil {
+		return nil, credentialRefusal(err)
+	}
 	p := r.Def.Project
 	return json.Marshal(hostclient.CreateAgentArgs{Cwd: "~", Provider: p.Provider, Model: p.Model, Thinking: p.Thinking,
-		Mode: agentMode(p.Provider), Title: agentTitle("Find the project", r.Name, r.Title), Prompt: ProjectPrompt(r.ID, r.Def, r.Input, repos),
+		Mode: agentMode(p.Provider), Title: agentTitle("Find the project", r.Name, r.Title), Prompt: prompt,
 		Labels: map[string]string{"intelligence.run": r.ID, "intelligence.role": "project"}})
 }
 
@@ -599,9 +616,13 @@ func (e *Engine) orchestratorStartArgs(ctx context.Context, tx pgx.Tx, r run) (j
 		}
 		v.Live = &live
 	}
+	prompt, err := OrchestratorPrompt(r.Name, d, v)
+	if err != nil {
+		return nil, credentialRefusal(err)
+	}
 	o := r.Def.Orchestrator
 	agent := &hostclient.CreateAgentArgs{Provider: o.Provider, Model: o.Model, Thinking: o.Thinking, Mode: agentMode(o.Provider),
-		Title: agentTitle("Orchestrator", r.Name, r.Title), Prompt: OrchestratorPrompt(r.Name, d, v),
+		Title: agentTitle("Orchestrator", r.Name, r.Title), Prompt: prompt,
 		Labels: map[string]string{"intelligence.run": r.ID, "intelligence.role": "orchestrator"}}
 	ws := hostclient.CreateWorkspaceArgs{Cwd: "~", Title: wsTitle, Agent: agent}
 	if r.Repo != "" {
@@ -626,7 +647,7 @@ func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo s
 	}
 	c, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.CreateWorkspaceKind, args, commandTTL, e.Now())
 	if err != nil {
-		return err
+		return credentialRefusal(err)
 	}
 	if err := e.recordProject(ctx, tx, r, repo); err != nil {
 		return err
@@ -737,6 +758,12 @@ type Move struct {
 // MoveRun makes m on run, for host (whose key the caller checked): the run must be on host. It
 // returns what the agent should read next.
 func (e *Engine) MoveRun(ctx context.Context, host, runID string, m Move) (string, error) {
+	for _, text := range []string{m.Move, m.Directory, m.Step, m.Summary, m.Why, m.Note, m.Token, m.Exclude,
+		m.Now, m.WaitingOn, m.ETA, m.Deliverable, m.Into} {
+		if err := agenttext.Validate(text); err != nil {
+			return "", bad("%s", err)
+		}
+	}
 	if !uuidRe.MatchString(runID) {
 		return "", ErrNotFound
 	}
@@ -761,9 +788,18 @@ func (e *Engine) MoveRun(ctx context.Context, host, runID string, m Move) (strin
 			r.Status = Running
 		}
 		msg, err = e.move(ctx, tx, r, m)
-		return err
+		if err != nil {
+			return err
+		}
+		if err := agenttext.Validate(msg); err != nil {
+			return bad("%s", err)
+		}
+		return nil
 	})
-	return msg, err
+	if err != nil {
+		return "", err
+	}
+	return msg, nil
 }
 
 func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, error) {
@@ -967,7 +1003,11 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Step %d is done.\n\n%s", r.Step+1, StepMessage(d, r.Step+1, r.vars())+sameTurnReminder), set(Running, r.Step+1, "")
+		step, err := StepMessage(d, r.Step+1, r.vars())
+		if err != nil {
+			return "", bad("%s", err)
+		}
+		return fmt.Sprintf("Step %d is done.\n\n%s", r.Step+1, step+sameTurnReminder), set(Running, r.Step+1, "")
 	case "back":
 		to := r.Def.Index(m.Step)
 		if to < 0 || to >= r.Step {
@@ -983,7 +1023,11 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Back to step %d. What is missing, as you said: %s\n\n%s", to+1, m.Why, StepMessage(d, to, r.vars())+sameTurnReminder), set(Running, to, "")
+		step, err := StepMessage(d, to, r.vars())
+		if err != nil {
+			return "", bad("%s", err)
+		}
+		return fmt.Sprintf("Back to step %d. What is missing, as you said: %s\n\n%s", to+1, m.Why, step+sameTurnReminder), set(Running, to, "")
 	case "ask":
 		if strings.TrimSpace(m.Note) == "" {
 			return "", bad("ask needs a note for Zach: --note <file>, in Markdown.")
@@ -1050,6 +1094,9 @@ func (e *Engine) Reply(ctx context.Context, account int64, runID, text string) e
 
 // ReplyTx is Reply in tx.
 func (e *Engine) ReplyTx(ctx context.Context, tx pgx.Tx, account int64, runID, text string) error {
+	if err := agenttext.Validate(text); err != nil {
+		return bad("%s", err)
+	}
 	if strings.TrimSpace(text) == "" {
 		return bad("a reply needs text")
 	}
@@ -1087,6 +1134,9 @@ func (e *Engine) ReplyTx(ctx context.Context, tx pgx.Tx, account int64, runID, t
 // starts with; once the orchestrator runs, it goes to it as a message. It cannot reach an
 // orchestrator that is being started, and refuses a run that is over.
 func (e *Engine) MessageTx(ctx context.Context, tx pgx.Tx, account int64, runID, what, text string) error {
+	if err := agenttext.Validate(what + "\n" + text); err != nil {
+		return bad("%s", err)
+	}
 	r, err := e.lockRun(ctx, tx, account, runID)
 	if err != nil {
 		return err

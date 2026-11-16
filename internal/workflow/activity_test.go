@@ -16,7 +16,7 @@ func TestActivityCLIValidation(t *testing.T) {
 func TestSavedOrchestratorsGetActivityContract(t *testing.T) {
 	d := Starting
 	d.Orchestrator.Instructions = "Saved custom instructions."
-	prompt := OrchestratorPrompt("Saved workflow", d, Vars{Run: "run-1"})
+	prompt := mustOrchestratorPrompt(t, "Saved workflow", d, Vars{Run: "run-1"})
 	for _, want := range []string{"at each step change", "outside party", "more than 10 minutes", "never type clock times", "omit --eta", "intelligence workflow status --run run-1 --now"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("missing %q", want)

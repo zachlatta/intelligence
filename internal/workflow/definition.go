@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/zachlatta/intelligence/internal/agenttext"
 	"github.com/zachlatta/intelligence/internal/hostclient"
 	"github.com/zachlatta/intelligence/internal/paseo"
 )
@@ -193,7 +194,7 @@ func (v Vars) fill(s string) string {
 
 // ProjectPrompt is what the project finder is told: its instructions, the input, the host's
 // repositories, routing guidance (including for saved definitions), and how to answer.
-func ProjectPrompt(run string, d Definition, input string, repos []string) string {
+func ProjectPrompt(run string, d Definition, input string, repos []string) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n\nThe task:\n\n%s\n\n", strings.TrimSpace(d.Project.Instructions), strings.TrimSpace(input))
 	if len(repos) == 0 {
@@ -206,7 +207,7 @@ func ProjectPrompt(run string, d Definition, input string, repos []string) strin
 		"  intelligence workflow project --run %[1]s <directory>\n"+
 		"  intelligence workflow project --run %[1]s none\n\n"+
 		"none means the task belongs in no repository: the orchestrator then works in the home directory.", run)
-	return b.String()
+	return agenttext.Checked(b.String())
 }
 
 const projectRoutingGuidance = `Choose by the requested work product, not by topic overlap or where source data lives.
@@ -262,7 +263,7 @@ func subAgentModes() string {
 // OrchestratorPrompt is the orchestrator's first message: its standing instructions, the mode its
 // sub-agents start in, the run, the steps, the commands that move it, the workflow contract, and
 // the first step.
-func OrchestratorPrompt(name string, d Definition, v Vars) string {
+func OrchestratorPrompt(name string, d Definition, v Vars) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n\n%s\n\nThis is run %s of the workflow “%s”. You are its orchestrator", strings.TrimSpace(d.Orchestrator.Instructions), subAgentModes(), v.Run, name)
 	if v.Repo != "" {
@@ -302,15 +303,21 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 		"After a successful ask, end your turn and wait for the reply message; do not poll or create a wakeup.\n\n" +
 		PublicRepoRule + "\n\n")
 	b.WriteString("Lifecycle: after next, skip or back, keep working in the same turn using the returned instructions. Wait for sub-agents in the foreground. End your turn only after a successful ask or after the run is finished, done or failed.\n\n")
-	b.WriteString(StepMessage(d, 0, v))
-	return b.String()
+	step, err := StepMessage(d, 0, v)
+	if err != nil {
+		return "", err
+	}
+	b.WriteString(step)
+	return agenttext.Checked(b.String())
 }
 
 // StepMessage is step i's title and filled instructions, as the orchestrator gets them.
-func StepMessage(d Definition, i int, v Vars) string {
+func StepMessage(d Definition, i int, v Vars) (string, error) {
 	s := d.Steps[i]
-	return fmt.Sprintf("Step %d of %d: %s\n\n%s", i+1, len(d.Steps), s.Title, strings.TrimSpace(v.fill(s.Instructions))+"\n\n"+UnattendedShellRule+"\n\n"+v.fill(SharedDeliverableRule)+"\n\n"+FileDeliveryRule+"\n\n"+DeliverableEmailRule+"\n\n"+v.fill(RunAnswerRule))
+	return agenttext.Checked(fmt.Sprintf("Step %d of %d: %s\n\n%s", i+1, len(d.Steps), s.Title, strings.TrimSpace(v.fill(s.Instructions))+"\n\n"+CredentialHandoffRule+"\n\n"+UnattendedShellRule+"\n\n"+v.fill(SharedDeliverableRule)+"\n\n"+FileDeliveryRule+"\n\n"+DeliverableEmailRule+"\n\n"+v.fill(RunAnswerRule)))
 }
+
+const CredentialHandoffRule = "Never paste credentials into a sub-agent's prompt, brief, message, command text or report. Pass an environment variable name or the path of a 0600 file on the worker's host, never its value. Use the worker's existing scoped credentials when available; keep credential files outside tracked files. Pass this rule to every worker."
 
 // DeliverableEmailRule is appended at runtime, like FileDeliveryRule, so saved workflows get it
 // too. Without it a run whose result is a report finished with that report only on its run page

@@ -49,7 +49,7 @@ func TestEmailAndVoiceMemoRunsCheckLiveRunsBeforeBuilding(t *testing.T) {
 	live := []LiveRun{{ID: "run-deck", Workflow: "Zach Email Task", Summary: "Build grant map\nfor the deck", Status: Running, Orchestrator: "orch-1",
 		Started: time.Date(2026, 11, 13, 3, 39, 0, 0, time.UTC), Claims: []string{"https://files.example.com/ns"},
 		Emails: []string{"“Re: Grant map” (thread t-map)"}}}
-	p := OrchestratorPrompt("Voice Memo Received", d, Vars{Run: "run-quotes", Input: "Voice memo: quotes", Live: &LiveRuns{Runs: live, Total: 1}})
+	p := mustOrchestratorPrompt(t, "Voice Memo Received", d, Vars{Run: "run-quotes", Input: "Voice memo: quotes", Live: &LiveRuns{Runs: live, Total: 1}})
 	for _, want := range []string{"run-deck · “Zach Email Task” · Build grant map for the deck · running, step 1 · started 2026-11-13T03:39:00Z · orchestrator orch-1 · claims: https://files.example.com/ns",
 		"intelligence workflow steer --run run-quotes --into <run id>", "email: “Re: Grant map” (thread t-map)", "intelligence workflow claim --run run-quotes <link or name>", "same email thread chain", "Claim the public link (or folder) as soon as you know it"} {
 		if !strings.Contains(p, want) {
@@ -60,13 +60,13 @@ func TestEmailAndVoiceMemoRunsCheckLiveRunsBeforeBuilding(t *testing.T) {
 		t.Error("the check should come before the first step")
 	}
 	// every step, of every workflow, carries the publishing guard
-	step := StepMessage(Starting, 0, Vars{Run: "run-x"})
+	step := mustStepMessage(t, Starting, 0, Vars{Run: "run-x"})
 	for _, want := range []string{"intelligence workflow claim --run run-x", "expected_version", "new file name"} {
 		if !strings.Contains(step, want) {
 			t.Errorf("step misses %q", want)
 		}
 	}
-	if task := OrchestratorPrompt("Factory Task", Starting, Vars{Run: "run-x"}); strings.Contains(task, "Before building anything") {
+	if task := mustOrchestratorPrompt(t, "Factory Task", Starting, Vars{Run: "run-x"}); strings.Contains(task, "Before building anything") {
 		t.Error("a task run has no live-run check")
 	}
 }
