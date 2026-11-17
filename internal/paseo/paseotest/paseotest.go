@@ -24,20 +24,21 @@ type Daemon struct {
 	token string
 	srv   *httptest.Server
 
-	mu          sync.Mutex
-	hellos      []map[string]any
-	requests    []map[string]any
-	conns       []*websocket.Conn
-	agents      []map[string]any
-	workspaces  []map[string]any
-	projects    []map[string]any
-	projectsErr string // project.list answers rpc_error with this
-	statusErr   string // daemon.get_status answers rpc_error with this
-	silent      bool   // never answers requests
-	accepted    int
-	timelines   map[string]timeline
-	created     map[string]map[string]any // what each creation idempotency key made
-	nextID      int
+	mu             sync.Mutex
+	hellos         []map[string]any
+	requests       []map[string]any
+	conns          []*websocket.Conn
+	agents         []map[string]any
+	archivedAgents map[string]map[string]any
+	workspaces     []map[string]any
+	projects       []map[string]any
+	projectsErr    string // project.list answers rpc_error with this
+	statusErr      string // daemon.get_status answers rpc_error with this
+	silent         bool   // never answers requests
+	accepted       int
+	timelines      map[string]timeline
+	created        map[string]map[string]any // what each creation idempotency key made
+	nextID         int
 
 	schedules   []map[string]any  // schedules.go
 	noSchedules bool              // every schedule request fails, as on a daemon without them
@@ -336,6 +337,26 @@ func (f *Daemon) change(c *websocket.Conn, id string, msg map[string]any) bool {
 		f.pushLocked("workspace_update", map[string]any{"kind": "upsert", "workspace": f.workspaces[i]})
 		f.write(c, session("workspace.title.set.response", map[string]any{"requestId": id, "workspaceId": ws, "accepted": true,
 			"title": msg["title"], "error": nil}))
+	case "fetch_agent_request", "refresh_agent_request":
+		ag := str("agentId")
+		var a map[string]any
+		if i := f.find(f.agents, ag); i >= 0 {
+			a = f.agents[i]
+		} else {
+			a = f.archivedAgents[ag]
+		}
+		if msg["type"] == "fetch_agent_request" {
+			f.write(c, session("fetch_agent_response", map[string]any{"requestId": id, "agent": a}))
+		} else if a == nil {
+			f.write(c, session("rpc_error", map[string]any{"requestId": id, "error": "Agent not found: " + ag}))
+		} else {
+			delete(a, "archivedAt")
+			if f.find(f.agents, ag) < 0 {
+				f.agents = append(f.agents, a)
+			}
+			f.pushLocked("agent_update", map[string]any{"kind": "upsert", "agent": a})
+			f.write(c, session("status", map[string]any{"requestId": id, "status": "agent_refreshed", "agentId": ag}))
+		}
 	case "update_agent_request", "send_agent_message_request", "cancel_agent_request", "archive_agent_request":
 		ag := str("agentId")
 		i := f.find(f.agents, ag)
@@ -362,6 +383,11 @@ func (f *Daemon) change(c *websocket.Conn, id string, msg map[string]any) bool {
 		case "cancel_agent_request":
 			f.write(c, session("cancel_agent_response", map[string]any{"requestId": id, "agentId": ag, "agent": f.agents[i], "error": nil}))
 		case "archive_agent_request":
+			if f.archivedAgents == nil {
+				f.archivedAgents = map[string]map[string]any{}
+			}
+			f.agents[i]["archivedAt"] = "2026-11-08T12:00:00.000Z"
+			f.archivedAgents[ag] = f.agents[i]
 			f.agents = slices.Delete(f.agents, i, i+1)
 			f.pushLocked("agent_update", map[string]any{"kind": "remove", "agentId": ag})
 			f.write(c, session("agent_archived", map[string]any{"requestId": id, "agentId": ag, "archivedAt": "2026-11-08T12:00:00.000Z"}))

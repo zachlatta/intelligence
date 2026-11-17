@@ -932,13 +932,26 @@ it once:
 1. **In the thread of a run** (an earlier email in its Gmail thread started one), the workflow's
    `replies` decides: `run` (the default) adds it to the run as a message to its orchestrator; if
    the run waits on a question and the email is from one of the account holder's own addresses,
-   it is the answer; if the run is over, it starts a new run of the workflow. `new` starts a new
+   it is the answer; if the run is over, it starts a follow-up run of the workflow. `new` starts a new
    run; `ignore` does nothing.
 2. **Otherwise** it starts the workflow whose filter (`definition.email`: `from` addresses or
    `@domain`s, `to`, `subject`, `words`, `without`, `attachment`) it matches, like a Gmail filter:
    every filled field must match. When two match, the narrower wins (more fields; an address beats
    its domain). Saving a filter that another workflow already has, sharing a sender with nothing to
    tell them apart, is refused.
+
+A follow-up less than 24 hours after completion reuses the earlier orchestrator and workspace,
+restoring them from Paseo persistence when archived. Each email keeps a separate run, with its own
+steps, completion and answer; `workflow_runs.continued_run_id` links the previous run. Restoration
+waits for the previous cleanup command to finish. Only a confirmed missing agent permits a cold
+start. An older run or a run without an orchestrator also starts cold. All these follow-ups include
+the thread's sent messages as verbatim decoded text/HTML MIME bodies and the earlier runs' notes
+and events. Gmail read failures retry intake rather than losing that context.
+`workflow_run_events` records `email_continuation_requested`, `email_continued`, or `email_cold_start`;
+continuation events expose `continued_run_id` for SQL review. A delivery error or expiry that might
+have sent the prompt fails the follow-up visibly rather than launching a second answering agent.
+Email orchestrator prompts, including saved definitions, require explicit corrections, truthful
+action status, and a yes/no opening when asked whether anything was done or remains to do.
 
 Email authentication, trigger matching and permission to start work are separate concerns.
 The current email paths do not enforce a complete owner-only workflow-start policy. Do not

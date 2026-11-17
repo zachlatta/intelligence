@@ -117,6 +117,21 @@ func (c *Client) ArchiveAgent(ctx context.Context, id string) error {
 	return c.command(ctx, map[string]any{"type": "archive_agent_request", "agentId": id}, nil)
 }
 
+// RefreshAgent restores the owning workspace and loads the same persisted agent,
+// unarchiving it if needed. It does not start a turn.
+func (c *Client) RefreshAgent(ctx context.Context, id string) error {
+	return c.command(ctx, map[string]any{"type": "refresh_agent_request", "agentId": id}, nil)
+}
+
+// InspectAgent includes archived persistence records, unlike Agents' live subscription.
+func (c *Client) InspectAgent(ctx context.Context, id string) (*Agent, error) {
+	var p struct {
+		Agent *Agent `json:"agent"`
+	}
+	err := c.command(ctx, map[string]any{"type": "fetch_agent_request", "agentId": id}, &p)
+	return p.Agent, err
+}
+
 // SetWorkspaceTitle renames a workspace; "" goes back to the name the daemon derives.
 func (c *Client) SetWorkspaceTitle(ctx context.Context, id, title string) error {
 	var t any = title

@@ -12,8 +12,37 @@ import (
 	"github.com/zachlatta/intelligence/internal/paseo/paseotest"
 )
 
+func TestContinueEmailRestoresArchivedAgentAndRetriesWithoutRefreshingLiveTurn(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	if _, err := execute(t, w, ArchiveAgentKind, `{"agentId":"a1"}`); err != nil {
+		t.Fatal(err)
+	}
+	cmd := Command{ID: "follow-up", Kind: ContinueEmailKind, Args: json.RawMessage(`{"agentId":"a1","text":"Did you do it?"}`)}
+	for range 2 {
+		res, err := w.Execute(t.Context(), cmd)
+		if err != nil || res.AgentID != "a1" {
+			t.Fatalf("continuation: %+v %v", res, err)
+		}
+	}
+	if n := len(d.Requests("refresh_agent_request")); n != 1 {
+		t.Fatalf("refreshes=%d; retry must not interrupt the running turn", n)
+	}
+	for _, r := range d.Requests("send_agent_message_request") {
+		if r["agentId"] != "a1" || r["messageId"] != "follow-up" {
+			t.Fatalf("send=%v", r)
+		}
+	}
+	res, err := execute(t, w, ContinueEmailKind, `{"agentId":"missing","text":"hello"}`)
+	if err == nil || !res.AgentGone {
+		t.Fatalf("gone: %+v %v", res, err)
+	}
+}
+
 func TestParseCommandChecksEachKind(t *testing.T) {
 	good := map[string]string{
+		ContinueEmailKind:              `{"agentId":"a1","text":"follow-up"}`,
 		CreateWorkspaceKind:            `{"cwd":"/w/app","worktree":true,"branch":"fix","base":"main","title":"Fix","agent":{"provider":"claude","prompt":"go"}}`,
 		CreateAgentKind:                `{"workspaceId":"w1","provider":"claude","prompt":"go"}`,
 		ArchiveWorkspaceKind:           `{"workspaceId":"w1"}`,

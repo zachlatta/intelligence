@@ -18,10 +18,12 @@ import (
 
 // rawHost is a host's end of the stream, driven frame by frame.
 type rawHost struct {
-	t     *testing.T
-	conn  *websocket.Conn
-	hello hostclient.Hello
-	next  uint64
+	captureCommands bool
+	pendingCommands []hostclient.Command
+	t               *testing.T
+	conn            *websocket.Conn
+	hello           hostclient.Hello
+	next            uint64
 }
 
 // streamWait bounds each wait on a host stream: the hello, an ack, a command. It only ends a
@@ -91,12 +93,20 @@ func (b *rawHost) call(f hostclient.Frame) hostclient.Frame {
 			}
 			return got
 		}
+		if b.captureCommands && got.Type == hostclient.CommandFrame {
+			b.pendingCommands = append(b.pendingCommands, *got.Command)
+		}
 	}
 }
 
 // command reads frames until a command arrives.
 func (b *rawHost) command() hostclient.Command {
 	b.t.Helper()
+	if len(b.pendingCommands) > 0 {
+		c := b.pendingCommands[0]
+		b.pendingCommands = b.pendingCommands[1:]
+		return c
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), streamWait)
 	defer cancel()
 	for {

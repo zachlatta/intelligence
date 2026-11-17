@@ -173,6 +173,9 @@ func (r *Registry) Claim(ctx context.Context, host string, options ClaimOptions,
 				AND CASE WHEN idempotency_key = '' THEN $3::boolean ELSE $6::boolean END))
 			AND (idempotency_key = '' OR ($5 AND EXISTS (
 				SELECT 1 FROM hosts WHERE name = $1 AND stream_id = NULLIF($4, '')::uuid AND start_retry_keys)))
+			AND (args->>'afterCommand' IS NULL OR EXISTS (
+				SELECT 1 FROM commands prior WHERE prior.id::text = commands.args->>'afterCommand' AND prior.host=commands.host
+				AND (prior.status='succeeded' OR (commands.kind='continue_email' AND prior.status='failed'))))
 			FOR UPDATE SKIP LOCKED)
 		RETURNING `+commandColumns, host, at, options.Replay, options.StreamID, options.RetryReady, options.ReplayRetries)
 	if err != nil {
@@ -222,6 +225,12 @@ func (r *Registry) UpdateCommand(ctx context.Context, host string, u hostclient.
 			return err
 		}
 		changed = true
+		// A finished cleanup may release a waiting email continuation.
+		if u.Status == hostclient.CommandSucceeded || u.Status == hostclient.CommandFailed {
+			if _, err := tx.Exec(ctx, notifySQL, CommandsTopic(host)); err != nil {
+				return err
+			}
+		}
 		_, err = tx.Exec(ctx, notifySQL, CommandTopic(u.ID))
 		return err
 	})

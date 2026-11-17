@@ -129,6 +129,7 @@ func TestEmailStartsTheWorkflowThatMatchesItAndRepliesGoToItsRun(t *testing.T) {
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
 	b := openStream(t, h, "host-1")
+	b.captureCommands = true
 	wf := christina(t, h)
 
 	fake.Add(mailMsg("old", "t-old", "christina@example.com", "From last week", "Already handled."))
@@ -210,12 +211,13 @@ func TestEmailStartsTheWorkflowThatMatchesItAndRepliesGoToItsRun(t *testing.T) {
 	if archive.Kind != hostclient.ArchiveWorkspaceKind || aa.WorkspaceID != "w-run" || aa.WaitForAgent != "orch-1" {
 		t.Fatalf("archive = %s %s", archive.Kind, archive.Args)
 	}
+	succeed(t, b, archive, `{"workspaceId":"w-run"}`)
 	fake.Add(mailMsg("m4", "t1", "christina@example.com", "Re: Q4 board deck", "One more thing: slide 7 too."))
 	r = decided(t, h, "m4")
 	if r["decision"] != "follow_up" || r["run_id"] == run || r["run_id"] == "" {
 		t.Fatalf("m4 = %v", r)
 	}
-	if next := b.command(); next.Kind != hostclient.CreateWorkspaceKind || !strings.Contains(string(next.Args), run) {
+	if next := b.command(); next.Kind != "continue_email" || !strings.Contains(string(next.Args), "orch-1") {
 		t.Fatalf("follow-up = %s %s", next.Kind, next.Args)
 	}
 

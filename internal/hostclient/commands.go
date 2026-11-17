@@ -61,7 +61,16 @@ const (
 	RenameAgentKind      = "rename_agent"
 	SendMessageKind      = "send_message"
 	CancelAgentKind      = "cancel_agent"
+	ContinueEmailKind    = "continue_email"
 )
+
+// ContinueEmailArgs restores a finished task's agent before sending the new run's prompt.
+// AfterCommand serializes restoration after the earlier workspace cleanup on the server.
+type ContinueEmailArgs struct {
+	AgentID      string  `json:"agentId"`
+	Text         string  `json:"text"`
+	AfterCommand *string `json:"afterCommand,omitempty"`
+}
 
 // CreateWorkspaceArgs: a workspace on Cwd, or with Worktree a new git worktree of the repository at
 // Cwd on a new Branch from Base. With Agent, an agent is then started in it (Agent names no
@@ -99,11 +108,12 @@ type WorkspaceArgs struct {
 // AgentArgs name an agent: archive_agent, cancel_agent, rename_agent with Title, send_message with
 // Text and, optionally, Behavior.
 type AgentArgs struct {
-	Attachments []attachment.Image `json:"attachments,omitempty"`
-	AgentID     string             `json:"agentId"`
-	Title       string             `json:"title,omitempty"`
-	Text        string             `json:"text,omitempty"`
-	Behavior    string             `json:"behavior,omitempty"` // send_message: steer (""), interrupt or queue
+	AfterCommand *string            `json:"afterCommand,omitempty"` // send after this command succeeds
+	Attachments  []attachment.Image `json:"attachments,omitempty"`
+	AgentID      string             `json:"agentId"`
+	Title        string             `json:"title,omitempty"`
+	Text         string             `json:"text,omitempty"`
+	Behavior     string             `json:"behavior,omitempty"` // send_message: steer (""), interrupt or queue
 }
 
 // How a message treats the agent's running turn. Each starts a turn when the agent is not running.
@@ -128,6 +138,7 @@ func (c Command) waitsForTurn() bool {
 
 // CommandResult is what a command made or changed.
 type CommandResult struct {
+	AgentGone      bool   `json:"agentGone,omitempty"`
 	WorkspaceID    string `json:"workspaceId,omitempty"`
 	AgentID        string `json:"agentId,omitempty"`
 	ScheduleID     string `json:"scheduleId,omitempty"`
@@ -150,6 +161,15 @@ func ParseCommand(kind string, args json.RawMessage) (any, error) {
 		return nil
 	}
 	switch kind {
+	case ContinueEmailKind:
+		var a ContinueEmailArgs
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		if a.AgentID == "" || a.Text == "" {
+			return nil, errors.New("continue_email needs agentId and text")
+		}
+		return a, nil
 	case CreateWorkspaceKind:
 		var a CreateWorkspaceArgs
 		if err := decode(&a); err != nil {
@@ -200,6 +220,8 @@ func ParseCommand(kind string, args json.RawMessage) (any, error) {
 		switch {
 		case a.AgentID == "":
 			return nil, fmt.Errorf("%s needs agentId", kind)
+		case kind != SendMessageKind && a.AfterCommand != nil:
+			return nil, fmt.Errorf("%s takes no afterCommand", kind)
 		case kind == RenameAgentKind && a.Title == "":
 			return nil, errors.New("rename_agent needs title")
 		case kind == SendMessageKind && a.Text == "":
@@ -244,6 +266,22 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 		key = cmd.ID
 	}
 	switch a := parsed.(type) {
+	case ContinueEmailArgs:
+		// Refresh is Paseo's persistence-backed unarchive path. It restores the
+		// owning workspace as well. An uncertain send must never cause a cold start.
+		ag, err := c.InspectAgent(ctx, a.AgentID)
+		if err != nil {
+			return CommandResult{AgentID: a.AgentID, AgentGone: strings.Contains(err.Error(), "Agent not found:")}, err
+		}
+		if ag == nil {
+			return CommandResult{AgentID: a.AgentID, AgentGone: true}, fmt.Errorf("Agent not found: %s", a.AgentID)
+		}
+		if !ag.ArchivedAt.IsZero() {
+			if err := c.RefreshAgent(ctx, a.AgentID); err != nil {
+				return CommandResult{AgentID: a.AgentID}, err
+			}
+		}
+		return CommandResult{AgentID: a.AgentID}, c.SendMessage(ctx, a.AgentID, a.Text, cmd.ID, paseo.Steer)
 	case CreateWorkspaceArgs:
 		a.Cwd = expandHome(a.Cwd, home)
 		ws, err := c.CreateWorkspace(ctx, paseo.CreateWorkspace{Cwd: a.Cwd, Worktree: a.Worktree, Branch: a.Branch, Base: a.Base,

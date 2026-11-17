@@ -502,7 +502,23 @@ func (s *Service) reply(ctx context.Context, tx pgx.Tx, account int64, fromZach 
 	}
 	switch status {
 	case workflow.Succeeded, workflow.Failed, workflow.Canceled:
-		return s.start(ctx, tx, account, wf, name, input+fmt.Sprintf("\n\nIt replies in the thread of an earlier run of this workflow, %s, which is over (%s).", run, status), "follow_up")
+		history, err := s.followUpHistory(ctx, tx, account, m.ThreadID)
+		if err != nil {
+			return d, err
+		}
+		input += fmt.Sprintf("\n\nIt replies in the thread of an earlier run of this workflow, %s, which is over (%s).\n\n%s\n\n%s", run, status, workflow.EmailReplyRule, history)
+		id, continued, err := s.Engine.ContinueEmailTx(ctx, tx, account, run, input)
+		if err != nil {
+			return d, err
+		}
+		if continued {
+			return decision{Decision: "follow_up", Workflow: wf, Run: id}, nil
+		}
+		cold, err := s.start(ctx, tx, account, wf, name, input, "follow_up")
+		if err == nil && cold.Run != "" {
+			_, err = tx.Exec(ctx, `INSERT INTO workflow_run_events(run_id,account_id,at,kind,text,continued_run_id) VALUES($1,$2,$3,'email_cold_start','Earlier run is outside the continuity window or has no orchestrator.',$4)`, cold.Run, account, s.now(), run)
+		}
+		return cold, err
 	case workflow.Waiting:
 		if fromZach {
 			text := strings.TrimSpace(m.Text)

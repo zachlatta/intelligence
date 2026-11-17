@@ -236,6 +236,9 @@ func subAgentModes() string {
 // the first step.
 func OrchestratorPrompt(name string, d Definition, v Vars) string {
 	var b strings.Builder
+	if d.Trigger == TriggerEmail {
+		b.WriteString(EmailReplyRule + "\n\n")
+	}
 	fmt.Fprintf(&b, "%s\n\n%s\n\nThis is run %s of the workflow “%s”. You are its orchestrator", strings.TrimSpace(d.Orchestrator.Instructions), subAgentModes(), v.Run, name)
 	if v.Repo != "" {
 		fmt.Fprintf(&b, ", in a worktree of %s on branch %s", v.Repo, v.Branch)

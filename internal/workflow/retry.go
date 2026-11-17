@@ -122,7 +122,7 @@ func (e *Engine) dequeueRetry(ctx context.Context, tx pgx.Tx, r run) (bool, erro
 func (e *Engine) RetryStarts(ctx context.Context) error {
 	at := e.Now()
 	rows, err := e.p.Query(ctx, `SELECT r.pending_command::text FROM workflow_runs r JOIN commands c ON c.id=r.pending_command
- WHERE r.status IN ('finding_project','starting')
+ WHERE (r.status IN ('finding_project','starting') OR c.kind='continue_email')
  AND (c.status IN ('failed','expired','succeeded') OR c.expires_at <= $1)
  ORDER BY r.created_at, r.id`, at)
 	if err != nil {

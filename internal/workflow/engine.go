@@ -604,6 +604,9 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 			return err
 		}
 		at := e.Now()
+		if c.Kind == hostclient.ContinueEmailKind {
+			return e.emailContinued(ctx, tx, r, c, res)
+		}
 		if c.Status != hostclient.CommandSucceeded {
 			what := "could not start the project finder"
 			if r.Status == StartingOrchestrator {
@@ -898,11 +901,29 @@ func (e *Engine) MessageTx(ctx context.Context, tx pgx.Tx, account int64, runID,
 		}
 		return e.event(ctx, tx, r, "message", nil, nil, what)
 	}
+	var continuation *string
+	if err := tx.QueryRow(ctx, `SELECT c.id::text FROM workflow_runs r LEFT JOIN commands c ON c.id=r.pending_command AND c.kind='continue_email' WHERE r.id=$1`, r.ID).Scan(&continuation); err != nil {
+		return err
+	}
+	if continuation != nil {
+		addition := "\n\n" + what + ":\n\n" + text
+		if _, err := tx.Exec(ctx, "UPDATE workflow_runs SET input=input || $2 WHERE id=$1", r.ID, addition); err != nil {
+			return err
+		}
+		// A not-yet-delivered continuation can take the email in its first prompt.
+		tag, err := tx.Exec(ctx, `UPDATE commands SET args=jsonb_set(args,'{text}',to_jsonb((args->>'text') || $2::text)) WHERE id=$1 AND status='queued'`, *continuation, addition)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() > 0 {
+			return e.event(ctx, tx, r, "message", nil, nil, what)
+		}
+	}
 	waiting := ""
 	if r.Status == Waiting {
 		waiting = "\n\nYou are still waiting on Zach's reply to your note: this is not it."
 	}
-	args, _ := json.Marshal(hostclient.AgentArgs{AgentID: r.Orchestrator, Text: fmt.Sprintf("%s:\n\n%s%s\n\n"+
+	args, _ := json.Marshal(hostclient.AgentArgs{AgentID: r.Orchestrator, AfterCommand: continuation, Text: fmt.Sprintf("%s:\n\n%s%s\n\n"+
 		"Decide what it means for the run, and carry on.", what, text, waiting)})
 	if _, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.SendMessageKind, args, replyTTL, e.Now()); err != nil {
 		return err
