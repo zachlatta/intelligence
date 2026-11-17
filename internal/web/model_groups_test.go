@@ -285,6 +285,9 @@ func TestModelGroupNames(t *testing.T) {
 
 func TestModelGroupCanConfigureUnknownMeters(t *testing.T) {
 	h, d := dbServer(t)
+	if _, err := d.Owner.Exec(t.Context(), `UPDATE provider_plan_settings SET enabled=true WHERE provider='muse'`); err != nil {
+		t.Fatal(err)
+	}
 	rep := wfReport()
 	rep.Paseo.Providers = []hostclient.Provider{{Name: "muse", Available: true, Models: []hostclient.Model{{ID: "wonder", Thinking: []string{"high"}}}}}
 	sendReport(t, h, rep)
@@ -501,5 +504,20 @@ func TestModelGroupsScriptIsServed(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/javascript") ||
 		!strings.Contains(rec.Body.String(), "model-groups") || rec.Header().Get("ETag") == "" || rec.Header().Get("Cache-Control") != "no-cache" {
 		t.Errorf("/model-groups.js: %d %q, etag %q", rec.Code, rec.Header().Get("Content-Type"), rec.Header().Get("ETag"))
+	}
+}
+
+func TestWorkflowAPIRejectsStepModelFields(t *testing.T) {
+	h, _ := dbServer(t)
+	sendReport(t, h, wfReport())
+	def := workflow.Starting
+	def.Host = "host-1"
+	body, _ := json.Marshal(map[string]any{"name": "Removed model", "definition": def})
+	for _, field := range []string{`"model":"{{frontier_model}}"`, `"thinking":"high"`} {
+		raw := strings.Replace(string(body), `"steps":[{`, `"steps":[{`+field+",", 1)
+		rec := call(t, h, "POST", "/api/workflows", raw, sameOriginFetch)
+		if rec.Code != 400 || !strings.Contains(rec.Body.String(), "unknown field") {
+			t.Fatalf("removed field %s: %d %s", field, rec.Code, rec.Body)
+		}
 	}
 }

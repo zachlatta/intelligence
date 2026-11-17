@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -52,6 +53,19 @@ func (r *Registry) RecordSchedules(ctx context.Context, host string, rep hostcli
 				continue
 			}
 			ids = append(ids, s.ID)
+			if s.Status == "active" {
+				var pause bool
+				if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM provider_plan_settings WHERE provider=$1 AND NOT enabled)
+				 AND NOT EXISTS (SELECT 1 FROM commands WHERE host=$2 AND kind='pause_schedule' AND args->>'scheduleId'=$3 AND status IN ('queued','sent','running'))`, s.Provider, host, s.ID).Scan(&pause); err != nil {
+					return err
+				}
+				if pause {
+					args, _ := json.Marshal(hostclient.ScheduleIDArgs{ScheduleID: s.ID})
+					if _, err := EnqueueTx(ctx, tx, host, hostclient.PauseScheduleKind, args, 24*time.Hour, at); err != nil {
+						return err
+					}
+				}
+			}
 			var every *int64
 			if s.EveryMs > 0 {
 				every = &s.EveryMs

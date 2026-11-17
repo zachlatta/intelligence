@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/zachlatta/intelligence/internal/agenttext"
 	"github.com/zachlatta/intelligence/internal/attachment"
 	"github.com/zachlatta/intelligence/internal/paseo"
 )
@@ -67,6 +68,7 @@ const (
 // ContinueEmailArgs restores a finished task's agent before sending the new run's prompt.
 // AfterCommand serializes restoration after the earlier workspace cleanup on the server.
 type ContinueEmailArgs struct {
+	RunID        string  `json:"runId,omitempty"`
 	AgentID      string  `json:"agentId"`
 	Text         string  `json:"text"`
 	AfterCommand *string `json:"afterCommand,omitempty"`
@@ -149,6 +151,17 @@ type CommandResult struct {
 // ParseCommand decodes args for kind strictly (no unknown fields) and checks what it needs. The
 // server refuses a command that does not parse, so a host never receives one.
 func ParseCommand(kind string, args json.RawMessage) (any, error) {
+	if err := agenttext.Validate(kind); err != nil {
+		return nil, err
+	}
+	// Decode before checking so JSON escapes cannot hide a credential. Check all
+	// string fields, including titles and labels shown alongside agent messages.
+	var data any
+	if json.NewDecoder(bytes.NewReader(args)).Decode(&data) == nil {
+		if err := checkCommandText(data); err != nil {
+			return nil, err
+		}
+	}
 	if len(bytes.TrimSpace(args)) == 0 {
 		args = json.RawMessage("{}")
 	}
@@ -240,6 +253,29 @@ func ParseCommand(kind string, args json.RawMessage) (any, error) {
 		return parseSchedule(kind, decode) // schedules.go
 	}
 	return nil, fmt.Errorf("unknown command kind %q", kind)
+}
+
+func checkCommandText(v any) error {
+	switch v := v.(type) {
+	case string:
+		return agenttext.Validate(v)
+	case map[string]any:
+		for k, child := range v {
+			if err := agenttext.Validate(k); err != nil {
+				return err
+			}
+			if err := checkCommandText(child); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, child := range v {
+			if err := checkCommandText(child); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // Execute runs cmd against the daemon on the watcher's connection.

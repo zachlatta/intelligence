@@ -134,7 +134,7 @@ func TestOfflineStartupCommandsExpireAndReachDeadline(t *testing.T) {
 				t.Fatal(err)
 			}
 			r := readRun(t, h, run)
-			if r["status"] != "failed" || !strings.Contains(r["error"].(string), "24 hours") {
+			if r["status"] != "failed" || !strings.Contains(r["error"].(string), "was due at") {
 				t.Fatal(r)
 			}
 		})

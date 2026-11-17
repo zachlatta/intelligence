@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/zachlatta/intelligence/internal/agenttext"
 	"github.com/zachlatta/intelligence/internal/fleet"
 	"github.com/zachlatta/intelligence/internal/hostclient"
 )
@@ -50,6 +51,15 @@ type Refusal struct {
 func (r *Refusal) Error() string { return r.Msg }
 
 func bad(format string, a ...any) error { return &Refusal{Msg: fmt.Sprintf(format, a...)} }
+
+// Credential errors are permanent input refusals, including when wrapped by
+// fleet command validation. Leave infrastructure errors retryable.
+func credentialRefusal(err error) error {
+	if errors.Is(err, agenttext.ErrCredential) {
+		return bad("%s", agenttext.ErrCredential)
+	}
+	return err
+}
 func conflict(format string, a ...any) error {
 	return &Refusal{Conflict: true, Msg: fmt.Sprintf(format, a...)}
 }
@@ -61,6 +71,7 @@ const (
 	StartingOrchestrator = "starting"
 	Running              = "running"
 	Waiting              = "waiting"
+	Stalled              = "stalled"
 	Succeeded            = "succeeded"
 	Failed               = "failed"
 	Canceled             = "canceled"
@@ -247,6 +258,7 @@ func (e *Engine) applyWorkflowState(ctx context.Context, tx pgx.Tx, account int6
 	}
 	s.Name = name
 	s.Description = strings.TrimSpace(s.Description)
+	s.Definition = s.Definition.normalized()
 	if err := s.Definition.Validate(); err != nil {
 		return "", nil, bad("%s", err)
 	}
@@ -359,28 +371,39 @@ func ownsHost(ctx context.Context, tx pgx.Tx, account int64, host string) error 
 
 // run is a run with its workflow's name and definition.
 type run struct {
+	ContinuedRun                                 string
 	ID, Host, Title, Input, Status, Repo, Branch string
+	WorkflowID                                   string
 	Account                                      int64
 	Step                                         int
 	WorkspaceID, ProjectAgent, Orchestrator      string
 	ProjectCommand                               *string
 	StartRetryAt                                 *time.Time
 	StartRetries                                 int
+	EstimatedMemory                              int64
+	ProjectSelected                              bool
+	StartedByHand                                bool // Start now: it bypasses its host's queue until it has started
 	Name                                         string
+	Priority                                     string // the effective priority snapshotted at creation: normal or immediate
 	Def                                          Definition
 }
+
+// skipsQueue says r goes ahead of its host's queue and whatever the host's load, through project
+// selection and start retries: it was started by hand (Start now), or its priority is immediate.
+func (r run) skipsQueue() bool { return r.StartedByHand || r.Priority == PriorityImmediate }
 
 func (r run) vars() Vars { return Vars{Run: r.ID, Input: r.Input, Repo: r.Repo, Branch: r.Branch} }
 
 const runSelect = `SELECT r.id::text, r.host, r.title, r.input, r.status, r.repo, r.branch, r.account_id, r.step, r.workspace_id,
-	r.project_agent_id, r.orchestrator_id, r.project_command::text, w.name, v.definition, r.start_retry_at, r.start_retries
+	r.project_agent_id, r.orchestrator_id, r.project_command::text, w.name, v.definition, r.start_retry_at, r.start_retries,
+	r.estimated_memory_bytes, r.project_selected, r.started_by_hand, r.priority, r.workflow_id::text, coalesce(r.continued_run_id::text,'')
 	FROM workflow_runs r JOIN workflow_versions v USING (workflow_id, version) JOIN workflows w ON w.id = r.workflow_id `
 
 func scanRun(row pgx.Row) (run, error) {
 	var r run
 	var def []byte
 	err := row.Scan(&r.ID, &r.Host, &r.Title, &r.Input, &r.Status, &r.Repo, &r.Branch, &r.Account, &r.Step, &r.WorkspaceID,
-		&r.ProjectAgent, &r.Orchestrator, &r.ProjectCommand, &r.Name, &def, &r.StartRetryAt, &r.StartRetries)
+		&r.ProjectAgent, &r.Orchestrator, &r.ProjectCommand, &r.Name, &def, &r.StartRetryAt, &r.StartRetries, &r.EstimatedMemory, &r.ProjectSelected, &r.StartedByHand, &r.Priority, &r.WorkflowID, &r.ContinuedRun)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, ErrNotFound
 	}
@@ -404,14 +427,20 @@ func (e *Engine) StartRun(ctx context.Context, account int64, workflowID, input 
 	var id string
 	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
 		var err error
-		id, err = e.StartRunTx(ctx, tx, account, workflowID, input)
+		id, err = e.StartRunTx(ctx, tx, account, workflowID, input, time.Time{})
 		return err
 	})
 	return id, err
 }
 
-// StartRunTx is StartRun in tx.
-func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workflowID, input string) (string, error) {
+// StartRunTx is StartRun in tx, for a request sent at requestedAt (zero: now).
+func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workflowID, input string, requestedAt time.Time) (string, error) {
+	if err := agenttext.Validate(input); err != nil {
+		return "", credentialRefusal(err)
+	}
+	if requestedAt.IsZero() {
+		requestedAt = e.Now()
+	}
 	if strings.TrimSpace(input) == "" {
 		return "", bad("a run needs input: what should be done")
 	}
@@ -434,6 +463,7 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		if err := json.Unmarshal(def, &d); err != nil {
 			return err
 		}
+		d = d.normalized()
 		host = d.Host
 		if host == "" {
 			return bad("this workflow does not say which host it runs on: pick one in its editor, and save")
@@ -444,17 +474,31 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		if err := lockQueue(ctx, tx, host); err != nil {
 			return err
 		}
-		why, err := e.queueReason(ctx, tx, host)
+		repo := ""
+		selected := d.Project.Mode == ProjectFixed
+		if selected {
+			repo = d.Project.Directory
+		}
+		estimate, err := repositoryMemory(ctx, tx, account, host, workflowID, repo, selected)
 		if err != nil {
 			return err
+		}
+		priority := d.EffectivePriority()
+		var why string
+		if priority != PriorityImmediate { // immediate skips the queue and the host's capacity
+			why, err = e.room(ctx, tx, host, "", repo, estimate)
+			if err != nil {
+				return err
+			}
 		}
 		status := FindingProject
 		if why != "" {
 			status = Queued
 		}
-		if err := tx.QueryRow(ctx, `INSERT INTO workflow_runs (account_id, workflow_id, version, host, title, input, status, queue_reason, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9) RETURNING id::text`, account, workflowID, version, host, taskName(input), input,
-			status, why, e.Now()).Scan(&id); err != nil { // now, holding the lock: the queue's order is the order decided
+		if err := tx.QueryRow(ctx, `INSERT INTO workflow_runs (account_id, workflow_id, version, host, title, input, status, queue_reason, created_at, updated_at,
+			repo, project_selected, estimated_memory_bytes, queued_at_creation, requested_at, answer_expected, priority)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id::text`, account, workflowID, version, host, taskName(input), input,
+			status, why, e.Now(), repo, selected, estimate, why != "", requestedAt, d.Trigger == TriggerEmail || d.Trigger == TriggerVoiceMemo, priority).Scan(&id); err != nil { // now, holding the lock: the queue's order is the order decided
 			return err
 		}
 		r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id = $1", id))
@@ -463,6 +507,11 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		}
 		if err := e.event(ctx, tx, r, "started", nil, nil, input); err != nil {
 			return err
+		}
+		if selected {
+			if err := e.recordProject(ctx, tx, r, repo); err != nil {
+				return err
+			}
 		}
 		if why != "" {
 			return e.event(ctx, tx, r, "queued", nil, nil, why)
@@ -479,17 +528,44 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 // records when (launched_at) and the command that starts it (launch_command), which reserve the
 // run's footprint in its host's projected load until the host has carried it out (queue.go).
 func (e *Engine) launch(ctx context.Context, tx pgx.Tx, r run) error {
-	if err := e.startFirst(ctx, tx, r); err != nil {
+	_, err := e.startAttempt(ctx, tx, r, func(start pgx.Tx) error {
+		if err := checkWorkflowProviders(ctx, start, r.Def); err != nil {
+			return err
+		}
+		if err := e.startFirst(ctx, start, r); err != nil {
+			return err
+		}
+		_, err := start.Exec(ctx, "UPDATE workflow_runs SET launched_at = $2, launch_command = pending_command WHERE id = $1", r.ID, e.Now())
+		return err
+	})
+	return err
+}
+
+// Check both startup roles before starting either. Fixed projects have no finder.
+func checkWorkflowProviders(ctx context.Context, tx pgx.Tx, d Definition) error {
+	disabled, err := fleet.DisabledProviders(ctx, tx)
+	if err != nil {
 		return err
 	}
-	_, err := tx.Exec(ctx, "UPDATE workflow_runs SET launched_at = $2, launch_command = pending_command WHERE id = $1", r.ID, e.Now())
-	return err
+	providers := []string{d.Orchestrator.Provider}
+	if d.Project.Mode == ProjectMatch {
+		providers = append(providers, d.Project.Provider)
+	}
+	for _, provider := range providers {
+		if err := fleet.CheckProvider(disabled, provider); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // startFirst queues the command that starts run r, its pending_command.
 func (e *Engine) startFirst(ctx context.Context, tx pgx.Tx, r run) error {
-	if r.Def.Project.Mode == ProjectFixed {
-		return e.startOrchestrator(ctx, tx, r, r.Def.Project.Directory)
+	if r.ContinuedRun != "" && r.Orchestrator != "" {
+		return e.startEmailContinuation(ctx, tx, r)
+	}
+	if r.ProjectSelected {
+		return e.startOrchestrator(ctx, tx, r, r.Repo)
 	}
 	args, err := projectStartArgs(ctx, tx, r)
 	if err != nil {
@@ -497,7 +573,7 @@ func (e *Engine) startFirst(ctx context.Context, tx pgx.Tx, r run) error {
 	}
 	c, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.CreateAgentKind, args, commandTTL, e.Now())
 	if err != nil {
-		return err
+		return credentialRefusal(err)
 	}
 	_, err = tx.Exec(ctx, "UPDATE workflow_runs SET status = $2, pending_command = $3, project_command = $3, updated_at = $4 WHERE id = $1",
 		r.ID, FindingProject, c.ID, e.Now())
@@ -520,9 +596,13 @@ func projectStartArgs(ctx context.Context, tx pgx.Tx, r run) (json.RawMessage, e
 	if err != nil {
 		return nil, err
 	}
+	prompt, err := ProjectPrompt(r.ID, r.Def, r.Input, repos)
+	if err != nil {
+		return nil, credentialRefusal(err)
+	}
 	p := r.Def.Project
 	return json.Marshal(hostclient.CreateAgentArgs{Cwd: "~", Provider: p.Provider, Model: p.Model, Thinking: p.Thinking,
-		Mode: agentMode(p.Provider), Title: agentTitle("Find the project", r.Name, r.Title), Prompt: ProjectPrompt(r.ID, r.Def, r.Input, repos),
+		Mode: agentMode(p.Provider), Title: agentTitle("Find the project", r.Name, r.Title), Prompt: prompt,
 		Labels: map[string]string{"intelligence.run": r.ID, "intelligence.role": "project"}})
 }
 
@@ -532,9 +612,21 @@ func (e *Engine) orchestratorStartArgs(ctx context.Context, tx pgx.Tx, r run) (j
 		return nil, err
 	}
 	wsTitle, _ := runNames(r.ID, r.Name, r.Title)
+	v := r.vars()
+	if d.Trigger == TriggerEmail || d.Trigger == TriggerVoiceMemo {
+		live, err := liveRuns(ctx, tx, r.Account, r.ID)
+		if err != nil {
+			return nil, err
+		}
+		v.Live = &live
+	}
+	prompt, err := OrchestratorPrompt(r.Name, d, v)
+	if err != nil {
+		return nil, credentialRefusal(err)
+	}
 	o := r.Def.Orchestrator
 	agent := &hostclient.CreateAgentArgs{Provider: o.Provider, Model: o.Model, Thinking: o.Thinking, Mode: agentMode(o.Provider),
-		Title: agentTitle("Orchestrator", r.Name, r.Title), Prompt: OrchestratorPrompt(r.Name, d, r.vars()),
+		Title: agentTitle("Orchestrator", r.Name, r.Title), Prompt: prompt,
 		Labels: map[string]string{"intelligence.run": r.ID, "intelligence.role": "orchestrator"}}
 	ws := hostclient.CreateWorkspaceArgs{Cwd: "~", Title: wsTitle, Agent: agent}
 	if r.Repo != "" {
@@ -559,13 +651,9 @@ func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo s
 	}
 	c, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.CreateWorkspaceKind, args, commandTTL, e.Now())
 	if err != nil {
-		return err
+		return credentialRefusal(err)
 	}
-	text := repo
-	if text == "" {
-		text = "none"
-	}
-	if err := e.event(ctx, tx, r, "project", nil, nil, text); err != nil {
+	if err := e.recordProject(ctx, tx, r, repo); err != nil {
 		return err
 	}
 	// the workspace becomes the command that starts the run (launch_command): a run whose finder ran
@@ -573,6 +661,15 @@ func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo s
 	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, repo = $3, branch = $4, workspace_title = $5, pending_command = $6, launch_command = $6, updated_at = $7,
 		start_retries=0, start_retry_at=NULL, start_retry_queued=false, error='',
 		title = $8 WHERE id = $1`, r.ID, StartingOrchestrator, repo, r.Branch, wsTitle, c.ID, e.Now(), r.Title)
+	return err
+}
+
+// The selection event precedes any capacity wait. Legacy queued selections may
+// lack it, so launch also calls this without duplicating a recorded choice.
+func (e *Engine) recordProject(ctx context.Context, tx pgx.Tx, r run, repo string) error {
+	_, err := tx.Exec(ctx, `INSERT INTO workflow_run_events (run_id,account_id,at,kind,text)
+		SELECT $1,$2,$3,'project',$4 WHERE NOT EXISTS
+		(SELECT 1 FROM workflow_run_events WHERE run_id=$1 AND kind='project')`, r.ID, r.Account, e.Now(), orNone(repo))
 	return err
 }
 
@@ -649,7 +746,7 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 
 // Move is what `intelligence workflow` asks of a run.
 type Move struct {
-	Move      string `json:"move"`                // summarize, project, next, skip, back, ask, done, fail
+	Move      string `json:"move"`                // summarize, status, project, next, skip, back, ask, done, fail, claim, steer
 	Directory string `json:"directory,omitempty"` // project: a repository, or "none"
 	Step      string `json:"step,omitempty"`      // back: the step's id
 	Summary   string `json:"summary,omitempty"`
@@ -657,16 +754,31 @@ type Move struct {
 	Note      string `json:"note,omitempty"`    // ask: Markdown, for Zach
 	Token     string `json:"token,omitempty"`   // suggest: a model group's stable token
 	Exclude   string `json:"exclude,omitempty"` // suggest: comma-separated provider/model routes to skip
+	Now       string `json:"now,omitempty"`     // status: one plain sentence on what the run is doing
+	WaitingOn string `json:"waitingOn,omitempty"`
+	ETA       string `json:"eta,omitempty"` // status: RFC3339 estimated completion, "" for unknown
+	// claim: what the run will change or publish; steer: optionally, what the two runs share
+	Deliverable string `json:"deliverable,omitempty"`
+	Into        string `json:"into,omitempty"` // steer: the live run on the same deliverable
 }
 
 // MoveRun makes m on run, for host (whose key the caller checked): the run must be on host. It
 // returns what the agent should read next.
 func (e *Engine) MoveRun(ctx context.Context, host, runID string, m Move) (string, error) {
+	for _, text := range []string{m.Move, m.Directory, m.Step, m.Summary, m.Why, m.Note, m.Token, m.Exclude,
+		m.Now, m.WaitingOn, m.ETA, m.Deliverable, m.Into} {
+		if err := agenttext.Validate(text); err != nil {
+			return "", bad("%s", err)
+		}
+	}
 	if !uuidRe.MatchString(runID) {
 		return "", ErrNotFound
 	}
 	var msg string
 	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		if err := lockQueue(ctx, tx, host); err != nil {
+			return err
+		}
 		r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id = $1 FOR UPDATE OF r", runID))
 		if err != nil {
 			return err
@@ -674,10 +786,27 @@ func (e *Engine) MoveRun(ctx context.Context, host, runID string, m Move) (strin
 		if r.Host != host {
 			return ErrNotFound
 		}
+		if r.Status == Stalled {
+			// Move validation below shares this transaction: an invalid move rolls
+			// back both the recovery event and the state change.
+			if err := e.unstall(ctx, tx, r, "Resumed: orchestrator continued with "+m.Move+"."); err != nil {
+				return err
+			}
+			r.Status = Running
+		}
 		msg, err = e.move(ctx, tx, r, m)
-		return err
+		if err != nil {
+			return err
+		}
+		if err := agenttext.Validate(msg); err != nil {
+			return bad("%s", err)
+		}
+		return nil
 	})
-	return msg, err
+	if err != nil {
+		return "", err
+	}
+	return msg, nil
 }
 
 func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, error) {
@@ -701,7 +830,42 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 	case Succeeded, Failed:
 		return "", conflict("This run is over (%s). Do nothing more for it.", r.Status)
 	case Queued:
-		return "", conflict("This run is queued for room on its host: it has no agents yet. Do nothing for it.")
+		return "", conflict("This run is queued for room on its host. Do nothing for it.")
+	}
+	if m.Move == "status" {
+		line, eta, err := activityValues(m)
+		if err != nil {
+			return "", err
+		}
+		at := e.Now()
+		waiting := strings.TrimSpace(m.WaitingOn)
+		if r.Status == Waiting || (r.Step >= 0 && r.Step < len(r.Def.Steps) && r.Def.Steps[r.Step].Kind == KindSignoff) {
+			waiting = "Zach"
+		}
+		estimated := false
+		if waiting != "" {
+			eta = nil
+		} else if eta == nil && r.Step >= 0 {
+			eta, err = historyETA(ctx, tx, r, at)
+			if err != nil {
+				return "", err
+			}
+			estimated = eta != nil
+		}
+		if _, err := tx.Exec(ctx, "UPDATE workflow_runs SET current_activity=$2, activity_updated_at=$3, activity_eta=$4, updated_at=$3, activity_eta_estimated=$5, activity_waiting_on=$6 WHERE id=$1", r.ID, line, at, eta, estimated, waiting); err != nil {
+			return "", err
+		}
+		text := line + " · ETA unknown"
+		if eta != nil {
+			text = line + " · ETA " + eta.Format(time.RFC3339)
+		}
+		if estimated {
+			text += " (estimate)"
+		}
+		if waiting != "" {
+			text = line + " · waiting on " + waiting
+		}
+		return "Current activity saved; run status and step are unchanged.", e.event(ctx, tx, r, "status", nil, nil, text)
 	}
 	if m.Move == "project" {
 		if r.Status != FindingProject {
@@ -722,8 +886,56 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		if err := e.archiveFinder(ctx, tx, r); err != nil {
 			return "", err
 		}
-		if err := e.startOrchestrator(ctx, tx, r, repo); err != nil {
+		// A disabled orchestrator subscription fails the run now, rather than queueing it.
+		var startErr error
+		terminal, err := e.startAttempt(ctx, tx, r, func(start pgx.Tx) error {
+			startErr = checkWorkflowProviders(ctx, start, r.Def)
+			return startErr
+		})
+		if err != nil {
 			return "", err
+		}
+		if terminal {
+			return fmt.Sprintf("This run failed: %s. Stop now: do nothing more for it.", startErr), nil
+		}
+		estimate, err := repositoryMemory(ctx, tx, r.Account, r.Host, r.WorkflowID, repo, true)
+		if err != nil {
+			return "", err
+		}
+		r.Repo, r.ProjectSelected, r.EstimatedMemory = repo, true, estimate
+		if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET repo=$2, project_selected=true, estimated_memory_bytes=$3 WHERE id=$1`, r.ID, repo, estimate); err != nil {
+			return "", err
+		}
+		if err := e.recordProject(ctx, tx, r, repo); err != nil {
+			return "", err
+		}
+		// This run already holds a startup reservation. Replace it with the selected
+		// project's estimate; do not count the finder twice or lose its place in the queue.
+		// A run started by hand or with immediate priority went ahead of the queue and whatever
+		// the load: its orchestrator starts too, rather than waiting behind the queue it skipped.
+		why := ""
+		if !r.skipsQueue() {
+			why, err = e.room(ctx, tx, r.Host, r.ID, repo, estimate)
+			if err != nil {
+				return "", err
+			}
+		}
+		if why != "" {
+			if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET status='queued', queue_reason=$2, pending_command=NULL,
+				start_retry_at=NULL, start_retry_queued=false, updated_at=$3 WHERE id=$1`, r.ID, why, e.Now()); err != nil {
+				return "", err
+			}
+			return "Project selected. The orchestrator is queued for host capacity. Stop now.", e.event(ctx, tx, r, "queued", nil, nil, why)
+		}
+		terminal, err = e.startAttempt(ctx, tx, r, func(start pgx.Tx) error {
+			startErr = e.startOrchestrator(ctx, start, r, repo)
+			return startErr
+		})
+		if err != nil {
+			return "", err
+		}
+		if terminal {
+			return fmt.Sprintf("This run failed: %s. Stop now: do nothing more for it.", startErr), nil
 		}
 		return fmt.Sprintf("Thanks: the project is %s. The orchestrator takes it from here. Stop now.", orNone(repo)), nil
 	}
@@ -747,18 +959,39 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 			if err := fleet.CaptureWorkflowAgents(ctx, tx, r.Host, r.ID, e.Now()); err != nil {
 				return err
 			}
+			if err := e.noteUnansweredSteers(ctx, tx, r, status); err != nil {
+				return err
+			}
 		}
 		_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, step = $3, note = $4, error = $5, updated_at = $6,
-			finished_at = $7 WHERE id = $1`, r.ID, status, step, note, errText, e.Now(), finished)
+            finished_at = $7 WHERE id = $1`, r.ID, status, step, note, errText, e.Now(), finished)
 		if err != nil {
 			return err
 		}
+		updated := r
+		updated.Status, updated.Step = status, step
+		if err := e.refreshActivity(ctx, tx, updated); err != nil {
+			return err
+		}
+
 		if status == Succeeded {
 			return e.archiveRun(ctx, tx, r)
 		}
 		return nil
 	}
 	switch m.Move {
+	case "claim":
+		return e.claim(ctx, tx, r, m.Deliverable)
+	case "steer":
+		if err := e.steer(ctx, tx, r, &m); err != nil {
+			return "", err
+		}
+		into := m.Into // steer resolved it to the live run at the end of a steer chain
+		if err := e.event(ctx, tx, r, "done", ptr(r.Step), nil, "Steered into run "+into+"."); err != nil {
+			return "", err
+		}
+		return "Steered: run " + into + " has this request now, and it delivers and answers it. This run is finished: send nothing more for it. " +
+			"Archive any sub-agents you started outside this workspace, then end your turn.", set(Succeeded, r.Step, "")
 	case "next", "skip", "done":
 		text := m.Summary
 		if m.Move == "skip" {
@@ -777,7 +1010,11 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Step %d is done.\n\n%s", r.Step+1, StepMessage(d, r.Step+1, r.vars())), set(Running, r.Step+1, "")
+		step, err := StepMessage(d, r.Step+1, r.vars())
+		if err != nil {
+			return "", bad("%s", err)
+		}
+		return fmt.Sprintf("Step %d is done.\n\n%s", r.Step+1, step+sameTurnReminder), set(Running, r.Step+1, "")
 	case "back":
 		to := r.Def.Index(m.Step)
 		if to < 0 || to >= r.Step {
@@ -793,7 +1030,11 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Back to step %d. What is missing, as you said: %s\n\n%s", to+1, m.Why, StepMessage(d, to, r.vars())), set(Running, to, "")
+		step, err := StepMessage(d, to, r.vars())
+		if err != nil {
+			return "", bad("%s", err)
+		}
+		return fmt.Sprintf("Back to step %d. What is missing, as you said: %s\n\n%s", to+1, m.Why, step+sameTurnReminder), set(Running, to, "")
 	case "ask":
 		if strings.TrimSpace(m.Note) == "" {
 			return "", bad("ask needs a note for Zach: --note <file>, in Markdown.")
@@ -809,10 +1050,12 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		if err := e.event(ctx, tx, r, "fail", ptr(r.Step), nil, m.Why); err != nil {
 			return "", err
 		}
-		return "The run is marked failed. The workspace stays for inspection. Archive any sub-agents you started outside this workspace, then stop.", set(Failed, r.Step, "")
+		return "The run is marked failed. The workspace stays for inspection. Archive any sub-agents you started outside this workspace, then end your turn.", set(Failed, r.Step, "")
 	}
-	return "", bad("unknown move %q: want next, back, skip, ask, done or fail.", m.Move)
+	return "", bad("unknown move %q: want next, back, skip, ask, done, fail, claim or steer.", m.Move)
 }
+
+const sameTurnReminder = "\n\nContinue in this same turn. Wait for sub-agents in the foreground; end your turn only after a successful ask or when the run is finished. Leave every gate to its instructions."
 
 // archiveRun queues durable cleanup in the same transaction as the terminal move. Its
 // command's outcome is independent of the run's outcome and readable through archive_command.
@@ -858,6 +1101,9 @@ func (e *Engine) Reply(ctx context.Context, account int64, runID, text string) e
 
 // ReplyTx is Reply in tx.
 func (e *Engine) ReplyTx(ctx context.Context, tx pgx.Tx, account int64, runID, text string) error {
+	if err := agenttext.Validate(text); err != nil {
+		return bad("%s", err)
+	}
 	if strings.TrimSpace(text) == "" {
 		return bad("a reply needs text")
 	}
@@ -865,19 +1111,29 @@ func (e *Engine) ReplyTx(ctx context.Context, tx pgx.Tx, account int64, runID, t
 	if err != nil {
 		return err
 	}
-	if r.Status != Waiting {
+	if r.Status != Waiting && r.Status != Stalled {
 		return conflict("this run is not waiting for a reply (%s)", r.Status)
 	}
-	args, _ := json.Marshal(hostclient.AgentArgs{AgentID: r.Orchestrator, Text: fmt.Sprintf("Zach replied to your note:\n\n%s\n\n"+
-		"Decide what it means for the run, then move it with intelligence workflow (next, back, skip, ask or fail) --run %s.", text, r.ID)})
+	heading := "Zach replied to your note:"
+	if r.Status == Stalled {
+		heading = "A reply arrived for this workflow:"
+		if err := e.unstall(ctx, tx, r, "Resumed: a reply arrived for the existing orchestrator."); err != nil {
+			return err
+		}
+	}
+	args, _ := json.Marshal(hostclient.AgentArgs{AgentID: r.Orchestrator, Text: fmt.Sprintf("%s\n\n%s\n\n"+
+		"Decide what it means for the run, then move it with intelligence workflow (next, back, skip, ask or fail) --run %s.", heading, text, r.ID)})
 	if _, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.SendMessageKind, args, replyTTL, e.Now()); err != nil {
 		return err
 	}
 	if err := e.event(ctx, tx, r, "reply", ptr(r.Step), nil, text); err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, "UPDATE workflow_runs SET status = $2, note = '', updated_at = $3 WHERE id = $1", r.ID, Running, e.Now())
-	return err
+	if _, err = tx.Exec(ctx, "UPDATE workflow_runs SET status = $2, note = '', updated_at = $3 WHERE id = $1", r.ID, Running, e.Now()); err != nil {
+		return err
+	}
+	r.Status = Running
+	return e.refreshActivity(ctx, tx, r)
 }
 
 // MessageTx gives account's live run more to go on: what arrived later in the thread that started
@@ -885,6 +1141,9 @@ func (e *Engine) ReplyTx(ctx context.Context, tx pgx.Tx, account int64, runID, t
 // starts with; once the orchestrator runs, it goes to it as a message. It cannot reach an
 // orchestrator that is being started, and refuses a run that is over.
 func (e *Engine) MessageTx(ctx context.Context, tx pgx.Tx, account int64, runID, what, text string) error {
+	if err := agenttext.Validate(what + "\n" + text); err != nil {
+		return bad("%s", err)
+	}
 	r, err := e.lockRun(ctx, tx, account, runID)
 	if err != nil {
 		return err
@@ -918,6 +1177,9 @@ func (e *Engine) MessageTx(ctx context.Context, tx pgx.Tx, account int64, runID,
 		if tag.RowsAffected() > 0 {
 			return e.event(ctx, tx, r, "message", nil, nil, what)
 		}
+	}
+	if err := e.unstall(ctx, tx, r, "Resumed: new input arrived for the existing orchestrator."); err != nil {
+		return err
 	}
 	waiting := ""
 	if r.Status == Waiting {
@@ -967,6 +1229,9 @@ func (e *Engine) Cancel(ctx context.Context, account int64, runID string) error 
 			return err
 		}
 		if err := e.event(ctx, tx, r, "cancel", nil, nil, ""); err != nil {
+			return err
+		}
+		if err := e.noteUnansweredSteers(ctx, tx, r, Canceled); err != nil {
 			return err
 		}
 		_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, pending_command = NULL, start_retry_at=NULL, start_retry_queued=false, updated_at = $3, finished_at = $3 WHERE id = $1`,

@@ -37,6 +37,7 @@ import (
 	"github.com/zachlatta/intelligence/internal/probe"
 	"github.com/zachlatta/intelligence/internal/resources"
 	"github.com/zachlatta/intelligence/internal/usage"
+	"github.com/zachlatta/intelligence/internal/voicememo"
 	"github.com/zachlatta/intelligence/internal/web"
 	"github.com/zachlatta/intelligence/internal/whatsnew"
 	"github.com/zachlatta/intelligence/internal/workflow"
@@ -108,15 +109,18 @@ type serverSettings struct {
 	// PDW_URL (an HTTPS origin), PDW_API_KEY (a feed:voice-memos key) and PDW_INTELLIGENCE_ACCOUNT
 	// (the username whose workflows its voice memos start) turn voice memo triggers on; unset, they are off.
 	PDWURL, PDWKey, PDWAccount string
+	VoiceMemoInterval          time.Duration // VOICE_MEMO_POLL_INTERVAL, default 1s
 	// GOOGLE_OAUTH_CLIENT_JSON (a Google OAuth client, raw or base64) and CONNECTIONS_KEY (32
 	// random bytes, base64: seals each mailbox's token) turn email triggers on; unset, they are off.
 	EmailInterval time.Duration // EMAIL_POLL_INTERVAL, default 1s
 	Google        *email.Google
 	EmailKey      *email.Keyring
 	PublicURL     string // PUBLIC_URL: the server's origin, for Google's redirect; default each request's
-	// WORKFLOW_QUEUE_CPU_PCT, WORKFLOW_QUEUE_MEM_PCT and WORKFLOW_QUEUE_LOAD_PER_CPU: when a host
-	// is near capacity, so a new workflow run queues; each defaults to workflow.DefaultLimits (85,
-	// 90 and 1.5), and 0 or "off" turns it off.
+	// WORKFLOW_QUEUE_CPU_PCT, WORKFLOW_QUEUE_MEM_PCT, WORKFLOW_QUEUE_MEM_PEAK_PCT and
+	// WORKFLOW_QUEUE_LOAD_PER_CPU: when a host is near capacity, so a new workflow run queues; each
+	// defaults to workflow.DefaultLimits (85, 80, 95 and 1.5), and 0 or "off" turns it off.
+	// WORKFLOW_QUEUE_MEM_PEAKS (default 1): how many peaks of the runs going the host keeps room
+	// for beside a new run's own.
 	QueueLimits workflow.Limits
 }
 
@@ -150,6 +154,14 @@ func serverConfig(getenv func(string) string) (serverSettings, error) {
 		}
 		c.EmailInterval = d
 	}
+	c.VoiceMemoInterval = voicememo.Interval
+	if raw := getenv("VOICE_MEMO_POLL_INTERVAL"); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil || d < time.Second {
+			return c, fmt.Errorf("VOICE_MEMO_POLL_INTERVAL %q: want a duration of at least 1s", raw)
+		}
+		c.VoiceMemoInterval = d
+	}
 	c.PublicURL = getenv("PUBLIC_URL")
 	c.PDWURL, c.PDWKey, c.PDWAccount = getenv("PDW_URL"), getenv("PDW_API_KEY"), getenv("PDW_INTELLIGENCE_ACCOUNT")
 	if c.PDWURL != "" || c.PDWKey != "" || c.PDWAccount != "" {
@@ -178,7 +190,8 @@ func queueLimits(getenv func(string) string) (workflow.Limits, error) {
 	for _, f := range []struct {
 		name string
 		to   *float64
-	}{{"WORKFLOW_QUEUE_CPU_PCT", &l.CPUPct}, {"WORKFLOW_QUEUE_MEM_PCT", &l.MemPct}, {"WORKFLOW_QUEUE_LOAD_PER_CPU", &l.LoadPerCPU}} {
+	}{{"WORKFLOW_QUEUE_CPU_PCT", &l.CPUPct}, {"WORKFLOW_QUEUE_MEM_PCT", &l.MemPct}, {"WORKFLOW_QUEUE_MEM_PEAK_PCT", &l.MemPeakPct},
+		{"WORKFLOW_QUEUE_LOAD_PER_CPU", &l.LoadPerCPU}} {
 		switch v := strings.TrimSpace(getenv(f.name)); v {
 		case "":
 		case "off":
@@ -190,6 +203,13 @@ func queueLimits(getenv func(string) string) (workflow.Limits, error) {
 			}
 			*f.to = n
 		}
+	}
+	if v := strings.TrimSpace(getenv("WORKFLOW_QUEUE_MEM_PEAKS")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return l, fmt.Errorf("WORKFLOW_QUEUE_MEM_PEAKS %q: want a whole number of runs, 0 or more", v)
+		}
+		l.MemPeaks = n
 	}
 	return l, nil
 }
@@ -238,7 +258,7 @@ func serve(ctx context.Context) error {
 		Addr: addr(os.Getenv),
 		Handler: web.New(web.Config{Context: ctx, Version: v, DB: owner, Readonly: ro, BinDir: c.BinDir,
 			AssemblyAIKey: c.AssemblyAIKey, Google: c.Google, EmailKey: c.EmailKey, PublicURL: c.PublicURL, EmailInterval: c.EmailInterval, QueueLimits: &c.QueueLimits,
-			PDWURL: c.PDWURL, PDWKey: c.PDWKey, PDWAccount: c.PDWAccount}),
+			PDWURL: c.PDWURL, PDWKey: c.PDWKey, PDWAccount: c.PDWAccount, VoiceMemoInterval: c.VoiceMemoInterval}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go pruneHosts(ctx, fleet.New(owner))

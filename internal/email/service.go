@@ -284,7 +284,7 @@ func (s *Service) read(ctx context.Context, account int64, owners []string, toke
 			return perr
 		}
 		*history = now
-		return errors.New("the mailbox was not read for too long: email from before " + s.now().Format(time.DateTime) + " was skipped")
+		return historySkipped(s.now())
 	}
 	if err != nil {
 		return err
@@ -423,6 +423,9 @@ func orEmpty(s []string) []string {
 // route decides what m does: in the thread of a run, what that workflow says of replies;
 // otherwise, it starts the workflow whose trigger matches it best, if any.
 func (s *Service) route(ctx context.Context, tx pgx.Tx, account int64, owners []string, g GmailMessage, m workflow.Mail) (decision, error) {
+	if err := tx.QueryRow(ctx, "SELECT coalesce((SELECT address FROM gmail_connections WHERE account_id=$1), '')", account).Scan(&m.Mailbox); err != nil {
+		return decision{}, err
+	}
 	fromZach := m.Verified && slices.Contains(owners, m.From)
 	var runID, wfID string
 	err := tx.QueryRow(ctx, `SELECT run_id::text, workflow_id::text FROM emails
@@ -432,6 +435,18 @@ func (s *Service) route(ctx context.Context, tx pgx.Tx, account int64, owners []
 		return decision{}, err
 	}
 	if runID != "" {
+		// a run that steered into another handed it its thread: while that run is live, it gets the email
+		into, intoWF, steered, err := s.Engine.SteeredInto(ctx, tx, account, runID)
+		if err != nil {
+			return decision{}, err
+		}
+		if steered {
+			status, _, err := s.Engine.RunStatus(ctx, tx, account, into)
+			if err != nil {
+				return decision{}, err
+			}
+			return s.reply(ctx, tx, account, fromZach, m, into, intoWF, status)
+		}
 		status, _, err := s.Engine.RunStatus(ctx, tx, account, runID)
 		if err == nil {
 			return s.reply(ctx, tx, account, fromZach, m, runID, wfID, status)
@@ -464,7 +479,7 @@ func (s *Service) route(ctx context.Context, tx pgx.Tx, account int64, owners []
 	if best == nil {
 		return decision{Decision: "ignored", Reason: why}, nil
 	}
-	return s.start(ctx, tx, account, best.ID, best.Name, m.Input(fromZach), "started")
+	return s.start(ctx, tx, account, best.ID, best.Name, m.Input(fromZach), "started", m.Date)
 }
 
 // reply is what m does in the thread of run (of workflow wf), whose status is status.
@@ -498,7 +513,7 @@ func (s *Service) reply(ctx context.Context, tx pgx.Tx, account int64, fromZach 
 		d.Decision, d.Reason = "ignored", "“"+name+"” ignores replies in its runs' threads"
 		return d, nil
 	case replies == workflow.RepliesNewRun:
-		return s.start(ctx, tx, account, wf, name, input, "started")
+		return s.start(ctx, tx, account, wf, name, input, "started", m.Date)
 	}
 	switch status {
 	case workflow.Succeeded, workflow.Failed, workflow.Canceled:
@@ -507,14 +522,24 @@ func (s *Service) reply(ctx context.Context, tx pgx.Tx, account int64, fromZach 
 			return d, err
 		}
 		input += fmt.Sprintf("\n\nIt replies in the thread of an earlier run of this workflow, %s, which is over (%s).\n\n%s\n\n%s", run, status, workflow.EmailReplyRule, history)
-		id, continued, err := s.Engine.ContinueEmailTx(ctx, tx, account, run, input)
-		if err != nil {
-			return d, err
+		requested, _ := mail.ParseDate(m.Date)
+		var continued bool
+		kind, refused, err := try(ctx, tx, "follow_up", func(sp pgx.Tx) error {
+			id, ok, err := s.Engine.ContinueEmailTx(ctx, sp, account, run, input, requested)
+			continued = ok
+			if id != "" {
+				d.Run = id
+			}
+			return err
+		})
+		if err != nil || refused != "" {
+			return d.or(kind, refused, err)
 		}
 		if continued {
-			return decision{Decision: "follow_up", Workflow: wf, Run: id}, nil
+			d.Decision = "follow_up"
+			return d, nil
 		}
-		cold, err := s.start(ctx, tx, account, wf, name, input, "follow_up")
+		cold, err := s.start(ctx, tx, account, wf, name, input, "follow_up", m.Date)
 		if err == nil && cold.Run != "" {
 			_, err = tx.Exec(ctx, `INSERT INTO workflow_run_events(run_id,account_id,at,kind,text,continued_run_id) VALUES($1,$2,$3,'email_cold_start','Earlier run is outside the continuity window or has no orchestrator.',$4)`, cold.Run, account, s.now(), run)
 		}
@@ -535,10 +560,11 @@ func (s *Service) reply(ctx context.Context, tx pgx.Tx, account int64, fromZach 
 
 // start starts a run of workflow wf, recorded as kind; a run the workflow cannot start is
 // recorded as ignored, with why.
-func (s *Service) start(ctx context.Context, tx pgx.Tx, account int64, wf, name, input, kind string) (decision, error) {
+func (s *Service) start(ctx context.Context, tx pgx.Tx, account int64, wf, name, input, kind, date string) (decision, error) {
 	d := decision{Workflow: wf}
 	return d.or(try(ctx, tx, kind, func(sp pgx.Tx) error {
-		id, err := s.Engine.StartRunTx(ctx, sp, account, wf, input)
+		requested, _ := mail.ParseDate(date)
+		id, err := s.Engine.StartRunTx(ctx, sp, account, wf, input, requested)
 		if err != nil {
 			return fmt.Errorf("could not start “%s”: %w", name, err)
 		}
@@ -591,4 +617,10 @@ func TrimQuoted(text string) string {
 		lines = lines[:len(lines)-1]
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// historySkipped says mail from before at was skipped, naming at in RFC 3339, UTC, which pages show
+// in their reader's own zone.
+func historySkipped(at time.Time) error {
+	return errors.New("the mailbox was not read for too long: email from before " + at.UTC().Format(time.RFC3339) + " was skipped")
 }

@@ -136,3 +136,37 @@ func TestProposalReviewReadableAndDiscoverable(t *testing.T) {
 		t.Fatalf("version link: %d", version.Code)
 	}
 }
+
+// The proposal pages share the other pages' layout: the page spacing, a page head and, on a
+// review or a saved version, breadcrumbs back to the list; the Proposals tab's count sits apart
+// from its name.
+func TestProposalPagesShareThePageLayout(t *testing.T) {
+	h, _ := dbServer(t)
+	sendReport(t, h, wfReport())
+	key := keyOf(t, h, "host-1")
+	id := createWorkflow(t, h, workflow.Starting)
+	r := call(t, anon(h), "POST", "/api/workflow-proposals", `{"operation":"update","summary":"Layout change","workflowId":"`+id+`","baseVersion":1,"workflow":`+wfBody(t, "Renamed", workflow.Starting)+`}`, map[string]string{"Authorization": "Bearer " + key})
+	if r.Code != 201 {
+		t.Fatal(r.Body)
+	}
+	var p struct{ ID string }
+	json.Unmarshal(r.Body.Bytes(), &p)
+	for path, wants := range map[string][]string{
+		"/workflow-proposals": {`<main class="container page mid">`, `<div class="page-head"><div><h1>Workflow proposals</h1><p class="sub">`},
+		"/workflow-proposals/" + p.ID: {`<main class="container page mid">`, `<div class="crumbs"><a href="/workflow-proposals">Proposals</a>`,
+			`<div class="page-head"><div><h1>Review `},
+		"/workflows/" + id + "/versions/1": {`<main class="container page mid">`, `<div class="crumbs"><a href="/workflows">Workflows</a>`,
+			`<div class="page-head"><div><h1>Saved workflow definition · v1</h1>`},
+	} {
+		page := get(t, h, path, nil).Body.String()
+		for _, want := range wants {
+			if !strings.Contains(page, want) {
+				t.Errorf("%s misses %q", path, want)
+			}
+		}
+	}
+	css := get(t, h, "/ui.css", nil).Body.String()
+	if !strings.Contains(css, `.topnav #proposals-count:not(:empty) { margin-left: .3rem; }`) {
+		t.Error("the Proposals tab's count runs into its name")
+	}
+}

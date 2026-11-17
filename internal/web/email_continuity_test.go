@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zachlatta/intelligence/internal/email"
 	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
@@ -23,13 +24,26 @@ func continuityDecided(t *testing.T, h http.Handler, id string) map[string]any {
 	return nil
 }
 
+func readContinuityRun(t *testing.T, h http.Handler, id string) map[string]any {
+	t.Helper()
+	code, result := sqlPost(t, h, q("SELECT * FROM workflow_runs WHERE id='"+id+"'"))
+	if code != 200 || len(result.Rows) != 1 {
+		t.Fatalf("continued run: %d %+v", code, result)
+	}
+	out := map[string]any{}
+	for i, c := range result.Columns {
+		out[c.Name] = result.Rows[0][i]
+	}
+	return out
+}
+
 func TestEmailFollowUpContinuity(t *testing.T) {
 	for _, mode := range []string{"three follow-ups", "agent gone", "older than 24 hours", "transport failure", "cleanup pending", "arrival during restoration"} {
 		t.Run(mode, func(t *testing.T) {
 			h, fake := emailServer(t)
 			sendReport(t, h, wfReport())
 			b := openStream(t, h, "host-1")
-			b.captureCommands = true
+
 			key := keyOf(t, h, "host-1")
 			christina(t, h)
 			connectGmail(t, h, fake)
@@ -42,6 +56,13 @@ func TestEmailFollowUpContinuity(t *testing.T) {
 			}
 			for i := 0; i < count; i++ {
 				goneNow := mode == "agent gone" && i == count-1
+				// Each request records its own checked answer. A retry records no second send.
+				answerBody := fmt.Sprintf(`{"channel":"email","messageId":"answer-%d","threadId":"thread","checked":true}`, i)
+				for range 2 {
+					if rec := call(t, anon(h), "POST", "/api/workflow-runs/"+run+"/answers", answerBody, map[string]string{"Authorization": "Bearer " + key}); rec.Code != 200 {
+						t.Fatalf("answer: %d %s", rec.Code, rec.Body)
+					}
+				}
 				if code, msg := move(t, h, key, run, map[string]string{"move": "done", "summary": "Earlier note: exact total $42.03"}); code != http.StatusOK {
 					t.Fatalf("done: %d %s", code, msg)
 				}
@@ -58,8 +79,29 @@ func TestEmailFollowUpContinuity(t *testing.T) {
 				sent.LabelIDs = []string{"SENT"}
 				fake.Add(sent)
 				id := fmt.Sprintf("follow%d", i)
-				fake.Add(mailMsg(id, "thread", "christina@example.com", "Re: Question", "Did you do it?"))
+				requested := time.Now().UTC().Truncate(time.Second).Add(-time.Minute)
+				fake.Add(mailMsg(id, "thread", "christina@example.com", "Re: Question", "Did you do it?", email.Header{Name: "Date", Value: requested.Format(time.RFC1123Z)}))
 				next := continuityDecided(t, h, id)["run_id"].(string)
+				_, meta := sqlPost(t, h, q("SELECT r.answer_expected,r.requested_at=TIMESTAMPTZ '"+requested.Format(time.RFC3339)+"',r.project_selected,r.estimated_memory_bytes>0,r.priority=(SELECT priority FROM workflow_runs WHERE id='"+run+"'),s.answered_at IS NULL FROM workflow_runs r JOIN workflow_run_answer_status s ON s.id=r.id WHERE r.id='"+next+"'"))
+				if len(meta.Rows) != 1 {
+					t.Fatalf("metadata: %+v", meta)
+				}
+				for _, value := range meta.Rows[0] {
+					if value != true {
+						t.Fatalf("continued request must have independent answer state and current metadata: %+v", meta)
+					}
+				}
+				if mode == "three follow-ups" {
+					rec := call(t, anon(h), "POST", "/api/workflow-runs/"+next+"/answers", answerBody, map[string]string{"Authorization": "Bearer " + key})
+					if rec.Code != http.StatusBadRequest {
+						t.Fatalf("an earlier run's sent answer must not satisfy a follow-up: %d %s", rec.Code, rec.Body)
+					}
+					earlier := fmt.Sprintf(`{"channel":"email","messageId":"unrecorded-earlier-send","sentAt":%q,"checked":true}`, requested.Add(-time.Hour).Format(time.RFC3339))
+					rec = call(t, anon(h), "POST", "/api/workflow-runs/"+next+"/answers", earlier, map[string]string{"Authorization": "Bearer " + key})
+					if rec.Code != http.StatusBadRequest {
+						t.Fatalf("pre-request answer accepted: %d %s", rec.Code, rec.Body)
+					}
+				}
 				if mode == "cleanup pending" {
 					_, queued := sqlPost(t, h, q("SELECT status FROM commands WHERE kind='continue_email'"))
 					if len(queued.Rows) != 1 || queued.Rows[0][0] != "queued" {
@@ -96,7 +138,7 @@ func TestEmailFollowUpContinuity(t *testing.T) {
 							t.Fatal(ack.Error)
 						}
 						if mode == "transport failure" {
-							eventually(t, "delivery error recorded", func() bool { return readRun(t, h, next)["status"] == "failed" })
+							eventually(t, "delivery error recorded", func() bool { return readContinuityRun(t, h, next)["status"] == "failed" })
 							return
 						}
 						cmd = b.command()
@@ -112,7 +154,7 @@ func TestEmailFollowUpContinuity(t *testing.T) {
 							}
 						}
 						eventually(t, "same orchestrator", func() bool {
-							r := readRun(t, h, next)
+							r := readContinuityRun(t, h, next)
 							return r["orchestrator_id"] == "same-orchestrator" && r["pending_command"] == nil
 						})
 						_, events := sqlPost(t, h, q("SELECT continued_run_id::text FROM workflow_run_events WHERE run_id='"+next+"' AND kind='email_continued'"))
@@ -143,9 +185,21 @@ func TestEmailFollowUpContinuity(t *testing.T) {
 				run = next
 			}
 			if mode == "three follow-ups" {
+				rec := call(t, anon(h), "POST", "/api/workflow-runs/"+run+"/answers", `{"channel":"email","messageId":"answer-final","threadId":"thread","checked":true}`, map[string]string{"Authorization": "Bearer " + key})
+				if rec.Code != 200 {
+					t.Fatalf("final answer: %d %s", rec.Code, rec.Body)
+				}
+				if code, msg := move(t, h, key, run, map[string]string{"move": "done", "summary": "Final follow-up answered"}); code != 200 {
+					t.Fatalf("final completion: %d %s", code, msg)
+				}
+				succeed(t, b, b.command(), `{"workspaceId":"ws"}`)
 				_, rows := sqlPost(t, h, q("SELECT count(*),count(DISTINCT orchestrator_id),max(created_at)-min(created_at)<interval '1 hour' FROM workflow_runs"))
 				if len(rows.Rows) != 1 || rows.Rows[0][0] != float64(4) || rows.Rows[0][1] != float64(1) || rows.Rows[0][2] != true {
 					t.Fatalf("thread continuity: %+v", rows)
+				}
+				_, answers := sqlPost(t, h, q("SELECT count(*),count(DISTINCT run_id) FROM workflow_run_answers"))
+				if len(answers.Rows) != 1 || answers.Rows[0][0] != float64(4) || answers.Rows[0][1] != float64(4) {
+					t.Fatalf("duplicate or shared answers: %+v", answers)
 				}
 			}
 		})
