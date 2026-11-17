@@ -82,7 +82,7 @@ func (e *Engine) ContinueEmailTx(ctx context.Context, tx pgx.Tx, account int64, 
 	if err = e.recordProject(ctx, tx, next, r.Repo); err != nil {
 		return "", false, err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO workflow_run_events(run_id,account_id,at,kind,text,continued_run_id) VALUES($1,$2,$3,'email_continuation_requested',$4,$5)`, id, account, e.Now(), input, r.ID); err != nil {
+	if err = e.continuityEvent(ctx, tx, account, id, "email_continuation_requested", fmt.Sprintf("Follow-up to run %s: resuming its orchestrator %s", r.ID, r.Orchestrator), r.ID); err != nil {
 		return "", false, err
 	}
 	if why != "" {
@@ -108,7 +108,7 @@ func (e *Engine) startEmailContinuation(ctx context.Context, tx pgx.Tx, r run) e
 	if err = json.Unmarshal(raw, &ws); err != nil {
 		return err
 	}
-	args, _ := json.Marshal(hostclient.ContinueEmailArgs{RunID: r.ID, AgentID: r.Orchestrator, AfterCommand: archive, Text: fmt.Sprintf("Continue your earlier email task in new run %s (earlier run %s is over). Use only the NEW run ID for all workflow commands and answer records. Keep your research and earlier answers. Earlier sends do not answer this new request.\n\n%s\n\n%s", r.ID, r.ContinuedRun, EmailReplyRule, ws.Agent.Prompt)})
+	args, _ := json.Marshal(hostclient.ContinueEmailArgs{RunID: r.ID, AgentID: r.Orchestrator, AfterCommand: archive, Text: fmt.Sprintf("Continue your earlier email task in new run %s (earlier run %s is over). Use only the NEW run ID for all workflow commands and answer records. Keep your research and earlier answers. Earlier sends do not answer this new request.\n\n%s", r.ID, r.ContinuedRun, ws.Agent.Prompt)})
 	c, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.ContinueEmailKind, args, replyTTL, e.Now())
 	if err != nil {
 		return credentialRefusal(err)
@@ -128,8 +128,7 @@ func (e *Engine) emailContinued(ctx context.Context, tx pgx.Tx, r run, c fleet.C
 		if _, err := tx.Exec(ctx, "UPDATE workflow_runs SET pending_command=NULL WHERE id=$1", r.ID); err != nil {
 			return err
 		}
-		_, err := tx.Exec(ctx, `INSERT INTO workflow_run_events(run_id,account_id,at,kind,text,continued_run_id) SELECT id,account_id,$2,'email_continued',orchestrator_id,continued_run_id FROM workflow_runs WHERE id=$1`, r.ID, e.Now())
-		return err
+		return e.continuityEvent(ctx, tx, r.Account, r.ID, "email_continued", fmt.Sprintf("Resumed orchestrator %s of run %s", r.Orchestrator, r.ContinuedRun), r.ContinuedRun)
 	}
 	// A late delivery result cannot undo a lifecycle decision already made by the agent.
 	if r.Status == Succeeded || r.Status == Failed || r.Status == Canceled {
@@ -143,7 +142,7 @@ func (e *Engine) emailContinued(ctx context.Context, tx pgx.Tx, r run, c fleet.C
 		if _, err := tx.Exec(ctx, `UPDATE commands SET status='failed',error='Included in cold-start input',finished_at=$2 WHERE args->>'afterCommand'=$1 AND status='queued'`, c.ID, e.Now()); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO workflow_run_events(run_id,account_id,at,kind,text,continued_run_id) VALUES($1,$2,$3,'email_cold_start',$4,$5)`, r.ID, r.Account, e.Now(), "Previous orchestrator could not be resumed before sending ("+res.FailureStage+"): "+c.Error+". Earlier sent answers and run notes are in the input.", r.ContinuedRun); err != nil {
+		if err := e.continuityEvent(ctx, tx, r.Account, r.ID, "email_cold_start", fmt.Sprintf("New orchestrator: the one of run %s could not be resumed before sending (%s): %s. Earlier sent answers and run notes are in the input.", r.ContinuedRun, res.FailureStage, c.Error), r.ContinuedRun); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET orchestrator_id='',workspace_id='',pending_command=NULL,launch_command=NULL,launched_at=NULL WHERE id=$1`, r.ID); err != nil {
@@ -175,4 +174,16 @@ func (e *Engine) emailContinued(ctx context.Context, tx pgx.Tx, r run, c fleet.C
 	}
 	r.Status = Failed
 	return e.refreshActivity(ctx, tx, r)
+}
+
+// EmailColdStartTx records that follow-up run started a new orchestrator although it replies
+// to previous, which finished too long ago or had no orchestrator to resume.
+func (e *Engine) EmailColdStartTx(ctx context.Context, tx pgx.Tx, account int64, run, previous string) error {
+	return e.continuityEvent(ctx, tx, account, run, "email_cold_start", fmt.Sprintf("New orchestrator: run %s finished over 24 hours ago or had none.", previous), previous)
+}
+
+// continuityEvent records a follow-up's link to the earlier run, readable in SQL and on the run page.
+func (e *Engine) continuityEvent(ctx context.Context, tx pgx.Tx, account int64, run, kind, text, previous string) error {
+	_, err := tx.Exec(ctx, `INSERT INTO workflow_run_events(run_id,account_id,at,kind,text,continued_run_id) VALUES($1,$2,$3,$4,$5,$6)`, run, account, e.Now(), kind, text, previous)
+	return err
 }

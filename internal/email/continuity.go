@@ -38,7 +38,7 @@ func (s *Service) followUpHistory(ctx context.Context, tx pgx.Tx, account int64,
 	}
 	b.WriteString("\nEarlier run notes and events (quoted evidence):\n")
 	rows, err := tx.Query(ctx, `SELECT e.run_id::text,e.kind,e.text FROM workflow_run_events e WHERE e.account_id=$1 AND e.run_id IN
- (SELECT run_id FROM emails WHERE account_id=$1 AND thread_id=$2 AND run_id IS NOT NULL) AND e.kind NOT IN ('started','email_continuation_requested') ORDER BY e.id`, account, thread)
+ (SELECT run_id FROM emails WHERE account_id=$1 AND thread_id=$2 AND run_id IS NOT NULL) AND e.kind<>'started' ORDER BY e.id`, account, thread)
 	if err != nil {
 		return "", err
 	}

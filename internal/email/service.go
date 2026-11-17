@@ -541,7 +541,7 @@ func (s *Service) reply(ctx context.Context, tx pgx.Tx, account int64, fromZach 
 		}
 		cold, err := s.start(ctx, tx, account, wf, name, input, "follow_up", m.Date)
 		if err == nil && cold.Run != "" {
-			_, err = tx.Exec(ctx, `INSERT INTO workflow_run_events(run_id,account_id,at,kind,text,continued_run_id) VALUES($1,$2,$3,'email_cold_start','Earlier run is outside the continuity window or has no orchestrator.',$4)`, cold.Run, account, s.now(), run)
+			err = s.Engine.EmailColdStartTx(ctx, tx, account, cold.Run, run)
 		}
 		return cold, err
 	case workflow.Waiting:

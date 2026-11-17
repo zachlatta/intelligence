@@ -1352,7 +1352,7 @@ also starts cold. All these follow-ups include
 the thread's sent messages as verbatim decoded text/HTML MIME bodies and the earlier runs' notes
 and events. Gmail read failures retry intake rather than losing that context.
 `workflow_run_events` records `email_continuation_requested`, `email_continued`, or `email_cold_start`;
-continuation events expose `continued_run_id` for SQL review. A delivery error or expiry that might
+continuation events expose `continued_run_id` for SQL review, and the run page links the earlier run. A delivery error or expiry that might
 have sent the prompt fails the follow-up visibly rather than launching a second answering agent.
 Email orchestrator prompts, including saved definitions, require explicit corrections, truthful
 action status, and a yes/no opening when asked whether anything was done or remains to do.

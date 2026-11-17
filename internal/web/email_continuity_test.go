@@ -122,7 +122,7 @@ func TestEmailFollowUpContinuity(t *testing.T) {
 						t.Fatalf("old follow-up: %s", cmd.Kind)
 					}
 				} else {
-					if cmd.Kind != "continue_email" || !strings.Contains(string(cmd.Args), "same-orchestrator") {
+					if cmd.Kind != "continue_email" || !strings.Contains(string(cmd.Args), "same-orchestrator") || strings.Count(string(cmd.Args), "Correction:") == 0 {
 						t.Fatalf("continuation: %s %s", cmd.Kind, cmd.Args)
 					}
 					if goneNow || beforeSendFailure || mode == "transport failure" {
@@ -166,12 +166,23 @@ func TestEmailFollowUpContinuity(t *testing.T) {
 						if len(events.Rows) != 1 || events.Rows[0][0] != run {
 							t.Fatalf("continuity events: %+v", events)
 						}
+						// Event text is a short, linked line for the run page; the input lives on the run.
+						_, lines := sqlPost(t, h, q("SELECT text FROM workflow_run_events WHERE run_id='"+next+"' AND kind IN ('email_continuation_requested','email_continued') ORDER BY id"))
+						for _, row := range lines.Rows {
+							if text := fmt.Sprint(row[0]); !strings.Contains(text, run) || strings.Contains(text, "Earlier sent answers") {
+								t.Fatalf("continuity event text: %q", text)
+							}
+						}
 					}
 				}
 				if goneNow || beforeSendFailure || mode == "older than 24 hours" {
 					_, coldEvent := sqlPost(t, h, q("SELECT continued_run_id::text FROM workflow_run_events WHERE run_id='"+next+"' AND kind='email_cold_start'"))
 					if len(coldEvent.Rows) != 1 || coldEvent.Rows[0][0] != run {
 						t.Fatalf("cold-start predecessor: %+v", coldEvent)
+					}
+					_, coldText := sqlPost(t, h, q("SELECT text FROM workflow_run_events WHERE run_id='"+next+"' AND kind='email_cold_start'"))
+					if len(coldText.Rows) != 1 || !strings.Contains(fmt.Sprint(coldText.Rows[0][0]), run) {
+						t.Fatalf("cold-start text names no earlier run: %+v", coldText)
 					}
 					var a hostclient.CreateWorkspaceArgs
 					if err := json.Unmarshal(cmd.Args, &a); err != nil {
@@ -212,5 +223,15 @@ func TestEmailFollowUpContinuity(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestEmailContinuityEventsReadNaturally(t *testing.T) {
+	const earlier = "11111111-2222-3333-4444-555555555555"
+	for _, kind := range []string{"email_continuation_requested", "email_continued", "email_cold_start"} {
+		got := (runEvent{Kind: kind, Text: "Follow-up to run " + earlier}).Line()
+		if strings.Contains(got, kind) || !strings.Contains(got, "(/workflow-runs/"+earlier+")") {
+			t.Errorf("%s reads %q", kind, got)
+		}
 	}
 }
