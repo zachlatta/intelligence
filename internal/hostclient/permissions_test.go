@@ -173,8 +173,11 @@ func TestPermissionStuckAndCleared(t *testing.T) {
 	}
 }
 
-func TestPermissionRewriteIncludesLiteralAbsoluteRemovalRule(t *testing.T) {
-	for _, part := range []string{"literal absolute paths", "no glob, variable, substitution or ~", "no cd earlier"} {
+func TestPermissionRewriteDeniesRemovalAndPreservesScratch(t *testing.T) {
+	if strings.Contains(permissionRewrite, "literal absolute paths") {
+		t.Error("denial still suggests retrying rm with literal absolute paths")
+	}
+	for _, part := range []string{"Deleting files or directories with rm or rmdir is denied in this mode", "leave git-ignored scratch (.factory-scratch/) in place", "archiving the workspace removes the worktree", "Write/Edit", "split compound shell commands", "git -C", "Do not retry"} {
 		if !strings.Contains(permissionRewrite, part) {
 			t.Fatal("missing", part)
 		}

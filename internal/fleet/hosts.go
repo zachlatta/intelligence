@@ -14,11 +14,14 @@ import (
 func (r *Registry) RecordHost(ctx context.Context, host string, rep resources.Report, at time.Time) error {
 	return pgx.BeginFunc(ctx, r.p, func(tx pgx.Tx) error {
 		b := &pgx.Batch{}
-		for _, m := range rep.Minutes {
+		var newest *resources.Minute
+		for i, m := range rep.Minutes {
 			b.Queue(`INSERT INTO host_minutes (host, minute, samples, cpus, cpu_avg_pct, cpu_max_pct, load1, load5, load15,
 				mem_total, mem_available_min, swap_total, swap_used_max, disk_total, disk_available_min,
-				psi_cpu_some, psi_mem_some, psi_mem_full, psi_io_some, psi_io_full, oom_kills, paseo_mem_max, paseo_mem_peak, paseo_oom_kills)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+				psi_cpu_some, psi_mem_some, psi_mem_full, psi_io_some, psi_io_full, oom_kills, paseo_mem_max, paseo_mem_peak, paseo_oom_kills,
+				disk_read_bps, disk_write_bps, disk_iops, disk_read_bps_max, disk_write_bps_max, disk_busy_avg_pct, disk_busy_max_pct)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
+				$25, $26, $27, $28, $29, $30, $31)
 				ON CONFLICT (host, minute) DO UPDATE SET samples = EXCLUDED.samples, cpus = EXCLUDED.cpus,
 				cpu_avg_pct = EXCLUDED.cpu_avg_pct, cpu_max_pct = EXCLUDED.cpu_max_pct, load1 = EXCLUDED.load1,
 				load5 = EXCLUDED.load5, load15 = EXCLUDED.load15, mem_total = EXCLUDED.mem_total,
@@ -27,11 +30,29 @@ func (r *Registry) RecordHost(ctx context.Context, host string, rep resources.Re
 				disk_available_min = EXCLUDED.disk_available_min, psi_cpu_some = EXCLUDED.psi_cpu_some,
 				psi_mem_some = EXCLUDED.psi_mem_some, psi_mem_full = EXCLUDED.psi_mem_full, psi_io_some = EXCLUDED.psi_io_some,
 				psi_io_full = EXCLUDED.psi_io_full, oom_kills = EXCLUDED.oom_kills, paseo_mem_max = EXCLUDED.paseo_mem_max,
-				paseo_mem_peak = EXCLUDED.paseo_mem_peak, paseo_oom_kills = EXCLUDED.paseo_oom_kills`,
+				paseo_mem_peak = EXCLUDED.paseo_mem_peak, paseo_oom_kills = EXCLUDED.paseo_oom_kills,
+				disk_read_bps = EXCLUDED.disk_read_bps, disk_write_bps = EXCLUDED.disk_write_bps, disk_iops = EXCLUDED.disk_iops,
+				disk_read_bps_max = EXCLUDED.disk_read_bps_max, disk_write_bps_max = EXCLUDED.disk_write_bps_max,
+				disk_busy_avg_pct = EXCLUDED.disk_busy_avg_pct, disk_busy_max_pct = EXCLUDED.disk_busy_max_pct`,
 				host, m.Minute, m.Samples, m.CPUs, m.CPUAvgPct, m.CPUMaxPct, m.Load1, m.Load5, m.Load15,
 				int64(m.MemTotal), int64(m.MemAvailableMin), int64(m.SwapTotal), int64(m.SwapUsedMax), int64(m.DiskTotal),
 				int64(m.DiskAvailableMin), m.PSICPUSome, m.PSIMemSome, m.PSIMemFull, m.PSIIOSome, m.PSIIOFull,
-				i64(m.OOMKills), i64(m.PaseoMemMax), i64(m.PaseoMemPeak), i64(m.PaseoOOMKills))
+				i64(m.OOMKills), i64(m.PaseoMemMax), i64(m.PaseoMemPeak), i64(m.PaseoOOMKills),
+				m.DiskReadBps, m.DiskWriteBps, m.DiskIOPS, m.DiskReadBpsMax, m.DiskWriteBpsMax, m.DiskBusyAvgPct, m.DiskBusyMaxPct)
+			if m.Filesystems != nil && (newest == nil || m.Minute.After(newest.Minute)) {
+				newest = &rep.Minutes[i]
+			}
+		}
+		if newest != nil {
+			// the newest reading replaces the host's filesystems, unless a newer one is stored
+			b.Queue(`DELETE FROM host_filesystems WHERE host = $1 AND minute <= $2`, host, newest.Minute)
+			for _, f := range newest.Filesystems {
+				b.Queue(`INSERT INTO host_filesystems (host, mount, device, fs_type, total, available, minute)
+					SELECT $1, $2, $3, $4, $5, $6, $7
+					WHERE NOT EXISTS (SELECT 1 FROM host_filesystems WHERE host = $1 AND minute > $7)
+					ON CONFLICT (host, mount) DO NOTHING`,
+					host, f.Mount, f.Device, f.Type, int64(f.Total), int64(f.Available), newest.Minute)
+			}
 		}
 		for _, a := range rep.Agents {
 			if a.AgentID == "" {
@@ -84,6 +105,8 @@ type HostMinute struct {
 	CPUAvgPct        *float64  `json:"cpuAvgPct"`
 	CPUMaxPct        *float64  `json:"cpuMaxPct"`
 	Load1            float64   `json:"load1"`
+	Load5            float64   `json:"load5"`
+	Load15           float64   `json:"load15"`
 	MemTotal         int64     `json:"memTotal"`
 	MemAvailableMin  int64     `json:"memAvailableMin"`
 	SwapTotal        int64     `json:"swapTotal"`
@@ -96,21 +119,41 @@ type HostMinute struct {
 	PSIIOSome        *float64  `json:"psiIoSome"`
 	OOMKills         *int64    `json:"oomKills"`
 	PaseoMemMax      *int64    `json:"paseoMemMax"`
+	DiskReadBps      *float64  `json:"diskReadBps"`
+	DiskWriteBps     *float64  `json:"diskWriteBps"`
+	DiskIOPS         *float64  `json:"diskIops"`
+	DiskReadBpsMax   *float64  `json:"diskReadBpsMax"`
+	DiskWriteBpsMax  *float64  `json:"diskWriteBpsMax"`
+	DiskBusyAvgPct   *float64  `json:"diskBusyAvgPct"`
+	DiskBusyMaxPct   *float64  `json:"diskBusyMaxPct"`
 }
 
-const hostMinuteCols = `minute, cpus, cpu_avg_pct, cpu_max_pct, load1, mem_total, mem_available_min, swap_total, swap_used_max,
-	disk_total, disk_available_min, psi_mem_some, psi_mem_full, psi_cpu_some, psi_io_some, oom_kills, paseo_mem_max`
+const hostMinuteCols = `minute, cpus, cpu_avg_pct, cpu_max_pct, load1, load5, load15, mem_total, mem_available_min, swap_total,
+	swap_used_max, disk_total, disk_available_min, psi_mem_some, psi_mem_full, psi_cpu_some, psi_io_some, oom_kills, paseo_mem_max,
+	disk_read_bps, disk_write_bps, disk_iops, disk_read_bps_max, disk_write_bps_max, disk_busy_avg_pct, disk_busy_max_pct`
+
+// hostMinuteScan is where row.Scan puts hostMinuteCols, and done, which finishes m once scanned.
+func hostMinuteScan(m *HostMinute) (dest []any, done func()) {
+	var load1, load5, load15 float32
+	var reals [13]*float32
+	dest = []any{&m.Minute, &m.CPUs, &reals[0], &reals[1], &load1, &load5, &load15, &m.MemTotal, &m.MemAvailableMin, &m.SwapTotal,
+		&m.SwapUsedMax, &m.DiskTotal, &m.DiskAvailableMin, &reals[2], &reals[3], &reals[4], &reals[5], &m.OOMKills, &m.PaseoMemMax,
+		&reals[6], &reals[7], &reals[8], &reals[9], &reals[10], &reals[11], &reals[12]}
+	return dest, func() {
+		m.Load1, m.Load5, m.Load15 = float64(load1), float64(load5), float64(load15)
+		for i, p := range []**float64{&m.CPUAvgPct, &m.CPUMaxPct, &m.PSIMemSome, &m.PSIMemFull, &m.PSICPUSome, &m.PSIIOSome,
+			&m.DiskReadBps, &m.DiskWriteBps, &m.DiskIOPS, &m.DiskReadBpsMax, &m.DiskWriteBpsMax, &m.DiskBusyAvgPct, &m.DiskBusyMaxPct} {
+			*p = f64(reals[i])
+		}
+		m.Minute = m.Minute.UTC()
+	}
+}
 
 func scanHostMinute(row pgx.Row) (HostMinute, error) {
 	var m HostMinute
-	var cpuAvg, cpuMax, memSome, memFull, cpuSome, ioSome *float32
-	var load float32
-	err := row.Scan(&m.Minute, &m.CPUs, &cpuAvg, &cpuMax, &load, &m.MemTotal, &m.MemAvailableMin, &m.SwapTotal, &m.SwapUsedMax,
-		&m.DiskTotal, &m.DiskAvailableMin, &memSome, &memFull, &cpuSome, &ioSome, &m.OOMKills, &m.PaseoMemMax)
-	m.Load1 = float64(load)
-	m.CPUAvgPct, m.CPUMaxPct, m.PSIMemSome, m.PSIMemFull, m.PSICPUSome, m.PSIIOSome =
-		f64(cpuAvg), f64(cpuMax), f64(memSome), f64(memFull), f64(cpuSome), f64(ioSome)
-	m.Minute = m.Minute.UTC()
+	dest, done := hostMinuteScan(&m)
+	err := row.Scan(dest...)
+	done()
 	return m, err
 }
 
@@ -130,6 +173,18 @@ type HostNow struct {
 	Fresh        bool // a minute within the last 3
 	Probe        *ProbeRow
 	AgentMem     map[string]int64 // agents with a minute in the last 3, their most memory
+	Filesystems  []FilesystemRow  // its local filesystems, as last read, by mount
+}
+
+// FilesystemRow is one of a host's filesystems, as last read.
+type FilesystemRow struct {
+	Mount     string    `json:"mount"`
+	Device    string    `json:"device"`
+	Type      string    `json:"type"`
+	Total     int64     `json:"total"`
+	Available int64     `json:"available"`
+	UsedFrac  float64   `json:"usedFrac"`
+	Minute    time.Time `json:"minute"`
 }
 
 // ProbeRow is a host's probe, as last reported.
@@ -159,21 +214,36 @@ func (r *Registry) HostResources(ctx context.Context) (map[string]*HostNow, erro
 	for rows.Next() {
 		var host string
 		var m HostMinute
-		var cpuAvg, cpuMax, memSome, memFull, cpuSome, ioSome *float32
-		var load float32
 		var memFrac, diskFrac float64
 		var fresh bool
-		if err := rows.Scan(&host, &m.Minute, &m.CPUs, &cpuAvg, &cpuMax, &load, &m.MemTotal, &m.MemAvailableMin, &m.SwapTotal,
-			&m.SwapUsedMax, &m.DiskTotal, &m.DiskAvailableMin, &memSome, &memFull, &cpuSome, &ioSome, &m.OOMKills, &m.PaseoMemMax,
-			&memFrac, &diskFrac, &fresh); err != nil {
+		dest, done := hostMinuteScan(&m)
+		if err := rows.Scan(append(append([]any{&host}, dest...), &memFrac, &diskFrac, &fresh)...); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		m.Load1 = float64(load)
-		m.CPUAvgPct, m.CPUMaxPct, m.PSIMemSome, m.PSIMemFull, m.PSICPUSome, m.PSIIOSome =
-			f64(cpuAvg), f64(cpuMax), f64(memSome), f64(memFull), f64(cpuSome), f64(ioSome)
+		done()
 		h := get(host)
 		h.Minute, h.MemUsedFrac, h.DiskUsedFrac, h.Fresh = &m, memFrac, diskFrac, fresh
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows, err = r.p.Query(ctx, `SELECT host, mount, device, fs_type, total, available, coalesce(used_frac, 0), minute
+		FROM host_filesystems ORDER BY host, mount`)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var host string
+		var f FilesystemRow
+		if err := rows.Scan(&host, &f.Mount, &f.Device, &f.Type, &f.Total, &f.Available, &f.UsedFrac, &f.Minute); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		f.Minute = f.Minute.UTC()
+		h := get(host)
+		h.Filesystems = append(h.Filesystems, f)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {

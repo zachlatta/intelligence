@@ -142,17 +142,30 @@ func TestEmailStartsTheWorkflowThatMatchesItAndRepliesGoToItsRun(t *testing.T) {
 	}
 
 	// a new email from Christina starts her workflow; its input says it is not from Zach
-	fake.Add(mailMsg("m1", "t1", "Christina <christina@example.com>", "Q4 board deck", "Numbers for slide 6, please."))
+	fake.Add(mailMsg("m1", "t1", "Christina <christina@example.com>", "Q4 board deck", "Numbers for slide 6, please.", email.Header{Name: "Date", Value: "Wed, 11 Nov 2026 14:39:00 -0500"}))
 	r := decided(t, h, "m1")
 	run, _ := r["run_id"].(string)
 	if r["decision"] != "started" || run == "" {
 		t.Fatalf("m1 = %v", r)
+	}
+	code, requested := sqlPost(t, h, q("SELECT requested_at = TIMESTAMPTZ '2026-11-11T19:39:00Z' FROM workflow_runs WHERE id='"+run+"'"))
+	if code != 200 || len(requested.Rows) != 1 || requested.Rows[0][0] != true {
+		t.Fatalf("requested_at: %+v", requested)
+	}
+	receipt := call(t, anon(h), "POST", "/api/workflow-runs/"+run+"/answers", `{"channel":"email","messageId":"reply-example","threadId":"t1","sentAt":"2026-11-11T20:00:00Z","checked":true}`, map[string]string{"Authorization": "Bearer " + key})
+	if receipt.Code != 200 {
+		t.Fatal(receipt.Body.String())
+	}
+	code, answerReceipt := sqlPost(t, h, q("SELECT message_id,thread_id,sent_at=TIMESTAMPTZ '2026-11-11T20:00:00Z' FROM workflow_run_answers WHERE run_id='"+run+"'"))
+	if code != 200 || len(answerReceipt.Rows) != 1 || answerReceipt.Rows[0][0] != "reply-example" || answerReceipt.Rows[0][1] != "t1" || answerReceipt.Rows[0][2] != true {
+		t.Fatalf("reply receipt: %+v", answerReceipt)
 	}
 	ws := b.command()
 	var wa hostclient.CreateWorkspaceArgs
 	json.Unmarshal(ws.Args, &wa)
 	if ws.Kind != hostclient.CreateWorkspaceKind || wa.Agent == nil || !strings.Contains(wa.Agent.Prompt, "Numbers for slide 6") ||
 		!strings.Contains(wa.Agent.Prompt, "not from Zach") ||
+		!strings.Contains(wa.Agent.Prompt, "in bot@example.com") || !strings.Contains(wa.Agent.Prompt, "intelligence__query") ||
 		wa.Title != "Task from Intelligence: Q4 board deck · "+strings.ReplaceAll(run, "-", "")[:12] ||
 		wa.Branch != "wf-task-from-intelligence-q4-board-deck-"+strings.ReplaceAll(run, "-", "")[:12] {
 		t.Fatalf("command = %s %s", ws.Kind, ws.Args)
@@ -178,7 +191,7 @@ func TestEmailStartsTheWorkflowThatMatchesItAndRepliesGoToItsRun(t *testing.T) {
 	msg := b.command()
 	var ma hostclient.AgentArgs
 	json.Unmarshal(msg.Args, &ma)
-	if msg.Kind != hostclient.SendMessageKind || ma.AgentID != "orch-1" || !strings.Contains(ma.Text, "November 1") || strings.Contains(ma.Text, "Draft attached") {
+	if msg.Kind != hostclient.SendMessageKind || ma.AgentID != "orch-1" || !strings.Contains(ma.Text, "November 1") || strings.Contains(ma.Text, "Draft attached") || !strings.Contains(ma.Text, "in bot@example.com") {
 		t.Fatalf("message = %s %s", msg.Kind, msg.Args)
 	}
 
@@ -289,10 +302,18 @@ func TestTheEmailPageShowsTheMailboxAndWhatEachEmailDid(t *testing.T) {
 	fake.Add(mailMsg("s1", "t7", "someone@example.com", "Hello there", "Hi."))
 	decided(t, h, "s1")
 	page := get(t, h, "/workflows/email", nil)
-	for _, want := range []string{"bot@example.com", "Hello there", "someone@example.com", "no workflow"} {
+	for _, want := range []string{"bot@example.com", "Hello there", "someone@example.com", "no workflow", "<thead>"} {
 		if !strings.Contains(page.Body.String(), want) {
 			t.Errorf("page lacks %q", want)
 		}
+	}
+	// a mailbox error's instant shows in the reader's own zone (localtime.js)
+	if _, err := h.d.Owner.Exec(t.Context(), `UPDATE gmail_connections SET error = 'the mailbox was not read for too long: email from before 2026-11-11T23:57:05Z was skipped'`); err != nil {
+		t.Fatal(err)
+	}
+	page = get(t, h, "/workflows/email", nil)
+	if want := `<p class="banner">the mailbox was not read for too long: email from before <time datetime="2026-11-11T23:57:05Z" data-format="short"`; !strings.Contains(page.Body.String(), want) {
+		t.Errorf("mailbox error not shown locally; want %s in\n%s", want, page.Body)
 	}
 	editor := get(t, h, "/workflows", nil)
 	if !strings.Contains(editor.Body.String(), "christina@example.com") {

@@ -80,20 +80,20 @@ func buildResources(u fleet.AgentUse, base string, now time.Time, isLive bool) a
 	if res.Last.After(now.Add(-3 * time.Minute)) {
 		res.MemNow = u.Minutes[len(u.Minutes)-1].MemMax
 	}
-	const stamp = "Jan 2 15:04 MST"
-	from, to, toLabel := res.First, res.Last.Add(time.Minute), res.Last.Add(time.Minute).Format(stamp)
+	from, to := res.First, res.Last.Add(time.Minute)
+	fromLabel, toLabel := labelAt(from, "short"), labelAt(to, "short")
 	if isLive {
-		to, toLabel = now, "now"
+		to, toLabel = now, labelText("now")
 	}
 	if len(cpu.Points) > 0 {
 		top := math.Max(1, math.Ceil(res.PeakCores))
 		res.CPU = valueChart([]fleet.Series{cpu}, from, to, top, func(v float64) string { return fmt.Sprintf("%g", v) },
-			from.Format(stamp), toLabel)
+			fromLabel, toLabel)
 	}
 	if res.MemPeak > 0 {
 		top := niceBytes(res.MemPeak)
 		res.Mem = valueChart([]fleet.Series{mem}, from, to, top, func(v float64) string { return size(int64(v)) },
-			from.Format(stamp), toLabel)
+			fromLabel, toLabel)
 	}
 	return res
 }

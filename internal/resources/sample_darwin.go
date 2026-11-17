@@ -34,5 +34,13 @@ func (r *Reader) Sample(now time.Time) Sample {
 		s.CPUPct = &p
 	}
 	s.DiskTotal, s.DiskAvailable = diskSpace(r.Home)
+	if text := run("ioreg", "-r", "-c", "IOBlockStorageDriver", "-w", "0"); text != "" {
+		r.setDiskIO(now, parseDarwinIoreg(text), &s)
+	}
+	if r.filesystemsDue(now) {
+		if fs := parseDarwinDf(run("df", "-kPl")); fs != nil {
+			s.Filesystems = fs
+		}
+	}
 	return s
 }

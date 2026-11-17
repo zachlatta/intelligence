@@ -313,7 +313,10 @@ func pageCatalog(t *testing.T, page string) map[string]hostclient.Provider {
 // TestSpawnFormsKnowEachProvidersModels: the forms that start an agent carry the models, thinking
 // levels and modes of each provider the host can run, so they offer them as choices.
 func TestSpawnFormsKnowEachProvidersModels(t *testing.T) {
-	h, _ := cmdServer(t)
+	h, d := cmdServer(t)
+	if _, err := d.Owner.Exec(t.Context(), `UPDATE provider_plan_settings SET enabled=true WHERE provider='antigravity'`); err != nil {
+		t.Fatal(err)
+	}
 	rep := sampleReport
 	rep.Paseo.Providers = []hostclient.Provider{{Name: "claude", Available: true, Label: "Claude", DefaultMode: "auto",
 		Models: []hostclient.Model{{ID: "claude-opus-5-5", Label: "Opus 5.5", Default: true, Thinking: []string{"low", "medium"}, DefaultThinking: "medium"},

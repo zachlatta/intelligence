@@ -54,7 +54,7 @@ func TestSolMigrationUpgradesChoicesAndPreservesHistory(t *testing.T) {
  (1,$1,3,'codex','gpt-6.1-terra','high','test-login','7d',true,NULL)`, group)
 	}
 	// Replay just the upgrade over state saved before this release.
-	exec(`DELETE FROM schema_migrations WHERE version='0040_sol_6_2'`)
+	exec(`DELETE FROM schema_migrations WHERE version='20261117T1841_sol_6_2'`)
 	if err := db.Migrate(ctx, d.Owner); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestSolMigrationUpgradesChoicesAndPreservesHistory(t *testing.T) {
 		}
 	}
 	// Even replaying the data migration cannot add versions or bump revisions again.
-	exec(`DELETE FROM schema_migrations WHERE version='0040_sol_6_2'`)
+	exec(`DELETE FROM schema_migrations WHERE version='20261117T1841_sol_6_2'`)
 	if err := db.Migrate(ctx, d.Owner); err != nil {
 		t.Fatal(err)
 	}

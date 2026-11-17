@@ -92,7 +92,7 @@ func (r *Registry) record(ctx context.Context, rep hostclient.Report, at time.Ti
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, "UPDATE hosts SET projects = $2 WHERE name = $1", rep.Name, projects); err != nil {
+		if _, err := tx.Exec(ctx, "UPDATE hosts SET projects = $2, report_received_at = $3 WHERE name = $1", rep.Name, projects, at); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, "DELETE FROM workspaces WHERE host = $1", rep.Name); err != nil { // and their agents
@@ -133,6 +133,11 @@ func (r *Registry) record(ctx context.Context, rep hostclient.Report, at time.Ti
 			"updated_at", "last_user_message_at"}, pgx.CopyFromRows(arows)); err != nil {
 			return err
 		}
+		// Preserve departing agents before replacement, and capture newly reported
+		// workers now so their resource samples reduce reservations immediately.
+		if err := CaptureWorkflowAgents(ctx, tx, rep.Name, "", at); err != nil {
+			return err
+		}
 		if !ps.Connected {
 			return nil // a host that lost its daemon keeps its transcripts and diffs until it can say what is gone
 		}
@@ -171,6 +176,10 @@ func (r *Registry) ListWithHistory(ctx context.Context) ([]Host, error) {
 }
 
 func (r *Registry) list(ctx context.Context, history bool) ([]Host, error) {
+	disabled, err := DisabledProviders(ctx, r.p)
+	if err != nil {
+		return nil, err
+	}
 	agentTable, workspaceTable := "agents", "workspace_status"
 	if history {
 		agentTable, workspaceTable = "recorded_agents", "recorded_workspace_status"
@@ -199,6 +208,13 @@ func (r *Registry) list(ctx context.Context, history bool) ([]Host, error) {
 		}
 		if err := json.Unmarshal(projects, &p.Projects); err != nil {
 			return b, err
+		}
+		for i := range p.Providers {
+			for _, name := range disabled {
+				if p.Providers[i].Name == name {
+					p.Providers[i].Available = false
+				}
+			}
 		}
 		if len(p.Providers) == 0 {
 			p.Providers = nil
@@ -256,7 +272,7 @@ func (r *Registry) list(ctx context.Context, history bool) ([]Host, error) {
 		if len(w.Tags) == 0 {
 			w.Tags = nil
 		}
-		w.Agents = agents[key{host, w.ID}]
+		w.Agents = treeOrder(agents[key{host, w.ID}])
 		if i, ok := index[host]; ok {
 			hosts[i].Workspaces = append(hosts[i].Workspaces, w)
 		}
@@ -287,4 +303,42 @@ func deref(t *time.Time) time.Time {
 		return time.Time{}
 	}
 	return t.UTC()
+}
+
+// treeOrder puts each sub-agent right after its parent, keeping the given order among siblings
+// and among top-level agents. A sub-agent whose parent is not in the list counts as top-level.
+func treeOrder(agents []AgentView) []AgentView {
+	in := make(map[string]bool, len(agents))
+	for _, a := range agents {
+		in[a.ID] = true
+	}
+	children := map[string][]int{}
+	var roots []int
+	for i, a := range agents {
+		if a.ParentID != "" && a.ParentID != a.ID && in[a.ParentID] {
+			children[a.ParentID] = append(children[a.ParentID], i)
+		} else {
+			roots = append(roots, i)
+		}
+	}
+	out := make([]AgentView, 0, len(agents))
+	done := make([]bool, len(agents))
+	var walk func(i int)
+	walk = func(i int) {
+		if done[i] {
+			return
+		}
+		done[i] = true
+		out = append(out, agents[i])
+		for _, c := range children[agents[i].ID] {
+			walk(c)
+		}
+	}
+	for _, i := range roots {
+		walk(i)
+	}
+	for i := range agents { // a parent loop has no root: keep its agents rather than drop them
+		walk(i)
+	}
+	return out
 }
