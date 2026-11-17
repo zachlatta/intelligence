@@ -86,7 +86,7 @@ func (e *Engine) retryStart(ctx context.Context, tx pgx.Tx, r run, c fleet.Comma
 		return false, fmt.Sprintf("Start retry %d of %d was due at %s, but %s %s after it was due. Last start error: %s",
 			retries+1, StartRetryLimit, due.UTC().Format(time.RFC3339), why, waitLimitWords(), msg), nil
 	}
-	// Preserve the run's original FIFO priority when it becomes eligible again.
+	// Preserve the run's original place in the queue when it becomes eligible again.
 	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET start_retry_queued=$2, queue_reason=''
 		WHERE id=$1 AND start_retry_queued IS DISTINCT FROM $2`, r.ID, ready)
 	return true, msg, err
@@ -217,7 +217,7 @@ func (e *Engine) RetryStarts(ctx context.Context) error {
 		}
 	}
 	if len(ids) > 0 {
-		// Failed attempts can release room, and due retries can join the FIFO.
+		// Failed attempts can release room, and due retries can join the queue.
 		// Use the same admission path as resource updates and the queue worker.
 		failures = append(failures, e.StartQueued(ctx))
 	}

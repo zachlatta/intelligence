@@ -579,7 +579,7 @@ func (e *Engine) dequeue(ctx context.Context, tx pgx.Tx, r run, why string) erro
 
 // startAttempt rolls back partial startup writes (including model allocations) in a
 // savepoint. A disabled subscription ends this run in the outer transaction, freeing
-// its FIFO position. Other errors still roll back the caller's transaction.
+// its place in the queue. Other errors still roll back the caller's transaction.
 func (e *Engine) startAttempt(ctx context.Context, tx pgx.Tx, r run, attempt func(pgx.Tx) error) (bool, error) {
 	err := pgx.BeginFunc(ctx, tx, attempt)
 	var disabled *fleet.DisabledProviderError

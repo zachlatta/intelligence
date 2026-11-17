@@ -763,7 +763,7 @@ render();
 {{if .VoiceMemos}}<section class="card"><div class="card-head"><h2>Voice memo that started this run</h2><span class="grow"></span><a class="btn sm ghost" href="/workflows/voice-memos">All voice memos</a></div><div class="card-body">{{template "voice-memo-rows" .VoiceMemos}}</div></section>{{end}}
 {{if .Emails}}<section class="card"><div class="card-head"><h2>Email thread</h2><span class="meta grow">what each email in it did</span><a class="btn sm ghost" href="/workflows/email">All email</a></div>
   <div class="card-body"><ul class="events">{{range .Emails}}<li><span class="t">{{at .ReceivedAt "short"}}</span><b>{{.Who}}</b> · {{or .Subject "(no subject)"}} · <span class="badge {{.Badge}}">{{.Label}}</span>{{with .Reason}} <span class="meta">{{.}}</span>{{end}}</li>{{end}}</ul></div></section>{{end}}
-{{if eq .Run.Status "queued"}}<p class="banner note">Queued, {{.Run.InLine}}: {{localText .Run.QueueReason}}. It starts by itself once the host has room, immediate-priority runs first, then oldest first; <b>Start now</b> starts it anyway.</p>{{end}}
+{{if eq .Run.Status "queued"}}<p class="banner note">Queued, {{.Run.InLine}}: {{localText .Run.QueueReason}}. It starts by itself once the host has room, immediate-priority runs first, then oldest first, though a lighter run that fits may go ahead of a heavier one; <b>Start now</b> starts it anyway.</p>{{end}}
 <p class="meta">Estimated run memory: {{memoryGiB .Run.EstimatedMemory}} GiB{{if .Run.Repo}} for <span class="mono">{{.Run.Repo}}</span>{{end}}.</p>
 {{if eq .Run.Status "stalled"}}<p class="banner">{{.Run.Error}}</p>{{end}}
 {{if eq .Run.Status "failed"}}<p class="banner">{{or .Run.Error "The orchestrator marked the run failed."}}</p>{{end}}

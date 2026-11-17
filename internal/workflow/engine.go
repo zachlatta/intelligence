@@ -903,7 +903,7 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 			return "", err
 		}
 		// This run already holds a startup reservation. Replace it with the selected
-		// project's estimate; do not count the finder twice or lose its FIFO priority.
+		// project's estimate; do not count the finder twice or lose its place in the queue.
 		// A run started by hand or with immediate priority went ahead of the queue and whatever
 		// the load: its orchestrator starts too, rather than waiting behind the queue it skipped.
 		why := ""

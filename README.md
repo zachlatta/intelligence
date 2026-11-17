@@ -673,7 +673,8 @@ A workflow is the host it runs on, a trigger, a way to find the project, an orch
 version it started with. A run:
 
 0. **Waits for room on its host.** A run started while its host is near capacity is `queued`
-   instead (below), and starts, oldest first, once the host has room.
+   instead (below), and starts once the host has room, oldest first, unless a lighter run
+   behind it fits first.
 1. **Finds its project.** Before anything runs in a worktree, an agent (the definition's project
    finder, started in the host's home directory, `~`) is told the task and the host's repositories
    (its workspaces' `project_root`s) and answers with `intelligence workflow project --run <id>
@@ -1173,8 +1174,8 @@ not a guarantee that an oversized workload will fit or avoid an OOM kill.
 Failed, canceled, finder-only and empty-repository runs do not teach the estimator; without a
 successful run for a selected non-empty repository, it keeps the 4 GiB fallback.
 After a finder selects a repository, admission replaces its reservation with that estimate,
-without counting the finder twice. If it no longer fits, the same run re-enters the existing FIFO
-and resumes with its selected repository when room returns; it never repeats project finding.
+without counting the finder twice. If it no longer fits, the same run re-enters its host's queue in
+its original place and resumes with its selected repository when room returns; it never repeats project finding.
 `project_selected` distinguishes a selected `none` from a finder still to run.
 Project selection is recorded before a capacity wait. `queued_at_creation` distinguishes an
 initial submission from a run that already started finding its project and later requeued;
