@@ -198,8 +198,9 @@ func TestAFailedStartsRetryIsNotOvertakenByTheNextQueuedRun(t *testing.T) {
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour; c.Now = clock.Now })
 	b := sendReport(t, h, wfReport())
 	wf := fixedWorkflow(t, h) // no history: 4 GiB each
-	// 9 GiB of 16 free: one run fits (69%), a second does not (94%).
-	repositoryMinute(t, b, 9<<30)
+	// 8 GiB of 16 free: one run fits (75% should its peak come), a second does not (100% should
+	// both runs' peaks meet).
+	repositoryMinute(t, b, 8<<30)
 	first := startRun(t, h, wf, "first")
 	cmd := b.command()
 	clock.Add(time.Second) // queue order is by created_at, from this clock
@@ -218,7 +219,7 @@ func TestAFailedStartsRetryIsNotOvertakenByTheNextQueuedRun(t *testing.T) {
 		t.Fatalf("next run took the failed start's room: %v", got)
 	}
 	clock.Add(16 * time.Second)
-	repositoryMinute(t, b, 9<<30)
+	repositoryMinute(t, b, 8<<30)
 	if err := e.RetryStarts(t.Context()); err != nil {
 		t.Fatal(err)
 	}

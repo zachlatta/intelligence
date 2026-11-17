@@ -116,9 +116,11 @@ type serverSettings struct {
 	Google        *email.Google
 	EmailKey      *email.Keyring
 	PublicURL     string // PUBLIC_URL: the server's origin, for Google's redirect; default each request's
-	// WORKFLOW_QUEUE_CPU_PCT, WORKFLOW_QUEUE_MEM_PCT and WORKFLOW_QUEUE_LOAD_PER_CPU: when a host
-	// is near capacity, so a new workflow run queues; each defaults to workflow.DefaultLimits (85,
-	// 90 and 1.5), and 0 or "off" turns it off.
+	// WORKFLOW_QUEUE_CPU_PCT, WORKFLOW_QUEUE_MEM_PCT, WORKFLOW_QUEUE_MEM_PEAK_PCT and
+	// WORKFLOW_QUEUE_LOAD_PER_CPU: when a host is near capacity, so a new workflow run queues; each
+	// defaults to workflow.DefaultLimits (85, 80, 95 and 1.5), and 0 or "off" turns it off.
+	// WORKFLOW_QUEUE_MEM_PEAKS (default 1): how many peaks of the runs going the host keeps room
+	// for beside a new run's own.
 	QueueLimits workflow.Limits
 }
 
@@ -188,7 +190,8 @@ func queueLimits(getenv func(string) string) (workflow.Limits, error) {
 	for _, f := range []struct {
 		name string
 		to   *float64
-	}{{"WORKFLOW_QUEUE_CPU_PCT", &l.CPUPct}, {"WORKFLOW_QUEUE_MEM_PCT", &l.MemPct}, {"WORKFLOW_QUEUE_LOAD_PER_CPU", &l.LoadPerCPU}} {
+	}{{"WORKFLOW_QUEUE_CPU_PCT", &l.CPUPct}, {"WORKFLOW_QUEUE_MEM_PCT", &l.MemPct}, {"WORKFLOW_QUEUE_MEM_PEAK_PCT", &l.MemPeakPct},
+		{"WORKFLOW_QUEUE_LOAD_PER_CPU", &l.LoadPerCPU}} {
 		switch v := strings.TrimSpace(getenv(f.name)); v {
 		case "":
 		case "off":
@@ -200,6 +203,13 @@ func queueLimits(getenv func(string) string) (workflow.Limits, error) {
 			}
 			*f.to = n
 		}
+	}
+	if v := strings.TrimSpace(getenv("WORKFLOW_QUEUE_MEM_PEAKS")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return l, fmt.Errorf("WORKFLOW_QUEUE_MEM_PEAKS %q: want a whole number of runs, 0 or more", v)
+		}
+		l.MemPeaks = n
 	}
 	return l, nil
 }

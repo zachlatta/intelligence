@@ -1104,8 +1104,8 @@ host's measured load decides.
 The server projects the host's load from its newest minute of resources (Host resources, above):
 that minute's CPU, memory used (by the minute's least available) and 1-minute load per CPU.
 CPU and load add one run's footprint for each run still starting, whose load the minute cannot
-show yet, and one for the run about to start. Memory reservations persist throughout active runs,
-as described below. A run is starting from its launch (`workflow_runs.launched_at`) until
+show yet, and one for the run about to start. Memory adds what each run still starting takes as it
+starts, and keeps room for the largest peaks still to come, as described below. A run is starting from its launch (`workflow_runs.launched_at`) until
 its orchestrator has started: for its whole start-up. A run that finds its project first is
 starting all the while it finds it (its orchestrator is still to come), and every run is starting
 until the host reports its workspace and orchestrator command (`launch_command`) done and the
@@ -1116,7 +1116,10 @@ in the same transaction. An admitted command waiting for a slow or absent host h
 until it finishes or expires. Runs that succeeded, failed or were canceled no longer count.
 The run queues when
 the projection reaches a limit: `WORKFLOW_QUEUE_CPU_PCT` (default 85%), `WORKFLOW_QUEUE_MEM_PCT`
-(90%) or `WORKFLOW_QUEUE_LOAD_PER_CPU` (1.5). So an idle host starts runs back to back, and a burst
+(80%: memory used now with the runs still starting), `WORKFLOW_QUEUE_MEM_PEAK_PCT` (95%: the same,
+should the new run's peak meet the `WORKFLOW_QUEUE_MEM_PEAKS` (1) largest peaks still to come of
+the runs going) or
+`WORKFLOW_QUEUE_LOAD_PER_CPU` (1.5). So an idle host starts runs back to back, and a burst
 starts as many as fit: at 10% CPU, 7 of 10 runs started at once (about 80%), and the rest queue
 until the host has made them and a newer minute shows their load. The reason says it in plain words: “host-1 is near
 capacity: CPU 70% now, about 90% with 1 run starting and this one (queues at 85%)”, or “over
@@ -1137,25 +1140,35 @@ Unfinished runs were re-estimated this way when it changed (migration
 project reserves 1 GiB (its finder is small), and its project's estimate is checked when it is
 chosen. Agent samples expire after 90 days, so older history eventually falls back. These views and `workflow_runs.estimated_memory_bytes` expose the evidence
 and estimate through SQL; the run page shows the estimate. Estimates are fixed at repository
-selection and reused for reservations and retries. Every starting or running run reserves
-`max(estimate - resident memory, 0)` in addition to the host's measured memory usage. Resident memory
-is the sum for that run's known agents in the exact newest host minute; without a matching sample,
-its full estimate stays reserved. This prevents a run's quiet phase from admitting another heavy
-run, without counting its resident memory twice. A run waiting for Zach's reply reserves nothing
+selection and reused for reservations and retries.
+
+Each starting or running run may still grow by `max(estimate - resident memory, 0)`, its
+headroom. Resident memory is the sum for that run's known agents in the exact newest host minute;
+without a matching sample, its whole estimate is headroom. A run still starting (or whose start
+retry is pending) counts up to 1 GiB of its headroom at once, what a finder or orchestrator takes
+as it starts; so does the run about to start. Memory used now plus these starts aims under
+`WORKFLOW_QUEUE_MEM_PCT` (80%). The rest of each run's headroom is its peak still to come: a build
+or a test suite, for minutes at a time. A new run needs room for its own peak (its estimate) and
+the `WORKFLOW_QUEUE_MEM_PEAKS` (1) largest peaks still to come of the runs going, under
+`WORKFLOW_QUEUE_MEM_PEAK_PCT` (95%), not for every run's peak at once. Reserving every peak at once held a 19 GiB workflow host full at 30% used
+on 2026-11-16, with 8 runs queued for hours, when its runs' memory had peaked together at 11.6 GiB
+over 3 days and only two runs had ever been at their peaks at the same minute (for 6 minutes). Two
+runs whose peaks cannot both fit do not run together; lighter runs fit beside a heavy one. This
+counts no run's resident memory twice: it is in the measured minute. A run waiting for Zach's reply reserves nothing
 beyond what it uses: its agents are idle, perhaps for days, and their memory is already in the
 measured minute. When the queue waits on memory and waiting runs hold some of it, the reason says
 so: “2 runs waiting for sign-off hold 10.5 GiB”, and “: waiting for 2 sign-offs to free memory”
 when the run would fit without them. The Workflows page shows each host's queue head, how many
-runs are queued there and its reason. The existing memory percentage limit supplies host headroom.
-Memory queue reasons name the run's estimate and repository, measured free RAM and reservations.
-So that no estimate can block the FIFO for ever, the oldest run starts alone, whatever its
+runs are queued there and its reason.
+Memory queue reasons name the run's estimate and repository, measured free RAM and what is held for
+active runs' starts and peaks (“memory 32% used now, over 100% should its peak meet the largest to come of the runs going (queues
+at 95%); needs ~8.9 GiB for /w/pdw; 13.0 GiB free (7.7 GiB held for active runs' starts and
+peaks)”). So that no estimate can keep a run queued for ever, a run starts alone, whatever its
 estimate, when no other run is active or starting (a run waiting for Zach's reply does not count)
-and measured memory is below the limit. Otherwise memory used by other processes could keep an
-estimate that fits the host, but not beside them, queued for good, with every run behind it. The
-FIFO head check also applies during project selection, including older ready start retries and
-older runs that went back into the queue when they chose their project. CPU, load and
-telemetry checks still apply. Its full estimate stays reserved until it ends, so nothing else
-starts beside it until then. This is an advisory estimate,
+and measured memory is below `WORKFLOW_QUEUE_MEM_PCT`. Otherwise memory used by other processes
+could keep an estimate that fits the host, but not beside them, queued for good. CPU, load and
+telemetry checks still apply. Its whole headroom stays one of the peaks to come until it ends, so
+only runs that fit beside its peak start beside it. This is an advisory estimate,
 not a guarantee that an oversized workload will fit or avoid an OOM kill.
 Failed, canceled, finder-only and empty-repository runs do not teach the estimator; without a
 successful run for a selected non-empty repository, it keeps the 4 GiB fallback.
@@ -1219,7 +1232,7 @@ started by hand, a run that finds its project starts its orchestrator as soon as
 chosen, and its startup retries go out as soon as its host is ready, bypassing capacity, but still
 respecting retry backoff, deadlines and host/daemon readiness. Immediate starts can increase host
 load; they do not interrupt running work or make an offline host execute commands. Normal runs
-retain FIFO order.
+keep their order, but a lighter run that fits may start ahead of a heavier one (below).
 
 **Start now** bypasses the capacity hold and the queue for good (`workflow_runs.started_by_hand`;
 a queued run marked so starts on the queue's next pass, ahead of the others):
@@ -1229,8 +1242,14 @@ skipped. Retries of runs the queue started wait for admission, in their original
 **Start retry now** does the same for a run whose queued retry waits for admission (The run queue,
 below).
 
-A run also queues while earlier runs wait in its host's queue, so the queue keeps strict FIFO
-order: light runs wait behind heavy ones. The
+A run also queues while an earlier run in its host's queue can start now (it goes first), or while
+an earlier run would have room but for the runs that started after it: the queue then holds for that
+run (“2 runs queued on host-1 ahead of it; the queue holds for "…", which needs the room runs
+started after it are using”), so lighter runs cannot keep a heavy one waiting for ever; it starts
+when they end. Otherwise a run that fits starts ahead of earlier runs that the runs older than them
+are holding (a heavy run that cannot fit beside another heavy run): until 2026-11-16 the queue was
+strictly in order, and one heavy run at its head held seven runs needing 1 GiB each for hours. A
+start retry waiting out its backoff, or for its host to be ready, holds no one behind it. The
 decision and the start are made in one transaction holding the host's queue lock (an advisory
 lock per host), so runs started at the same moment are judged one after another, each counting
 those just before it.
@@ -1238,14 +1257,15 @@ those just before it.
 A new queued run has no agents or commands yet; a run queued after repository selection retains
 its archived finder history. A ready retry keeps its startup phase and joins
 the queue through `workflow_runs.start_retry_queued`. `workflow_runs.queue_reason` says why it waits
-(kept current while it waits, and cleared on dequeue), its events say when it was `queued` and
+(every queued run's is kept current while it waits, and cleared on dequeue), its events say when it was `queued` and
 `dequeued`, and `workflow_run_queue` lists each host's queue in order (`position` 1 is next). The
 runs list and the run page show it queued, where in line (“2nd in line for host-1”) and why, and
 the run page says when it was queued, not started; the run page's **Start now** starts it at once,
 whatever the host's load (`POST /api/workflow-runs/{id}/start`; for a queued retry the button reads
 **Start retry now** and sends the retry), and **Cancel run** cancels it.
 
-The server starts queued runs on a host, oldest first, while the projection leaves room: every 15
+The server starts queued runs on a host, in order, each that the projection leaves room for (above;
+its `dequeued` event says when it went ahead of runs that needed more room): every 15
 seconds, on each minute of resources the host sends, and when a run ends or fails to start. Runs
 already going are never stopped or paused. The queue is rows in Postgres, so it survives restarts.
 
@@ -1863,9 +1883,11 @@ Server:
   Retry deadlines and exponential backoff (1–64s plus jitter, or a longer `Retry-After`)
   are stored in `gmail_connections`, shared across server instances and restarts.
 - `PUBLIC_URL`: optional; the server's origin, for Google's redirect. Default each request's.
-- `WORKFLOW_QUEUE_CPU_PCT`, `WORKFLOW_QUEUE_MEM_PCT`, `WORKFLOW_QUEUE_LOAD_PER_CPU`: optional;
-  when a host is near capacity, so a new workflow run queues (The run queue, above). Defaults 85,
-  90 and 1.5; `0` or `off` turns one off.
+- `WORKFLOW_QUEUE_CPU_PCT`, `WORKFLOW_QUEUE_MEM_PCT`, `WORKFLOW_QUEUE_MEM_PEAK_PCT`,
+  `WORKFLOW_QUEUE_LOAD_PER_CPU`: optional; when a host is near capacity, so a new workflow run
+  queues (The run queue, above). Defaults 85, 80, 95 and 1.5; `0` or `off` turns one off.
+  `WORKFLOW_QUEUE_MEM_PEAKS`: how many memory peaks of the runs going the host keeps room for
+  beside a new run's own; default 1.
 
 The version is stamped at build (`-X main.buildCommit`, from Coolify's `SOURCE_COMMIT` build
 argument); else `SOURCE_COMMIT` at run time, else Go's VCS stamp, else `dev`.

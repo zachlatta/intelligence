@@ -1,10 +1,12 @@
 package workflow
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
 
@@ -16,8 +18,16 @@ import (
 // Limits are when a host is near capacity: a run queues when the host's projected load would reach
 // one of them (room). Zero turns a limit off.
 type Limits struct {
-	CPUPct     float64 // average CPU busy %
-	MemPct     float64 // the share of memory used (by the minute's least available), %
+	CPUPct float64 // average CPU busy %
+	// MemPct is the share of memory (used by the minute's least available) the host aims under:
+	// what it uses now, with what the runs still starting take as they start.
+	MemPct float64
+	// MemPeakPct is the share of memory the host may reach should a new run reach its peak (its
+	// estimate) while the MemPeaks largest peaks still to come of the runs already going (each
+	// one's estimate less what it uses now) come too. A run's peak lasts minutes (a build, a test
+	// suite), so the host keeps room for a few at a time, not for every run's at once.
+	MemPeakPct float64
+	MemPeaks   int
 	LoadPerCPU float64 // the 1-minute load average per CPU
 	// Fresh is how old the newest minute may be and still say how busy the host is. With an older
 	// one, runs wait for a fresh one. Once the newest is Unmonitored old, a host that is connected
@@ -26,9 +36,10 @@ type Limits struct {
 	Fresh, Unmonitored time.Duration
 }
 
-// DefaultLimits queue runs at 85% CPU, 90% memory or a load of 1.5 per CPU.
+// DefaultLimits queue runs at 85% CPU, a load of 1.5 per CPU, 80% memory with the runs still
+// starting, or 95% memory should a new run's peak meet the largest peak to come of those going.
 func DefaultLimits() Limits {
-	return Limits{CPUPct: 85, MemPct: 90, LoadPerCPU: 1.5, Fresh: 3 * time.Minute, Unmonitored: 30 * time.Minute}
+	return Limits{CPUPct: 85, MemPct: 80, MemPeakPct: 95, MemPeaks: 1, LoadPerCPU: 1.5, Fresh: 3 * time.Minute, Unmonitored: 30 * time.Minute}
 }
 
 // QueueEvery is how often queued runs are checked for room, besides each host minute and each
@@ -50,80 +61,86 @@ type minute struct {
 	MemTotal, MemMin int64
 }
 
-// room says why host is too near capacity for another run, or "" if it has room. It projects the
-// host's load: its newest minute, plus a run's footprint (host_run_footprint: learned from the
-// host's history, or a default; memory uses each run's estimate, repositoryMemory) for each run still
-// starting, whose CPU and load that minute cannot show
-// (launched since it began, still finding its project, or whose orchestrator the host had not
-// started when it began), and for the run to start. A run waits when the projection reaches a
-// limit. With no fresh minute it waits for one. A host that never sent its resources gives no sign
-// of being near capacity, so it has room; so does one connected now that has sent none for
-// Unmonitored (its monitoring stopped). One away that long keeps holding: its runs would all reach
-// it at once when it came back. Call it holding the host's queue lock (lockQueue).
-func (e *Engine) room(ctx context.Context, tx pgx.Tx, host, candidate, repo string, memory int64) (string, error) {
-	// Project selection and retries call room for a run the queue started, while older runs may
-	// have gone back into the queue. Honor older queued runs and ready retries on every admission path.
-	var ahead int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM workflow_run_queue q
-		WHERE q.host=$1 AND q.run_id::text<>$2 AND ($2='' OR EXISTS (
-			SELECT 1 FROM workflow_runs c WHERE c.id::text=$2 AND (q.queued_at,q.run_id)<(c.created_at,c.id)))`, host, candidate).Scan(&ahead); err != nil {
-		return "", err
-	}
-	if ahead > 0 {
-		return fmt.Sprintf("%s queued on %s ahead of it", runsWord(ahead), host), nil
-	}
+// hostRun is one of a host's runs as its capacity sees it.
+type hostRun struct {
+	ID      string
+	Created time.Time
+	// Active runs take room: admitted, not waiting for Zach, not finished, and not on a failed or
+	// expired launch (unless its retry is pending, which keeps the room it needs).
+	Active, Waiting bool
+	// Starting: the newest minute cannot show its load yet; Reserving: starting, or a start retry
+	// is pending, so its start still takes memory.
+	Starting, Reserving bool
+	Estimate, Resident  int64 // its memory estimate, and what its agents used in the newest minute
+}
+
+// capacity is what a host holds, read once per decision while holding its queue lock: its newest
+// minute and its runs.
+type capacity struct {
+	host   string
+	limits Limits
+	// hold is why every run waits whatever its size (no fresh measurement); open says there is no
+	// measurement to judge by (a host that never sent one, or connected but no longer sending),
+	// so every run has room.
+	hold            string
+	open            bool
+	m               minute
+	cpuRun, loadRun float64
+	runs            []hostRun
+}
+
+// loadCapacity reads host's capacity (see room).
+func (e *Engine) loadCapacity(ctx context.Context, tx pgx.Tx, host string) (*capacity, error) {
+	c := &capacity{host: host, limits: e.Limits}
 	l, now := e.Limits, e.Now()
-	var m minute
 	err := tx.QueryRow(ctx, `SELECT minute, cpus, cpu_avg_pct, load1, mem_total, mem_available_min FROM host_minutes
-		WHERE host = $1 ORDER BY minute DESC LIMIT 1`, host).Scan(&m.At, &m.CPUs, &m.CPU, &m.Load1, &m.MemTotal, &m.MemMin)
+		WHERE host = $1 ORDER BY minute DESC LIMIT 1`, host).Scan(&c.m.At, &c.m.CPUs, &c.m.CPU, &c.m.Load1, &c.m.MemTotal, &c.m.MemMin)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", nil
+		c.open = true
+		return c, nil
 	}
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	if m.At.Before(now.Add(-l.Unmonitored)) {
+	if c.m.At.Before(now.Add(-l.Unmonitored)) {
 		// connected: the host holds a stream that was seen in the last minute (as host_status.online)
 		var connected bool
 		if err := tx.QueryRow(ctx, "SELECT coalesce((SELECT stream_id IS NOT NULL AND last_seen > $2 FROM hosts WHERE name = $1), false)",
 			host, now.Add(-time.Minute)).Scan(&connected); err != nil {
-			return "", err
+			return nil, err
 		}
 		if connected {
-			return "", nil
+			c.open = true
+			return c, nil
 		}
-		return fmt.Sprintf("%s has no room yet: waiting for %s to report again (last measured %s)",
-			host, host, m.At.UTC().Format(time.RFC3339)), nil
+		c.hold = fmt.Sprintf("%s has no room yet: waiting for %s to report again (last measured %s)",
+			host, host, c.m.At.UTC().Format(time.RFC3339))
+		return c, nil
 	}
-	if m.At.Before(now.Add(-l.Fresh)) {
-		return fmt.Sprintf("%s has no room yet: waiting for a fresh measurement from %s (its newest is from %s)",
-			host, host, m.At.UTC().Format(time.RFC3339)), nil
+	if c.m.At.Before(now.Add(-l.Fresh)) {
+		c.hold = fmt.Sprintf("%s has no room yet: waiting for a fresh measurement from %s (its newest is from %s)",
+			host, host, c.m.At.UTC().Format(time.RFC3339))
+		return c, nil
 	}
-	var cpuRun, loadRun float64
 	if err := tx.QueryRow(ctx, `SELECT cpu_pct_per_run, load_per_cpu_per_run FROM host_run_footprint WHERE host = $1`,
-		host).Scan(&cpuRun, &loadRun); err != nil {
-		return "", err
+		host).Scan(&c.cpuRun, &c.loadRun); err != nil {
+		return nil, err
 	}
-	// starting: runs the newest minute cannot show at full size yet. A run is starting from its launch
-	// for as long as it finds its project (its orchestrator is still to come), and then until the host
-	// reports its start command (launch_command: the workspace and orchestrator) done and that
-	// minute began after it. Memory remains reserved for the whole active run, less
-	// its resident memory already included in this exact host minute. With no matching
-	// sample, reserve the full estimate. A failed or expired attempt keeps its reservation while
-	// its retry is pending (start_retry_at), so the next queued run cannot take the room the retry
-	// needs; the retry is sent or the run fails within RetryWaitLimit of its time, so this holds
-	// minutes, not hours. A run with no retry left fails, which releases it.
-	// A run waiting for Zach's reply reserves nothing more: its agents are idle, perhaps for
-	// days, and the memory they do use is already in the minute. Its resident memory is counted
-	// apart (waitingMemory) only so the reason can say when sign-offs are what holds the queue.
-	var started, active, waiting int
-	var reservedMemory, waitingMemory int64
-	if err := tx.QueryRow(ctx, `SELECT count(*) FILTER (WHERE r.status <> $8 AND r.start_retry_at IS NULL AND r.launched_at IS NOT NULL AND
-			(r.launched_at >= $2 OR r.status = $5 OR c.id IS NOT NULL AND (c.finished_at IS NULL OR c.finished_at > $2))),
-		count(*) FILTER (WHERE r.status <> $8),
-		coalesce(sum(greatest(r.estimated_memory_bytes - resident.bytes, 0)) FILTER (WHERE r.status <> $8), 0)::bigint,
-		count(*) FILTER (WHERE r.status = $8),
-		coalesce(sum(resident.bytes) FILTER (WHERE r.status = $8), 0)::bigint
+	// Starting: from a run's launch for as long as it finds its project (its orchestrator is still
+	// to come), and then until the host reports its start command (launch_command: the workspace and
+	// orchestrator) done and that minute began after it. A failed or expired attempt keeps its room
+	// while its retry is pending (start_retry_at), so the next queued run cannot take the room the
+	// retry needs; the retry is sent or the run fails within RetryWaitLimit of its time, so this
+	// holds minutes, not hours. A run with no retry left fails, which releases it.
+	// Resident: its agents' memory in this exact minute. Runs that ended since the minute began
+	// are read too: the minute still shows their memory.
+	rows, err := tx.Query(ctx, `SELECT r.id::text, r.created_at,
+			r.status NOT IN ($3, $4, $5, $6, $7) AND (r.start_retry_at IS NOT NULL OR coalesce(c.status NOT IN ('failed','expired'), true)),
+			r.status = $6,
+			r.start_retry_at IS NULL AND r.launched_at IS NOT NULL AND
+				(r.launched_at >= $2 OR r.status = $8 OR c.id IS NOT NULL AND (c.finished_at IS NULL OR c.finished_at > $2)),
+			r.start_retry_at IS NOT NULL,
+			r.estimated_memory_bytes, resident.bytes
 		FROM workflow_runs r LEFT JOIN commands c ON c.id = r.launch_command
 		LEFT JOIN LATERAL (
 			SELECT coalesce(sum(m.mem_max), 0)::bigint AS bytes
@@ -132,12 +149,97 @@ func (e *Engine) room(ctx context.Context, tx pgx.Tx, host, candidate, repo stri
 				UNION SELECT r.project_agent_id WHERE r.project_agent_id <> '') members
 			JOIN agent_minutes m ON m.host = r.host AND m.agent_id = members.agent_id AND m.minute = $2
 		) resident ON true
-		WHERE r.host = $1 AND r.status NOT IN ($3, $4, $6)
-			AND r.status <> 'queued' AND r.id::text <> $7
-			AND (r.start_retry_at IS NOT NULL OR coalesce(c.status NOT IN ('failed','expired'), true))`,
-		host, m.At, Failed, Canceled, FindingProject, Succeeded, candidate, Waiting).Scan(&started, &active, &reservedMemory, &waiting, &waitingMemory); err != nil {
-		return "", err
+		WHERE r.host = $1 AND (r.status NOT IN ($3, $4, $5) OR r.finished_at >= $2)
+		ORDER BY r.created_at, r.id`,
+		host, c.m.At, Failed, Canceled, Succeeded, Waiting, Queued, FindingProject)
+	if err != nil {
+		return nil, err
 	}
+	for rows.Next() {
+		var r hostRun
+		var retry bool
+		if err := rows.Scan(&r.ID, &r.Created, &r.Active, &r.Waiting, &r.Starting, &retry, &r.Estimate, &r.Resident); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		r.Starting = r.Starting && r.Active
+		r.Reserving = r.Active && (r.Starting || retry)
+		c.runs = append(c.runs, r)
+	}
+	return c, rows.Err()
+}
+
+// candidate is a run asking for room: its id ("" for one not made yet), when it was made (its
+// place in the queue), its memory estimate and its repository.
+type candidate struct {
+	ID      string
+	Created time.Time
+	Memory  int64
+	Repo    string
+}
+
+// fits says why c's host has no room for k, or "" if it has. With alone, it counts only the runs
+// that came before k (made before it): whether the runs after it are all that keep it waiting.
+//
+// It projects the host from its newest minute. CPU and load: the minute's, plus a run's footprint
+// (host_run_footprint: learned from the host's history, or a default) for each run still starting,
+// whose load the minute cannot show, and for k. Memory: the minute's use, plus what each run still
+// starting takes as it starts (its estimate less what it uses now, up to finderMemory, what a
+// finder or orchestrator takes), and the same for k; this aims under MemPct. Each run may yet
+// reach its peak (its estimate, less what it uses now and what its start counts): k must have room
+// for its own peak while the MemPeaks largest peaks of the runs going come too, under MemPeakPct.
+// So two runs whose peaks cannot both fit do not start together, but lighter runs fit beside a
+// heavy one. A run's peak is a build or a test suite of a few minutes, and the host's history
+// (2026-11) has two runs at their peaks at once for 6 minutes in 3 days and never three; reserving
+// every run's peak at once held a 19 GiB host full at 30% used.
+//
+// The run with no other active run starts if the memory used now is under MemPct, whatever its
+// estimate: memory other processes use could otherwise keep an estimate that fits the host, but
+// not beside them, queued for ever.
+func (c *capacity) fits(k candidate, alone bool) string {
+	if c.open {
+		return ""
+	}
+	if c.hold != "" {
+		return c.hold
+	}
+	l, m := c.limits, c.m
+	before := func(r hostRun) bool {
+		return r.Created.Before(k.Created) || r.Created.Equal(k.Created) && r.ID < k.ID
+	}
+	var started, active, waiting int
+	var usedBytes, waitingBytes, starts float64
+	var peaks []float64 // of the runs going
+	usedBytes = float64(m.MemTotal - m.MemMin)
+	for _, r := range c.runs {
+		if r.ID == k.ID {
+			continue
+		}
+		if alone && k.ID != "" && !before(r) {
+			usedBytes -= float64(r.Resident) // the minute's memory of a run after k
+			continue
+		}
+		if r.Waiting {
+			waiting++
+			waitingBytes += float64(r.Resident)
+		}
+		if !r.Active {
+			continue
+		}
+		active++
+		if r.Starting {
+			started++
+		}
+		headroom := float64(max(r.Estimate-r.Resident, 0))
+		if r.Reserving {
+			start := min(headroom, float64(finderMemory))
+			starts += start
+			headroom -= start
+		}
+		peaks = append(peaks, headroom)
+	}
+	kStart := float64(min(k.Memory, finderMemory))
+	starts += kStart
 	with := "this one"
 	if started > 0 {
 		with = runsWord(started) + " starting and this one"
@@ -145,33 +247,45 @@ func (e *Engine) room(ctx context.Context, tx pgx.Tx, host, candidate, repo stri
 	runs := float64(started + 1)
 	var why []string
 	if l.CPUPct > 0 && m.CPU != nil {
-		if p := *m.CPU + runs*cpuRun; p >= l.CPUPct {
+		if p := *m.CPU + runs*c.cpuRun; p >= l.CPUPct {
 			why = append(why, fmt.Sprintf("CPU %.0f%% now, %s with %s (queues at %.0f%%)", *m.CPU, about(p), with, l.CPUPct))
 		}
 	}
-	if l.MemPct > 0 && m.MemTotal > 0 {
-		used := 100 * (1 - float64(m.MemMin)/float64(m.MemTotal))
-		// The FIFO head starts alone when no other run is active and measured memory is under the
-		// limit, whatever its estimate: memory used by other processes could otherwise keep an
-		// estimate that fits the host, but not beside them, queued for ever. Keep the full
-		// estimate: no following job fits until this one releases its reservation.
-		solo := active == 0 && used < l.MemPct
-		if p := used + 100*(float64(reservedMemory)+float64(memory))/float64(m.MemTotal); p >= l.MemPct && !solo {
-			project := repo
+	if m.MemTotal > 0 {
+		pct := func(b float64) float64 { return 100 * b / float64(m.MemTotal) }
+		used := pct(max(usedBytes, 0))
+		solo := active == 0 && (l.MemPct <= 0 || used < l.MemPct)
+		slices.SortFunc(peaks, func(a, b float64) int { return cmp.Compare(b, a) })
+		counted := peaks[:min(max(l.MemPeaks, 0), len(peaks))]
+		var othersPeak float64
+		for _, p := range counted {
+			othersPeak += p
+		}
+		peak := float64(k.Memory) - kStart + othersPeak
+		steady := used + pct(starts)
+		var reason string
+		var over, limit float64
+		switch {
+		case solo:
+		case l.MemPct > 0 && steady >= l.MemPct:
+			over, limit = steady, l.MemPct
+			reason = fmt.Sprintf("memory %.0f%% used now, %s with %s (queues at %.0f%%)", used, about(steady), with, l.MemPct)
+		case l.MemPeakPct > 0 && steady+pct(peak) >= l.MemPeakPct:
+			over, limit = steady+pct(peak), l.MemPeakPct
+			reason = fmt.Sprintf("memory %.0f%% used now, %s %s (queues at %.0f%%)", used, about(over), peaksWords(len(counted)), l.MemPeakPct)
+		}
+		if reason != "" {
+			project := k.Repo
 			if project == "" {
 				project = "this run"
 			}
-			memoryWith := "this one"
-			if active > 0 {
-				memoryWith = runsWord(active) + " active and this one"
-			}
-			reason := fmt.Sprintf("memory %.0f%% used now, %s with %s (queues at %.0f%%); needs ~%.1f GiB for %s; %.1f GiB free (%.1f GiB reserved for active runs)",
-				used, about(p), memoryWith, l.MemPct, float64(memory)/(1<<30), project, float64(m.MemMin)/(1<<30), float64(reservedMemory)/(1<<30))
+			reason += fmt.Sprintf("; needs ~%.1f GiB for %s; %.1f GiB free (%.1f GiB held for active runs' starts and peaks)",
+				float64(k.Memory)/(1<<30), project, float64(m.MemMin)/(1<<30), (starts-kStart+othersPeak)/(1<<30))
 			// Runs waiting for Zach hold their agents' memory until he signs off, which can take hours.
 			// When they hold enough that the run would fit without it, say that plainly.
-			if waiting > 0 && waitingMemory > 0 {
-				reason += fmt.Sprintf("; %s waiting for sign-off hold %.1f GiB", runsWord(waiting), float64(waitingMemory)/(1<<30))
-				if p-100*float64(waitingMemory)/float64(m.MemTotal) < l.MemPct {
+			if waiting > 0 && waitingBytes > 0 {
+				reason += fmt.Sprintf("; %s waiting for sign-off hold %.1f GiB", runsWord(waiting), waitingBytes/(1<<30))
+				if over-pct(waitingBytes) < limit {
 					reason += fmt.Sprintf(": waiting for %s to free memory", signOffsWord(waiting))
 				}
 			}
@@ -180,14 +294,25 @@ func (e *Engine) room(ctx context.Context, tx pgx.Tx, host, candidate, repo stri
 	}
 	if l.LoadPerCPU > 0 && m.CPUs > 0 {
 		per := m.Load1 / float64(m.CPUs)
-		if p := per + runs*loadRun; p >= l.LoadPerCPU {
+		if p := per + runs*c.loadRun; p >= l.LoadPerCPU {
 			why = append(why, fmt.Sprintf("load %.2f per CPU now, about %.2f with %s (queues at %.2f)", per, p, with, l.LoadPerCPU))
 		}
 	}
 	if len(why) == 0 {
-		return "", nil
+		return ""
 	}
-	return host + " is near capacity: " + strings.Join(why, "; "), nil
+	return c.host + " is near capacity: " + strings.Join(why, "; ")
+}
+
+// peaksWords says which peaks the projection counts: the new run's, and n of the runs going.
+func peaksWords(n int) string {
+	switch n {
+	case 0:
+		return "at its peak"
+	case 1:
+		return "should its peak meet the largest to come of the runs going"
+	}
+	return fmt.Sprintf("should its peak meet the %d largest to come of the runs going", n)
 }
 
 // about reads a projected share: "about 90%", or "over 100%" past all of it.
@@ -210,6 +335,94 @@ func runsWord(n int) string {
 		return "1 run"
 	}
 	return fmt.Sprintf("%d runs", n)
+}
+
+// queuedRuns are host's queued runs and ready retries, in the order the queue starts them: runs
+// started by hand, then immediate ones, then by when they were made.
+func queuedRuns(ctx context.Context, tx pgx.Tx, host string) ([]run, []time.Time, error) {
+	rows, err := tx.Query(ctx, `SELECT id::text, created_at FROM workflow_runs r WHERE r.host = $1 AND (r.status = $2 OR r.start_retry_queued)
+		ORDER BY (r.status = $2 AND r.started_by_hand) DESC, (r.priority = $3) DESC, r.created_at, r.id`, host, Queued, PriorityImmediate)
+	if err != nil {
+		return nil, nil, err
+	}
+	type entry struct {
+		id string
+		at time.Time
+	}
+	entries, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (entry, error) {
+		var e entry
+		return e, row.Scan(&e.id, &e.at)
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	runs, created := make([]run, 0, len(entries)), make([]time.Time, 0, len(entries))
+	for _, en := range entries {
+		r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id = $1", en.id))
+		if err != nil {
+			return nil, nil, err
+		}
+		runs, created = append(runs, r), append(created, en.at)
+	}
+	return runs, created, nil
+}
+
+// heldFor is why a run behind queued run q waits for it: q would have room were it not for the
+// runs that came after it, so the queue holds for it rather than let later runs keep it waiting.
+func heldFor(ahead int, host string, q run) string {
+	return fmt.Sprintf("%s queued on %s ahead of it; the queue holds for %q, which needs the room runs started after it are using",
+		runsWord(ahead), host, q.Title)
+}
+
+// room says why a run (candidate's id, "" for a new one; its repository and memory estimate) has
+// to wait on host, or "" if it can start now (fits). A run waits for the runs queued before it
+// that can start now, and for one the runs after it are keeping waiting (heldFor). Runs ahead that
+// older runs are holding (they need more room than the host has beside those) do not hold it: a
+// run that fits starts ahead of them, so a heavy run at the head no longer keeps every light run
+// behind it waiting. Call it holding the host's queue lock (lockQueue).
+func (e *Engine) room(ctx context.Context, tx pgx.Tx, host, candidateID, repo string, memory int64) (string, error) {
+	c, err := e.loadCapacity(ctx, tx, host)
+	if err != nil {
+		return "", err
+	}
+	k := candidate{ID: candidateID, Created: e.Now(), Memory: memory, Repo: repo}
+	if candidateID != "" {
+		if err := tx.QueryRow(ctx, "SELECT created_at FROM workflow_runs WHERE id::text = $1", candidateID).Scan(&k.Created); err != nil {
+			return "", err
+		}
+	}
+	queue, created, err := queuedRuns(ctx, tx, host)
+	if err != nil {
+		return "", err
+	}
+	var ahead []int
+	for i, q := range queue {
+		if q.ID != candidateID && (q.skipsQueue() || created[i].Before(k.Created) || created[i].Equal(k.Created) && q.ID < k.ID) {
+			ahead = append(ahead, i)
+		}
+	}
+	for _, i := range ahead {
+		q := queue[i]
+		if q.skipsQueue() {
+			return fmt.Sprintf("%s queued on %s ahead of it", runsWord(len(ahead)), host), nil
+		}
+		if q.StartRetryAt != nil {
+			if held, err := e.retryHeld(ctx, tx, q); err != nil || held != "" {
+				if err != nil {
+					return "", err
+				}
+				continue // a retry held for its backoff or its host does not hold the queue
+			}
+		}
+		qk := candidate{ID: q.ID, Created: created[i], Memory: q.EstimatedMemory, Repo: q.Repo}
+		if c.fits(qk, false) == "" {
+			return fmt.Sprintf("%s queued on %s ahead of it", runsWord(len(ahead)), host), nil
+		}
+		if c.fits(qk, true) == "" {
+			return heldFor(len(ahead), host, q), nil
+		}
+	}
+	return c.fits(k, false), nil
 }
 
 // StartQueued starts, on each host with a queue, its queued runs in order while the host has room
@@ -239,44 +452,84 @@ func (e *Engine) StartQueued(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// startNext admits the next run by priority and creation order. Immediate bypasses room.
+// startNext starts the first of host's queued runs that can start (room), in the queue's order,
+// and says whether it started one. A run started by hand or with immediate priority starts
+// whatever the load. Every run it passes over is told why it waits (queue_reason).
 func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, error) {
 	if err := lockQueue(ctx, tx, host); err != nil {
 		return false, err
 	}
-	// A queued run started by hand comes first: Start now put it ahead of the queue (it may have
-	// gone back in when it chose its project, before started_by_hand kept it out). Immediate runs
-	// come next, ahead of normal ones.
-	r, err := scanRun(tx.QueryRow(ctx, runSelect+`WHERE r.host = $1 AND (r.status = $2 OR r.start_retry_queued)
-		ORDER BY (r.status = $2 AND r.started_by_hand) DESC, (r.priority = $3) DESC, r.created_at, r.id LIMIT 1 FOR UPDATE OF r`,
-		host, Queued, PriorityImmediate))
-	if errors.Is(err, ErrNotFound) {
+	queue, created, err := queuedRuns(ctx, tx, host)
+	if err != nil || len(queue) == 0 {
+		return false, err
+	}
+	c, err := e.loadCapacity(ctx, tx, host)
+	if err != nil {
+		return false, err
+	}
+	reasons := map[string]string{}
+	var pick *run
+	var why string
+	var holding *run // a run ahead that only the runs after it keep waiting
+	passed := 0
+	for i := range queue {
+		r := queue[i]
+		// A queued run started by hand comes first: Start now put it ahead of the queue (it may have
+		// gone back in when it chose its project, before started_by_hand kept it out). Immediate runs
+		// come next, ahead of normal ones.
+		if r.Status == Queued && r.StartedByHand {
+			pick, why = &r, startedByHand
+			break
+		}
+		if r.StartRetryAt != nil {
+			// Reconciliation records a timeout, and removes a retry whose host is no longer ready.
+			held, err := e.retryHeld(ctx, tx, r)
+			if err != nil {
+				return false, err
+			}
+			if held != "" {
+				continue
+			}
+		}
+		if r.Priority == PriorityImmediate {
+			pick, why = &r, "immediate priority, ahead of the queue"
+			break
+		}
+		if holding != nil {
+			reasons[r.ID] = heldFor(i, host, *holding)
+			continue
+		}
+		k := candidate{ID: r.ID, Created: created[i], Memory: r.EstimatedMemory, Repo: r.Repo}
+		if reason := c.fits(k, false); reason != "" {
+			reasons[r.ID] = reason
+			passed++
+			if c.fits(k, true) == "" {
+				holding = &queue[i]
+			}
+			continue
+		}
+		pick, why = &r, host+" has room"
+		if passed > 0 {
+			why += fmt.Sprintf(", ahead of %s queued before it that need more room", runsWord(passed))
+		}
+		break
+	}
+	for id, reason := range reasons {
+		if _, err := tx.Exec(ctx, "UPDATE workflow_runs SET queue_reason = $2 WHERE id = $1 AND queue_reason <> $2", id, reason); err != nil {
+			return false, err
+		}
+	}
+	if pick == nil {
 		return false, nil
 	}
+	r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id = $1 FOR UPDATE OF r", pick.ID))
 	if err != nil {
 		return false, err
 	}
 	if r.Status == Queued && r.StartedByHand {
-		return true, e.dequeue(ctx, tx, r, startedByHand)
+		return true, e.dequeue(ctx, tx, r, why)
 	}
-	if r.StartRetryAt != nil {
-		// Reconciliation records a timeout, and removes a retry whose host is no longer ready.
-		if held, err := e.retryHeld(ctx, tx, r); err != nil || held != "" {
-			return false, err
-		}
-	}
-	var why string
-	if r.Priority != PriorityImmediate {
-		why, err = e.room(ctx, tx, host, r.ID, r.Repo, r.EstimatedMemory)
-		if err != nil {
-			return false, err
-		}
-	}
-	if why != "" {
-		_, err := tx.Exec(ctx, "UPDATE workflow_runs SET queue_reason = $2 WHERE id = $1 AND queue_reason <> $2", r.ID, why)
-		return false, err
-	}
-	// A permanent refusal must not leave this oldest run blocking the host.
+	// A permanent refusal must not leave this run blocking the host.
 	// Roll back any partial launch (including model allocations and commands)
 	// before recording its terminal failure in the outer transaction.
 	sp, err := tx.Begin(ctx)
@@ -287,11 +540,7 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 	if r.StartRetryAt != nil {
 		started, err = e.dequeueRetry(ctx, sp, r, host+" has room for the retry")
 	} else {
-		reason := host + " has room"
-		if r.Priority == PriorityImmediate {
-			reason = "immediate priority, ahead of the queue"
-		}
-		err = e.dequeue(ctx, sp, r, reason)
+		err = e.dequeue(ctx, sp, r, why)
 		started = err == nil
 	}
 	if err == nil {

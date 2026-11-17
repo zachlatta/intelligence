@@ -203,7 +203,8 @@ func TestServerConfigReadsTheWorkflowQueueLimits(t *testing.T) {
 	if err != nil || c.QueueLimits != workflow.DefaultLimits() {
 		t.Fatalf("default limits = %+v, %v", c.QueueLimits, err)
 	}
-	set := map[string]string{"WORKFLOW_QUEUE_CPU_PCT": "70", "WORKFLOW_QUEUE_MEM_PCT": "off", "WORKFLOW_QUEUE_LOAD_PER_CPU": "2.5"}
+	set := map[string]string{"WORKFLOW_QUEUE_CPU_PCT": "70", "WORKFLOW_QUEUE_MEM_PCT": "off", "WORKFLOW_QUEUE_LOAD_PER_CPU": "2.5",
+		"WORKFLOW_QUEUE_MEM_PEAK_PCT": "90", "WORKFLOW_QUEUE_MEM_PEAKS": "2"}
 	for k, v := range base {
 		set[k] = v
 	}
@@ -211,12 +212,20 @@ func TestServerConfigReadsTheWorkflowQueueLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l := c.QueueLimits; l.CPUPct != 70 || l.MemPct != 0 || l.LoadPerCPU != 2.5 {
+	if l := c.QueueLimits; l.CPUPct != 70 || l.MemPct != 0 || l.LoadPerCPU != 2.5 || l.MemPeakPct != 90 || l.MemPeaks != 2 {
 		t.Errorf("limits = %+v", l)
 	}
-	set["WORKFLOW_QUEUE_CPU_PCT"] = "lots"
-	if _, err := serverConfig(env(set)); err == nil || !strings.Contains(err.Error(), "WORKFLOW_QUEUE_CPU_PCT") {
-		t.Errorf("a bad limit should be refused: %v", err)
+	if l := workflow.DefaultLimits(); l.MemPct != 80 || l.MemPeakPct != 95 || l.MemPeaks != 1 {
+		t.Errorf("default memory limits = %+v, want 80%% now, 95%% should a new run's peak meet the largest to come", l)
+	}
+	for k, v := range map[string]string{"WORKFLOW_QUEUE_CPU_PCT": "lots", "WORKFLOW_QUEUE_MEM_PEAKS": "1.5", "WORKFLOW_QUEUE_MEM_PEAK_PCT": "-1"} {
+		bad := map[string]string{k: v}
+		for k, v := range base {
+			bad[k] = v
+		}
+		if _, err := serverConfig(env(bad)); err == nil || !strings.Contains(err.Error(), k) {
+			t.Errorf("a bad %s should be refused: %v", k, err)
+		}
 	}
 }
 

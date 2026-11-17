@@ -70,8 +70,8 @@ func TestABusyHostQueuesNewRunsAndStartsThemInOrder(t *testing.T) {
 	if reason := runField(t, h, first, "queue_reason").(string); !strings.Contains(reason, "CPU") || !strings.Contains(reason, "97%") {
 		t.Errorf("the reason should say the CPU is busy: %q", reason)
 	}
-	if reason := runField(t, h, second, "queue_reason").(string); reason != "1 run queued on host-1 ahead of it" {
-		t.Errorf("the reason should say what is queued ahead: %q", reason)
+	if reason := runField(t, h, second, "queue_reason").(string); !strings.Contains(reason, "CPU") || !strings.Contains(reason, "97%") {
+		t.Errorf("the reason should say what it waits for, as the first's does: %q", reason)
 	}
 	code, r := sqlPost(t, h, q("SELECT run_id::text, position, host FROM workflow_run_queue ORDER BY position"))
 	if code != http.StatusOK || len(r.Rows) != 2 || r.Rows[0][0] != first || r.Rows[1][0] != second || r.Rows[0][2] != "host-1" {
@@ -159,7 +159,7 @@ func TestAQueuedRunCanBeStartedNowOrCanceled(t *testing.T) {
 	wf := fixedWorkflow(t, h)
 	first := startRun(t, h, wf, "first")
 	second := startRun(t, h, wf, "second")
-	if reason := runField(t, h, first, "queue_reason").(string); !strings.Contains(reason, "memory 97% used now, over 100% with this one") {
+	if reason := runField(t, h, first, "queue_reason").(string); !strings.Contains(reason, "memory 97% used now, about 98% with this one (queues at 80%)") {
 		t.Errorf("reason = %q", reason)
 	}
 	if code, msg := move(t, h, key, first, map[string]string{"move": "next"}); code != http.StatusConflict || !strings.Contains(msg, "queued") {
