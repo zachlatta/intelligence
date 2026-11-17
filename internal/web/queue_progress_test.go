@@ -188,14 +188,14 @@ func TestARequeuedHandStartedRunStartsOnTheNextPass(t *testing.T) {
 func TestTheQueueHeadStartsOnAnIdleHost(t *testing.T) {
 	h, d := dbServer(t)
 	b := sendReport(t, h, wfReport())
-	wf := repositoryHistory(t, h, d, "/w/app") // 10 GiB estimate
+	wf := repositoryHistory(t, h, d, "/w/app") // 8 GiB estimate
 	b.command()
 	repositoryMinute(t, b, 1<<30)
 	head := startRun(t, h, wf, "build")
 	if got := runField(t, h, head, "status"); got != "queued" {
 		t.Fatalf("status = %v, want queued while memory is full", got)
 	}
-	// 9 GiB of 16 in use by other things: 10 GiB more never fits under 90%.
+	// 9 GiB of 16 in use by other things: 8 GiB more is over the 95% peak ceiling, even alone.
 	repositoryMinute(t, b, 7<<30)
 	if got := runField(t, h, head, "status"); got != "queued" {
 		t.Fatalf("solo bypass exceeded its bounded peak: %v", got)

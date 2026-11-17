@@ -256,9 +256,6 @@ func (c *capacity) fits(k candidate, alone bool) string {
 	if m.MemTotal > 0 {
 		pct := func(b float64) float64 { return 100 * b / float64(m.MemTotal) }
 		used := pct(max(usedBytes, 0))
-		// Alone may pass the startup ceiling, but never discard an arbitrarily
-		// large estimate. Limit this exception to estimates at most half the host,
-		// and require its whole remaining peak to fit under the peak ceiling.
 		solo := active == 0 && k.Memory <= m.MemTotal/2 &&
 			(l.MemPct <= 0 || used < l.MemPct) &&
 			(l.MemPeakPct <= 0 || used+pct(kHeadroom) < l.MemPeakPct)

@@ -58,7 +58,7 @@ func TestRepositoryEstimateGatesExistingQueue(t *testing.T) {
 		t.Fatalf("heavy repo = %v, want queued", got)
 	}
 	if got := runField(t, h, id, "estimated_memory_bytes"); got != float64(8<<30) {
-		t.Fatalf("concurrent peak plus headroom = %v", got)
+		t.Fatalf("repository p85 estimate = %v", got)
 	}
 	if page := get(t, h, "/workflow-runs/"+id, nil).Body.String(); !strings.Contains(page, "Estimated run memory: 8.0 GiB") {
 		t.Fatal("page hides repository estimate")
@@ -160,8 +160,8 @@ func TestOversizedRepositoryRunsAloneWithoutBlockingFIFOForever(t *testing.T) {
 	if got := runField(t, h, light, "status"); got != "starting" {
 		t.Fatalf("FIFO did not progress: %v", got)
 	}
-	// An OS baseline can make an estimate never fit beside it, even one smaller than
-	// physical RAM. On an idle host the head still starts, so the queue cannot wait for ever.
+	// An OS baseline can keep even a lone head's peak over the peak ceiling: it waits
+	// until measured memory has room for it, then starts with nothing else going.
 	if _, err := d.Owner.Exec(t.Context(), `UPDATE workflow_runs SET status='succeeded',finished_at=now() WHERE id=$1`, light); err != nil {
 		t.Fatal(err)
 	}

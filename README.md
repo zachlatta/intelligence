@@ -1169,7 +1169,8 @@ peaks)”). A run alone can pass the steady/start memory ceiling when its estima
 half the host, live use is below `WORKFLOW_QUEUE_MEM_PCT`, and live use plus its unconsumed
 estimate remains below `WORKFLOW_QUEUE_MEM_PEAK_PCT`. This bounded solo exit does not waive
 the peak ceiling. A head too large to fit even alone does not hold lighter work behind it:
-backfill and the hold-for-head rule below still apply. CPU, load and telemetry checks still
+backfill and the hold-for-head rule below still apply. Such a run starts only when measured
+memory leaves room for its peak, or by **Start now**. CPU, load and telemetry checks still
 apply. Its whole headroom stays one of the peaks to come until it ends, so
 only runs that fit beside its peak start beside it. This is an advisory estimate,
 not a guarantee that an oversized workload will fit or avoid an OOM kill.
