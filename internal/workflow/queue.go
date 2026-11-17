@@ -522,7 +522,14 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 	if pick == nil {
 		return false, nil
 	}
-	r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id = $1 FOR UPDATE OF r", pick.ID))
+	// The queue was read without locking its runs: lock the one picked only if it is still in the
+	// queue (Postgres checks again after waiting for its row), so a run canceled meanwhile is not
+	// started. One that left the queue is progress: the next pass reads the queue again.
+	r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id = $1 AND (r.status = $2 OR r.start_retry_queued) FOR UPDATE OF r",
+		pick.ID, Queued))
+	if errors.Is(err, ErrNotFound) {
+		return true, nil
+	}
 	if err != nil {
 		return false, err
 	}

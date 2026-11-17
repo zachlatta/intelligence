@@ -1258,7 +1258,7 @@ A new queued run has no agents or commands yet; a run queued after repository se
 its archived finder history. A ready retry keeps its startup phase and joins
 the queue through `workflow_runs.start_retry_queued`. `workflow_runs.queue_reason` says why it waits
 (every queued run's is kept current while it waits, and cleared on dequeue), its events say when it was `queued` and
-`dequeued`, and `workflow_run_queue` lists each host's queue in order (`position` 1 is next). The
+`dequeued`, and `workflow_run_queue` lists each host's queue in order (`position` 1 is first in line; a later run that fits may start before runs that need more room). The
 runs list and the run page show it queued, where in line (“2nd in line for host-1”) and why, and
 the run page says when it was queued, not started; the run page's **Start now** starts it at once,
 whatever the host's load (`POST /api/workflow-runs/{id}/start`; for a queued retry the button reads

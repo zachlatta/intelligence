@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/zachlatta/intelligence/internal/dbtest"
+	"github.com/zachlatta/intelligence/internal/hostclient"
 	"github.com/zachlatta/intelligence/internal/workflow"
 )
 
@@ -156,5 +157,132 @@ func TestEveryQueuedRunsReasonIsKeptCurrent(t *testing.T) {
 		if reason := runField(t, h, id, "queue_reason").(string); !strings.Contains(reason, "CPU 96% now") {
 			t.Errorf("reason = %q, want the newest minute's CPU", reason)
 		}
+	}
+}
+
+// rawMinute records host-1's minute at m straight into host_minutes, without the stream (whose
+// minute starts the queue at once), so a test can start the queue itself.
+func rawMinute(t *testing.T, d dbtest.DB, m time.Time, cpu float64, total, available int64) {
+	t.Helper()
+	if _, err := d.Owner.Exec(t.Context(), `INSERT INTO host_minutes (host, minute, samples, cpus, cpu_avg_pct, load1, mem_total, mem_available_min)
+		VALUES ('host-1', $1, 12, 8, $2, 1, $3, $4)`, m, cpu, total, available); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A run canceled while the queue is choosing it is not started: the queue reads its runs without
+// locking them, so it locks the one it picks only while that one is still queued.
+func TestARunCanceledAsTheQueuePicksItIsNotStarted(t *testing.T) {
+	d := dbtest.New(t)
+	clock := &fakeClock{t: time.Now().UTC().Truncate(time.Minute)}
+	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.Now = clock.Now; c.QueueInterval = time.Hour })
+	b := sendReport(t, h, wfReport())
+	wf := fixedWorkflow(t, h)
+	hostMinute(t, b, clock.Now().Add(-time.Minute), 97, 0.3)
+	id := startRun(t, h, wf, "canceled as it is picked")
+	if got := runField(t, h, id, "status"); got != "queued" {
+		t.Fatalf("status = %v, want queued", got)
+	}
+	rawMinute(t, d, clock.Now(), 10, 100*gib, 70*gib) // room now
+
+	// Cancel holds the run's row while the queue reads it, and commits once the queue waits for it.
+	cancel, err := d.Owner.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel.Rollback(t.Context())
+	if _, err := cancel.Exec(t.Context(), "SELECT 1 FROM workflow_runs WHERE id = $1 FOR UPDATE", id); err != nil {
+		t.Fatal(err)
+	}
+	e := workflow.NewEngine(d.Owner, clock.Now)
+	done := make(chan error, 1)
+	go func() { done <- e.StartQueued(t.Context()) }()
+	for waited := 0; ; waited++ {
+		var n int
+		if err := d.Owner.QueryRow(t.Context(), `SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n > 0 {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("the queue finished without waiting for the run's row: %v", err)
+		case <-time.After(10 * time.Millisecond):
+		}
+		if waited > 1000 {
+			t.Fatal("the queue never waited for the run's row")
+		}
+	}
+	if _, err := cancel.Exec(t.Context(), "UPDATE workflow_runs SET status = 'canceled', finished_at = $2, queue_reason = '' WHERE id = $1",
+		id, clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := cancel.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if got := runField(t, h, id, "status"); got != "canceled" {
+		t.Fatalf("a canceled run was started: %v", got)
+	}
+	code, r := sqlPost(t, h, q(`SELECT count(*) FROM workflow_run_events WHERE run_id = '`+id+`' AND kind = 'dequeued'`))
+	if code != http.StatusOK || r.Rows[0][0] != float64(0) {
+		t.Fatalf("a canceled run was dequeued: %+v", r)
+	}
+}
+
+// A start retry the queue cannot send yet (here overdue: reconciliation sends it or fails the run)
+// does not hold the runs behind it: one that fits starts. The retry keeps its memory, so the run
+// after that, which would fit beside the first without it, waits.
+func TestAHeldStartRetryDoesNotHoldTheRunsBehindIt(t *testing.T) {
+	d := dbtest.New(t)
+	clock := &fakeClock{t: time.Now().UTC().Truncate(time.Minute)}
+	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.Now = clock.Now; c.QueueInterval = time.Hour })
+	b := sendReport(t, h, wfReport())
+	wf := fixedWorkflow(t, h) // no history: 4 GiB each
+	rawMinute(t, d, clock.Now(), 10, 16*gib, 16*gib)
+	retry := startRun(t, h, wf, "its start failed")
+	cmd := b.command()
+	if ack := b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{ID: cmd.ID, Status: hostclient.CommandFailed, Error: "not connected to the Paseo daemon"}}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	// Its retry is queued and RetryWaitLimit overdue: the queue itself cannot send it.
+	clock.Add(time.Minute)
+	if _, err := d.Owner.Exec(t.Context(), `UPDATE workflow_runs SET start_retry_at = $2, start_retry_queued = true, pending_command = launch_command
+		WHERE id = $1`, retry, clock.Now().Add(-workflow.RetryWaitLimit-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	// 7 of 16 GiB used, and busy CPU for now, so the next two runs queue behind the retry.
+	rawMinute(t, d, clock.Now(), 97, 16*gib, 9*gib)
+	clock.Add(time.Second)
+	next := startRun(t, h, wf, "fits beside the retry")
+	clock.Add(time.Second)
+	after := startRun(t, h, wf, "fits only were the retry's memory not counted")
+	for _, id := range []string{next, after} {
+		if got := runField(t, h, id, "status"); got != "queued" {
+			t.Fatalf("status = %v, want queued while the CPU is busy", got)
+		}
+	}
+	// The CPU calms: the next run starts past the held retry; the one after it does not fit beside
+	// the retry's 4 GiB and the next run's (100% should their peaks meet).
+	clock.Add(time.Minute)
+	rawMinute(t, d, clock.Now(), 10, 16*gib, 9*gib)
+	if err := workflow.NewEngine(d.Owner, clock.Now).StartQueued(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := runField(t, h, next, "status"); got == "queued" {
+		t.Fatalf("the held retry kept the next run queued: %v", runField(t, h, next, "queue_reason"))
+	}
+	if got := runField(t, h, after, "status"); got != "queued" {
+		t.Fatalf("the run after = %v, want queued: the retry's memory must stay counted", got)
+	}
+	if reason := runField(t, h, after, "queue_reason").(string); !strings.Contains(reason, "memory") {
+		t.Errorf("reason = %q, want memory", reason)
+	}
+	if got := runField(t, h, retry, "start_retry_queued"); got != true {
+		t.Errorf("the retry left the queue: %v", got)
 	}
 }
