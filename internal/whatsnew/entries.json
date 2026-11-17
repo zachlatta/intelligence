@@ -1,5 +1,13 @@
 [
   {
+    "id": "email-follow-up-continuity",
+    "released": "2026-11-17",
+    "title": "Email follow-ups keep their context",
+    "summary": "A reply email within 24 hours continues the earlier run's agent, keeping its research and numbers. Replies say \"Correction:\" and explain why when they change an earlier answer. On the run page, What happened links each follow-up to the earlier run.",
+    "media": "email-follow-up-continuity.png",
+    "mediaAlt": "A local demo run's What happened section showing a follow-up resuming the earlier run's orchestrator, with links to that run"
+  },
+  {
     "id": "workflow-run-status-tabs",
     "released": "2026-11-15",
     "title": "Filter workflow runs by status",

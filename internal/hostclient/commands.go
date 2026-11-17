@@ -62,7 +62,17 @@ const (
 	RenameAgentKind      = "rename_agent"
 	SendMessageKind      = "send_message"
 	CancelAgentKind      = "cancel_agent"
+	ContinueEmailKind    = "continue_email"
 )
+
+// ContinueEmailArgs restores a finished task's agent before sending the new run's prompt.
+// AfterCommand serializes restoration after the earlier workspace cleanup on the server.
+type ContinueEmailArgs struct {
+	RunID        string  `json:"runId,omitempty"`
+	AgentID      string  `json:"agentId"`
+	Text         string  `json:"text"`
+	AfterCommand *string `json:"afterCommand,omitempty"`
+}
 
 // CreateWorkspaceArgs: a workspace on Cwd, or with Worktree a new git worktree of the repository at
 // Cwd on a new Branch from Base. With Agent, an agent is then started in it (Agent names no
@@ -100,11 +110,12 @@ type WorkspaceArgs struct {
 // AgentArgs name an agent: archive_agent, cancel_agent, rename_agent with Title, send_message with
 // Text and, optionally, Behavior.
 type AgentArgs struct {
-	Attachments []attachment.Image `json:"attachments,omitempty"`
-	AgentID     string             `json:"agentId"`
-	Title       string             `json:"title,omitempty"`
-	Text        string             `json:"text,omitempty"`
-	Behavior    string             `json:"behavior,omitempty"` // send_message: steer (""), interrupt or queue
+	AfterCommand *string            `json:"afterCommand,omitempty"` // send after this command succeeds
+	Attachments  []attachment.Image `json:"attachments,omitempty"`
+	AgentID      string             `json:"agentId"`
+	Title        string             `json:"title,omitempty"`
+	Text         string             `json:"text,omitempty"`
+	Behavior     string             `json:"behavior,omitempty"` // send_message: steer (""), interrupt or queue
 }
 
 // How a message treats the agent's running turn. Each starts a turn when the agent is not running.
@@ -129,6 +140,9 @@ func (c Command) waitsForTurn() bool {
 
 // CommandResult is what a command made or changed.
 type CommandResult struct {
+	NotDelivered   bool   `json:"notDelivered,omitempty"` // failure before calling SendMessage
+	FailureStage   string `json:"failureStage,omitempty"`
+	AgentGone      bool   `json:"agentGone,omitempty"`
 	WorkspaceID    string `json:"workspaceId,omitempty"`
 	AgentID        string `json:"agentId,omitempty"`
 	ScheduleID     string `json:"scheduleId,omitempty"`
@@ -162,6 +176,15 @@ func ParseCommand(kind string, args json.RawMessage) (any, error) {
 		return nil
 	}
 	switch kind {
+	case ContinueEmailKind:
+		var a ContinueEmailArgs
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		if a.AgentID == "" || a.Text == "" {
+			return nil, errors.New("continue_email needs agentId and text")
+		}
+		return a, nil
 	case CreateWorkspaceKind:
 		var a CreateWorkspaceArgs
 		if err := decode(&a); err != nil {
@@ -212,6 +235,8 @@ func ParseCommand(kind string, args json.RawMessage) (any, error) {
 		switch {
 		case a.AgentID == "":
 			return nil, fmt.Errorf("%s needs agentId", kind)
+		case kind != SendMessageKind && a.AfterCommand != nil:
+			return nil, fmt.Errorf("%s takes no afterCommand", kind)
 		case kind == RenameAgentKind && a.Title == "":
 			return nil, errors.New("rename_agent needs title")
 		case kind == SendMessageKind && a.Text == "":
@@ -268,6 +293,9 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 	c := w.client
 	w.mu.Unlock()
 	if c == nil {
+		if a, ok := parsed.(ContinueEmailArgs); ok {
+			return CommandResult{AgentID: a.AgentID, NotDelivered: true, FailureStage: "connect"}, errors.New("not connected to the Paseo daemon")
+		}
 		return CommandResult{}, errors.New("not connected to the Paseo daemon")
 	}
 	if IsScheduleKind(cmd.Kind) {
@@ -279,6 +307,52 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 		key = cmd.ID
 	}
 	switch a := parsed.(type) {
+	case ContinueEmailArgs:
+		result := CommandResult{AgentID: a.AgentID}
+		beforeSend := func(stage string, err error) (CommandResult, error) {
+			result.NotDelivered = true
+			result.FailureStage = stage
+			return result, err
+		}
+		ag, err := c.InspectAgent(ctx, a.AgentID)
+		if err != nil {
+			result.AgentGone = strings.Contains(err.Error(), "Agent not found:")
+			return beforeSend("inspect_agent", err)
+		}
+		if ag == nil {
+			result.AgentGone = true
+			return beforeSend("inspect_agent", fmt.Errorf("Agent not found: %s", a.AgentID))
+		}
+		result.WorkspaceID = ag.WorkspaceID
+		if ag.WorkspaceID == "" {
+			return beforeSend("inspect_workspace", errors.New("agent has no owning workspace"))
+		}
+		// archive_workspace removes a worktree. Modern Paseo clients receive no
+		// implicit recovery from refresh_agent_request, so recover it explicitly.
+		recovery, err := c.InspectWorkspaceRecovery(ctx, ag.WorkspaceID)
+		if err != nil {
+			return beforeSend("inspect_workspace", err)
+		}
+		switch {
+		case recovery.Kind == "recoverable":
+			if err := c.RestoreWorkspace(ctx, ag.WorkspaceID); err != nil {
+				return beforeSend("restore_workspace", err)
+			}
+		case recovery.Kind == "unavailable" && recovery.Reason == "workspace_not_archived":
+			// Already active, including a replay after an earlier successful send.
+		default:
+			return beforeSend("inspect_workspace", fmt.Errorf("workspace cannot be recovered (%s): %s", recovery.Reason, recovery.Message))
+		}
+		if !ag.ArchivedAt.IsZero() {
+			if err := c.RefreshAgent(ctx, a.AgentID); err != nil {
+				return beforeSend("refresh_agent", err)
+			}
+		}
+		if err := c.SendMessage(ctx, a.AgentID, a.Text, cmd.ID, paseo.Steer); err != nil {
+			result.FailureStage = "send_message"
+			return result, err
+		}
+		return result, nil
 	case CreateWorkspaceArgs:
 		a.Cwd = expandHome(a.Cwd, home)
 		ws, err := c.CreateWorkspace(ctx, paseo.CreateWorkspace{Cwd: a.Cwd, Worktree: a.Worktree, Branch: a.Branch, Base: a.Base,

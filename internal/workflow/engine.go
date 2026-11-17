@@ -371,6 +371,7 @@ func ownsHost(ctx context.Context, tx pgx.Tx, account int64, host string) error 
 
 // run is a run with its workflow's name and definition.
 type run struct {
+	ContinuedRun                                 string
 	ID, Host, Title, Input, Status, Repo, Branch string
 	WorkflowID                                   string
 	Account                                      int64
@@ -395,14 +396,14 @@ func (r run) vars() Vars { return Vars{Run: r.ID, Input: r.Input, Repo: r.Repo, 
 
 const runSelect = `SELECT r.id::text, r.host, r.title, r.input, r.status, r.repo, r.branch, r.account_id, r.step, r.workspace_id,
 	r.project_agent_id, r.orchestrator_id, r.project_command::text, w.name, v.definition, r.start_retry_at, r.start_retries,
-	r.estimated_memory_bytes, r.project_selected, r.started_by_hand, r.priority, r.workflow_id::text
+	r.estimated_memory_bytes, r.project_selected, r.started_by_hand, r.priority, r.workflow_id::text, coalesce(r.continued_run_id::text,'')
 	FROM workflow_runs r JOIN workflow_versions v USING (workflow_id, version) JOIN workflows w ON w.id = r.workflow_id `
 
 func scanRun(row pgx.Row) (run, error) {
 	var r run
 	var def []byte
 	err := row.Scan(&r.ID, &r.Host, &r.Title, &r.Input, &r.Status, &r.Repo, &r.Branch, &r.Account, &r.Step, &r.WorkspaceID,
-		&r.ProjectAgent, &r.Orchestrator, &r.ProjectCommand, &r.Name, &def, &r.StartRetryAt, &r.StartRetries, &r.EstimatedMemory, &r.ProjectSelected, &r.StartedByHand, &r.Priority, &r.WorkflowID)
+		&r.ProjectAgent, &r.Orchestrator, &r.ProjectCommand, &r.Name, &def, &r.StartRetryAt, &r.StartRetries, &r.EstimatedMemory, &r.ProjectSelected, &r.StartedByHand, &r.Priority, &r.WorkflowID, &r.ContinuedRun)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, ErrNotFound
 	}
@@ -560,6 +561,9 @@ func checkWorkflowProviders(ctx context.Context, tx pgx.Tx, d Definition) error 
 
 // startFirst queues the command that starts run r, its pending_command.
 func (e *Engine) startFirst(ctx context.Context, tx pgx.Tx, r run) error {
+	if r.ContinuedRun != "" && r.Orchestrator != "" {
+		return e.startEmailContinuation(ctx, tx, r)
+	}
 	if r.ProjectSelected {
 		return e.startOrchestrator(ctx, tx, r, r.Repo)
 	}
@@ -697,6 +701,9 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 			return err
 		}
 		at := e.Now()
+		if c.Kind == hostclient.ContinueEmailKind {
+			return e.emailContinued(ctx, tx, r, c, res)
+		}
 		if c.Status != hostclient.CommandSucceeded {
 			what := "could not start the project finder"
 			if r.Status == StartingOrchestrator {
@@ -1153,6 +1160,24 @@ func (e *Engine) MessageTx(ctx context.Context, tx pgx.Tx, account int64, runID,
 		}
 		return e.event(ctx, tx, r, "message", nil, nil, what)
 	}
+	var continuation *string
+	if err := tx.QueryRow(ctx, `SELECT c.id::text FROM workflow_runs r LEFT JOIN commands c ON c.id=r.pending_command AND c.kind='continue_email' WHERE r.id=$1`, r.ID).Scan(&continuation); err != nil {
+		return err
+	}
+	if continuation != nil {
+		addition := "\n\n" + what + ":\n\n" + text
+		if _, err := tx.Exec(ctx, "UPDATE workflow_runs SET input=input || $2 WHERE id=$1", r.ID, addition); err != nil {
+			return err
+		}
+		// A not-yet-delivered continuation can take the email in its first prompt.
+		tag, err := tx.Exec(ctx, `UPDATE commands SET args=jsonb_set(args,'{text}',to_jsonb((args->>'text') || $2::text)) WHERE id=$1 AND status='queued'`, *continuation, addition)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() > 0 {
+			return e.event(ctx, tx, r, "message", nil, nil, what)
+		}
+	}
 	if err := e.unstall(ctx, tx, r, "Resumed: new input arrived for the existing orchestrator."); err != nil {
 		return err
 	}
@@ -1160,7 +1185,7 @@ func (e *Engine) MessageTx(ctx context.Context, tx pgx.Tx, account int64, runID,
 	if r.Status == Waiting {
 		waiting = "\n\nYou are still waiting on Zach's reply to your note: this is not it."
 	}
-	args, _ := json.Marshal(hostclient.AgentArgs{AgentID: r.Orchestrator, Text: fmt.Sprintf("%s:\n\n%s%s\n\n"+
+	args, _ := json.Marshal(hostclient.AgentArgs{AgentID: r.Orchestrator, AfterCommand: continuation, Text: fmt.Sprintf("%s:\n\n%s%s\n\n"+
 		"Decide what it means for the run, and carry on.", what, text, waiting)})
 	if _, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.SendMessageKind, args, replyTTL, e.Now()); err != nil {
 		return err

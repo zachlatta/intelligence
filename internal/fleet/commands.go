@@ -181,6 +181,12 @@ func (r *Registry) Claim(ctx context.Context, host string, options ClaimOptions,
 				AND CASE WHEN idempotency_key = '' THEN $3::boolean ELSE $6::boolean END))
 			AND (idempotency_key = '' OR ($5 AND EXISTS (
 				SELECT 1 FROM hosts WHERE name = $1 AND stream_id = NULLIF($4, '')::uuid AND start_retry_keys)))
+			AND (args->>'afterCommand' IS NULL OR EXISTS (
+				SELECT 1 FROM commands prior WHERE prior.id::text = commands.args->>'afterCommand' AND prior.host=commands.host
+				AND (prior.status='succeeded' OR (commands.kind='continue_email' AND prior.status='failed'))))
+			AND (kind<>'continue_email' OR args->>'runId' IS NULL OR EXISTS (
+				SELECT 1 FROM workflow_runs r WHERE r.id::text=commands.args->>'runId' AND r.pending_command=commands.id
+				AND r.status IN ('running','waiting','stalled')))
             AND NOT EXISTS (SELECT 1 FROM workflow_run_continuations k JOIN workflow_runs r ON r.id=k.run_id
               WHERE k.command_id=commands.id AND (r.status<>'running'
                 OR k.event_id<>(SELECT event_id FROM workflow_run_latest_transition WHERE run_id=r.id)))
@@ -233,6 +239,12 @@ func (r *Registry) UpdateCommand(ctx context.Context, host string, u hostclient.
 			return err
 		}
 		changed = true
+		// A finished cleanup may release a waiting email continuation.
+		if u.Status == hostclient.CommandSucceeded || u.Status == hostclient.CommandFailed {
+			if _, err := tx.Exec(ctx, notifySQL, CommandsTopic(host)); err != nil {
+				return err
+			}
+		}
 		_, err = tx.Exec(ctx, notifySQL, CommandTopic(u.ID))
 		return err
 	})

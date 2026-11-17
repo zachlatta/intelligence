@@ -1329,7 +1329,7 @@ it once:
 1. **In the thread of a run** (an earlier email in its Gmail thread started one), the workflow's
    `replies` decides: `run` (the default) adds it to the run as a message to its orchestrator; if
    the run waits on a question and the email is from one of the account holder's own addresses,
-   it is the answer; if the run is over, it starts a new run of the workflow. `new` starts a new
+   it is the answer; if the run is over, it starts a follow-up run of the workflow. `new` starts a new
    run; `ignore` does nothing. When the thread's run steered into another run that is still
    live, the email goes to that run instead (One deliverable, one run, above).
 2. **Otherwise** it starts the workflow whose filter (`definition.email`: `from` addresses or
@@ -1337,6 +1337,25 @@ it once:
    every filled field must match. When two match, the narrower wins (more fields; an address beats
    its domain). Saving a filter that another workflow already has, sharing a sender with nothing to
    tell them apart, is refused.
+
+A follow-up less than 24 hours after completion reuses the earlier orchestrator and workspace,
+restoring them from Paseo persistence when archived. Each email keeps a separate run, with its own
+steps, completion and answer; `workflow_runs.continued_run_id` links the previous run. Restoration
+uses the normal queue and effective priority, with a fresh repository memory estimate. Each new
+request has its own request time and expected answer; earlier sends and resolutions do not settle it.
+Restoration waits for the previous cleanup command to finish, then explicitly inspects and restores
+the archived workspace through Paseo's recovery protocol before refreshing the agent. A failure
+before sending the prompt (agent inspection, workspace recovery or refresh) permits a cold start;
+the failed command's result records `notDelivered` and `failureStage`. Failures during the send
+remain uncertain and cannot start a second agent. An older run or a run without an orchestrator
+also starts cold. All these follow-ups include
+the thread's sent messages as verbatim decoded text/HTML MIME bodies and the earlier runs' notes
+and events. Gmail read failures retry intake rather than losing that context.
+`workflow_run_events` records `email_continuation_requested`, `email_continued`, or `email_cold_start`;
+continuation events expose `continued_run_id` for SQL review, and the run page links the earlier run. A delivery error or expiry that might
+have sent the prompt fails the follow-up visibly rather than launching a second answering agent.
+Email orchestrator prompts, including saved definitions, require explicit corrections, truthful
+action status, and a yes/no opening when asked whether anything was done or remains to do.
 
 Email authentication, trigger matching and permission to start work are separate concerns.
 The current email paths do not enforce a complete owner-only workflow-start policy. Do not

@@ -8,6 +8,21 @@ import (
 	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
+func TestSavedEmailWorkflowGetsFollowUpReplyRules(t *testing.T) {
+	d := Starting
+	d.Trigger = TriggerEmail
+	d.Orchestrator.Instructions = "Saved instructions without the new rules."
+	p, err := OrchestratorPrompt("Saved email task", d, Vars{Run: "follow-up", Input: "Did you do it?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Correction:", "number, recommendation or yes/no", "Done", "Changed", "Nothing was changed", "first words must be yes/no", "earlier sent answers do not count"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+}
+
 func TestOrchestratorSummarizesTheTaskBeforeStartingWork(t *testing.T) {
 	p := mustOrchestratorPrompt(t, "Saved workflow", Starting, Vars{Run: "run-1", Input: "a long task"})
 	for _, want := range []string{"intelligence workflow summarize --run run-1 --summary", "3–8 words", "whole task", "If saving the summary fails, continue"} {

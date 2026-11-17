@@ -53,6 +53,12 @@ func checkCommandProvider(ctx context.Context, tx pgx.Tx, host, kind string, par
 	}
 	provider, scheduleID := "", ""
 	switch a := parsed.(type) {
+	case hostclient.ContinueEmailArgs:
+		// Archived agents disappear from the live fleet. Their retained workflow
+		// snapshot still identifies the provider that restoration would resume.
+		if err := tx.QueryRow(ctx, `SELECT coalesce((SELECT provider FROM recorded_agents WHERE host=$1 AND id=$2),'')`, host, a.AgentID).Scan(&provider); err != nil {
+			return err
+		}
 	case hostclient.CreateAgentArgs:
 		provider = a.Provider
 	case hostclient.CreateWorkspaceArgs:

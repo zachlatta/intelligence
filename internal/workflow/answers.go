@@ -45,6 +45,21 @@ func (e *Engine) RecordAnswer(ctx context.Context, host, id string, a Answer) er
 		if !a.SentAt.IsZero() {
 			sentAt = &a.SentAt
 		}
+		if a.Checked {
+			// A resumed agent knows earlier message IDs. Those are evidence for the
+			// new request, not a checked answer to it (including a cold fallback).
+			var earlier bool
+			if err := tx.QueryRow(ctx, `SELECT
+ (r.continued_run_id IS NOT NULL OR EXISTS(SELECT 1 FROM workflow_run_events e WHERE e.run_id=r.id AND e.kind='email_cold_start'))
+ AND (coalesce($2::timestamptz,now())<r.requested_at OR EXISTS(
+  SELECT 1 FROM workflow_run_answers a WHERE a.account_id=r.account_id AND a.run_id<>r.id AND a.channel=$3 AND a.message_id=$4))
+ FROM workflow_runs r WHERE r.id=$1`, id, sentAt, a.Channel, a.MessageID).Scan(&earlier); err != nil {
+				return err
+			}
+			if earlier {
+				return bad("a follow-up needs its own answer sent after its request; earlier thread replies are context")
+			}
+		}
 		tag, err := tx.Exec(ctx, `INSERT INTO workflow_run_answers (run_id,account_id,channel,message_id,thread_id,sent_at,checked)
    VALUES ($1,$2,$3,$4,$5,coalesce($6,now()),$7) ON CONFLICT (run_id,channel,message_id) DO NOTHING`, id, r.Account, a.Channel, a.MessageID, a.ThreadID, sentAt, a.Checked)
 		if err != nil || tag.RowsAffected() > 0 {

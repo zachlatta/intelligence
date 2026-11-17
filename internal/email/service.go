@@ -517,7 +517,33 @@ func (s *Service) reply(ctx context.Context, tx pgx.Tx, account int64, fromZach 
 	}
 	switch status {
 	case workflow.Succeeded, workflow.Failed, workflow.Canceled:
-		return s.start(ctx, tx, account, wf, name, input+fmt.Sprintf("\n\nIt replies in the thread of an earlier run of this workflow, %s, which is over (%s).", run, status), "follow_up", m.Date)
+		history, err := s.followUpHistory(ctx, tx, account, m.ThreadID)
+		if err != nil {
+			return d, err
+		}
+		input += fmt.Sprintf("\n\nIt replies in the thread of an earlier run of this workflow, %s, which is over (%s).\n\n%s\n\n%s", run, status, workflow.EmailReplyRule, history)
+		requested, _ := mail.ParseDate(m.Date)
+		var continued bool
+		kind, refused, err := try(ctx, tx, "follow_up", func(sp pgx.Tx) error {
+			id, ok, err := s.Engine.ContinueEmailTx(ctx, sp, account, run, input, requested)
+			continued = ok
+			if id != "" {
+				d.Run = id
+			}
+			return err
+		})
+		if err != nil || refused != "" {
+			return d.or(kind, refused, err)
+		}
+		if continued {
+			d.Decision = "follow_up"
+			return d, nil
+		}
+		cold, err := s.start(ctx, tx, account, wf, name, input, "follow_up", m.Date)
+		if err == nil && cold.Run != "" {
+			err = s.Engine.EmailColdStartTx(ctx, tx, account, cold.Run, run)
+		}
+		return cold, err
 	case workflow.Waiting:
 		if fromZach {
 			text := strings.TrimSpace(m.Text)

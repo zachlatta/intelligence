@@ -1105,7 +1105,7 @@ func (e runEvent) Line() string {
 		return "Canceled"
 	case "claim":
 		return "Claimed " + e.Text
-	case "steer", "steer_unanswered":
+	case "steer", "steer_unanswered", "email_continuation_requested", "email_continued", "email_cold_start":
 		return linkRuns(e.Text)
 	case "error", "stalled", "continuation", "resume":
 		return e.Text
