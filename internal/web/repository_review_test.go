@@ -29,9 +29,9 @@ func TestQueueCreationUpgradeDoesNotRelabelLegacyFinder(t *testing.T) {
 		SELECT id,account_id,now(),'queued','capacity' FROM workflow_runs WHERE id=$1`, legacy); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Owner.Exec(t.Context(), `DROP VIEW workflow_memory_estimate, workflow_repository_memory, workflow_run_memory;
+	if _, err := d.Owner.Exec(t.Context(), `DROP VIEW workflow_memory_estimate_history, workflow_memory_estimate, workflow_repository_memory, workflow_run_memory;
 		ALTER TABLE workflow_runs DROP COLUMN queued_at_creation, DROP COLUMN project_selected, DROP COLUMN estimated_memory_bytes;
-		DELETE FROM schema_migrations WHERE version IN ('0040_workflow_repository_memory', '0048_workflow_memory_estimate')`); err != nil {
+		DELETE FROM schema_migrations WHERE version IN ('0040_workflow_repository_memory', '0048_workflow_memory_estimate', '20261117T0539_recent_memory_estimates')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Migrate(t.Context(), d.Owner); err != nil {
@@ -133,7 +133,7 @@ func TestFixedRepositoryPathsUseCanonicalHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := startRun(t, h, wf, "canonical repository")
-	if got := runField(t, h, id, "estimated_memory_bytes"); got != float64(10<<30) {
+	if got := runField(t, h, id, "estimated_memory_bytes"); got != float64(8<<30) {
 		t.Fatalf("path missed history: %v", got)
 	}
 	if got := runField(t, h, id, "repo"); got != "/w/app" {

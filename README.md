@@ -1105,8 +1105,8 @@ host's measured load decides.
 The server projects the host's load from its newest minute of resources (Host resources, above):
 that minute's CPU, memory used (by the minute's least available) and 1-minute load per CPU.
 CPU and load add one run's footprint for each run still starting, whose load the minute cannot
-show yet, and one for the run about to start. Memory adds every active run's unconsumed
-reservation, as described below. A run is starting from its launch (`workflow_runs.launched_at`) until
+show yet, and one for the run about to start. Memory adds what each run still starting takes as it
+starts, and keeps room for the largest peaks still to come, as described below. A run is starting from its launch (`workflow_runs.launched_at`) until
 its orchestrator has started: for its whole start-up. A run that finds its project first is
 starting all the while it finds it (its orchestrator is still to come), and every run is starting
 until the host reports its workspace and orchestrator command (`launch_command`) done and the
@@ -1117,38 +1117,45 @@ in the same transaction. An admitted command waiting for a slow or absent host h
 until it finishes or expires. Runs that succeeded, failed or were canceled no longer count.
 The run queues when
 the projection reaches a limit: `WORKFLOW_QUEUE_CPU_PCT` (default 85%), `WORKFLOW_QUEUE_MEM_PCT`
-(90%: live memory plus all unconsumed reservations) or
+(80%: memory used now with the runs still starting), `WORKFLOW_QUEUE_MEM_PEAK_PCT` (95%: the same,
+should the new run's peak meet the `WORKFLOW_QUEUE_MEM_PEAKS` (1) largest peaks still to come of
+the runs going) or
 `WORKFLOW_QUEUE_LOAD_PER_CPU` (1.5). So an idle host starts runs back to back, and a burst
 starts as many as fit: at 10% CPU, 7 of 10 runs started at once (about 80%), and the rest queue
 until the host has made them and a newer minute shows their load. The reason says it in plain words: “host-1 is near
 capacity: CPU 70% now, about 90% with 1 run starting and this one (queues at 85%)”, or “over
 100%” when the projection is past all of it.
 
-A run's memory estimate is learned from its own workflow's runs in its selected repository on that
-host, within its account, from successful runs finished in the last seven days
-(`workflow_memory_estimate`): an email answer in a repository is not
-charged like that repository's Factory Task runs. A workflow with no successful run there yet
-takes the repository's estimate (`workflow_repository_memory`, below: the same view's rows with a
-null `workflow_id`, one rule for both), then 4 GiB. Unfinished runs were re-estimated this way when it changed (migration
-`0048_workflow_memory_estimate`).
-`workflow_run_memory` sums the recorded agents' memory in each minute, then takes the run's peak.
-`workflow_repository_memory` takes what nine in ten successful-run peaks for that selected, non-empty
-repository root stayed under (the 90th percentile; the largest, until it has ten runs), adds 25%
-headroom, and applies a 1 GiB floor, so one unusually heavy run does not size every later run.
-Unfinished runs were re-estimated this way when it changed (migration
-`0043_workflow_queue_progress`). Without history the estimate is 4 GiB. A run still finding its
-project reserves 1 GiB (its finder is small), and its project's estimate is checked when it is
-chosen. History older than seven days does not size new runs. These views and `workflow_runs.estimated_memory_bytes` expose the evidence
-and estimate through SQL; the run page shows the estimate. Estimates are fixed at repository
-selection and reused for reservations and retries.
+Memory estimates use continuous p85 of successful runs' concurrent-agent peaks, floored at
+1 GiB, without a multiplier. Even sparse histories interpolate p85 rather than taking the
+maximum plus another margin. `workflow_run_memory` sums each run's recorded agents in each
+minute before taking its peak. Within the account and host, admission tries these histories
+in order: the workflow in this repository over fourteen days, the same over ninety days,
+the workflow across repositories over fourteen then ninety days, and the repository across
+workflows over fourteen then ninety days. Only a run with no such history reserves 4 GiB.
+A finder reserves 1 GiB until it selects its project, when admission checks the new estimate.
+The fortnight covers less frequent work while ninety-day fallback prevents a quiet repository
+from losing useful evidence after a week. Samples themselves expire after ninety days.
+`workflow_memory_estimate` exposes the fourteen-day estimates (`repo IS NULL`: the workflow
+across repositories; `workflow_id IS NULL`: the repository across workflows).
+`workflow_memory_estimate_history` exposes the ninety-day fallback, and
+`workflow_repository_memory` retains the repository-only projection. These views and
+`workflow_runs.estimated_memory_bytes` expose the evidence and charged estimate through SQL.
+Estimates are fixed at project selection and reused for retries; migration
+`20261117T0539_recent_memory_estimates` refreshes unfinished selected runs on upgrade.
 
 Each starting or running run may still grow by `max(estimate - resident memory, 0)`, its
 headroom. Resident memory is the sum for that run's known agents in the exact newest host minute;
-without a matching sample, its whole estimate is headroom. Admission requires live used memory
-plus the sum of **all** active runs' headroom plus the new run's unconsumed estimate to stay
-below `WORKFLOW_QUEUE_MEM_PCT` (90%). A re-admitted finder or retry subtracts its own measured
-use too. The remaining 10% of physical memory, in addition to each estimate's 25% headroom,
-is the safety margin for unsampled growth and workloads above p90. This
+without a matching sample, its whole estimate is headroom. A run still starting (or whose start
+retry is pending) counts up to 1 GiB of its headroom at once, what a finder or orchestrator takes
+as it starts; so does the run about to start. Memory used now plus these starts aims under
+`WORKFLOW_QUEUE_MEM_PCT` (80%). The rest of each run's headroom is its peak still to come: a build
+or a test suite, for minutes at a time. A new run needs room for its own peak (its estimate) and
+the `WORKFLOW_QUEUE_MEM_PEAKS` (1) largest peaks still to come of the runs going, under
+`WORKFLOW_QUEUE_MEM_PEAK_PCT` (95%), not for every run's peak at once. Reserving every peak at once held a 19 GiB workflow host full at 30% used
+on 2026-11-16, with 8 runs queued for hours, when its runs' memory had peaked together at 11.6 GiB
+over 3 days and only two runs had ever been at their peaks at the same minute (for 6 minutes). Two
+runs whose peaks cannot both fit do not run together; lighter runs fit beside a heavy one. This
 counts no run's resident memory twice: it is in the measured minute. A run waiting for Zach's reply reserves nothing
 beyond what it uses: its agents are idle, perhaps for days, and their memory is already in the
 measured minute. When the queue waits on memory and waiting runs hold some of it, the reason says
@@ -1156,10 +1163,15 @@ so: “2 runs waiting for sign-off hold 10.5 GiB”, and “: waiting for 2 sign
 when the run would fit without them. The Workflows page shows each host's queue head, how many
 runs are queued there and its reason.
 Memory queue reasons name the run's estimate and repository, measured free RAM and what is held for
-active runs' unconsumed reservations. An estimate that cannot fit even alone remains queued;
-Start now is the explicit manual override. CPU, load and telemetry checks still apply to
-automatic admission. The former `WORKFLOW_QUEUE_MEM_PEAK_PCT` and `WORKFLOW_QUEUE_MEM_PEAKS`
-settings are accepted for compatibility but no longer change admission. This is an advisory estimate,
+active runs' starts and peaks (“memory 32% used now, over 100% should its peak meet the largest to come of the runs going (queues
+at 95%); needs ~8.9 GiB for /w/pdw; 13.0 GiB free (7.7 GiB held for active runs' starts and
+peaks)”). A run alone can pass the steady/start memory ceiling when its estimate is at most
+half the host, live use is below `WORKFLOW_QUEUE_MEM_PCT`, and live use plus its unconsumed
+estimate remains below `WORKFLOW_QUEUE_MEM_PEAK_PCT`. This bounded solo exit does not waive
+the peak ceiling. A head too large to fit even alone does not hold lighter work behind it:
+backfill and the hold-for-head rule below still apply. CPU, load and telemetry checks still
+apply. Its whole headroom stays one of the peaks to come until it ends, so
+only runs that fit beside its peak start beside it. This is an advisory estimate,
 not a guarantee that an oversized workload will fit or avoid an OOM kill.
 Failed, canceled, finder-only and empty-repository runs do not teach the estimator; without a
 successful run for a selected non-empty repository, it keeps the 4 GiB fallback.
@@ -1874,10 +1886,11 @@ Server:
   Retry deadlines and exponential backoff (1–64s plus jitter, or a longer `Retry-After`)
   are stored in `gmail_connections`, shared across server instances and restarts.
 - `PUBLIC_URL`: optional; the server's origin, for Google's redirect. Default each request's.
-- `WORKFLOW_QUEUE_CPU_PCT`, `WORKFLOW_QUEUE_MEM_PCT`,
+- `WORKFLOW_QUEUE_CPU_PCT`, `WORKFLOW_QUEUE_MEM_PCT`, `WORKFLOW_QUEUE_MEM_PEAK_PCT`,
   `WORKFLOW_QUEUE_LOAD_PER_CPU`: optional; when a host is near capacity, so a new workflow run
-  queues (The run queue, above). Defaults 85, 90 and 1.5; `0` or `off` turns one off.
-  `WORKFLOW_QUEUE_MEM_PEAK_PCT` and `WORKFLOW_QUEUE_MEM_PEAKS` are deprecated and ignored.
+  queues (The run queue, above). Defaults 85, 80, 95 and 1.5; `0` or `off` turns one off.
+  `WORKFLOW_QUEUE_MEM_PEAKS`: how many memory peaks of the runs going the host keeps room for
+  beside a new run's own; default 1.
 
 The version is stamped at build (`-X main.buildCommit`, from Coolify's `SOURCE_COMMIT` build
 argument); else `SOURCE_COMMIT` at run time, else Go's VCS stamp, else `dev`.

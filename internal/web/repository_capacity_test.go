@@ -57,10 +57,10 @@ func TestRepositoryEstimateGatesExistingQueue(t *testing.T) {
 	if got := runField(t, h, id, "status"); got != "queued" {
 		t.Fatalf("heavy repo = %v, want queued", got)
 	}
-	if got := runField(t, h, id, "estimated_memory_bytes"); got != float64(10<<30) {
+	if got := runField(t, h, id, "estimated_memory_bytes"); got != float64(8<<30) {
 		t.Fatalf("concurrent peak plus headroom = %v", got)
 	}
-	if page := get(t, h, "/workflow-runs/"+id, nil).Body.String(); !strings.Contains(page, "Estimated run memory: 10.0 GiB") {
+	if page := get(t, h, "/workflow-runs/"+id, nil).Body.String(); !strings.Contains(page, "Estimated run memory: 8.0 GiB") {
 		t.Fatal("page hides repository estimate")
 	}
 	if rec := call(t, h, http.MethodPost, "/api/workflow-runs/"+id+"/cancel", `{}`, sameOriginFetch); rec.Code != http.StatusNoContent {
@@ -131,7 +131,7 @@ func TestMatchedRepositoryReentersExistingQueue(t *testing.T) {
 	}
 }
 
-func TestOversizedRepositoryNeedsManualOverrideAndAllowsBackfill(t *testing.T) {
+func TestOversizedRepositoryRunsAloneWithoutBlockingFIFOForever(t *testing.T) {
 	h, d := dbServer(t)
 	b := sendReport(t, h, wfReport())
 	wf := repositoryHistory(t, h, d, "/w/app")
@@ -144,22 +144,11 @@ func TestOversizedRepositoryNeedsManualOverrideAndAllowsBackfill(t *testing.T) {
 	heavy := startRun(t, h, wf, "oversized build")
 	desk := workflow.Starting
 	desk.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/desk"}
-	lightWorkflow := createWorkflow(t, h, desk)
-	light := startRun(t, h, lightWorkflow, "next job")
+	light := startRun(t, h, createWorkflow(t, h, desk), "next job")
 	repositoryMinute(t, b, 16<<30)
-	if got := runField(t, h, heavy, "status"); got != "queued" {
-		t.Fatalf("oversized head bypassed safety limit: %v", got)
+	if got := runField(t, h, heavy, "status"); got != "starting" {
+		t.Fatalf("oversized head never starts: %v", got)
 	}
-	if got := runField(t, h, light, "status"); got != "starting" {
-		t.Fatalf("a job that fits could not pass an oversized head: %v", got)
-	}
-	if rec := call(t, h, http.MethodPost, "/api/workflow-runs/"+light+"/cancel", `{}`, sameOriginFetch); rec.Code != http.StatusNoContent {
-		t.Fatal(rec.Body)
-	}
-	if rec := call(t, h, http.MethodPost, "/api/workflow-runs/"+heavy+"/start", `{}`, sameOriginFetch); rec.Code != http.StatusNoContent {
-		t.Fatal(rec.Body)
-	}
-	light = startRun(t, h, lightWorkflow, "alongside oversized run")
 	if got := runField(t, h, light, "status"); got != "queued" {
 		t.Fatalf("oversized run must run alone: %v", got)
 	}
@@ -172,7 +161,7 @@ func TestOversizedRepositoryNeedsManualOverrideAndAllowsBackfill(t *testing.T) {
 		t.Fatalf("FIFO did not progress: %v", got)
 	}
 	// An OS baseline can make an estimate never fit beside it, even one smaller than
-	// physical RAM. Even on an idle host this needs the manual override.
+	// physical RAM. On an idle host the head still starts, so the queue cannot wait for ever.
 	if _, err := d.Owner.Exec(t.Context(), `UPDATE workflow_runs SET status='succeeded',finished_at=now() WHERE id=$1`, light); err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +171,11 @@ func TestOversizedRepositoryNeedsManualOverrideAndAllowsBackfill(t *testing.T) {
 	repositoryMinute(t, b, 7<<30)
 	baseline := startRun(t, h, wf, "build alongside OS baseline")
 	if got := runField(t, h, baseline, "status"); got != "queued" {
-		t.Fatalf("idle host exceeded memory limit: %v", got)
+		t.Fatalf("idle host exceeded its bounded peak: %v", got)
+	}
+	repositoryMinute(t, b, 10<<30)
+	if got := runField(t, h, baseline, "status"); got != "starting" {
+		t.Fatalf("bounded solo did not progress with room: %v", got)
 	}
 }
 
@@ -218,7 +211,7 @@ func TestActiveRepositoryRunKeepsUnconsumedMemoryReservation(t *testing.T) {
 		t.Fatalf("active run lost peak reservation: %v", got)
 	}
 	reason := runField(t, h, second, "queue_reason").(string)
-	if !strings.Contains(reason, "12.5 GiB") || !strings.Contains(reason, "/w/app") || !strings.Contains(reason, "free") {
+	if !strings.Contains(reason, "10.0 GiB") || !strings.Contains(reason, "/w/app") || !strings.Contains(reason, "free") {
 		t.Fatalf("reason hides estimate or free memory: %s", reason)
 	}
 	// Use most of the estimate, then show a small job still fits: resident memory
@@ -233,7 +226,7 @@ func TestActiveRepositoryRunKeepsUnconsumedMemoryReservation(t *testing.T) {
 	if ack := b.call(hostclient.Frame{Type: hostclient.HostFrame, Host: &rep}); ack.Error != "" {
 		t.Fatal(ack.Error)
 	}
-	// 1 GiB estimate leaves room under the 90% limit alongside 12.5 GiB.
+	// 1 GiB estimate leaves room under the 90% limit alongside 10 GiB.
 	if _, err := d.Owner.Exec(t.Context(), `UPDATE agent_minutes SET mem_max=$1 WHERE agent_id IN ('worker-a','worker-b')`, int64(128<<20)); err != nil {
 		t.Fatal(err)
 	}

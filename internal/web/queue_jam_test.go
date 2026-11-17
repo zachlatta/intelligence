@@ -91,7 +91,7 @@ func TestMemoryEstimatesComeFromTheWorkflowsOwnHistory(t *testing.T) {
 	factory := namedWorkflow(t, h, "Factory Task", "/w/desk")
 	email := namedWorkflow(t, h, "Zach Email Task", "/w/desk")
 	voice := namedWorkflow(t, h, "Voice Memo Received", "/w/desk")
-	pastRuns(t, d, factory, 5980<<20) // 5.84 GiB: estimated at 7.3 GiB
+	pastRuns(t, d, factory, 5980<<20) // 5.84 GiB: percentile only
 	small := []int64{}
 	for range 12 {
 		small = append(small, 300<<20)
@@ -106,8 +106,8 @@ func TestMemoryEstimatesComeFromTheWorkflowsOwnHistory(t *testing.T) {
 			t.Fatalf("estimate = %.2f GiB, want %.2f GiB", got.(float64)/float64(gib), float64(want)/float64(gib))
 		}
 	}
-	check(email, gib)                   // its own runs peak at 300 MiB: the 1 GiB floor
-	check(factory, int64(5980<<20)*5/4) // 7.3 GiB
+	check(email, gib)               // its own runs peak at 300 MiB: the 1 GiB floor
+	check(factory, int64(5980<<20)) // percentile only, no multiplier
 	_, r := sqlPost(t, h, q(`SELECT estimated_memory_bytes FROM workflow_repository_memory WHERE repo = '/w/desk'`))
 	check(voice, int64(r.Rows[0][0].(float64))) // no history of its own: the repository's
 	code, r := sqlPost(t, h, q(`SELECT w.name, e.observed_runs, e.estimated_memory_bytes FROM workflow_memory_estimate e
@@ -145,8 +145,8 @@ func TestTheNovember11QueueStarts(t *testing.T) {
 	if got := runField(t, h, head, "status"); got != "queued" {
 		t.Fatalf("status = %v, want queued while memory is full", got)
 	}
-	if got := runField(t, h, head, "estimated_memory_bytes"); got != float64(int64(5980<<20)*5/4) {
-		t.Fatalf("estimate = %v, want desk's 7.3 GiB (the email workflow has no history yet)", got)
+	if got := runField(t, h, head, "estimated_memory_bytes"); got != float64(int64(5980<<20)) {
+		t.Fatalf("estimate = %v, want the repository percentile (the email workflow has no history yet)", got)
 	}
 	// 11-11 04:30 ET: 12 GiB of 19 free, the host idle.
 	memMinute(t, b, minute, 19*gib, 12*gib)

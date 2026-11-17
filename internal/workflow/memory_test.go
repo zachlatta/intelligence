@@ -2,38 +2,42 @@ package workflow
 
 import "testing"
 
-func TestMemoryAdmissionCountsEveryUnconsumedReservation(t *testing.T) {
+func TestSoloAdmissionHasAPhysicalBound(t *testing.T) {
+	const g = int64(1 << 30)
+	c := capacity{limits: DefaultLimits(), m: minute{MemTotal: 20 * g, MemMin: 12 * g}}
+	if c.fits(candidate{Memory: 12 * g}, false) == "" {
+		t.Fatal("solo bypass admitted an estimate above half the host")
+	}
+	c.m.MemMin = 3 * g
+	if c.fits(candidate{Memory: 4 * g}, false) == "" {
+		t.Fatal("solo bypass exceeded the peak ceiling")
+	}
+	c.m.MemMin = 4*g + g/2
+	if got := c.fits(candidate{Memory: g}, false); got != "" {
+		t.Fatalf("bounded solo exit lost: %s", got)
+	}
+	c.runs = []hostRun{{ID: "waiting", Waiting: true, Estimate: 10 * g, Resident: g}}
+	if got := c.fits(candidate{Memory: g}, false); got != "" {
+		t.Fatalf("waiting run retained unconsumed reservation: %s", got)
+	}
+}
+
+func TestReadmissionSubtractsItsOwnMeasuredUse(t *testing.T) {
+	const g = int64(1 << 30)
+	c := capacity{limits: DefaultLimits(), m: minute{MemTotal: 20 * g, MemMin: 5 * g}, runs: []hostRun{{ID: "resume", Waiting: true, Estimate: 8 * g, Resident: 8 * g}}}
+	if got := c.fits(candidate{ID: "resume", Memory: 8 * g}, false); got != "" {
+		t.Fatalf("measured use charged twice on readmission: %s", got)
+	}
+}
+
+func TestAdmissionPreservesMainOverlappingPeakRule(t *testing.T) {
 	const g = int64(1 << 30)
 	c := capacity{limits: DefaultLimits(), m: minute{MemTotal: 20 * g, MemMin: 14 * g}, runs: []hostRun{
 		{ID: "a", Active: true, Estimate: 6 * g, Resident: 2 * g},
 		{ID: "b", Active: true, Estimate: 6 * g, Resident: 2 * g},
 		{ID: "c", Active: true, Estimate: 6 * g, Resident: 2 * g},
 	}}
-	k := candidate{Memory: g}
-	if got := c.fits(k, false); got == "" {
-		t.Fatal("admitted above 90% after counting all three reservations")
-	}
-	c.runs[2].Active, c.runs[2].Waiting = false, true
-	if got := c.fits(k, false); got != "" {
-		t.Fatalf("waiting run reserved more than its measured use: %s", got)
-	}
-	c.runs[0].Resident = 8 * g // growth beyond estimate cannot produce negative headroom
-	c.m.MemMin = 8 * g
-	if got := c.fits(k, false); got != "" {
-		t.Fatalf("resident memory charged twice: %s", got)
-	}
-	c.runs = nil
-	c.m.MemMin = 4 * g
-	if got := c.fits(candidate{Memory: 3 * g}, false); got == "" {
-		t.Fatal("oversized solo run bypassed memory safety limit")
-	}
-	c.m.MemMin = 10 * g
-	c.runs = []hostRun{{ID: "retry", Active: true, Estimate: 6 * g, Resident: 4 * g}}
-	if got := c.fits(candidate{ID: "retry", Memory: 6 * g}, false); got != "" {
-		t.Fatalf("candidate's own measured use counted twice: %s", got)
-	}
-	c.runs[0].Resident = 0 // missing sample conservatively retains the whole reservation
-	if got := c.fits(candidate{Memory: 2 * g}, false); got == "" {
-		t.Fatal("admitted at exactly 90%, or dropped a retry's reservation")
+	if got := c.fits(candidate{Memory: g}, false); got != "" {
+		t.Fatalf("reserved every concurrent peak again: %s", got)
 	}
 }

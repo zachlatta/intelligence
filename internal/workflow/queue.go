@@ -1,10 +1,12 @@
 package workflow
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,10 +19,13 @@ import (
 // one of them (room). Zero turns a limit off.
 type Limits struct {
 	CPUPct float64 // average CPU busy %
-	// MemPct caps live used memory plus every active run's unconsumed reservation.
+	// MemPct is the share of memory (used by the minute's least available) the host aims under:
+	// what it uses now, with what the runs still starting take as they start.
 	MemPct float64
-	// Deprecated: accepted for configuration compatibility; all reservations now count
-	// against MemPct, regardless of these former overlapping-peak settings.
+	// MemPeakPct is the share of memory the host may reach should a new run reach its peak (its
+	// estimate) while the MemPeaks largest peaks still to come of the runs already going (each
+	// one's estimate less what it uses now) come too. A run's peak lasts minutes (a build, a test
+	// suite), so the host keeps room for a few at a time, not for every run's at once.
 	MemPeakPct float64
 	MemPeaks   int
 	LoadPerCPU float64 // the 1-minute load average per CPU
@@ -31,9 +36,10 @@ type Limits struct {
 	Fresh, Unmonitored time.Duration
 }
 
-// DefaultLimits leave 10% memory free beyond the estimates' own 25% margin.
+// DefaultLimits queue runs at 85% CPU, a load of 1.5 per CPU, 80% memory with the runs still
+// starting, or 95% memory should a new run's peak meet the largest peak to come of those going.
 func DefaultLimits() Limits {
-	return Limits{CPUPct: 85, MemPct: 90, LoadPerCPU: 1.5, Fresh: 3 * time.Minute, Unmonitored: 30 * time.Minute}
+	return Limits{CPUPct: 85, MemPct: 80, MemPeakPct: 95, MemPeaks: 1, LoadPerCPU: 1.5, Fresh: 3 * time.Minute, Unmonitored: 30 * time.Minute}
 }
 
 // QueueEvery is how often queued runs are checked for room, besides each host minute and each
@@ -62,10 +68,10 @@ type hostRun struct {
 	// Active runs take room: admitted, not waiting for Zach, not finished, and not on a failed or
 	// expired launch (unless its retry is pending, which keeps the room it needs).
 	Active, Waiting bool
-	// Starting: the newest minute cannot show its CPU/load yet. All active runs,
-	// including pending retries, retain their unconsumed memory reservation.
-	Starting           bool
-	Estimate, Resident int64 // its memory estimate, and what its agents used in the newest minute
+	// Starting: the newest minute cannot show its load yet; Reserving: starting, or a start retry
+	// is pending, so its start still takes memory.
+	Starting, Reserving bool
+	Estimate, Resident  int64 // its memory estimate, and what its agents used in the newest minute
 }
 
 // capacity is what a host holds, read once per decision while holding its queue lock: its newest
@@ -133,6 +139,7 @@ func (e *Engine) loadCapacity(ctx context.Context, tx pgx.Tx, host string) (*cap
 			r.status = $6,
 			r.start_retry_at IS NULL AND r.launched_at IS NOT NULL AND
 				(r.launched_at >= $2 OR r.status = $8 OR c.id IS NOT NULL AND (c.finished_at IS NULL OR c.finished_at > $2)),
+			r.start_retry_at IS NOT NULL,
 			r.estimated_memory_bytes, resident.bytes
 		FROM workflow_runs r LEFT JOIN commands c ON c.id = r.launch_command
 		LEFT JOIN LATERAL (
@@ -150,11 +157,13 @@ func (e *Engine) loadCapacity(ctx context.Context, tx pgx.Tx, host string) (*cap
 	}
 	for rows.Next() {
 		var r hostRun
-		if err := rows.Scan(&r.ID, &r.Created, &r.Active, &r.Waiting, &r.Starting, &r.Estimate, &r.Resident); err != nil {
+		var retry bool
+		if err := rows.Scan(&r.ID, &r.Created, &r.Active, &r.Waiting, &r.Starting, &retry, &r.Estimate, &r.Resident); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		r.Starting = r.Starting && r.Active
+		r.Reserving = r.Active && (r.Starting || retry)
 		c.runs = append(c.runs, r)
 	}
 	return c, rows.Err()
@@ -174,11 +183,19 @@ type candidate struct {
 //
 // It projects the host from its newest minute. CPU and load: the minute's, plus a run's footprint
 // (host_run_footprint: learned from the host's history, or a default) for each run still starting,
-// whose load the minute cannot show, and for k. Memory: live used plus
-// sum(max(0, estimate-resident)) for every active run, plus k's unconsumed estimate.
-// Waiting runs reserve only their measured use, already in the host minute. The
-// 90% ceiling and the estimator's 25% margin protect against growth beyond p90.
-// No solo exception: an oversized estimate needs an explicit Start now override.
+// whose load the minute cannot show, and for k. Memory: the minute's use, plus what each run still
+// starting takes as it starts (its estimate less what it uses now, up to finderMemory, what a
+// finder or orchestrator takes), and the same for k; this aims under MemPct. Each run may yet
+// reach its peak (its estimate, less what it uses now and what its start counts): k must have room
+// for its own peak while the MemPeaks largest peaks of the runs going come too, under MemPeakPct.
+// So two runs whose peaks cannot both fit do not start together, but lighter runs fit beside a
+// heavy one. A run's peak is a build or a test suite of a few minutes, and the host's history
+// (2026-11) has two runs at their peaks at once for 6 minutes in 3 days and never three; reserving
+// every run's peak at once held a 19 GiB host full at 30% used.
+//
+// Alone may pass the steady ceiling only with an estimate at most half the host
+// and its entire unconsumed peak below the peak ceiling. An oversized head still
+// permits backfill; it cannot claim the unbounded solo exception.
 func (c *capacity) fits(k candidate, alone bool) string {
 	if c.open {
 		return ""
@@ -190,12 +207,13 @@ func (c *capacity) fits(k candidate, alone bool) string {
 	before := func(r hostRun) bool {
 		return r.Created.Before(k.Created) || r.Created.Equal(k.Created) && r.ID < k.ID
 	}
-	var started, waiting int
-	var usedBytes, waitingBytes, reserved, candidateResident float64
+	var started, active, waiting int
+	var usedBytes, waitingBytes, starts, ownResident float64
+	var peaks []float64 // of the runs going
 	usedBytes = float64(m.MemTotal - m.MemMin)
 	for _, r := range c.runs {
 		if r.ID == k.ID {
-			candidateResident = float64(r.Resident)
+			ownResident = float64(r.Resident)
 			continue
 		}
 		if alone && k.ID != "" && !before(r) {
@@ -209,12 +227,21 @@ func (c *capacity) fits(k candidate, alone bool) string {
 		if !r.Active {
 			continue
 		}
+		active++
 		if r.Starting {
 			started++
 		}
-		reserved += float64(max(r.Estimate-r.Resident, 0))
+		headroom := float64(max(r.Estimate-r.Resident, 0))
+		if r.Reserving {
+			start := min(headroom, float64(finderMemory))
+			starts += start
+			headroom -= start
+		}
+		peaks = append(peaks, headroom)
 	}
-	kHeadroom := max(float64(k.Memory)-candidateResident, 0)
+	kHeadroom := max(float64(k.Memory)-ownResident, 0)
+	kStart := min(kHeadroom, float64(finderMemory))
+	starts += kStart
 	with := "this one"
 	if started > 0 {
 		with = runsWord(started) + " starting and this one"
@@ -229,20 +256,38 @@ func (c *capacity) fits(k candidate, alone bool) string {
 	if m.MemTotal > 0 {
 		pct := func(b float64) float64 { return 100 * b / float64(m.MemTotal) }
 		used := pct(max(usedBytes, 0))
-		projected := used + pct(reserved+kHeadroom)
+		// Alone may pass the startup ceiling, but never discard an arbitrarily
+		// large estimate. Limit this exception to estimates at most half the host,
+		// and require its whole remaining peak to fit under the peak ceiling.
+		solo := active == 0 && k.Memory <= m.MemTotal/2 &&
+			(l.MemPct <= 0 || used < l.MemPct) &&
+			(l.MemPeakPct <= 0 || used+pct(kHeadroom) < l.MemPeakPct)
+		slices.SortFunc(peaks, func(a, b float64) int { return cmp.Compare(b, a) })
+		counted := peaks[:min(max(l.MemPeaks, 0), len(peaks))]
+		var othersPeak float64
+		for _, p := range counted {
+			othersPeak += p
+		}
+		peak := kHeadroom - kStart + othersPeak
+		steady := used + pct(starts)
 		var reason string
 		var over, limit float64
-		if l.MemPct > 0 && projected >= l.MemPct {
-			over, limit = projected, l.MemPct
-			reason = fmt.Sprintf("memory %.0f%% used now, %s with all active reservations and this one (queues at %.0f%%)", used, about(projected), l.MemPct)
+		switch {
+		case solo:
+		case l.MemPct > 0 && steady >= l.MemPct:
+			over, limit = steady, l.MemPct
+			reason = fmt.Sprintf("memory %.0f%% used now, %s with %s (queues at %.0f%%)", used, about(steady), with, l.MemPct)
+		case l.MemPeakPct > 0 && steady+pct(peak) >= l.MemPeakPct:
+			over, limit = steady+pct(peak), l.MemPeakPct
+			reason = fmt.Sprintf("memory %.0f%% used now, %s %s (queues at %.0f%%)", used, about(over), peaksWords(len(counted)), l.MemPeakPct)
 		}
 		if reason != "" {
 			project := k.Repo
 			if project == "" {
 				project = "this run"
 			}
-			reason += fmt.Sprintf("; needs ~%.1f GiB for %s; %.1f GiB free (%.1f GiB held for active runs' unconsumed reservations)",
-				float64(k.Memory)/(1<<30), project, float64(m.MemMin)/(1<<30), reserved/(1<<30))
+			reason += fmt.Sprintf("; needs ~%.1f GiB for %s; %.1f GiB free (%.1f GiB held for active runs' starts and peaks)",
+				float64(k.Memory)/(1<<30), project, float64(m.MemMin)/(1<<30), (starts-kStart+othersPeak)/(1<<30))
 			// Runs waiting for Zach hold their agents' memory until he signs off, which can take hours.
 			// When they hold enough that the run would fit without it, say that plainly.
 			if waiting > 0 && waitingBytes > 0 {
@@ -264,6 +309,17 @@ func (c *capacity) fits(k candidate, alone bool) string {
 		return ""
 	}
 	return c.host + " is near capacity: " + strings.Join(why, "; ")
+}
+
+// peaksWords says which peaks the projection counts: the new run's, and n of the runs going.
+func peaksWords(n int) string {
+	switch n {
+	case 0:
+		return "at its peak"
+	case 1:
+		return "should its peak meet the largest to come of the runs going"
+	}
+	return fmt.Sprintf("should its peak meet the %d largest to come of the runs going", n)
 }
 
 // about reads a projected share: "about 90%", or "over 100%" past all of it.

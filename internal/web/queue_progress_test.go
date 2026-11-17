@@ -67,11 +67,11 @@ func TestOneHeavyRunDoesNotSizeEveryRunOfItsRepository(t *testing.T) {
 	if got := runField(t, h, id, "status"); got != "starting" {
 		t.Fatalf("status = %v, want starting: %v", got, runField(t, h, id, "queue_reason"))
 	}
-	// Until a repository has ten runs, its heaviest still decides.
+	// Sparse histories interpolate p85 rather than charging maximum plus a multiplier.
 	few := peakHistory(t, h, d, "/w/few", []int64{6 << 30, 256 << 20, 256 << 20})
 	b.command()
-	if got := runField(t, h, startRun(t, h, few, "few runs"), "estimated_memory_bytes"); got != float64(7.5*(1<<30)) {
-		t.Fatalf("few-run estimate = %v, want the heaviest plus 25%%", got)
+	if got := runField(t, h, startRun(t, h, few, "few runs"), "estimated_memory_bytes"); got != float64(4590246298) {
+		t.Fatalf("few-run estimate = %v, want interpolated p85", got)
 	}
 }
 
@@ -183,8 +183,9 @@ func TestARequeuedHandStartedRunStartsOnTheNextPass(t *testing.T) {
 	}
 }
 
-// An idle host still needs room for the estimate alongside non-workflow memory.
-func TestTheQueueHeadWaitsForMemoryEvenOnAnIdleHost(t *testing.T) {
+// The solo exit keeps the peak ceiling even with no other active run. It progresses
+// automatically once the host has enough measured room for that bounded estimate.
+func TestTheQueueHeadStartsOnAnIdleHost(t *testing.T) {
 	h, d := dbServer(t)
 	b := sendReport(t, h, wfReport())
 	wf := repositoryHistory(t, h, d, "/w/app") // 10 GiB estimate
@@ -197,11 +198,11 @@ func TestTheQueueHeadWaitsForMemoryEvenOnAnIdleHost(t *testing.T) {
 	// 9 GiB of 16 in use by other things: 10 GiB more never fits under 90%.
 	repositoryMinute(t, b, 7<<30)
 	if got := runField(t, h, head, "status"); got != "queued" {
-		t.Fatalf("idle host exceeded memory budget: %v", got)
+		t.Fatalf("solo bypass exceeded its bounded peak: %v", got)
 	}
-	repositoryMinute(t, b, 15<<30)
+	repositoryMinute(t, b, 10<<30)
 	if got := runField(t, h, head, "status"); got != "starting" {
-		t.Fatalf("head did not start with room: %v", got)
+		t.Fatalf("bounded head did not start with room: %v", got)
 	}
 	next := startRun(t, h, wf, "next build")
 	if got := runField(t, h, next, "status"); got != "queued" {
@@ -225,9 +226,9 @@ func TestProjectSelectionCannotSkipAnOlderRequeuedRun(t *testing.T) {
 	newer := startRun(t, h, createWorkflow(t, h, workflow.Starting), "newer")
 	succeed(t, b, b.command(), `{"agentId":"finder-newer"}`)
 	key := keyOf(t, h, "host-1")
-	// 4 GiB used plus the older run's 10 GiB fits under 90% of 16 GiB,
-	// but the newer finder's 1 GiB holds it back. Preserve its queue priority.
-	repositoryMinute(t, b, 12<<30)
+	// 7 GiB used plus this repository's 8 GiB estimate fits under 95% of
+	// 16 GiB; the newer finder's extra 1 GiB alone holds the older run back.
+	repositoryMinute(t, b, 9<<30)
 	if code, msg := move(t, h, key, older, map[string]string{"move": "project", "directory": "/w/app"}); code != http.StatusOK {
 		t.Fatalf("move: %d %s", code, msg)
 	}

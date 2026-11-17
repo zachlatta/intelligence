@@ -1,21 +1,36 @@
--- Keep the existing workflow/repository split and p90 + 25% margin, but expire
--- old workloads after seven days. With fewer than ten samples discrete p90 is
--- the maximum; with no samples admission falls back to the repository, then 4 GiB.
+-- A percentile is the margin: do not multiply it by another 25%. Continuous
+-- p85 interpolates sparse histories instead of always taking their maximum.
+-- Prefer a fortnight of recent work; retain ninety-day evidence for quiet repos.
+-- repo NULL identifies a workflow's history across repositories, for new projects.
 CREATE OR REPLACE VIEW workflow_memory_estimate WITH (security_invoker = true) AS
 SELECT r.account_id, r.host, r.workflow_id, r.repo, count(*) AS observed_runs,
-    greatest(1073741824, ceil((percentile_disc(0.9) WITHIN GROUP (ORDER BY m.peak_memory_bytes)) * 1.25))::bigint
+    greatest(1073741824, ceil(percentile_cont(0.85) WITHIN GROUP (ORDER BY m.peak_memory_bytes)))::bigint
         AS estimated_memory_bytes
 FROM workflow_runs r JOIN workflow_run_memory m ON m.run_id = r.id
-WHERE r.status = 'succeeded' AND r.finished_at >= CURRENT_TIMESTAMP - interval '7 days'
+WHERE r.status = 'succeeded' AND r.finished_at >= CURRENT_TIMESTAMP - interval '14 days'
     AND r.finished_at <= CURRENT_TIMESTAMP
     AND r.project_selected AND r.repo <> '' AND m.peak_memory_bytes > 0
-GROUP BY GROUPING SETS ((r.account_id, r.host, r.workflow_id, r.repo), (r.account_id, r.host, r.repo));
+GROUP BY GROUPING SETS ((r.account_id, r.host, r.workflow_id, r.repo), (r.account_id, r.host, r.repo), (r.account_id, r.host, r.workflow_id));
 
--- Give already-admitted and queued runs the new estimate on upgrade. Finished
--- runs retain their charged estimate. Unknown/empty projects retain their charge.
+CREATE VIEW workflow_memory_estimate_history WITH (security_invoker = true) AS
+SELECT r.account_id, r.host, r.workflow_id, r.repo, count(*) AS observed_runs,
+    greatest(1073741824, ceil(percentile_cont(0.85) WITHIN GROUP (ORDER BY m.peak_memory_bytes)))::bigint
+        AS estimated_memory_bytes
+FROM workflow_runs r JOIN workflow_run_memory m ON m.run_id = r.id
+WHERE r.status = 'succeeded' AND r.finished_at >= CURRENT_TIMESTAMP - interval '90 days'
+    AND r.finished_at <= CURRENT_TIMESTAMP
+    AND r.project_selected AND r.repo <> '' AND m.peak_memory_bytes > 0
+GROUP BY GROUPING SETS ((r.account_id, r.host, r.workflow_id, r.repo), (r.account_id, r.host, r.repo), (r.account_id, r.host, r.workflow_id));
+
+COMMENT ON VIEW workflow_memory_estimate IS 'Fourteen-day continuous p85; repo null means the workflow across repositories; workflow_id null means the repository across workflows';
+COMMENT ON VIEW workflow_memory_estimate_history IS 'Ninety-day fallback for quiet workflows and repositories; same grouping and percentile as workflow_memory_estimate';
+
+-- Refresh unfinished selected runs; completed runs keep their charged estimate.
 UPDATE workflow_runs r SET estimated_memory_bytes = coalesce(
-    (SELECT estimated_memory_bytes FROM workflow_memory_estimate m
-     WHERE m.account_id=r.account_id AND m.host=r.host AND m.workflow_id=r.workflow_id AND m.repo=r.repo),
-    (SELECT estimated_memory_bytes FROM workflow_repository_memory m
-     WHERE m.account_id=r.account_id AND m.host=r.host AND m.repo=r.repo), 4294967296)
-WHERE r.status NOT IN ('succeeded','failed','canceled') AND r.project_selected AND r.repo <> '';
+    (SELECT estimated_memory_bytes FROM workflow_memory_estimate m WHERE m.account_id=r.account_id AND m.host=r.host AND m.workflow_id=r.workflow_id AND m.repo=r.repo),
+    (SELECT estimated_memory_bytes FROM workflow_memory_estimate_history m WHERE m.account_id=r.account_id AND m.host=r.host AND m.workflow_id=r.workflow_id AND m.repo=r.repo),
+    (SELECT estimated_memory_bytes FROM workflow_memory_estimate m WHERE m.account_id=r.account_id AND m.host=r.host AND m.workflow_id=r.workflow_id AND m.repo IS NULL),
+    (SELECT estimated_memory_bytes FROM workflow_memory_estimate_history m WHERE m.account_id=r.account_id AND m.host=r.host AND m.workflow_id=r.workflow_id AND m.repo IS NULL),
+    (SELECT estimated_memory_bytes FROM workflow_memory_estimate m WHERE m.account_id=r.account_id AND m.host=r.host AND m.workflow_id IS NULL AND m.repo=r.repo),
+    (SELECT estimated_memory_bytes FROM workflow_memory_estimate_history m WHERE m.account_id=r.account_id AND m.host=r.host AND m.workflow_id IS NULL AND m.repo=r.repo),4294967296)
+WHERE r.status NOT IN ('succeeded','failed','canceled') AND r.project_selected;
