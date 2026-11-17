@@ -40,6 +40,71 @@ func TestContinueEmailRestoresArchivedAgentAndRetriesWithoutRefreshingLiveTurn(t
 	}
 }
 
+func TestContinueEmailRestoresDeletedWorktreeBeforeRefreshAndLaterCleanup(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	if _, err := execute(t, w, ArchiveWorkspaceKind, `{"workspaceId":"w1"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := execute(t, w, ContinueEmailKind, `{"agentId":"a1","text":"Reply to the follow-up"}`); err != nil {
+		t.Fatalf("restoration failed: %v", err)
+	}
+	if len(d.Requests("workspace.recovery.restore.request")) != 1 {
+		t.Fatal("worktree was not explicitly restored")
+	}
+	if _, err := execute(t, w, ArchiveWorkspaceKind, `{"workspaceId":"w1"}`); err != nil {
+		t.Fatalf("later cleanup: %v", err)
+	}
+	eventually(t, w, "cleaned up again", func(s PaseoStatus) bool {
+		for _, ws := range s.Workspaces {
+			if ws.ID == "w1" {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+func TestContinueEmailFailureStages(t *testing.T) {
+	for _, tc := range []struct {
+		kind, stage  string
+		notDelivered bool
+	}{
+		{"fetch_agent_request", "inspect_agent", true},
+		{"workspace.recovery.inspect.request", "inspect_workspace", true},
+		{"unrecoverable_workspace", "inspect_workspace", true},
+		{"workspace.recovery.restore.request", "restore_workspace", true},
+		{"refresh_agent_request", "refresh_agent", true},
+		{"send_agent_message_request", "send_message", false},
+	} {
+		t.Run(tc.stage, func(t *testing.T) {
+			d := daemon(t)
+			w := watcher(t, d)
+			eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+			if _, err := execute(t, w, ArchiveWorkspaceKind, `{"workspaceId":"w1"}`); err != nil {
+				t.Fatal(err)
+			}
+			if tc.kind == "unrecoverable_workspace" {
+				d.UnrecoverableWorkspace("w1", "project_directory_missing")
+			} else {
+				d.FailRequest(tc.kind, "simulated RPC error")
+			}
+			res, err := execute(t, w, ContinueEmailKind, `{"agentId":"a1","text":"Follow-up"}`)
+			if err == nil || res.NotDelivered != tc.notDelivered || res.FailureStage != tc.stage {
+				t.Fatalf("failure stage: %+v %v", res, err)
+			}
+			want := 0
+			if !tc.notDelivered {
+				want = 1
+			}
+			if got := len(d.Requests("send_agent_message_request")); got != want {
+				t.Fatalf("sends=%d want %d", got, want)
+			}
+		})
+	}
+}
+
 func TestParseCommandChecksEachKind(t *testing.T) {
 	good := map[string]string{
 		ContinueEmailKind:              `{"agentId":"a1","text":"follow-up"}`,

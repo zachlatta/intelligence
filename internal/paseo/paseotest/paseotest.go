@@ -24,21 +24,25 @@ type Daemon struct {
 	token string
 	srv   *httptest.Server
 
-	mu             sync.Mutex
-	hellos         []map[string]any
-	requests       []map[string]any
-	conns          []*websocket.Conn
-	agents         []map[string]any
-	archivedAgents map[string]map[string]any
-	workspaces     []map[string]any
-	projects       []map[string]any
-	projectsErr    string // project.list answers rpc_error with this
-	statusErr      string // daemon.get_status answers rpc_error with this
-	silent         bool   // never answers requests
-	accepted       int
-	timelines      map[string]timeline
-	created        map[string]map[string]any // what each creation idempotency key made
-	nextID         int
+	mu                 sync.Mutex
+	hellos             []map[string]any
+	requests           []map[string]any
+	conns              []*websocket.Conn
+	agents             []map[string]any
+	archivedAgents     map[string]map[string]any
+	archivedWorkspaces map[string]map[string]any
+	missingWorktrees   map[string]bool
+	rpcErrors          map[string]string
+	unrecoverable      map[string]string
+	workspaces         []map[string]any
+	projects           []map[string]any
+	projectsErr        string // project.list answers rpc_error with this
+	statusErr          string // daemon.get_status answers rpc_error with this
+	silent             bool   // never answers requests
+	accepted           int
+	timelines          map[string]timeline
+	created            map[string]map[string]any // what each creation idempotency key made
+	nextID             int
 
 	schedules   []map[string]any  // schedules.go
 	noSchedules bool              // every schedule request fails, as on a daemon without them
@@ -52,6 +56,25 @@ type Daemon struct {
 
 // FailProjects makes project.list answer rpc_error with msg ("" answers normally).
 func (f *Daemon) FailProjects(msg string) { f.mu.Lock(); f.projectsErr = msg; f.mu.Unlock() }
+
+// FailRequest injects a daemon RPC refusal for a specific protocol operation.
+func (f *Daemon) FailRequest(kind, message string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.rpcErrors == nil {
+		f.rpcErrors = map[string]string{}
+	}
+	f.rpcErrors[kind] = message
+}
+
+func (f *Daemon) UnrecoverableWorkspace(id, reason string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.unrecoverable == nil {
+		f.unrecoverable = map[string]string{}
+	}
+	f.unrecoverable[id] = reason
+}
 
 // SetProjects sets the project catalog project.list answers with.
 func (f *Daemon) SetProjects(projects ...map[string]any) {
@@ -194,12 +217,45 @@ func (f *Daemon) answer(c *websocket.Conn, msg map[string]any) {
 	id, _ := msg["requestId"].(string)
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	str := func(k string) string { s, _ := msg[k].(string); return s }
+	if reason := f.rpcErrors[str("type")]; reason != "" {
+		f.write(c, session("rpc_error", map[string]any{"requestId": id, "error": reason}))
+		return
+	}
 	if !validFetch(msg) {
 		// the daemon validates every request against its schema and answers a bad one this way
 		f.write(c, session("rpc_error", map[string]any{"requestId": id, "error": "Unknown request, try upgrading the daemon"}))
 		return
 	}
 	switch msg["type"] {
+	case "workspace.recovery.inspect.request":
+		ws := str("workspaceId")
+		state := map[string]any{"kind": "unavailable", "reason": "workspace_not_found", "message": "Workspace not found"}
+		if reason := f.unrecoverable[ws]; reason != "" {
+			state["reason"] = reason
+			state["message"] = "Source repository cannot be recovered"
+		} else if f.find(f.workspaces, ws) >= 0 {
+			state["reason"] = "workspace_not_archived"
+		} else if f.archivedWorkspaces[ws] != nil {
+			action := "unarchive"
+			if f.missingWorktrees[ws] {
+				action = "restore"
+			}
+			state = map[string]any{"kind": "recoverable", "action": action, "workspaceId": ws}
+		}
+		f.write(c, session("workspace.recovery.inspect.response", map[string]any{"requestId": id, "state": state}))
+	case "workspace.recovery.restore.request":
+		ws := str("workspaceId")
+		workspace := f.archivedWorkspaces[ws]
+		if workspace == nil {
+			f.write(c, session("workspace.recovery.restore.response", map[string]any{"requestId": id, "accepted": false, "error": "Workspace cannot be restored"}))
+			return
+		}
+		f.missingWorktrees[ws] = false
+		f.workspaces = append(f.workspaces, workspace)
+		delete(f.archivedWorkspaces, ws)
+		f.pushLocked("workspace_update", map[string]any{"kind": "upsert", "workspace": workspace})
+		f.write(c, session("workspace.recovery.restore.response", map[string]any{"requestId": id, "accepted": true}))
 	case "agent_permission_response":
 		response, _ := msg["response"].(map[string]any)
 		if id == "" || msg["agentId"] == "" || response["behavior"] != "deny" || response["message"] == "" {
@@ -321,6 +377,12 @@ func (f *Daemon) change(c *websocket.Conn, id string, msg map[string]any) bool {
 				"error": "Workspace not found: " + ws}))
 			return true
 		}
+		if f.archivedWorkspaces == nil {
+			f.archivedWorkspaces = map[string]map[string]any{}
+			f.missingWorktrees = map[string]bool{}
+		}
+		f.archivedWorkspaces[ws] = f.workspaces[i]
+		f.missingWorktrees[ws] = f.workspaces[i]["workspaceKind"] == "worktree"
 		f.workspaces = slices.Delete(f.workspaces, i, i+1)
 		f.pushLocked("workspace_update", map[string]any{"kind": "remove", "id": ws})
 		f.write(c, session("archive_workspace_response", map[string]any{"requestId": id, "workspaceId": ws,
@@ -349,6 +411,8 @@ func (f *Daemon) change(c *websocket.Conn, id string, msg map[string]any) bool {
 			f.write(c, session("fetch_agent_response", map[string]any{"requestId": id, "agent": a}))
 		} else if a == nil {
 			f.write(c, session("rpc_error", map[string]any{"requestId": id, "error": "Agent not found: " + ag}))
+		} else if f.missingWorktrees[fmt.Sprint(a["workspaceId"])] {
+			f.write(c, session("rpc_error", map[string]any{"requestId": id, "error": "Workspace directory is missing"}))
 		} else {
 			delete(a, "archivedAt")
 			if f.find(f.agents, ag) < 0 {
@@ -371,6 +435,10 @@ func (f *Daemon) change(c *websocket.Conn, id string, msg map[string]any) bool {
 			f.agents[i]["title"] = msg["name"]
 			f.write(c, session("update_agent_response", map[string]any{"requestId": id, "agentId": ag, "ok": true, "error": nil}))
 		case "send_agent_message_request":
+			if f.missingWorktrees[fmt.Sprint(f.agents[i]["workspaceId"])] {
+				f.write(c, session("rpc_error", map[string]any{"requestId": id, "error": "Working directory does not exist"}))
+				return true
+			}
 			if b, ok := msg["activeTurnBehavior"]; ok && b != "steer" && b != "interrupt" { // the daemon's schema refuses it
 				f.write(c, session("rpc_error", map[string]any{"requestId": id, "requestType": msg["type"],
 					"error": "Invalid message", "code": "invalid_message"}))

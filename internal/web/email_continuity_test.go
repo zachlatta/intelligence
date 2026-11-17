@@ -38,7 +38,7 @@ func readContinuityRun(t *testing.T, h http.Handler, id string) map[string]any {
 }
 
 func TestEmailFollowUpContinuity(t *testing.T) {
-	for _, mode := range []string{"three follow-ups", "agent gone", "older than 24 hours", "transport failure", "cleanup pending", "arrival during restoration"} {
+	for _, mode := range []string{"three follow-ups", "agent gone", "older than 24 hours", "transport failure", "cleanup pending", "arrival during restoration", "pre-send inspect_agent", "pre-send inspect_workspace", "pre-send unrecoverable_workspace", "pre-send restore_workspace", "pre-send refresh_agent"} {
 		t.Run(mode, func(t *testing.T) {
 			h, fake := emailServer(t)
 			sendReport(t, h, wfReport())
@@ -55,6 +55,7 @@ func TestEmailFollowUpContinuity(t *testing.T) {
 				count = 3
 			}
 			for i := 0; i < count; i++ {
+				beforeSendFailure := strings.HasPrefix(mode, "pre-send ")
 				goneNow := mode == "agent gone" && i == count-1
 				// Each request records its own checked answer. A retry records no second send.
 				answerBody := fmt.Sprintf(`{"channel":"email","messageId":"answer-%d","threadId":"thread","checked":true}`, i)
@@ -124,12 +125,16 @@ func TestEmailFollowUpContinuity(t *testing.T) {
 					if cmd.Kind != "continue_email" || !strings.Contains(string(cmd.Args), "same-orchestrator") {
 						t.Fatalf("continuation: %s %s", cmd.Kind, cmd.Args)
 					}
-					if goneNow || mode == "transport failure" {
+					if goneNow || beforeSendFailure || mode == "transport failure" {
 						reason := "refresh_agent_request: Agent not found: same-orchestrator"
 						if mode == "transport failure" {
 							reason = "connection lost"
 						}
 						result := json.RawMessage(`{"agentGone":true}`)
+						if beforeSendFailure {
+							result, _ = json.Marshal(map[string]any{"notDelivered": true, "failureStage": strings.TrimPrefix(mode, "pre-send ")})
+							reason = "Cannot revive before sending: " + mode
+						}
 						if mode == "transport failure" {
 							result = nil
 						}
@@ -163,7 +168,11 @@ func TestEmailFollowUpContinuity(t *testing.T) {
 						}
 					}
 				}
-				if goneNow || mode == "older than 24 hours" {
+				if goneNow || beforeSendFailure || mode == "older than 24 hours" {
+					_, coldEvent := sqlPost(t, h, q("SELECT continued_run_id::text FROM workflow_run_events WHERE run_id='"+next+"' AND kind='email_cold_start'"))
+					if len(coldEvent.Rows) != 1 || coldEvent.Rows[0][0] != run {
+						t.Fatalf("cold-start predecessor: %+v", coldEvent)
+					}
 					var a hostclient.CreateWorkspaceArgs
 					if err := json.Unmarshal(cmd.Args, &a); err != nil {
 						t.Fatal(err)

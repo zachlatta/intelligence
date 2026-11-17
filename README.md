@@ -1343,8 +1343,12 @@ restoring them from Paseo persistence when archived. Each email keeps a separate
 steps, completion and answer; `workflow_runs.continued_run_id` links the previous run. Restoration
 uses the normal queue and effective priority, with a fresh repository memory estimate. Each new
 request has its own request time and expected answer; earlier sends and resolutions do not settle it.
-Restoration waits for the previous cleanup command to finish. Only a confirmed missing agent permits a cold
-start. An older run or a run without an orchestrator also starts cold. All these follow-ups include
+Restoration waits for the previous cleanup command to finish, then explicitly inspects and restores
+the archived workspace through Paseo's recovery protocol before refreshing the agent. A failure
+before sending the prompt (agent inspection, workspace recovery or refresh) permits a cold start;
+the failed command's result records `notDelivered` and `failureStage`. Failures during the send
+remain uncertain and cannot start a second agent. An older run or a run without an orchestrator
+also starts cold. All these follow-ups include
 the thread's sent messages as verbatim decoded text/HTML MIME bodies and the earlier runs' notes
 and events. Gmail read failures retry intake rather than losing that context.
 `workflow_run_events` records `email_continuation_requested`, `email_continued`, or `email_cold_start`;

@@ -140,6 +140,8 @@ func (c Command) waitsForTurn() bool {
 
 // CommandResult is what a command made or changed.
 type CommandResult struct {
+	NotDelivered   bool   `json:"notDelivered,omitempty"` // failure before calling SendMessage
+	FailureStage   string `json:"failureStage,omitempty"`
 	AgentGone      bool   `json:"agentGone,omitempty"`
 	WorkspaceID    string `json:"workspaceId,omitempty"`
 	AgentID        string `json:"agentId,omitempty"`
@@ -291,6 +293,9 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 	c := w.client
 	w.mu.Unlock()
 	if c == nil {
+		if a, ok := parsed.(ContinueEmailArgs); ok {
+			return CommandResult{AgentID: a.AgentID, NotDelivered: true, FailureStage: "connect"}, errors.New("not connected to the Paseo daemon")
+		}
 		return CommandResult{}, errors.New("not connected to the Paseo daemon")
 	}
 	if IsScheduleKind(cmd.Kind) {
@@ -303,21 +308,51 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 	}
 	switch a := parsed.(type) {
 	case ContinueEmailArgs:
-		// Refresh is Paseo's persistence-backed unarchive path. It restores the
-		// owning workspace as well. An uncertain send must never cause a cold start.
+		result := CommandResult{AgentID: a.AgentID}
+		beforeSend := func(stage string, err error) (CommandResult, error) {
+			result.NotDelivered = true
+			result.FailureStage = stage
+			return result, err
+		}
 		ag, err := c.InspectAgent(ctx, a.AgentID)
 		if err != nil {
-			return CommandResult{AgentID: a.AgentID, AgentGone: strings.Contains(err.Error(), "Agent not found:")}, err
+			result.AgentGone = strings.Contains(err.Error(), "Agent not found:")
+			return beforeSend("inspect_agent", err)
 		}
 		if ag == nil {
-			return CommandResult{AgentID: a.AgentID, AgentGone: true}, fmt.Errorf("Agent not found: %s", a.AgentID)
+			result.AgentGone = true
+			return beforeSend("inspect_agent", fmt.Errorf("Agent not found: %s", a.AgentID))
+		}
+		result.WorkspaceID = ag.WorkspaceID
+		if ag.WorkspaceID == "" {
+			return beforeSend("inspect_workspace", errors.New("agent has no owning workspace"))
+		}
+		// archive_workspace removes a worktree. Modern Paseo clients receive no
+		// implicit recovery from refresh_agent_request, so recover it explicitly.
+		recovery, err := c.InspectWorkspaceRecovery(ctx, ag.WorkspaceID)
+		if err != nil {
+			return beforeSend("inspect_workspace", err)
+		}
+		switch {
+		case recovery.Kind == "recoverable":
+			if err := c.RestoreWorkspace(ctx, ag.WorkspaceID); err != nil {
+				return beforeSend("restore_workspace", err)
+			}
+		case recovery.Kind == "unavailable" && recovery.Reason == "workspace_not_archived":
+			// Already active, including a replay after an earlier successful send.
+		default:
+			return beforeSend("inspect_workspace", fmt.Errorf("workspace cannot be recovered (%s): %s", recovery.Reason, recovery.Message))
 		}
 		if !ag.ArchivedAt.IsZero() {
 			if err := c.RefreshAgent(ctx, a.AgentID); err != nil {
-				return CommandResult{AgentID: a.AgentID}, err
+				return beforeSend("refresh_agent", err)
 			}
 		}
-		return CommandResult{AgentID: a.AgentID}, c.SendMessage(ctx, a.AgentID, a.Text, cmd.ID, paseo.Steer)
+		if err := c.SendMessage(ctx, a.AgentID, a.Text, cmd.ID, paseo.Steer); err != nil {
+			result.FailureStage = "send_message"
+			return result, err
+		}
+		return result, nil
 	case CreateWorkspaceArgs:
 		a.Cwd = expandHome(a.Cwd, home)
 		ws, err := c.CreateWorkspace(ctx, paseo.CreateWorkspace{Cwd: a.Cwd, Worktree: a.Worktree, Branch: a.Branch, Base: a.Base,

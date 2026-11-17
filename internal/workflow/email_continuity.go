@@ -138,12 +138,12 @@ func (e *Engine) emailContinued(ctx context.Context, tx pgx.Tx, r run, c fleet.C
 		}
 		return e.event(ctx, tx, r, "error", nil, nil, "Late email continuation delivery result: "+c.Error)
 	}
-	if c.Status == hostclient.CommandFailed && res.AgentGone {
+	if c.Status == hostclient.CommandFailed && (res.AgentGone || res.NotDelivered) {
 		// Additional emails are in r.Input and reach the replacement's first prompt.
 		if _, err := tx.Exec(ctx, `UPDATE commands SET status='failed',error='Included in cold-start input',finished_at=$2 WHERE args->>'afterCommand'=$1 AND status='queued'`, c.ID, e.Now()); err != nil {
 			return err
 		}
-		if err := e.event(ctx, tx, r, "email_cold_start", nil, nil, "Previous orchestrator is gone; earlier sent answers and run notes are in the input."); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO workflow_run_events(run_id,account_id,at,kind,text,continued_run_id) VALUES($1,$2,$3,'email_cold_start',$4,$5)`, r.ID, r.Account, e.Now(), "Previous orchestrator could not be resumed before sending ("+res.FailureStage+"): "+c.Error+". Earlier sent answers and run notes are in the input.", r.ContinuedRun); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET orchestrator_id='',workspace_id='',pending_command=NULL,launch_command=NULL,launched_at=NULL WHERE id=$1`, r.ID); err != nil {
