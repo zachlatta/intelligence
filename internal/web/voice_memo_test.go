@@ -255,7 +255,8 @@ func TestVoiceMemoRunsUseTheHostCapacityQueue(t *testing.T) {
 	if len(rows.Rows) != 1 || rows.Rows[0][0] != "started" || rows.Rows[0][1] != workflow.Queued {
 		t.Fatalf("voice memo bypassed queue: %+v", rows)
 	}
-	if _, err := d.Owner.Exec(t.Context(), "UPDATE host_minutes SET cpu_avg_pct=0,load1=0,mem_available_min=100 WHERE host='host-1'"); err != nil {
+	// A finder needs real room for its 1 GiB reservation, even when alone.
+	if _, err := d.Owner.Exec(t.Context(), "UPDATE host_minutes SET cpu_avg_pct=0,load1=0,mem_total=4294967296,mem_available_min=4294967296 WHERE host='host-1'"); err != nil {
 		t.Fatal(err)
 	}
 	if err := engine.StartQueued(t.Context()); err != nil {

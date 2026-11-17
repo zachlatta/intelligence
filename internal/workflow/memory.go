@@ -12,7 +12,9 @@ const finderMemory = int64(1 << 30)
 // Unknown projects reserve finderMemory until their finder selects a repository. A selected
 // project's estimate comes from the workflow's own runs in that repository
 // (workflow_memory_estimate), so an email answer is not charged like a Factory Task in the same
-// repository; with none yet, from the repository's runs (workflow_repository_memory); else 4 GiB.
+// repository; with none in the last seven days, from the repository's recent runs
+// (workflow_repository_memory); else 4 GiB. Both use discrete p90 plus 25%, at
+// least 1 GiB; fewer than ten samples conservatively use their maximum.
 // Persist the estimate with the run so retries and reservations use exactly what admission charged.
 func repositoryMemory(ctx context.Context, tx pgx.Tx, account int64, host, workflowID, repo string, selected bool) (int64, error) {
 	const fallback = int64(4 << 30)

@@ -131,7 +131,7 @@ func TestMatchedRepositoryReentersExistingQueue(t *testing.T) {
 	}
 }
 
-func TestOversizedRepositoryRunsAloneWithoutBlockingFIFOForever(t *testing.T) {
+func TestOversizedRepositoryNeedsManualOverrideAndAllowsBackfill(t *testing.T) {
 	h, d := dbServer(t)
 	b := sendReport(t, h, wfReport())
 	wf := repositoryHistory(t, h, d, "/w/app")
@@ -144,11 +144,22 @@ func TestOversizedRepositoryRunsAloneWithoutBlockingFIFOForever(t *testing.T) {
 	heavy := startRun(t, h, wf, "oversized build")
 	desk := workflow.Starting
 	desk.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/desk"}
-	light := startRun(t, h, createWorkflow(t, h, desk), "next job")
+	lightWorkflow := createWorkflow(t, h, desk)
+	light := startRun(t, h, lightWorkflow, "next job")
 	repositoryMinute(t, b, 16<<30)
-	if got := runField(t, h, heavy, "status"); got != "starting" {
-		t.Fatalf("oversized head never starts: %v", got)
+	if got := runField(t, h, heavy, "status"); got != "queued" {
+		t.Fatalf("oversized head bypassed safety limit: %v", got)
 	}
+	if got := runField(t, h, light, "status"); got != "starting" {
+		t.Fatalf("a job that fits could not pass an oversized head: %v", got)
+	}
+	if rec := call(t, h, http.MethodPost, "/api/workflow-runs/"+light+"/cancel", `{}`, sameOriginFetch); rec.Code != http.StatusNoContent {
+		t.Fatal(rec.Body)
+	}
+	if rec := call(t, h, http.MethodPost, "/api/workflow-runs/"+heavy+"/start", `{}`, sameOriginFetch); rec.Code != http.StatusNoContent {
+		t.Fatal(rec.Body)
+	}
+	light = startRun(t, h, lightWorkflow, "alongside oversized run")
 	if got := runField(t, h, light, "status"); got != "queued" {
 		t.Fatalf("oversized run must run alone: %v", got)
 	}
@@ -161,7 +172,7 @@ func TestOversizedRepositoryRunsAloneWithoutBlockingFIFOForever(t *testing.T) {
 		t.Fatalf("FIFO did not progress: %v", got)
 	}
 	// An OS baseline can make an estimate never fit beside it, even one smaller than
-	// physical RAM. On an idle host the head still starts, so the queue cannot wait for ever.
+	// physical RAM. Even on an idle host this needs the manual override.
 	if _, err := d.Owner.Exec(t.Context(), `UPDATE workflow_runs SET status='succeeded',finished_at=now() WHERE id=$1`, light); err != nil {
 		t.Fatal(err)
 	}
@@ -170,8 +181,8 @@ func TestOversizedRepositoryRunsAloneWithoutBlockingFIFOForever(t *testing.T) {
 	}
 	repositoryMinute(t, b, 7<<30)
 	baseline := startRun(t, h, wf, "build alongside OS baseline")
-	if got := runField(t, h, baseline, "status"); got != "starting" {
-		t.Fatalf("idle host kept its head queued behind an OS baseline: %v", got)
+	if got := runField(t, h, baseline, "status"); got != "queued" {
+		t.Fatalf("idle host exceeded memory limit: %v", got)
 	}
 }
 

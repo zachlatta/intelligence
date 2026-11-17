@@ -159,7 +159,7 @@ func TestAQueuedRunCanBeStartedNowOrCanceled(t *testing.T) {
 	wf := fixedWorkflow(t, h)
 	first := startRun(t, h, wf, "first")
 	second := startRun(t, h, wf, "second")
-	if reason := runField(t, h, first, "queue_reason").(string); !strings.Contains(reason, "memory 97% used now, about 98% with this one (queues at 80%)") {
+	if reason := runField(t, h, first, "queue_reason").(string); !strings.Contains(reason, "memory 97% used now, over 100% with all active reservations and this one (queues at 90%)") {
 		t.Errorf("reason = %q", reason)
 	}
 	if code, msg := move(t, h, key, first, map[string]string{"move": "next"}); code != http.StatusConflict || !strings.Contains(msg, "queued") {

@@ -215,7 +215,7 @@ func TestServerConfigReadsTheWorkflowQueueLimits(t *testing.T) {
 	if l := c.QueueLimits; l.CPUPct != 70 || l.MemPct != 0 || l.LoadPerCPU != 2.5 || l.MemPeakPct != 90 || l.MemPeaks != 2 {
 		t.Errorf("limits = %+v", l)
 	}
-	if l := workflow.DefaultLimits(); l.MemPct != 80 || l.MemPeakPct != 95 || l.MemPeaks != 1 {
+	if l := workflow.DefaultLimits(); l.MemPct != 90 || l.MemPeakPct != 0 || l.MemPeaks != 0 {
 		t.Errorf("default memory limits = %+v, want 80%% now, 95%% should a new run's peak meet the largest to come", l)
 	}
 	for k, v := range map[string]string{"WORKFLOW_QUEUE_CPU_PCT": "lots", "WORKFLOW_QUEUE_MEM_PEAKS": "1.5", "WORKFLOW_QUEUE_MEM_PEAK_PCT": "-1"} {

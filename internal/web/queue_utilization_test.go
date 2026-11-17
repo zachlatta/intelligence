@@ -18,8 +18,7 @@ import (
 // (12 GiB) and kept the queue strictly in order, so its head, a second heavy run, held seven small
 // runs behind it, each needing 1 GiB to find its project.
 //
-// A new run needs room for its own peak and the largest peak still to come of the runs going, not
-// for all of them: two heavy runs cannot meet on it, but small runs fit beside one. A run that fits starts ahead of a head that the
+// A new run needs room beside every unconsumed reservation. A run that fits starts ahead of a head that the
 // runs older than it are holding. Once only the runs that started after the head keep it waiting,
 // the queue holds for it, so it is not starved, and it starts when they end.
 func TestTheNovember16QueueStartsSmallRunsAroundAHeavyHead(t *testing.T) {
@@ -50,8 +49,8 @@ func TestTheNovember16QueueStartsSmallRunsAroundAHeavyHead(t *testing.T) {
 		return id
 	}
 	long := going(heavy, "orch-long", 0)
-	going(light, "orch-s1", 2100<<20)
-	going(light, "orch-s2", 2400<<20)
+	going(light, "orch-s1", 614<<20)
+	going(light, "orch-s2", 614<<20)
 	resident := func(at time.Time, agents map[string]int64) {
 		t.Helper()
 		for agent, bytes := range agents {
@@ -65,13 +64,13 @@ func TestTheNovember16QueueStartsSmallRunsAroundAHeavyHead(t *testing.T) {
 	clock.Add(2 * time.Minute)
 	at := clock.Now()
 	resident(at, map[string]int64{"orch-long": 1229 << 20, "orch-s1": 614 << 20, "orch-s2": 614 << 20})
-	memMinute(t, b, at, 19*gib, 13*gib)
+	memMinute(t, b, at, 20*gib, 14*gib)
 
 	head := startRun(t, h, heavy, "second heavy run")
 	if got := runField(t, h, head, "status"); got != "queued" {
 		t.Fatalf("head = %v: two heavy runs' peaks cannot meet on a 19 GiB host", got)
 	}
-	if reason := runField(t, h, head, "queue_reason").(string); !strings.Contains(reason, "should its peak meet the largest to come of the runs going") || !strings.Contains(reason, "8.9 GiB for /w/pdw") {
+	if reason := runField(t, h, head, "queue_reason").(string); !strings.Contains(reason, "all active reservations") || !strings.Contains(reason, "8.9 GiB for /w/pdw") {
 		t.Errorf("head's reason = %q", reason)
 	}
 	var small []string
@@ -80,7 +79,7 @@ func TestTheNovember16QueueStartsSmallRunsAroundAHeavyHead(t *testing.T) {
 		small = append(small, startRun(t, h, finder, fmt.Sprintf("small task %d", i)))
 	}
 	// 6 GiB used and a 7.7 GiB peak still to come for the long run: four finders' starts fit
-	// beside it under 95%, a fifth does not.
+	// beside it under 90% of 20 GiB, a fifth does not.
 	for i, want := range []string{"finding_project", "finding_project", "finding_project", "finding_project", "queued", "queued"} {
 		if got := runField(t, h, small[i], "status"); got != want {
 			t.Fatalf("small task %d = %v, want %v: %v", i, got, want, runField(t, h, small[i], "queue_reason"))
@@ -256,7 +255,7 @@ func TestAHeldStartRetryDoesNotHoldTheRunsBehindIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 7 of 16 GiB used, and busy CPU for now, so the next two runs queue behind the retry.
-	rawMinute(t, d, clock.Now(), 97, 16*gib, 9*gib)
+	rawMinute(t, d, clock.Now(), 97, 16*gib, 10*gib)
 	clock.Add(time.Second)
 	next := startRun(t, h, wf, "fits beside the retry")
 	clock.Add(time.Second)
@@ -269,7 +268,7 @@ func TestAHeldStartRetryDoesNotHoldTheRunsBehindIt(t *testing.T) {
 	// The CPU calms: the next run starts past the held retry; the one after it does not fit beside
 	// the retry's 4 GiB and the next run's (100% should their peaks meet).
 	clock.Add(time.Minute)
-	rawMinute(t, d, clock.Now(), 10, 16*gib, 9*gib)
+	rawMinute(t, d, clock.Now(), 10, 16*gib, 10*gib)
 	if err := workflow.NewEngine(d.Owner, clock.Now).StartQueued(t.Context()); err != nil {
 		t.Fatal(err)
 	}
