@@ -1520,7 +1520,9 @@ make run    # http://localhost:8080 (needs DATABASE_URL and READONLY_DATABASE_UR
 
 Tests talk to a fake Paseo daemon (`internal/paseo/paseotest`). Database tests get their own
 database and read-only role (`internal/dbtest`) on the server in `TEST_DATABASE_URL`, which
-`make test` sets when it is empty.
+`make test` sets when it is empty. A package whose `TestMain` calls `dbtest.RunWithTemplate`
+(`internal/web` does) migrates one template database once and clones it for each test, instead
+of migrating every test database; each clone still gets its own read-only role.
 
 ### Public repository
 
