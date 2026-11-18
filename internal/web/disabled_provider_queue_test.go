@@ -51,6 +51,7 @@ func TestDisabledOrchestratorCannotStrandProjectFinder(t *testing.T) {
 				name = provider + "/finder_running"
 			}
 			t.Run(name, func(t *testing.T) {
+				t.Parallel()
 				h, d := dbServer(t)
 				b := sendReport(t, h, wfReport())
 				def := workflow.Starting
@@ -125,10 +126,14 @@ func TestDisabledProviderDoesNotBlockHostQueue(t *testing.T) {
 					name += "/retry"
 				}
 				t.Run(name, func(t *testing.T) {
+					t.Parallel()
 					d := dbtest.New(t)
-					clock := &fakeClock{t: time.Now().UTC().Truncate(time.Minute)}
-					h := newServer(t, d, d.Owner, "v", func(c *Config) { c.Now = clock.Now; c.QueueInterval = time.Hour })
-					b := sendReport(t, h, wfReport())
+					// Retry readiness uses host_status.online, which compares the
+					// fake heartbeat with Postgres's real clock. Keep that heartbeat
+					// fresh through the test's timeout and drive retries explicitly.
+					clock := &fakeClock{t: time.Now().UTC().Truncate(time.Minute).Add(time.Hour)}
+					h := newStallServer(t, d, d.Owner, "v", func(c *Config) { c.Now = clock.Now })
+					b := stallReport(t, h, wfReport())
 					def := workflow.Starting
 					def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
 					if finder {
@@ -160,7 +165,7 @@ func TestDisabledProviderDoesNotBlockHostQueue(t *testing.T) {
 					clock.Add(time.Second)
 					second := startRun(t, h, fixedWorkflow(t, h), "Subscribed provider run")
 					clock.Add(time.Minute)
-					e := workflow.NewEngine(d.Owner, clock.Now)
+					e := h.local.wf
 					if retry {
 						if err := e.RetryStarts(t.Context()); err != nil {
 							t.Fatal(err)

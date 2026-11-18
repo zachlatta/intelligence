@@ -12,6 +12,8 @@ Read `README.md` first.
   -race -timeout=30m ./...`. The whole web package is also heavy: run it through that wrapper.
   Narrow package tests with `-run` can run directly while iterating. Do not bypass the lease with
   an unwrapped full `go test -race ./...`.
+- Run a single package against a throwaway Postgres under the same lease with
+  `make test-pkg PKG=./internal/whatsnew`. Run `make test` before committing.
 - Keep `main` deployable: every push to `main` deploys to production.
 - Prefer the standard library. Add a dependency only when it clearly earns its place.
 - Do all work in the repo, never in `/tmp`. Transient scratch goes in `.factory-scratch/` (git-ignored).

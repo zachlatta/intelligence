@@ -1800,6 +1800,8 @@ share it. To run a full suite against an existing test database, use `make test`
 `TEST_DATABASE_URL` set, or `scripts/with-test-capacity go test -race -timeout=30m ./...`.
 Reviewers use these leased entry points too. The entire web package is heavy; run
 `scripts/with-test-capacity go test -race -timeout=30m ./internal/web` for it.
+To run one package's tests with race detection against a fresh throwaway Postgres, use
+`make test-pkg PKG=./internal/whatsnew`. This also holds a host-wide lease.
 Narrow tests with `-run` can run directly during iteration. `make test` sets a 30-minute
 package timeout so a slow shared host does not hit Go's ten-minute default.
 

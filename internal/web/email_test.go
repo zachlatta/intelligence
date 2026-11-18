@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -325,12 +326,39 @@ func TestTheEmailPageShowsTheMailboxAndWhatEachEmailDid(t *testing.T) {
 // TestADeletedEmailWorkflowStartsNothingAndFreesItsSender: once deleted, an email workflow starts
 // no run, from a new email or a reply in an old run's thread, and its senders can start another.
 func TestADeletedEmailWorkflowStartsNothingAndFreesItsSender(t *testing.T) {
-	h, fake := emailServer(t)
-	sendReport(t, h, wfReport())
+	fake := gmailfake.New(t, "bot@example.com")
+	d := dbtest.New(t)
+	clock := &fakeClock{t: time.Now().UTC()}
+	key := emailKey(t)
+	h := newStallServer(t, d, d.Owner, "v", func(c *Config) {
+		c.Google, c.EmailKey, c.Now = fake.Google(), key, clock.Now
+	})
+	stallReport(t, h, wfReport())
 	wf := christina(t, h)
 	connectGmail(t, h, fake)
-	fake.Add(mailMsg("m1", "t1", "christina@example.com", "Q4 board deck", "Numbers for slide 6, please."))
-	run, _ := decided(t, h, "m1")["run_id"].(string)
+
+	// The routing assertions need a completed poll, independent of the background
+	// poller's scheduling and the time it takes Gmail to pace message reads.
+	mail := email.Service{DB: d.Owner, Engine: h.local.wf, Google: fake.Google(), Key: key, Now: clock.Now}
+	deliver := func(msg email.GmailMessage) map[string]any {
+		t.Helper()
+		clock.Add(email.Interval)
+		msg.InternalDate = strconv.FormatInt(clock.Now().UnixMilli(), 10)
+		fake.Add(msg)
+		if err := mail.Poll(t.Context(), h.acct.ID); err != nil {
+			t.Fatal(err)
+		}
+		row := emailDecision(t, h, msg.ID)
+		if row == nil {
+			var pollError string
+			if err := d.Owner.QueryRow(t.Context(), "SELECT error FROM gmail_connections WHERE account_id = $1", h.acct.ID).Scan(&pollError); err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("poll did not decide email %s (mailbox error %q)", msg.ID, pollError)
+		}
+		return row
+	}
+	run, _ := deliver(mailMsg("m1", "t1", "christina@example.com", "Q4 board deck", "Numbers for slide 6, please."))["run_id"].(string)
 	if run == "" {
 		t.Fatal("m1 started no run")
 	}
@@ -341,12 +369,10 @@ func TestADeletedEmailWorkflowStartsNothingAndFreesItsSender(t *testing.T) {
 		t.Fatalf("delete = %d %s", rec.Code, rec.Body)
 	}
 
-	fake.Add(mailMsg("m2", "t1", "christina@example.com", "Re: Q4 board deck", "And slide 7."))
-	if r := decided(t, h, "m2"); r["decision"] != "ignored" || !strings.Contains(r["reason"].(string), "gone") {
+	if r := deliver(mailMsg("m2", "t1", "christina@example.com", "Re: Q4 board deck", "And slide 7.")); r["decision"] != "ignored" || !strings.Contains(r["reason"].(string), "gone") {
 		t.Errorf("a reply to a deleted workflow's run = %v", r)
 	}
-	fake.Add(mailMsg("m3", "t3", "christina@example.com", "New request", "Hi."))
-	if r := decided(t, h, "m3"); r["decision"] != "ignored" || !strings.Contains(r["reason"].(string), "no workflow") {
+	if r := deliver(mailMsg("m3", "t3", "christina@example.com", "New request", "Hi.")); r["decision"] != "ignored" || !strings.Contains(r["reason"].(string), "no workflow") {
 		t.Errorf("a new email for a deleted workflow = %v", r)
 	}
 	christina(t, h) // her address is free again

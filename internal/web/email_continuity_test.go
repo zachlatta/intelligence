@@ -40,6 +40,7 @@ func readContinuityRun(t *testing.T, h http.Handler, id string) map[string]any {
 func TestEmailFollowUpContinuity(t *testing.T) {
 	for _, mode := range []string{"three follow-ups", "agent gone", "older than 24 hours", "transport failure", "cleanup pending", "arrival during restoration", "pre-send inspect_agent", "pre-send inspect_workspace", "pre-send unrecoverable_workspace", "pre-send restore_workspace", "pre-send refresh_agent"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			h, fake := emailServer(t)
 			sendReport(t, h, wfReport())
 			b := openStream(t, h, "host-1")

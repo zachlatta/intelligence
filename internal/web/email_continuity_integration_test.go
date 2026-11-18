@@ -18,6 +18,7 @@ import (
 func TestEmailContinuationUsesMainStartupPolicy(t *testing.T) {
 	for _, mode := range []string{"normal queue", "immediate priority", "fallback queue", "disabled provider", "credential", "cancellation blocks redelivery", "prior resolution", "late expiry"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			d := dbtest.New(t)
 			h := newServer(t, d, d.Owner, "test", func(c *Config) { c.QueueInterval = time.Hour })
 			b := sendReport(t, h, wfReport())
