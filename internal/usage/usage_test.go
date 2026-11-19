@@ -69,6 +69,17 @@ func TestParseClaudeKeepsTwoOrganizationsOfOneEmailApart(t *testing.T) {
 	}
 }
 
+// cswap says when each login's sign-in ends (its refresh token's hard limit), and when one is gone.
+func TestParseClaudeKeepsWhenEachSignInEnds(t *testing.T) {
+	s := parseClaude([]byte(`{"accounts":[
+		{"number":1,"email":"ada@example.com","usageStatus":"ok","loginExpiresAt":"2026-12-18T18:16:24Z","usage":{"sevenDay":{"pct":1,"resetsAt":"2026-11-13T11:00:00Z"}}},
+		{"number":2,"email":"grace@example.com","usageStatus":"relogin_required","usage":null}]}`), now)
+	if len(s.Accounts) != 2 || !s.Accounts[0].LoginExpiresAt.Equal(time.Date(2026, 12, 18, 18, 16, 24, 0, time.UTC)) ||
+		!s.Accounts[1].LoginExpiresAt.IsZero() || s.Accounts[1].Error != "cswap usage status: relogin_required" {
+		t.Errorf("accounts = %+v", s.Accounts)
+	}
+}
+
 func TestParseClaudeRejectsGarbage(t *testing.T) {
 	for _, raw := range []string{`not json`, `{"accounts":[]}`} {
 		if s := parseClaude([]byte(raw), now); s.Error == "" || len(s.Accounts) != 0 {

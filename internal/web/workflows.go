@@ -1107,7 +1107,7 @@ func (e runEvent) Line() string {
 		return "Claimed " + e.Text
 	case "steer", "steer_unanswered", "email_continuation_requested", "email_continued", "email_cold_start":
 		return linkRuns(e.Text)
-	case "error", "stalled", "continuation", "resume":
+	case "error", "stalled", "continuation", "resume", "interrupted", "login_recovery":
 		return e.Text
 	case "start_retry":
 		return "Start failed; retry queued: " + e.Text

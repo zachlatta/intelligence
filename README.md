@@ -1500,6 +1500,65 @@ crash between denial and its final upload can leave `pending`, which deliberatel
 claim a confirmed outcome. While the server is unreachable the worker waits to store the audit
 before acting. Raw commands, tool inputs and prompt contents are not copied into this table.
 
+### Broken logins and login recovery
+
+A Claude or Codex sign-in can end under the agents using it: Claude logins have a hard limit of
+about 30 days (the refresh token's `refreshTokenExpiresAt`), after which Claude Code wipes the
+host's credential. Every agent on the host then fails its next turn with the provider's own
+message and sits idle as if it had finished. On 2026-11-19 that was “Failed to authenticate: this
+login reached its time limit and cannot be renewed. Run `claude auth login` to sign in again…”,
+sent as the whole of an assistant message. Intelligence now recognises it, resumes what it
+stopped once a working login is active, and asks for the fix.
+
+- **Detection.** As transcripts arrive, the server runs `internal/interrupt` on each new entry: only
+  an agent's own message (`assistant_message` or `error`, never a user message, tool call or
+  reasoning) of at most 700 characters that opens with the provider's wording (`Failed to
+  authenticate` with Claude's follow-up, `API Error: 401`, `OAuth token has expired`, `Invalid API
+  key · Please run /login`, `Not logged in · Please run /login`, Codex's `Your access token could
+  not be refreshed` or `unexpected status 401` with its sign-in wording). Agents mention 401s and
+  logins all the time (every file-share check says “anonymous GET 401”), so a keyword is never
+  enough. An entry more than 6 hours older than its arrival (a first sync's history) is not news.
+  Each match is one `agent_interruptions` row, keyed by host, agent and entry, so a resend records
+  nothing twice. The host's meter is a second witness: cswap's `relogin_required` or
+  `no_credentials` for a login opens an incident before any agent trips over it
+  (`token_expired` is cswap deferring a refresh, and is ignored).
+- **The broken login.** The interruption's login is the one the host's tool was using then
+  (`usage_active`); `login_incidents` keeps one open row per host, provider and login (`''` when
+  unknown). It closes by itself when a meter reading of that login taken after it opened works
+  again (`resolved_by = 'reading'`), or when someone marks it fixed. A model group member on a
+  broken login is not suggested (`model_group_candidates.reason = 'Login broken'`), so new launches
+  avoid it.
+- **Recovery.** Every 15 seconds `RecoverInterruptions` looks at each waiting interruption, under its
+  row lock. It waits while the host is away or the login its tool uses now still has an open
+  incident (cswap fails over to another login within minutes; a host with no meter waits for Mark
+  fixed). Then it resumes the same agent, so the same model carries on with its context intact:
+  a queued `send_message` saying the turn did not run, why, and to check before repeating any
+  external action. A sub-agent belongs to its parent (an orchestrator may already have replaced it),
+  so the parent is told instead, with the `paseo send` that resumes it and the `--provider` of a
+  replacement on the same model; a parent that was interrupted too is resumed first. An agent with
+  a newer turn in its transcript is `superseded`; one no longer on its host is `gone`; one resumed 3
+  times in 6 hours and failing again is `gave_up`; one with no working login for 24 hours is
+  `expired`. Each outcome is on the row (`status`, `target_agent_id`, `command_id`, `outcome`,
+  `acted_at`).
+- **Runs.** An interruption of a run's orchestrator, of one of its descendants or of an agent in
+  its workspace adds an `interrupted` event to the run, and each recovery a `login_recovery` event,
+  both in What happened. While an agent of the run's tree waits for a working login, the stall
+  watchdog counts it as pending: it neither nudges the orchestrator (the nudge would fail on the
+  same dead login and spend the run's two continuations, as one did on 2026-11-19) nor stalls the
+  run.
+- **In the interface.** Every page loads `logins.js`, which reads `login_alerts` through `/api/sql`
+  and shows a note under the top bar for each broken login (which login on which host, since when,
+  how many agent turns it stopped and where their recovery stands) and for each login whose
+  sign-in ends within 5 days (cswap's `loginExpiresAt`, kept in `usage_sources.login_expires_at`).
+  The note has the fix (How to fix, and Copy command for `claude auth login --email …`) and, for a
+  broken login, Mark fixed, which calls `POST /api/login-incidents/{id}/resolve` with JSON
+  `{"note"}` (204; 404 outside the account; 400 for a bad note) and lets the waiting agents carry
+  on. A broken login also puts “⚠ Login broken” in the tab's title. The Plans page lists the last
+  50 interrupted agents with what Intelligence did about each.
+
+Signing in again still happens on the host (an OAuth link to open and a code to paste); the note
+says exactly how.
+
 ### Self-update
 
 Every response carries `X-Intelligence-Version`, the server's commit. The image builds the host
@@ -1573,7 +1632,8 @@ the account and enrollment routes, the host binaries and the streams (with a hos
   The prompt takes dictation as the new agent form does.
   Each of these pages sends its commands to the commands API and follows them through `/api/sql`.
 - `GET /usage?days=7` (1 to 365): every login with a chart of each window's used % over the days,
-  and its weekly peaks (the four newest, with older weeks folded).
+  and its weekly peaks (the four newest, with older weeks folded). Above them, the agents a broken login stopped
+  (Broken logins and login recovery, above).
 - `GET /api/usage`: the logins and their windows, as JSON.
 - `GET /resources?hours=1` (1 to 2160; it was `/hosts`, which sends here), the Host monitoring tab: each host's CPU, memory,
   load, disk busy time and disk throughput charts, its load averages, disk I/O now and filesystems
@@ -1676,6 +1736,11 @@ origin (another site's request is refused with 403), and those with a body must 
 - `GET /whatsnew.js`: loaded by every page with its stylesheet: the unseen count on the What's New
   tab and the note under the top bar.
 - `GET /whats-new/media/{name}`: an entry's demo, built into the binary; no sign-in needed.
+- `POST /api/login-incidents/{id}/resolve` with `{"note": "..."}` (one line, at most 500
+  characters; `{}` is fine): marks a broken login fixed, so the agents waiting for it are resumed
+  (204, also when it was already fixed); 404 when the incident is not on the account's hosts.
+- `GET /logins.js`: loaded by every page with its stylesheet: the note under the top bar for each
+  broken or soon-ending login (`login_alerts`), and the Plans page's interrupted agents.
 - `GET /localtime.js`: loaded by every page with its stylesheet. Pages show every time in the
   reader's own time zone and locale: the server writes each as an instant
   (`<time datetime="<RFC 3339, UTC>" data-format="…">`, with the time in UTC as its text for a

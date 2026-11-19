@@ -1,5 +1,13 @@
 [
   {
+    "id": "login-recovery",
+    "released": "2026-11-19",
+    "title": "Agents recover when a login expires",
+    "summary": "When a Claude or Codex login stops working, a note under the top bar on every page names the login and host, counts the agent turns it stopped, and shows how to sign in again, with Copy command and Mark fixed. Once a working login is active, Intelligence resumes each stopped agent with the same model, or asks its orchestrator to. Logins ending within 5 days are flagged too. Plans lists the agents a login stopped.",
+    "media": "login-recovery.gif",
+    "mediaAlt": "A local demo: the broken-login note with its fix steps, the Plans page's list of stopped agents, and Mark fixed clearing the note"
+  },
+  {
     "id": "email-follow-up-continuity",
     "released": "2026-11-17",
     "title": "Email follow-ups keep their context",

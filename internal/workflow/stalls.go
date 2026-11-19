@@ -54,7 +54,9 @@ func (e *Engine) ReconcileStalls(ctx context.Context) error {
 }
 
 // idleSnapshot includes descendants even when workers use another workspace. UNION
-// (rather than UNION ALL) makes malformed parent cycles finite.
+// (rather than UNION ALL) makes malformed parent cycles finite. An agent of the tree waiting for a
+// working login (agent_interruptions) counts as pending: a nudge would fail on the same dead login
+// and spend the run's continuations, and login recovery resumes it once a login works.
 const idleSnapshot = `WITH RECURSIVE tree AS (
  SELECT a.* FROM agents a WHERE a.host=$1 AND a.id=$2
  UNION
@@ -69,7 +71,8 @@ const idleSnapshot = `WITH RECURSIVE tree AS (
    WHERE p.status IN ('pending','error','stuck') AND p.cleared_at IS NULL),
  EXISTS(SELECT 1 FROM commands c WHERE c.host=$1 AND c.status IN ('queued','sent','running')
   AND c.expires_at>$3 AND (c.args->>'agentId' IN (SELECT id FROM tree)
-    OR c.args->>'workspaceId'=$4)),
+    OR c.args->>'workspaceId'=$4))
+ OR EXISTS(SELECT 1 FROM agent_interruptions i JOIN tree t ON i.host=t.host AND i.agent_id=t.id WHERE i.status='waiting'),
  coalesce((SELECT jsonb_agg(jsonb_build_array(id,status,attention_reason='permission',updated_at,last_user_message_at) ORDER BY id)::text FROM tree),'')`
 
 func (e *Engine) reconcileStall(ctx context.Context, tx pgx.Tx, r run) error {
@@ -176,7 +179,7 @@ func (e *Engine) Resume(ctx context.Context, account int64, id string) error {
 			return err
 		}
 		if !fresh || !idle || blocked || pending {
-			return conflict("Resume needs a fresh online host, an idle orchestrator, no active or permission-blocked worker and no pending command. Inspect the existing agents first.")
+			return conflict("Resume needs a fresh online host, an idle orchestrator, no active or permission-blocked worker, no pending command and no agent waiting for a working login. Inspect the existing agents first.")
 		}
 		if err := e.event(ctx, tx, r, "resume", ptr(r.Step), nil, "Resumed the existing orchestrator."); err != nil {
 			return err

@@ -75,6 +75,19 @@ h1, h2, h3 { color: var(--fg); letter-spacing: -.015em; }
   border: 1px solid var(--accent-line); background: var(--accent-bg); color: var(--fg-2); font-size: 13px; }
 .whatsnew-note .what { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .whatsnew-note .what b { color: var(--fg); font-weight: 600; }
+/* a broken or soon-ending login (logins.js): under the top bar on every page */
+.login-alert { display: flex; align-items: flex-start; gap: .6rem; margin-top: 1rem; padding: .55rem .8rem; border-radius: var(--radius);
+  font-size: 13px; color: var(--fg-2); }
+.login-alert.broken { border: 1px solid var(--red-line); background: var(--red-bg); }
+.login-alert.expiring { border: 1px solid var(--orange-line); background: var(--orange-bg); }
+.login-alert .what { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.login-alert .what > b { color: var(--fg); font-weight: 600; }
+.login-alert.broken .what > b { color: var(--red); }
+.login-alert .fix > summary { display: list-item; list-style: disclosure-closed inside; cursor: pointer; margin-top: .25rem; color: var(--fg); font-weight: 500; }
+.login-alert .fix[open] > summary { list-style-type: disclosure-open; }
+.login-alert .fix p { margin: .3rem 0 0; }
+.login-alert .fix .said { color: var(--muted); }
+.card-title { margin: 0; padding: .8rem 1.1rem; font-size: .95rem; font-weight: 600; }
 @media (max-width: 44rem) {
   :root { --topbar-h: 5.1rem; }
   .topbar-inner { flex-direction: column; gap: 0; min-height: 0; }
@@ -82,8 +95,8 @@ h1, h2, h3 { color: var(--fg); letter-spacing: -.015em; }
   /* every tab stays in sight on a phone (with What's New's count), on two rows if need be */
   .topnav { flex-wrap: wrap; gap: 0 1.1rem; overflow-x: visible; }
   .topnav a { padding: .4rem 0 .5rem; }
-  .whatsnew-note { flex-wrap: wrap; }
-  .whatsnew-note .what { flex-basis: 100%; }
+  .whatsnew-note, .login-alert { flex-wrap: wrap; }
+  .whatsnew-note .what, .login-alert .what { flex-basis: 100%; }
 }
 
 /* page structure */

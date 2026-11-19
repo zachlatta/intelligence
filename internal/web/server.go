@@ -119,6 +119,7 @@ func newHandler(cfg Config, workers bool) http.Handler {
 		go a.wf.RunQueue(cfg.Context, cfg.QueueInterval)
 		go a.wf.RunStartRetries(cfg.Context)
 		go a.wf.RunStallWatchdog(cfg.Context)
+		go a.wf.RunInterruptionRecovery(cfg.Context)
 	}
 	if cfg.PDWURL != "" && cfg.PDWKey != "" && cfg.PDWAccount != "" {
 		voice := &voicememo.Service{DB: cfg.DB, Engine: a.wf, URL: cfg.PDWURL, Key: cfg.PDWKey, Username: cfg.PDWAccount, Interval: cfg.VoiceMemoInterval}
@@ -260,6 +261,8 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	mux.HandleFunc("GET /workflows/email", a.page(func(v viewer) http.HandlerFunc { return emailPage(cfg, a, v) }))
 	mux.HandleFunc("GET /workflows/{id}", a.page(func(v viewer) http.HandlerFunc { return workflowPage(cfg, a, v) }))
 	mux.HandleFunc("GET /workflow-runs/{id}", a.page(func(v viewer) http.HandlerFunc { return runPage(cfg, v) }))
+	mux.HandleFunc("POST /api/login-incidents/{id}/resolve", a.write(a.resolveLoginIncident))
+	mux.HandleFunc("GET /logins.js", loginsScript)
 	mux.HandleFunc("GET /usage", a.page(func(v viewer) http.HandlerFunc { return usagePage(cfg, v.reg) }))
 	mux.HandleFunc("GET /resources", a.page(func(v viewer) http.HandlerFunc { return hostResourcesPage(cfg, v.reg) }))
 	mux.HandleFunc("GET /hosts", func(w http.ResponseWriter, r *http.Request) { // its name before the home page's hosts took it

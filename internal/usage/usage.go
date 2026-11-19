@@ -66,6 +66,9 @@ type Account struct {
 	Note       string    `json:"note,omitempty"`  // a caveat on the reading
 	Error      string    `json:"error,omitempty"` // this login's read failed; Windows is empty
 	Windows    []Window  `json:"windows,omitempty"`
+	// LoginExpiresAt is when the login's sign-in ends for good, where the tool says (cswap: the
+	// refresh token's hard limit, about 30 days for Claude). Past it the provider refuses every turn.
+	LoginExpiresAt time.Time `json:"loginExpiresAt,omitzero"`
 }
 
 // Window is one quota window: "7d", "5h", or a pool's window such as "fable/7d" or "gemini/5h".
@@ -188,6 +191,7 @@ func parseClaude(raw []byte, now time.Time) Source {
 			Org            string `json:"organizationUuid"`
 			UsageStatus    string `json:"usageStatus"`
 			UsageFetchedAt string `json:"usageFetchedAt"`
+			LoginExpiresAt string `json:"loginExpiresAt"`
 			Usage          *struct {
 				SevenDay *win  `json:"sevenDay"`
 				FiveHour *win  `json:"fiveHour"`
@@ -219,6 +223,9 @@ func parseClaude(raw []byte, now time.Time) Source {
 		}
 		if t, ok := parseTime(a.UsageFetchedAt); ok {
 			acct.ObservedAt = t
+		}
+		if t, ok := parseTime(a.LoginExpiresAt); ok {
+			acct.LoginExpiresAt = t.UTC()
 		}
 		add := func(id string, seconds int, w *win) {
 			if w != nil && w.Pct != nil {
