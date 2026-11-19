@@ -29,7 +29,7 @@
 {{range .Problems}}<p class="banner">{{.}}</p>{{end}}
 {{template "modelgroups" "inline"}}
 <section class="card" hidden>
-  <h2 class="card-title">Agents stopped by a broken login</h2>
+  <div class="card-head"><h2>Agents stopped by a broken login</h2></div>
   <table class="table" id="login-history">
     <thead><tr><th>When</th><th>Host</th><th>Login</th><th>Agent</th><th>What Intelligence did</th></tr></thead>
     <tbody></tbody>
