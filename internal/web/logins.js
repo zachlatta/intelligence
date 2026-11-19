@@ -2,8 +2,10 @@
 // read-only SQL API: each login a host's agents could not use (an expired or revoked Claude or Codex
 // sign-in), and each whose sign-in ends within 5 days. Each shows as a note under the top bar that
 // says which login on which host, what it broke and what Intelligence did about it, and how to fix
-// it: the command to copy, the steps, and Mark fixed (POST /api/login-incidents/{id}/resolve) for
-// when the host's meter cannot tell that it works again. On the Plans page it also fills the
+// it: the steps, the command to copy (login_alerts.command: for a login cswap manages, the whole
+// safe sequence, which signs in inside a throwaway CLAUDE_CONFIG_DIR and imports into cswap, never
+// over the live login; otherwise only the first step, labelled so), and Mark fixed
+// (POST /api/login-incidents/{id}/resolve) for when the host's meter cannot tell that it works again. On the Plans page it also fills the
 // history of interrupted agents (#login-history) from agent_interruptions.
 (() => {
   const sql = async (query) => {
@@ -24,8 +26,6 @@
   };
   const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
   const providerName = (p) => ({ claude: "Claude", codex: "Codex", muse: "Muse", antigravity: "Antigravity" })[p] || p;
-  // the one command to run on the host, from the fix text (its first `code`)
-  const command = (fix) => (/`([^`]+)`/.exec(fix || "") || [])[1] || "";
 
   // What the agents went through, in a sentence.
   function story(a) {
@@ -52,12 +52,19 @@
     if (s) what.append(el("span", "story", " " + s));
     const how = el("details", "fix");
     how.append(el("summary", "", "How to fix"), el("p", "", a.fix));
+    if (a.command) {
+      const pre = el("pre", "cmd");
+      pre.append(el("code", "", a.command));
+      how.append(pre);
+    }
     if (broken && a.message) how.append(el("p", "said", (a.source === "meter" ? "The host's meter said: " : "The provider said: ") + a.message));
     what.append(how);
     box.append(what);
-    const cmd = command(a.fix);
+    const cmd = a.command;
     if (cmd) {
-      const copy = el("button", "btn sm", "Copy command");
+      const label = a.first_step ? "Copy first step" : "Copy command";
+      const copy = el("button", "btn sm", label);
+      if (a.first_step) copy.title = "Only the first step: see How to fix";
       copy.type = "button";
       copy.addEventListener("click", async () => {
         try { await navigator.clipboard.writeText(cmd); copy.textContent = "Copied"; } catch (err) { copy.textContent = cmd; }
@@ -82,14 +89,14 @@
   }
 
   async function alerts() {
-    const rows = await sql(`SELECT kind, incident_id, host, provider, login, label, reason, message, fix, source, since, expires_at,
-      interrupted, waiting, recovered, stuck FROM login_alerts ORDER BY kind, since`);
+    const rows = await sql(`SELECT kind, incident_id, host, provider, login, label, reason, message, fix, command, first_step, source,
+      since, expires_at, interrupted, waiting, recovered, stuck FROM login_alerts ORDER BY kind, since`);
     if (!rows || !rows.length) return;
     const top = document.querySelector("header.topbar");
     if (!top || document.querySelector(".login-alerts")) return;
     const wrap = el("div", "container login-alerts");
-    const keys = ["kind", "incident_id", "host", "provider", "login", "label", "reason", "message", "fix", "source", "since",
-      "expires_at", "interrupted", "waiting", "recovered", "stuck"];
+    const keys = ["kind", "incident_id", "host", "provider", "login", "label", "reason", "message", "fix", "command", "first_step",
+      "source", "since", "expires_at", "interrupted", "waiting", "recovered", "stuck"];
     let broken = 0;
     for (const row of rows) {
       const a = Object.fromEntries(keys.map((k, i) => [k, row[i]]));

@@ -63,18 +63,6 @@ func TestMessageIsClippedToOneLine(t *testing.T) {
 	}
 }
 
-func TestFixSaysHowToSignInAgain(t *testing.T) {
-	if f := Fix("claude", "zach@example.com"); !strings.Contains(f, "claude auth login") || !strings.Contains(f, "zach@example.com") {
-		t.Fatal(f)
-	}
-	if f := Fix("codex", ""); !strings.Contains(f, "codex login") {
-		t.Fatal(f)
-	}
-	if f := Fix("other", ""); f == "" {
-		t.Fatal("no fix for an unknown provider")
-	}
-}
-
 func TestMeterStatusSaysWhenALoginIsBroken(t *testing.T) {
 	for status, want := range map[string]string{"relogin_required": LoginExpired, "no_credentials": LoggedOut} {
 		r, ok := MeterStatus("claude", "cswap usage status: "+status)

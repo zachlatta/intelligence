@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -187,9 +188,15 @@ func TestTheMeterOpensAnIncidentForALoginWithNoSignIn(t *testing.T) {
 		!inc[0].Opened.Equal(t1) || !inc[0].Seen.Equal(t1.Add(6*time.Minute)) {
 		t.Fatalf("incidents = %+v", inc)
 	}
-	var fix string
-	if err := dbtest.Reader(t, d, "host-1").QueryRow(ctx, `SELECT fix FROM login_alerts WHERE login = 'grace@example.com'`).Scan(&fix); err != nil || fix == "" {
+	var fix, command string
+	var first bool
+	if err := dbtest.Reader(t, d, "host-1").QueryRow(ctx, `SELECT fix, command, first_step FROM login_alerts WHERE login = 'grace@example.com'`).
+		Scan(&fix, &command, &first); err != nil || fix == "" {
 		t.Fatalf("fix %q %v", fix, err)
+	}
+	safeRelogin(t, command, "grace@example.com")
+	if first {
+		t.Fatal("a cswap login's command is the whole fix, not a first step")
 	}
 }
 
@@ -205,17 +212,18 @@ func TestLoginExpiryIsStoredAndWarnedAboutAhead(t *testing.T) {
 	if err := r.p.QueryRow(ctx, `SELECT login_expires_at FROM usage_sources WHERE account = 'grace@example.com'`).Scan(&at); err != nil || !at.Equal(later.LoginExpiresAt) {
 		t.Fatal(at, err)
 	}
-	rows, err := dbtest.Reader(t, d, "host-1").Query(ctx, `SELECT kind, login, fix FROM login_alerts ORDER BY login`)
+	rows, err := dbtest.Reader(t, d, "host-1").Query(ctx, `SELECT kind, login, fix, command FROM login_alerts ORDER BY login`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
 	var got []string
 	for rows.Next() {
-		var kind, login, fix string
-		if err := rows.Scan(&kind, &login, &fix); err != nil {
+		var kind, login, fix, command string
+		if err := rows.Scan(&kind, &login, &fix, &command); err != nil {
 			t.Fatal(err)
 		}
+		safeRelogin(t, command, login)
 		got = append(got, kind+" "+login)
 		if fix == "" {
 			t.Errorf("%s has no fix", login)
@@ -256,5 +264,46 @@ func TestMarkingALoginFixedClosesItsIncident(t *testing.T) {
 	recordUsage(t, r, "host-1", claudeRead(t1.Add(2*time.Hour), ada(true), gone))
 	if inc := incidents(t, r); len(inc) != 2 || inc[1].Resolved != nil {
 		t.Fatalf("incidents = %+v", inc)
+	}
+}
+
+// safeRelogin checks a copyable fix for a cswap-managed Claude login: pasting it must never sign in
+// over the live login the host's agents use. It signs in inside a throwaway CLAUDE_CONFIG_DIR, as
+// Zach did on 2026-11-19, and loads that login into cswap.
+func safeRelogin(t *testing.T, command, login string) {
+	t.Helper()
+	for _, want := range []string{
+		`T=$(mktemp -d)`,
+		`CLAUDE_CONFIG_DIR="$T/cfg" claude auth login --claudeai --email '` + login + `'`,
+		`CLAUDE_CONFIG_DIR="$T/cfg" XDG_DATA_HOME="$T/data" cswap add`,
+		`CLAUDE_CONFIG_DIR="$T/cfg" XDG_DATA_HOME="$T/data" cswap export "$T/export.json"`,
+		`cswap import "$T/export.json" --force`,
+	} {
+		if !strings.Contains(command, want) {
+			t.Errorf("command %q lacks %q", command, want)
+		}
+	}
+	if strings.HasPrefix(command, "claude ") || strings.Contains(command, "&& claude auth login") {
+		t.Errorf("command %q signs in over the live login", command)
+	}
+}
+
+// Where the host's login is unknown (no cswap meter), the command is only the first step.
+func TestAnUnknownLoginsCommandIsAFirstStep(t *testing.T) {
+	d := dbtest.New(t)
+	r := New(d.Owner)
+	record(t, r, full(), t1)
+	now := time.Now()
+	if err := r.StoreTranscript(ctx, hostclient.TranscriptBatch{Host: "host-1", AgentID: "a3", Epoch: "e", Replace: true,
+		Entries: []hostclient.TranscriptEntry{entryAt(2, now, expiredLogin)}}, now); err != nil {
+		t.Fatal(err)
+	}
+	var fix, command string
+	var first bool
+	if err := dbtest.Reader(t, d, "host-1").QueryRow(ctx, `SELECT fix, command, first_step FROM login_alerts`).Scan(&fix, &command, &first); err != nil {
+		t.Fatal(err)
+	}
+	if !first || command != "claude auth login --claudeai" || !strings.HasPrefix(fix, "First step:") || !strings.Contains(fix, "CLAUDE_CONFIG_DIR") {
+		t.Fatalf("fix %q command %q first %v", fix, command, first)
 	}
 }

@@ -16,7 +16,6 @@ CREATE TABLE login_incidents (
  login text NOT NULL DEFAULT '',
  reason text NOT NULL CHECK (reason IN ('login_expired','logged_out','auth_rejected')),
  message text NOT NULL DEFAULT '',          -- what the provider (or the host's meter) said, one line
- fix text NOT NULL DEFAULT '',              -- how to sign in again, in words
  source text NOT NULL CHECK (source IN ('transcript','meter')),
  opened_at timestamptz NOT NULL,
  last_seen_at timestamptz NOT NULL,
@@ -71,12 +70,56 @@ ALTER TABLE agent_interruptions ENABLE ROW LEVEL SECURITY;
 CREATE POLICY own_hosts ON agent_interruptions FOR SELECT
  USING (host IN (SELECT k.host FROM host_keys k WHERE k.account_id = current_account_id()));
 
+-- How to sign a login in again, in one place for every note (login_alerts). A Claude login cswap
+-- manages is signed in inside a throwaway CLAUDE_CONFIG_DIR and loaded into cswap, as on
+-- 2026-11-19: a bare `claude auth login` would sign in over the live login every agent on the host
+-- uses. login_fix_command is what Copy command copies; login_fix_first_step says it is only the
+-- first step (a Claude login whose cswap email is unknown).
+CREATE FUNCTION login_fix_first_step(provider text, login text) RETURNS boolean
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+ SELECT provider = 'claude' AND position('@' IN login) = 0
+$$;
+
+CREATE FUNCTION login_fix_command(provider text, login text) RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+ SELECT CASE
+  WHEN provider = 'claude' AND position('@' IN login) > 0 THEN
+   'T=$(mktemp -d) && mkdir -p "$T/cfg" "$T/data"'
+   || ' && CLAUDE_CONFIG_DIR="$T/cfg" claude auth login --claudeai --email '''
+   || replace(split_part(login, '#', 1), '''', '') || ''''
+   || ' && CLAUDE_CONFIG_DIR="$T/cfg" XDG_DATA_HOME="$T/data" cswap add'
+   || ' && CLAUDE_CONFIG_DIR="$T/cfg" XDG_DATA_HOME="$T/data" cswap export "$T/export.json"'
+   || ' && cswap import "$T/export.json" --force && rm -rf "$T" && cswap list'
+  WHEN provider = 'claude' THEN 'claude auth login --claudeai'
+  WHEN provider = 'codex' THEN 'codex login'
+  ELSE '' END
+$$;
+
+CREATE FUNCTION login_fix(provider text, login text) RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+ SELECT CASE
+  WHEN provider = 'claude' AND position('@' IN login) > 0 THEN
+   'Paste Copy command into a terminal on the host. It signs ' || split_part(login, '#', 1)
+   || ' in inside a throwaway CLAUDE_CONFIG_DIR, so the live login the agents use is not touched,'
+   || ' then loads it into cswap (add, export, import --force) and lists the logins.'
+   || ' Open the link it prints, approve as ' || split_part(login, '#', 1) || ', and paste the code back.'
+   || ' If this is the login the host uses now, finish with `cswap --switch-to <its slot number> --force`.'
+  WHEN provider = 'claude' THEN
+   'First step: run `claude auth login --claudeai` on the host and finish the sign-in it starts.'
+   || ' If cswap manages the host''s logins, sign in inside a throwaway CLAUDE_CONFIG_DIR instead and'
+   || ' `cswap import` the result, so the live login is not overwritten.'
+  WHEN provider = 'codex' THEN 'Run `codex login` on the host and finish the sign-in it starts.'
+  ELSE 'Sign the provider''s CLI on the host in again.' END
+$$;
+
 -- What the interface warns about on every page: each broken login, with how many agents it
 -- stopped and where their recovery stands, and each login whose sign-in ends within 5 days.
 CREATE VIEW login_alerts WITH (security_invoker = true) AS
 SELECT 'broken'::text AS kind, i.id AS incident_id, i.host, i.provider, i.login,
        coalesce(nullif(a.label, ''), nullif(i.login, ''), i.provider) AS label,
-       i.reason, i.message, i.fix, i.source, i.opened_at AS since, s.login_expires_at AS expires_at,
+       i.reason, i.message, login_fix(i.provider, i.login) AS fix,
+       login_fix_command(i.provider, i.login) AS command, login_fix_first_step(i.provider, i.login) AS first_step,
+       i.source, i.opened_at AS since, s.login_expires_at AS expires_at,
        (SELECT count(*) FROM agent_interruptions x WHERE x.incident_id = i.id)::int AS interrupted,
        (SELECT count(*) FROM agent_interruptions x WHERE x.incident_id = i.id AND x.status = 'waiting')::int AS waiting,
        (SELECT count(*) FROM agent_interruptions x WHERE x.incident_id = i.id AND x.status IN ('resumed','parent_notified'))::int AS recovered,
@@ -89,10 +132,8 @@ UNION ALL
 SELECT 'expiring', NULL, s.host, s.provider, s.account,
        coalesce(nullif(a.label, ''), s.account),
        'login_expiring', 'The sign-in ends ' || to_char(s.login_expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') || ' UTC',
-       CASE s.provider
-         WHEN 'claude' THEN 'Renew it before then: on the host run `claude auth login --email ' || split_part(s.account, '#', 1) || '` (in tmux, with a throwaway CLAUDE_CONFIG_DIR when cswap manages the host''s logins), open the link, approve, paste the code, then load it into cswap.'
-         WHEN 'codex' THEN 'Renew it before then: on the host run `codex login`.'
-         ELSE 'Sign the provider''s CLI in again before then.' END,
+       'Renew it before then. ' || login_fix(s.provider, s.account),
+       login_fix_command(s.provider, s.account), login_fix_first_step(s.provider, s.account),
        'meter', s.observed_at, s.login_expires_at, 0, 0, 0, 0
 FROM usage_sources s
 LEFT JOIN usage_accounts a ON a.provider = s.provider AND a.account = s.account

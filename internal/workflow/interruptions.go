@@ -105,6 +105,16 @@ func (e *Engine) recoverInterruption(ctx context.Context, tx pgx.Tx, x interrupt
 	if moved {
 		return e.settle(ctx, tx, x, "superseded", "", nil, "It carried on before Intelligence resumed it.")
 	}
+	// it failed again later (a nudge, or a message, on the same dead login): one resume, for the
+	// newest failure, is enough
+	var later bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_interruptions WHERE host = $1 AND agent_id = $2 AND seq > $3
+		AND status = 'waiting')`, x.Host, x.Agent, x.Seq).Scan(&later); err != nil {
+		return err
+	}
+	if later {
+		return e.settle(ctx, tx, x, "superseded", "", nil, "It failed again later on the same login; Intelligence resumes it once, for that failure.")
+	}
 	if status == "running" || status == "initializing" {
 		return nil // busy: see what its turn does
 	}
@@ -135,6 +145,19 @@ func (e *Engine) recoverInterruption(ctx context.Context, tx pgx.Tx, x interrupt
 		if parentLive {
 			target, text = parent, parentText(x)
 			outcome = "Asked its parent agent to resume or replace " + who + " with the same model."
+		}
+	}
+	if target == x.Agent {
+		// a message sent to it since it failed (Zach's, say) is on its way and gets it going: wait for
+		// what that turn does rather than send a second one
+		var onItsWay bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM commands WHERE host = $1 AND kind = $2 AND args->>'agentId' = $3
+			AND status IN ('queued', 'sent', 'running') AND expires_at > $4 AND created_at >= $5)`,
+			x.Host, hostclient.SendMessageKind, x.Agent, now, x.At).Scan(&onItsWay); err != nil {
+			return err
+		}
+		if onItsWay {
+			return nil
 		}
 	}
 	args, _ := json.Marshal(hostclient.AgentArgs{AgentID: target, Text: text, Behavior: hostclient.Queue})

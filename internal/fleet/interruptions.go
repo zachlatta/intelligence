@@ -121,12 +121,12 @@ func openIncident(ctx context.Context, tx pgx.Tx, host, provider, login string, 
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return 0, err
 	}
-	err = tx.QueryRow(ctx, `INSERT INTO login_incidents (host, provider, login, reason, message, fix, source, opened_at, last_seen_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+	err = tx.QueryRow(ctx, `INSERT INTO login_incidents (host, provider, login, reason, message, source, opened_at, last_seen_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
 		ON CONFLICT (host, provider, login) WHERE resolved_at IS NULL DO UPDATE SET
 		opened_at = least(login_incidents.opened_at, EXCLUDED.opened_at),
 		last_seen_at = greatest(login_incidents.last_seen_at, EXCLUDED.last_seen_at)
-		RETURNING id`, host, provider, login, reason.Code, reason.Message, interrupt.Fix(provider, login), source, at).Scan(&id)
+		RETURNING id`, host, provider, login, reason.Code, reason.Message, source, at).Scan(&id)
 	return id, err
 }
 

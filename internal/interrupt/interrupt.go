@@ -102,21 +102,6 @@ func summary(code string) string {
 	return "the provider refused the login"
 }
 
-// Fix is what to run on the host to sign the login in again.
-func Fix(provider, login string) string {
-	switch provider {
-	case "claude":
-		cmd := "claude auth login"
-		if strings.Contains(login, "@") {
-			cmd += " --email " + strings.SplitN(login, "#", 2)[0]
-		}
-		return "On the host, sign in again: run `" + cmd + "` (in tmux, with a throwaway CLAUDE_CONFIG_DIR when cswap manages the host's logins), open the link it prints, approve, and paste the code back. Then load it into cswap (`cswap add`, or `cswap import` from the throwaway store) and check with `cswap list`."
-	case "codex":
-		return "On the host, sign in again: run `codex login` and finish the sign-in it starts."
-	}
-	return "On the host, sign the provider's CLI in again."
-}
-
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		s = s[:i]

@@ -46,7 +46,7 @@ setTimeout(async () => {
   const notes = wrap ? wrap.children.filter((c) => !c.removed) : [];
   const out = { title: document.title, notes: notes.map((n) => ({ role: n.getAttribute("role"), cls: n.className, text: text(n) })) };
   if (notes[0]) {
-    const copy = all(notes[0], (c) => c.textContent === "Copy command")[0];
+    const copy = all(notes[0], (c) => /^Copy (command|first step)$/.test(c.textContent))[0];
     if (copy) await copy.listeners.click();
   }
   if (act === "fix" && notes[0]) {
@@ -64,8 +64,10 @@ func TestLoginsScriptWarnsAndFixes(t *testing.T) {
 	if err != nil {
 		t.Skip("no node")
 	}
-	broken := `["broken", 7, "host-1", "claude", "ada@example.com", "ada@example.com", "login_expired", "Failed to authenticate: this login reached its time limit", "On the host, sign in again: run ` + "`claude auth login --email ada@example.com`" + ` …", "transcript", "2026-11-19T04:38:05Z", null, 4, 1, 3, 0]`
-	expiring := `["expiring", null, "host-1", "claude", "grace@example.com", "grace@example.com", "login_expiring", "The sign-in ends 2026-11-20 21:26 UTC", "Renew it before then: on the host run ` + "`claude auth login --email grace@example.com`" + ` …", "meter", "2026-11-19T04:00:00Z", "2026-11-20T21:26:50Z", 0, 0, 0, 0]`
+	cmd := `T=$(mktemp -d) && mkdir -p \"$T/cfg\" \"$T/data\" && CLAUDE_CONFIG_DIR=\"$T/cfg\" claude auth login --claudeai --email 'ada@example.com' && cswap import \"$T/export.json\" --force`
+	broken := `["broken", 7, "host-1", "claude", "ada@example.com", "ada@example.com", "login_expired", "Failed to authenticate: this login reached its time limit", "Paste Copy command into a terminal on the host.", "` + cmd + `", false, "transcript", "2026-11-19T04:38:05Z", null, 4, 1, 3, 0]`
+	expiring := `["expiring", null, "host-1", "claude", "grace@example.com", "grace@example.com", "login_expiring", "The sign-in ends 2026-11-20 21:26 UTC", "Renew it before then. Paste Copy command into a terminal on the host.", "` + strings.ReplaceAll(cmd, "ada@", "grace@") + `", false, "meter", "2026-11-19T04:00:00Z", "2026-11-20T21:26:50Z", 0, 0, 0, 0]`
+	unknown := `["broken", 8, "host-2", "claude", "", "claude", "login_expired", "Failed to authenticate", "First step: run claude auth login --claudeai on the host.", "claude auth login --claudeai", true, "transcript", "2026-11-19T04:38:05Z", null, 1, 1, 0, 0]`
 
 	run := func(alerts, act string) string {
 		t.Helper()
@@ -85,13 +87,17 @@ func TestLoginsScriptWarnsAndFixes(t *testing.T) {
 		`"role":"status","cls":"login-alert expiring"`,
 		`Claude login grace@example.com on host-1 ends`,
 		`Renew it before then, or every agent using it stops.How to fix`,
-		`["clipboard","claude auth login --email ada@example.com"]`,
+		`["clipboard","T=$(mktemp -d) && mkdir -p \"$T/cfg\" \"$T/data\" && CLAUDE_CONFIG_DIR=\"$T/cfg\" claude auth login --claudeai --email 'ada@example.com' && cswap import \"$T/export.json\" --force"]`,
 		`["/api/login-incidents/7/resolve",{"note":"marked fixed from /"}]`,
 		`"removed":true`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %s in\n%s", want, got)
 		}
+	}
+	// where cswap is not known to manage the login, the copy is only the first step, and says so
+	if got := run("["+unknown+"]", ""); !strings.Contains(got, "Copy first step") || !strings.Contains(got, `["clipboard","claude auth login --claudeai"]`) {
+		t.Errorf("unknown login: %s", got)
 	}
 	if got := run("[]", ""); got != `{"title":"Hosts · Intelligence","notes":[],"posts":[]}` {
 		t.Errorf("no alerts: %s", got)

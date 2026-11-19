@@ -1535,7 +1535,10 @@ stopped once a working login is active, and asks for the fix.
   a queued `send_message` saying the turn did not run, why, and to check before repeating any
   external action. A sub-agent belongs to its parent (an orchestrator may already have replaced it),
   so the parent is told instead, with the `paseo send` that resumes it and the `--provider` of a
-  replacement on the same model; a parent that was interrupted too is resumed first. An agent with
+  replacement on the same model; a parent that was interrupted too is resumed first. Each agent is
+  resumed once: an agent that failed again later (a nudge or a message on the same dead login) has
+  its older interruptions settled as `superseded` and is resumed for the newest, and a message sent
+  to it since it failed (still queued or on its way) is left to get it going instead. An agent with
   a newer turn in its transcript is `superseded`; one no longer on its host is `gone`; one resumed 3
   times in 6 hours and failing again is `gave_up`; one with no working login for 24 hours is
   `expired`. Each outcome is on the row (`status`, `target_agent_id`, `command_id`, `outcome`,
@@ -1550,14 +1553,21 @@ stopped once a working login is active, and asks for the fix.
   and shows a note under the top bar for each broken login (which login on which host, since when,
   how many agent turns it stopped and where their recovery stands) and for each login whose
   sign-in ends within 5 days (cswap's `loginExpiresAt`, kept in `usage_sources.login_expires_at`).
-  The note has the fix (How to fix, and Copy command for `claude auth login --email …`) and, for a
-  broken login, Mark fixed, which calls `POST /api/login-incidents/{id}/resolve` with JSON
+  The note has the fix (How to fix, with the command, and Copy command) and, for a broken login,
+  Mark fixed, which calls `POST /api/login-incidents/{id}/resolve` with JSON
   `{"note"}` (204; 404 outside the account; 400 for a bad note) and lets the waiting agents carry
   on. A broken login also puts “⚠ Login broken” in the tab's title. The Plans page lists the last
   50 interrupted agents with what Intelligence did about each.
 
-Signing in again still happens on the host (an OAuth link to open and a code to paste); the note
-says exactly how.
+The fix text and the command come from SQL functions (`login_fix`, `login_fix_command`,
+`login_fix_first_step`), so every note says the same. For a Claude login cswap manages (its email is
+known), the command is the whole safe sequence from the 2026-11-19 fix: sign in inside a throwaway
+`CLAUDE_CONFIG_DIR` (`claude auth login --claudeai --email …`), `cswap add` and `export` there with a
+throwaway `XDG_DATA_HOME`, then `cswap import --force` into the host's store. It never signs in over
+the live login every agent on the host uses, which a bare `claude auth login` would. Where the login
+is unknown (no cswap meter), the button says Copy first step and copies only `claude auth login
+--claudeai`, and How to fix says to use a throwaway config directory if cswap manages the host.
+Signing in still happens on the host (an OAuth link to open and a code to paste).
 
 ### Self-update
 

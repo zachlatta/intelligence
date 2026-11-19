@@ -293,8 +293,8 @@ func TestMarkingALoginFixedResumesWhatWaitedForIt(t *testing.T) {
 	if m := g.messages(t); len(m) != 0 {
 		t.Fatalf("messages: %+v", m)
 	}
-	rows := g.sql(t, "SELECT incident_id, login, fix FROM login_alerts")
-	if len(rows) != 1 || rows[0][1] != "" || !strings.Contains(rows[0][2].(string), "claude auth login") {
+	rows := g.sql(t, "SELECT incident_id, login, command, first_step FROM login_alerts")
+	if len(rows) != 1 || rows[0][1] != "" || rows[0][2] != "claude auth login --claudeai" || rows[0][3] != true {
 		t.Fatalf("alerts: %v", rows)
 	}
 	path := fmt.Sprintf("/api/login-incidents/%v/resolve", rows[0][0])
@@ -326,5 +326,42 @@ func TestMarkingALoginFixedResumesWhatWaitedForIt(t *testing.T) {
 	g.recover(t)
 	if m := g.messages(t); len(m) != 1 || m[0].AgentID != "orch-1" {
 		t.Fatalf("messages: %+v", m)
+	}
+}
+
+// The 2026-11-19 orchestrator failed twice on the dead login (its turn, then a nudge): it gets one
+// resume, for its newest failure, and the older one is settled as superseded.
+func TestAnAgentThatFailedTwiceIsResumedOnce(t *testing.T) {
+	g := newLoginRig(t)
+	g.fail(t, "orch-1", 92)
+	g.clock.Add(2 * time.Minute)
+	g.fail(t, "orch-1", 94)
+	g.usage(t, "grace@example.com", "ada@example.com")
+	g.recover(t)
+	g.clock.Add(time.Second)
+	g.recover(t)
+	if m := g.messages(t); len(m) != 1 || m[0].AgentID != "orch-1" {
+		t.Fatalf("messages: %+v", m)
+	}
+	rows := g.sql(t, "SELECT seq, status FROM agent_interruptions WHERE agent_id = 'orch-1' ORDER BY seq")
+	if len(rows) != 2 || rows[0][1] != "superseded" || rows[1][1] != "resumed" {
+		t.Fatalf("interruptions: %v", rows)
+	}
+}
+
+// A message already on its way to the agent (Zach's, say) gets it going: no second one.
+func TestAMessageAlreadyOnItsWayIsNotDuplicated(t *testing.T) {
+	g := newLoginRig(t)
+	g.fail(t, "orch-1", 92)
+	if r := call(t, g.h, http.MethodPost, "/api/hosts/host-1/commands", `{"kind":"send_message","args":{"agentId":"orch-1","text":"carry on"}}`, sameOriginFetch); r.Code >= 300 {
+		t.Fatalf("queue a message: %d %s", r.Code, r.Body)
+	}
+	g.usage(t, "grace@example.com", "ada@example.com")
+	g.recover(t)
+	if m := g.messages(t); len(m) != 1 || m[0].Text != "carry on" {
+		t.Fatalf("messages: %+v", m)
+	}
+	if s := g.status(t, "orch-1"); s != "waiting" {
+		t.Fatalf("status %q", s)
 	}
 }
