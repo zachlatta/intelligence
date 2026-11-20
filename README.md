@@ -1117,6 +1117,8 @@ Argon remains usable for existing agents and explicit choices.
 
 Antigravity is enabled. Existing Frontier Models groups (`frontier_models_model`) that used
 `gemini-4-neon-xhigh` now use `gemini-4-neon-medium` with the same login and quota pool.
+The Carbon Medium migration removes `gemini-4-carbon-medium` from active Frontier Models groups
+and preserves the order of their remaining members.
 Suggestions require the host's catalog, an active login and fresh quota. Accounts without the
 member can add it in Plans → Model groups when their host reports the model and pool.
 
