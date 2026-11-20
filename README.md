@@ -148,6 +148,14 @@ automatic recovery only handles idle orchestrators and does not restart or repla
 
 `workflow_runs.idle_since`, `idle_observation`, `stall_checked_at`, status and error, and
 `workflow_run_continuations` (event, attempt, command and creation time) expose recovery through SQL.
+
+Zach's replies and later input reach the orchestrator as messages, which fail while its host's
+Paseo daemon is down. `workflow_run_input_deliveries` links each `reply` or `message` event to every
+message that carried it (`original`, `redelivery`, or `ask`), and the view `workflow_run_inputs`
+says whether each was `delivered`. An input whose every carrier failed or expired goes again,
+verbatim and marked as Zach's reply to the open ask, at the head of the next message to the
+orchestrator: a continuation, Resume, or more input. An `ask` made while a reply is undelivered does
+not reach Zach: the move answers with the reply instead, and the run keeps running.
 Run row locks and the unique `(run_id, event_id, attempt)` key coordinate server instances.
 Each continuation attempt and the stalled transition write an event and update `updated_at`, so
 both appear in What happened. Finished-turn attention is not a permission block; only a current
@@ -866,7 +874,11 @@ online and reports both a connected Paseo daemon and support for retry keys
 (`hosts.start_retry_keys`). Once ready, it joins the same capacity queue as new runs in
 original run creation order; a run started by hand (Start now) retries at once instead. A
 replacement stream must report support again before it can receive queued or unfinished retries. Each retry reuses the original Paseo creation key so a
-lost response does not create a second workspace or agent.
+lost response does not create a second workspace or agent. Because the retry rebuilds its prompt
+(an orchestrator's lists the live runs), Paseo can refuse the reused key with
+`agent_request_key_conflict` although it made the agent the first time; the host then reports the
+live agent labelled with the original command (`intelligence.command`) and the run goes on with it.
+Only when no such agent is left does the conflict fail the start.
 
 The existing durable `commands` queue handles host reconnects. `workflow_runs.start_retries`,
 `start_retry_at` and `error` expose the retry count, queued retry time and last failure through

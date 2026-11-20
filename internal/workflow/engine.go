@@ -1039,6 +1039,14 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		if strings.TrimSpace(m.Note) == "" {
 			return "", bad("ask needs a note for Zach: --note <file>, in Markdown.")
 		}
+		lost, err := undeliveredInputs(ctx, tx, r.ID, e.Now())
+		if err != nil {
+			return "", err
+		}
+		if answeredAsk(lost) {
+			// The reply never reached this orchestrator: the ask it is repeating is answered.
+			return answeredAskMessage + redelivery(lost), e.carried(ctx, tx, r, lost, "ask", nil)
+		}
 		if err := e.event(ctx, tx, r, "ask", ptr(r.Step), nil, m.Note); err != nil {
 			return "", err
 		}
@@ -1121,12 +1129,20 @@ func (e *Engine) ReplyTx(ctx context.Context, tx pgx.Tx, account int64, runID, t
 			return err
 		}
 	}
-	args, _ := json.Marshal(hostclient.AgentArgs{AgentID: r.Orchestrator, Text: fmt.Sprintf("%s\n\n%s\n\n"+
-		"Decide what it means for the run, then move it with intelligence workflow (next, back, skip, ask or fail) --run %s.", heading, text, r.ID)})
-	if _, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.SendMessageKind, args, replyTTL, e.Now()); err != nil {
+	lost, err := undeliveredInputs(ctx, tx, r.ID, e.Now())
+	if err != nil {
 		return err
 	}
-	if err := e.event(ctx, tx, r, "reply", ptr(r.Step), nil, text); err != nil {
+	args, _ := json.Marshal(hostclient.AgentArgs{AgentID: r.Orchestrator, Text: withRedelivery(lost, fmt.Sprintf("%s\n\n%s\n\n"+
+		"Decide what it means for the run, then move it with intelligence workflow (next, back, skip, ask or fail) --run %s.", heading, text, r.ID))})
+	c, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.SendMessageKind, args, replyTTL, e.Now())
+	if err != nil {
+		return err
+	}
+	if err := e.carried(ctx, tx, r, lost, "redelivery", &c.ID); err != nil {
+		return err
+	}
+	if err := e.recordInput(ctx, tx, r, "reply", ptr(r.Step), text, c.ID); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, "UPDATE workflow_runs SET status = $2, note = '', updated_at = $3 WHERE id = $1", r.ID, Running, e.Now()); err != nil {
@@ -1185,12 +1201,20 @@ func (e *Engine) MessageTx(ctx context.Context, tx pgx.Tx, account int64, runID,
 	if r.Status == Waiting {
 		waiting = "\n\nYou are still waiting on Zach's reply to your note: this is not it."
 	}
-	args, _ := json.Marshal(hostclient.AgentArgs{AgentID: r.Orchestrator, AfterCommand: continuation, Text: fmt.Sprintf("%s:\n\n%s%s\n\n"+
-		"Decide what it means for the run, and carry on.", what, text, waiting)})
-	if _, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.SendMessageKind, args, replyTTL, e.Now()); err != nil {
+	lost, err := undeliveredInputs(ctx, tx, r.ID, e.Now())
+	if err != nil {
 		return err
 	}
-	return e.event(ctx, tx, r, "message", ptr(r.Step), nil, what)
+	args, _ := json.Marshal(hostclient.AgentArgs{AgentID: r.Orchestrator, AfterCommand: continuation, Text: withRedelivery(lost, fmt.Sprintf("%s:\n\n%s%s\n\n"+
+		"Decide what it means for the run, and carry on.", what, text, waiting))})
+	c, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.SendMessageKind, args, replyTTL, e.Now())
+	if err != nil {
+		return err
+	}
+	if err := e.carried(ctx, tx, r, lost, "redelivery", &c.ID); err != nil {
+		return err
+	}
+	return e.recordInput(ctx, tx, r, "message", ptr(r.Step), what, c.ID)
 }
 
 // RunStatus is account's run's status and workflow.

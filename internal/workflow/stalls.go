@@ -142,10 +142,19 @@ func (e *Engine) continueRun(ctx context.Context, tx pgx.Tx, r run, event int64,
 	if err != nil {
 		return credentialRefusal(err)
 	}
-	text := "Continue this workflow in the same turn. Inspect worker outcomes before moving; follow the current step and all gates. Never skip a gate or repeat an external action without checking its result.\n\n" + step + sameTurnReminder
+	// Zach's input that failed to arrive (the host was down when it was sent) comes first: the step
+	// alone would have the orchestrator ask an answered question again.
+	lost, err := undeliveredInputs(ctx, tx, r.ID, e.Now())
+	if err != nil {
+		return err
+	}
+	text := withRedelivery(lost, "Continue this workflow in the same turn. Inspect worker outcomes before moving; follow the current step and all gates. Never skip a gate or repeat an external action without checking its result.\n\n"+step+sameTurnReminder)
 	args, _ := json.Marshal(hostclient.AgentArgs{AgentID: r.Orchestrator, Text: text, Behavior: "queue"})
 	c, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.SendMessageKind, args, time.Minute, e.Now())
 	if err != nil {
+		return err
+	}
+	if err := e.carried(ctx, tx, r, lost, "redelivery", &c.ID); err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO workflow_run_continuations(run_id,account_id,event_id,attempt,command_id,created_at) VALUES($1,$2,$3,$4,$5,$6)`, r.ID, r.Account, event, attempt, c.ID, e.Now())
