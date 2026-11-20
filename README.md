@@ -1107,7 +1107,8 @@ ID to `agy --model`. Gemini 4 Neon and Hydrogen expose `-low`, `-medium`, `-high
 Paseo encodes effort in those IDs and leaves the separate thinking field empty. The three
 Orchestrator choices pair a Neon, Carbon or Argon planner with a Hydrogen worker at fixed effort.
 For the current IDs and CLI releases, see [Antigravity's model list](https://antigravity.google/docs/cli/headless/).
-Older hosts get the new options when their Antigravity CLI reports them.
+Each host gets these options when its Antigravity CLI lists them for the signed-in account.
+The installed version and a saved model preference alone do not establish access.
 
 The Neon migration adds `gemini-4-neon-xhigh` to existing `frontier_models_model` groups with
 room for a member and an observed Antigravity Gemini weekly pool. Antigravity's disabled provider

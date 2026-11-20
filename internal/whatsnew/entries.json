@@ -3,7 +3,7 @@
     "id": "neon-frontier",
     "released": "2026-11-20",
     "title": "Gemini 4 Neon Extra High in Frontier Models",
-    "summary": "Plans → Model groups now lists Gemini 4 Neon Extra High in existing Frontier Models groups with a reported Antigravity Gemini quota pool. Intelligence checks provider access and quota before suggesting it. Hosts report other Neon and Hydrogen variants through the Antigravity catalog.",
+    "summary": "Plans → Model groups lists Gemini 4 Neon Extra High in existing Frontier Models groups with a reported Antigravity Gemini quota pool. Suggestions require an enabled provider, the model in the host's signed-in Antigravity catalog, and fresh quota. Other Neon and Hydrogen variants appear in model pickers as eligible hosts report them.",
     "media": "neon-frontier.png",
     "mediaAlt": "The Frontier Models group in local Plans, with Gemini 4 Neon Extra High listed and marked Provider disabled"
   },
