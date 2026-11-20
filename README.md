@@ -1102,9 +1102,19 @@ rankings and history through SQL (`model_groups`, `model_group_members`, `model_
 `workflow_model_suggestions`). Detailed audit data stays in SQL; the run page shows a short summary.
 
 The starting workflow spreads frontier work across the subscribed Claude Opus 5.5 and Codex plans.
-Gemini remains supported for later reactivation. Antigravity encodes effort in the model ID; Carbon has
-`gemini-4-carbon-medium` and `gemini-4-carbon-low`. Models are read from the host's Paseo catalog,
-with “other…” for an ID not yet listed. Argon remains usable for existing agents and explicit choices.
+Paseo discovers Antigravity models from the host's `agy models` output and forwards the selected
+ID to `agy --model`. Gemini 4 Neon and Hydrogen expose `-low`, `-medium`, `-high` and `-xhigh` IDs.
+Paseo encodes effort in those IDs and leaves the separate thinking field empty. The three
+Orchestrator choices pair a Neon, Carbon or Argon planner with a Hydrogen worker at fixed effort.
+For the current IDs and CLI releases, see [Antigravity's model list](https://antigravity.google/docs/cli/headless/).
+Older hosts get the new options when their Antigravity CLI reports them.
+
+The Neon migration adds `gemini-4-neon-xhigh` to existing `frontier_models_model` groups with
+room for a member and an observed Antigravity Gemini weekly pool. Antigravity's disabled provider
+setting prevents suggestions and launches. When the provider is enabled, selection also requires
+the host's catalog, an active login and fresh quota. Accounts whose group has no observed Gemini
+pool can add the entry in Plans → Model groups once Antigravity is enabled and reports usage.
+
 Migration `0028_carbon_frontier` makes new versions of saved workflows that recommend Argon
 or use the old starting frontier list; existing runs keep their original versions.
 

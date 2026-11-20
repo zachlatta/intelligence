@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
@@ -318,15 +319,25 @@ func TestSpawnFormsKnowEachProvidersModels(t *testing.T) {
 		t.Fatal(err)
 	}
 	rep := sampleReport
+	agyModels := []hostclient.Model{
+		{ID: "gemini-4-neon-xhigh", Label: "Gemini 4 Neon (XHigh)"},
+		{ID: "gemini-4-neon-high"}, {ID: "gemini-4-neon-medium"}, {ID: "gemini-4-neon-low"},
+		{ID: "gemini-4-hydrogen-xhigh"}, {ID: "gemini-4-hydrogen-high"},
+		{ID: "gemini-4-hydrogen-medium"}, {ID: "gemini-4-hydrogen-low"},
+		{ID: "gemini-pro-orchestrator-neon"}, {ID: "gemini-pro-orchestrator"}, {ID: "gemini-pro-orchestrator-argon"},
+		{ID: "gemini-4-carbon-high", Label: "Gemini 4 Carbon (High)"},
+		{ID: "gemini-4-carbon-medium"}, {ID: "gemini-4-carbon-low"}, {ID: "gemini-4-argon-high"},
+		{ID: "gemini-3.8-flash-high"}, {ID: "gemini-3.8-flash-medium"},
+		{ID: "claude-sonnet-5-5-medium"}, {ID: "claude-opus-5-5-medium"},
+	}
 	rep.Paseo.Providers = []hostclient.Provider{{Name: "claude", Available: true, Label: "Claude", DefaultMode: "auto",
 		Models: []hostclient.Model{{ID: "claude-opus-5-5", Label: "Opus 5.5", Default: true, Thinking: []string{"low", "medium"}, DefaultThinking: "medium"},
 			{ID: "claude-sonnet-5-5", Label: "Sonnet 5.5"}},
 		Modes: []hostclient.Mode{{ID: "auto", Label: "Auto mode"}, {ID: "bypassPermissions", Label: "Bypass"}}},
 		{Name: "codex", Available: true}, {Name: "copilot", Models: []hostclient.Model{{ID: "gpt"}}},
 		{Name: "antigravity", Available: true, DefaultMode: "full-access",
-			Models: []hostclient.Model{{ID: "gemini-4-carbon-high", Label: "Gemini 4 Carbon (High)"},
-				{ID: "gemini-4-carbon-medium"}, {ID: "gemini-4-carbon-low"}, {ID: "gemini-4-argon-high"}},
-			Modes: []hostclient.Mode{{ID: "full-access"}}}}
+			Models: agyModels,
+			Modes:  []hostclient.Mode{{ID: "full-access"}}}}
 	sendReport(t, h, rep)
 	sendSchedules(t, h, sampleSchedules)
 	c := signInAs(t, h)
@@ -344,9 +355,9 @@ func TestSpawnFormsKnowEachProvidersModels(t *testing.T) {
 		if _, ok := cat["codex"]; !ok {
 			t.Errorf("%s: a provider with no catalog yet is left out: %v", path, cat)
 		}
-		if ag := cat["antigravity"]; len(ag.Models) != 4 || ag.Models[0].ID != "gemini-4-carbon-high" ||
-			ag.Models[0].Label != "Gemini 4 Carbon (High)" || ag.Models[1].ID != "gemini-4-carbon-medium" ||
-			ag.Models[2].ID != "gemini-4-carbon-low" || ag.Models[3].ID != "gemini-4-argon-high" || ag.DefaultMode != "full-access" {
+		if ag := cat["antigravity"]; !slices.EqualFunc(ag.Models, agyModels, func(got, want hostclient.Model) bool {
+			return got.ID == want.ID && got.Label == want.Label && len(got.Thinking) == 0
+		}) || ag.DefaultMode != "full-access" {
 			t.Errorf("%s: antigravity = %+v", path, ag)
 		}
 		if _, ok := cat["copilot"]; ok {
