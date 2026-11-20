@@ -11,7 +11,7 @@ import (
 )
 
 func TestUnsubscribedIsNotAnActivePlanEvenAfterFreshReports(t *testing.T) {
-	for _, provider := range []string{usage.Muse, usage.Antigravity, "gemini"} {
+	for _, provider := range []string{usage.Muse, "gemini"} {
 		t.Run(provider, func(t *testing.T) {
 			r := usageRig(t)
 			now := time.Now().UTC()
@@ -57,7 +57,7 @@ func TestUnsubscribedIsNotAnActivePlanEvenAfterFreshReports(t *testing.T) {
 }
 
 func TestUnsubscribedLaunchCommandsAreRefused(t *testing.T) {
-	for _, provider := range []string{usage.Muse, usage.Antigravity, "gemini"} {
+	for _, provider := range []string{usage.Muse, "gemini"} {
 		t.Run(provider, func(t *testing.T) {
 			r := commandRig(t)
 			for kind, args := range map[string]string{
@@ -75,7 +75,7 @@ func TestUnsubscribedLaunchCommandsAreRefused(t *testing.T) {
 }
 
 func TestUnsubscribedSchedulesArePausedOnReport(t *testing.T) {
-	for _, provider := range []string{usage.Muse, usage.Antigravity, "gemini"} {
+	for _, provider := range []string{usage.Muse, "gemini"} {
 		t.Run(provider, func(t *testing.T) {
 			r := commandRig(t)
 			err := r.RecordSchedules(ctx, "host-1", hostclient.ScheduleReport{Schedules: []hostclient.Schedule{{ID: "old", Provider: provider, Status: "active", Target: "new-agent"}}}, t1)

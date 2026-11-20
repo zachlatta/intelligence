@@ -1,5 +1,13 @@
 [
   {
+    "id": "antigravity-neon-medium",
+    "released": "2026-11-20",
+    "title": "Antigravity is back with Gemini 4 Neon Medium",
+    "summary": "Antigravity is available for new launches again. In Plans → Model groups, Gemini 4 Neon Medium replaces Extra High where it was already a member of Frontier Models. A suggestion requires a host that reports the model, an active login and fresh quota.",
+    "media": "antigravity-neon-medium.png",
+    "mediaAlt": "Plans shows Gemini 4 Neon Medium suggested in Frontier Models, with Antigravity quota meters below."
+  },
+  {
     "id": "workflow-run-additional-input",
     "released": "2026-11-20",
     "title": "Send a follow-up to a running workflow",

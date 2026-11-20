@@ -314,14 +314,11 @@ func pageCatalog(t *testing.T, page string) map[string]hostclient.Provider {
 // TestSpawnFormsKnowEachProvidersModels: the forms that start an agent carry the models, thinking
 // levels and modes of each provider the host can run, so they offer them as choices.
 func TestSpawnFormsKnowEachProvidersModels(t *testing.T) {
-	h, d := cmdServer(t)
-	if _, err := d.Owner.Exec(t.Context(), `UPDATE provider_plan_settings SET enabled=true WHERE provider='antigravity'`); err != nil {
-		t.Fatal(err)
-	}
+	h, _ := cmdServer(t)
 	rep := sampleReport
 	agyModels := []hostclient.Model{
 		{ID: "gemini-4-neon-xhigh", Label: "Gemini 4 Neon (XHigh)"},
-		{ID: "gemini-4-neon-high"}, {ID: "gemini-4-neon-medium"}, {ID: "gemini-4-neon-low"},
+		{ID: "gemini-4-neon-high"}, {ID: "gemini-4-neon-medium", Label: "Gemini 4 Neon (Medium)"}, {ID: "gemini-4-neon-low"},
 		{ID: "gemini-4-hydrogen-xhigh"}, {ID: "gemini-4-hydrogen-high"},
 		{ID: "gemini-4-hydrogen-medium"}, {ID: "gemini-4-hydrogen-low"},
 		{ID: "gemini-pro-orchestrator-neon"}, {ID: "gemini-pro-orchestrator"}, {ID: "gemini-pro-orchestrator-argon"},

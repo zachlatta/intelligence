@@ -17,6 +17,7 @@ func TestNeonMigrationAddsOnlyExtraHighToFrontier(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	exec(`UPDATE provider_plan_settings SET enabled=false WHERE provider='antigravity'`)
 	exec(`INSERT INTO usage_accounts(provider,account,first_seen,last_seen) VALUES('antigravity','default',now(),now())`)
 	exec(`INSERT INTO usage_sources(host,provider,account,ok,received_at) VALUES('ann-host','antigravity','default',true,now())`)
 	exec(`INSERT INTO usage_readings(provider,account,window_id,window_seconds,used_pct,first_observed,last_observed)

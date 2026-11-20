@@ -511,10 +511,10 @@ func TestWorkflowPages(t *testing.T) {
 	if !strings.Contains(ed.Body.String(), `"host":"host-1"`) || !strings.Contains(ed.Body.String(), `const hosts = ["host-1"]`) {
 		t.Errorf("the editor should show the workflow's host and offer the account's")
 	}
-	// the editor offers the providers whose agents can run without asking, and only those
-	providers, _ := json.Marshal([]string{"claude", "codex"})
+	// The editor offers enabled providers with an unattended mode.
+	providers, _ := json.Marshal([]string{"claude", "codex", "antigravity"})
 	if !strings.Contains(ed.Body.String(), "const providers = "+string(providers)+";") || strings.Contains(ed.Body.String(), "<option>claude</option>") {
-		t.Errorf("the editor's providers should be workflow.Providers() = %s", providers)
+		t.Errorf("the editor should offer enabled unattended providers %s", providers)
 	}
 	// a fixed project is picked from the repositories the account's hosts reported
 	if !strings.Contains(ed.Body.String(), `const allRepos = [{"directory":"/w/app","project":"example/app","hosts":["host-1"]}]`) {

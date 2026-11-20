@@ -577,7 +577,7 @@ workspace.
 ### Plan usage
 
 `provider_plan_settings` holds deployment-wide subscription availability. Unlisted providers
-are enabled; Muse and Gemini (including Antigravity) are disabled because their subscriptions
+are enabled; Muse and standalone Gemini are disabled because their subscriptions
 ended. Disabled providers stay supported: their meters and history are retained, but Plans, quota
 totals, model-group suggestions and new launches exclude them, and a command that would start or
 resume one is refused. Each step's instructions end with a subscription policy naming the disabled
@@ -1115,11 +1115,10 @@ The installed version and a saved model preference alone do not establish access
 Spawn forms read models from the host's Paseo catalog, with “other…” for an ID not yet listed.
 Argon remains usable for existing agents and explicit choices.
 
-The Neon migration adds `gemini-4-neon-xhigh` to existing `frontier_models_model` groups with
-room for a member and an observed Antigravity Gemini weekly pool. Antigravity's disabled provider
-setting prevents suggestions and launches. When the provider is enabled, selection also requires
-the host's catalog, an active login and fresh quota. Accounts whose group has no observed Gemini
-pool can add the entry in Plans → Model groups once Antigravity is enabled and reports usage.
+Antigravity is enabled. Existing Frontier Models groups (`frontier_models_model`) that used
+`gemini-4-neon-xhigh` now use `gemini-4-neon-medium` with the same login and quota pool.
+Suggestions require the host's catalog, an active login and fresh quota. Accounts without the
+member can add it in Plans → Model groups when their host reports the model and pool.
 
 Migration `0028_carbon_frontier` makes new versions of saved workflows that recommend Argon
 or use the old starting frontier list; existing runs keep their original versions.

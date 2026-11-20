@@ -271,7 +271,7 @@ func TestUsageViews(t *testing.T) {
 
 func TestPlansShowEachLoginsWindowsWhereItIsActiveAndItsProblems(t *testing.T) {
 	r := usageRig(t)
-	if _, err := r.p.Exec(ctx, `UPDATE provider_plan_settings SET enabled=true WHERE provider IN ('muse','antigravity')`); err != nil {
+	if _, err := r.p.Exec(ctx, `UPDATE provider_plan_settings SET enabled=true WHERE provider='muse'`); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Truncate(time.Second)
