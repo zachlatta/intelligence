@@ -1,5 +1,13 @@
 [
   {
+    "id": "silent-host-alerts",
+    "released": "2026-11-20",
+    "title": "Alerts when a busy host goes silent",
+    "summary": "When a host with queued, running or waiting workflow runs stops reporting for 10 minutes, a red note under the top bar on every page names the host, how long it has been silent, how many runs wait on it and its last recorded OOM kills. Intelligence also sends one phone notification through PDW, and one more when the host reports again. Idle hosts never alert.",
+    "media": "silent-host-alerts.png",
+    "mediaAlt": "A local demo: the red note under the top bar saying a throwaway host stopped reporting, with its silent time, waiting runs and OOM kills"
+  },
+  {
     "id": "login-recovery",
     "released": "2026-11-19",
     "title": "Agents recover when a login expires",

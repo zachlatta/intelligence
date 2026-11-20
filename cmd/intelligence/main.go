@@ -33,6 +33,7 @@ import (
 	"github.com/zachlatta/intelligence/internal/email"
 	"github.com/zachlatta/intelligence/internal/fleet"
 	"github.com/zachlatta/intelligence/internal/hostclient"
+	"github.com/zachlatta/intelligence/internal/hostwatch"
 	"github.com/zachlatta/intelligence/internal/paseo"
 	"github.com/zachlatta/intelligence/internal/probe"
 	"github.com/zachlatta/intelligence/internal/resources"
@@ -109,7 +110,13 @@ type serverSettings struct {
 	// PDW_URL (an HTTPS origin), PDW_API_KEY (a feed:voice-memos key) and PDW_INTELLIGENCE_ACCOUNT
 	// (the username whose workflows its voice memos start) turn voice memo triggers on; unset, they are off.
 	PDWURL, PDWKey, PDWAccount string
-	VoiceMemoInterval          time.Duration // VOICE_MEMO_POLL_INTERVAL, default 1s
+	// PDW_NOTIFY_KEY (a PDW agent token, which reaches its notify tool) sends a phone notification
+	// through PDW when a host of PDW_INTELLIGENCE_ACCOUNT's with active runs stops reporting, and
+	// when it reports again; unset, the alert shows only as a banner. NOTIFY_TIME_ZONE is the zone
+	// its times are given in, default America/New_York.
+	PDWNotifyKey      string
+	NotifyLocation    *time.Location
+	VoiceMemoInterval time.Duration // VOICE_MEMO_POLL_INTERVAL, default 1s
 	// GOOGLE_OAUTH_CLIENT_JSON (a Google OAuth client, raw or base64) and CONNECTIONS_KEY (32
 	// random bytes, base64: seals each mailbox's token) turn email triggers on; unset, they are off.
 	EmailInterval time.Duration // EMAIL_POLL_INTERVAL, default 1s
@@ -170,6 +177,17 @@ func serverConfig(getenv func(string) string) (serverSettings, error) {
 			return c, errors.New("voice memo triggers need PDW_URL (HTTPS origin), PDW_API_KEY and PDW_INTELLIGENCE_ACCOUNT")
 		}
 	}
+	c.PDWNotifyKey = getenv("PDW_NOTIFY_KEY")
+	if c.PDWNotifyKey != "" && (c.PDWURL == "" || c.PDWAccount == "") {
+		return c, errors.New("PDW_NOTIFY_KEY needs PDW_URL and PDW_INTELLIGENCE_ACCOUNT (whose hosts it alerts about)")
+	}
+	zone := getenv("NOTIFY_TIME_ZONE")
+	if zone == "" {
+		zone = "America/New_York"
+	}
+	if c.NotifyLocation, err = time.LoadLocation(zone); err != nil {
+		return c, fmt.Errorf("NOTIFY_TIME_ZONE %q: %w", zone, err)
+	}
 	if c.QueueLimits, err = queueLimits(getenv); err != nil {
 		return c, err
 	}
@@ -182,6 +200,14 @@ func serverConfig(getenv func(string) string) (serverSettings, error) {
 		}
 	}
 	return c, nil
+}
+
+// hostAlerts is the phone channel for silent-host alerts: PDW's notify tool, when configured.
+func hostAlerts(c serverSettings) hostwatch.Notifier {
+	if c.PDWNotifyKey == "" {
+		return nil
+	}
+	return &hostwatch.PDW{URL: c.PDWURL, Key: c.PDWNotifyKey}
 }
 
 // queueLimits reads the workflow queue's limits over workflow.DefaultLimits.
@@ -258,7 +284,8 @@ func serve(ctx context.Context) error {
 		Addr: addr(os.Getenv),
 		Handler: web.New(web.Config{Context: ctx, Version: v, DB: owner, Readonly: ro, BinDir: c.BinDir,
 			AssemblyAIKey: c.AssemblyAIKey, Google: c.Google, EmailKey: c.EmailKey, PublicURL: c.PublicURL, EmailInterval: c.EmailInterval, QueueLimits: &c.QueueLimits,
-			PDWURL: c.PDWURL, PDWKey: c.PDWKey, PDWAccount: c.PDWAccount, VoiceMemoInterval: c.VoiceMemoInterval}),
+			PDWURL: c.PDWURL, PDWKey: c.PDWKey, PDWAccount: c.PDWAccount, VoiceMemoInterval: c.VoiceMemoInterval,
+			HostAlerts: hostAlerts(c), NotifyLocation: c.NotifyLocation}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go pruneHosts(ctx, fleet.New(owner))

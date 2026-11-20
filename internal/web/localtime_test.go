@@ -84,8 +84,10 @@ func TestNoServerFormattedClockTimes(t *testing.T) {
 	clock := regexp.MustCompile(`15:04|"Mon Jan|"Jan 2|\bMST\b|time\.(DateTime|Kitchen|Stamp\w*|ANSIC|UnixDate|RubyDate|RFC822\w*|RFC850|RFC1123\w*)\b|` +
 		`toISOString\(\)\.replace\("T"|toISOString\(\)\.slice\(0, 16\)`)
 	// what is never shown on a page: localtime.go holds the fallback layouts, and the host client's
-	// enrollment code is logged on the host itself, in that host's zone
-	allowed := map[string]bool{"localtime.go": true, filepath.Join("..", "hostclient", "keys.go"): true}
+	// enrollment code is logged on the host itself, in that host's zone; hostwatch writes phone
+	// notifications, read on the phone in NOTIFY_TIME_ZONE (the banner formats its own times in the browser)
+	allowed := map[string]bool{"localtime.go": true, filepath.Join("..", "hostclient", "keys.go"): true,
+		filepath.Join("..", "hostwatch", "hostwatch.go"): true}
 	for _, root := range []string{".", "..", filepath.Join("..", "..", "cmd")} {
 		err := filepath.WalkDir(root, func(f string, d os.DirEntry, err error) error {
 			if err != nil {

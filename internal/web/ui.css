@@ -83,6 +83,7 @@ h1, h2, h3 { color: var(--fg); letter-spacing: -.015em; }
 .login-alert .what { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .login-alert .what > b { color: var(--fg); font-weight: 600; }
 .login-alert.broken .what > b { color: var(--red); }
+.host-silent .what > b a { color: inherit; text-decoration: underline; }
 .login-alert .fix > summary { display: list-item; list-style: disclosure-closed inside; cursor: pointer; margin-top: .25rem; color: var(--fg); font-weight: 500; }
 .login-alert .fix[open] > summary { list-style-type: disclosure-open; }
 .login-alert .fix p { margin: .3rem 0 0; }

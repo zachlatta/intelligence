@@ -20,6 +20,14 @@ var loginsJS []byte
 
 var loginsScript = asset("logins.js", "text/javascript; charset=utf-8", loginsJS)
 
+// hostalerts.js shows a red note on every page for each host with active runs that stopped
+// reporting (host_silence_current, kept by internal/hostwatch). It only reads.
+//
+//go:embed hostalerts.js
+var hostAlertsJS []byte
+
+var hostAlertsScript = asset("hostalerts.js", "text/javascript; charset=utf-8", hostAlertsJS)
+
 // resolveLoginIncident marks a broken login fixed (JSON {"note"}), for when the host's meter cannot
 // tell: the agents waiting for it are then resumed. A login still broken opens a new incident on its
 // next failure or meter read.

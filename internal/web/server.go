@@ -19,6 +19,7 @@ import (
 	"github.com/zachlatta/intelligence/internal/email"
 	"github.com/zachlatta/intelligence/internal/fleet"
 	"github.com/zachlatta/intelligence/internal/hostclient"
+	"github.com/zachlatta/intelligence/internal/hostwatch"
 	"github.com/zachlatta/intelligence/internal/voicememo"
 	"github.com/zachlatta/intelligence/internal/workflow"
 )
@@ -28,6 +29,12 @@ import (
 type Config struct {
 	// PDWURL, PDWKey and PDWAccount turn voice memo triggers on for the account named PDWAccount.
 	PDWURL, PDWKey, PDWAccount string
+	// HostAlerts, when set, gets one phone notification when a host of PDWAccount's with active
+	// runs stops reporting for hostwatch.After, and one when it reports again (internal/hostwatch).
+	// Every account's silent hosts show as a red banner either way. NotifyLocation is the zone
+	// the notifications give times in.
+	HostAlerts     hostwatch.Notifier
+	NotifyLocation *time.Location
 	// VoiceMemoInterval is how often PDW's voice memo feed is read (default voicememo.Interval).
 	VoiceMemoInterval time.Duration
 	// Context is the server's lifetime: its listener for fleet changes stops when it ends. Default: never.
@@ -120,6 +127,9 @@ func newHandler(cfg Config, workers bool) http.Handler {
 		go a.wf.RunStartRetries(cfg.Context)
 		go a.wf.RunStallWatchdog(cfg.Context)
 		go a.wf.RunInterruptionRecovery(cfg.Context)
+		watch := &hostwatch.Watcher{DB: cfg.DB, Notify: cfg.HostAlerts, Account: cfg.PDWAccount, Location: cfg.NotifyLocation,
+			Started: cfg.Now(), Now: cfg.Now}
+		go watch.Run(cfg.Context)
 	}
 	if cfg.PDWURL != "" && cfg.PDWKey != "" && cfg.PDWAccount != "" {
 		voice := &voicememo.Service{DB: cfg.DB, Engine: a.wf, URL: cfg.PDWURL, Key: cfg.PDWKey, Username: cfg.PDWAccount, Interval: cfg.VoiceMemoInterval}
@@ -263,6 +273,7 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	mux.HandleFunc("GET /workflow-runs/{id}", a.page(func(v viewer) http.HandlerFunc { return runPage(cfg, v) }))
 	mux.HandleFunc("POST /api/login-incidents/{id}/resolve", a.write(a.resolveLoginIncident))
 	mux.HandleFunc("GET /logins.js", loginsScript)
+	mux.HandleFunc("GET /hostalerts.js", hostAlertsScript)
 	mux.HandleFunc("GET /usage", a.page(func(v viewer) http.HandlerFunc { return usagePage(cfg, v.reg) }))
 	mux.HandleFunc("GET /resources", a.page(func(v viewer) http.HandlerFunc { return hostResourcesPage(cfg, v.reg) }))
 	mux.HandleFunc("GET /hosts", func(w http.ResponseWriter, r *http.Request) { // its name before the home page's hosts took it

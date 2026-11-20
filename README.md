@@ -1569,6 +1569,33 @@ is unknown (no cswap meter), the button says Copy first step and copies only `cl
 --claudeai`, and How to fix says to use a throwaway config directory if cswap manages the host.
 Signing in still happens on the host (an OAuth link to open and a code to paste).
 
+### Silent hosts
+
+When a host stops reporting while workflow runs depend on it, Intelligence says so, once.
+`internal/hostwatch` checks every minute (one server instance at a time, under a Postgres advisory
+lock). A host is silent when the server has not heard from it (`hosts.last_seen`: a report or a
+ping on its stream) for 10 minutes, counted from no earlier than the server's own start, so a server
+that was down itself does not alert on every host. A silent host with active runs (`queued`,
+`finding_project`, `starting`, `running`, `waiting` or `stalled`) gets one row in
+`host_silence_alerts`: when it was last heard from, the runs it holds up by kind, and the OOM kills
+its probe last recorded (`oom_kills`: those in the hour up to its latest, however old, since a
+wedged host's probe often cannot upload until it is back). A host with no active
+runs never alerts. There is one open row per host (a unique index), so the alert never repeats while
+the host stays down, on any instance or after a restart. When the host is heard from again the row
+gets `recovered_at`.
+
+- **On the phone.** With `PDW_NOTIFY_KEY` set, each alert on a host of `PDW_INTELLIGENCE_ACCOUNT`'s
+  sends one push through PDW's `notify` tool (`POST <PDW_URL>/api/tools/notify`,
+  time-sensitive, thread `intelligence-hosts`): the host, how long it has been silent, the runs it
+  holds up and the OOM kills. Recovery sends one more ("is reporting again", with how long it was
+  away), only if the alert went out. A failed send keeps its error (`alert_error`,
+  `recovery_error`) and is retried each minute, up to 10 times. The text sent is kept
+  (`alert_text`, `recovery_text`). No email.
+- **In the interface.** Every page loads `hostalerts.js`, which reads `host_silence_current` (each
+  open alert, with the host's live silence and active runs) through `/api/sql` and shows a red note
+  under the top bar for each, with whether the phone notification went out. It goes when the host
+  reports again. It shows for every account's own hosts, phone or not.
+
 ### Self-update
 
 Every response carries `X-Intelligence-Version`, the server's commit. The image builds the host
@@ -1751,6 +1778,8 @@ origin (another site's request is refused with 403), and those with a body must 
   (204, also when it was already fixed); 404 when the incident is not on the account's hosts.
 - `GET /logins.js`: loaded by every page with its stylesheet: the note under the top bar for each
   broken or soon-ending login (`login_alerts`), and the Plans page's interrupted agents.
+- `GET /hostalerts.js`: loaded by every page with its stylesheet: the red note under the top bar
+  for each host with active runs that stopped reporting (`host_silence_current`; Silent hosts).
 - `GET /localtime.js`: loaded by every page with its stylesheet. Pages show every time in the
   reader's own time zone and locale: the server writes each as an instant
   (`<time datetime="<RFC 3339, UTC>" data-format="…">`, with the time in UTC as its text for a
@@ -1960,6 +1989,12 @@ Set all three server variables to enable polling:
   Only this account's workflows can receive its memos; other accounts never receive this data.
 
 Unset all three to disable polling. Removing configuration preserves cursors and receipts.
+
+`PDW_NOTIFY_KEY` is optional: a PDW access token whose scope reaches its tools API (an agent
+token), for the phone notification when a host of `PDW_INTELLIGENCE_ACCOUNT`'s with active runs
+stops reporting (Silent hosts, above). It needs `PDW_URL` and `PDW_INTELLIGENCE_ACCOUNT`. Unset,
+silent hosts show only as a banner. `NOTIFY_TIME_ZONE` (default `America/New_York`) is the zone the
+notification gives times in.
 
 `VOICE_MEMO_POLL_INTERVAL` is optional: a Go duration, default `1s`, minimum `1s`.
 

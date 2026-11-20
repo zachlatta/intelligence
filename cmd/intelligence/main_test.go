@@ -277,6 +277,31 @@ func TestVoiceMemoConfigRequiresAnOriginKeyAndAccount(t *testing.T) {
 	}
 }
 
+func TestHostAlertsNeedPDWAndANotifyKey(t *testing.T) {
+	base := map[string]string{"DATABASE_URL": "postgres://app:p@db/app", "READONLY_DATABASE_URL": "postgres://ro:p@db/app"}
+	c, err := serverConfig(env(base))
+	if err != nil || c.PDWNotifyKey != "" {
+		t.Fatalf("off by default: %+v %v", c.PDWNotifyKey, err)
+	}
+	if c.NotifyLocation == nil || c.NotifyLocation.String() != "America/New_York" {
+		t.Fatalf("default zone: %v", c.NotifyLocation)
+	}
+	base["PDW_NOTIFY_KEY"] = "notify-key"
+	if _, err := serverConfig(env(base)); err == nil {
+		t.Fatal("a notify key without PDW_URL and PDW_INTELLIGENCE_ACCOUNT accepted")
+	}
+	base["PDW_URL"], base["PDW_API_KEY"], base["PDW_INTELLIGENCE_ACCOUNT"] = "https://pdw.example.com", "test-key", "owner"
+	base["NOTIFY_TIME_ZONE"] = "Europe/Berlin"
+	c, err = serverConfig(env(base))
+	if err != nil || c.PDWNotifyKey != "notify-key" || c.NotifyLocation.String() != "Europe/Berlin" {
+		t.Fatalf("%q %v %v", c.PDWNotifyKey, c.NotifyLocation, err)
+	}
+	base["NOTIFY_TIME_ZONE"] = "Mars/Olympus"
+	if _, err := serverConfig(env(base)); err == nil {
+		t.Fatal("a bad zone accepted")
+	}
+}
+
 func TestVoiceMemoPollInterval(t *testing.T) {
 	base := map[string]string{"DATABASE_URL": "postgres://app:p@db/app", "READONLY_DATABASE_URL": "postgres://ro:p@db/app"}
 	for _, tt := range []struct {
