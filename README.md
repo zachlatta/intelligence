@@ -1588,7 +1588,7 @@ gets `recovered_at`.
   sends one push through PDW's `notify` tool (`POST <PDW_URL>/api/tools/notify`,
   time-sensitive, thread `intelligence-hosts`): the host, how long it has been silent, the runs it
   holds up and the OOM kills. Recovery sends one more ("is reporting again", with how long it was
-  away), only if the alert went out. A failed send keeps its error (`alert_error`,
+  away), only if the alert went out. A send that fails, or that PDW reports reached no device, keeps its error (`alert_error`,
   `recovery_error`) and is retried each minute, up to 10 times. The text sent is kept
   (`alert_text`, `recovery_text`). No email.
 - **In the interface.** Every page loads `hostalerts.js`, which reads `host_silence_current` (each

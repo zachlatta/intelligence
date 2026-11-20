@@ -330,4 +330,17 @@ func TestPDWSendsThroughNotifyTool(t *testing.T) {
 	if err := p.Notify(context.Background(), hostwatch.Notice{Title: "t"}); err == nil || !strings.Contains(err.Error(), "no devices") {
 		t.Fatalf("tool error not surfaced: %v", err)
 	}
+
+	// PDW answers 200 without an error when no device is registered, or every device failed:
+	// nothing reached the phone, so it is not sent
+	for _, body := range []string{`{"data":{"report":{"devices":0,"sent":0}}}`,
+		`{"data":{"report":{"devices":2,"sent":0,"failed":2,"errors":["DeviceNotRegistered"]}}}`, `{"data":{}}`} {
+		none := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(body)) }))
+		p = &hostwatch.PDW{URL: none.URL, Key: "k", Client: none.Client()}
+		err := p.Notify(context.Background(), hostwatch.Notice{Title: "t"})
+		none.Close()
+		if err == nil {
+			t.Fatalf("%s counted as sent", body)
+		}
+	}
 }

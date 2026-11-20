@@ -27,7 +27,7 @@ type notifyInput struct {
 	InterruptionLevel string `json:"interruption_level,omitempty"`
 }
 
-// Notify sends n; it fails unless PDW says it delivered without error.
+// Notify sends n; it fails unless PDW says it delivered to at least one device without error.
 func (p *PDW) Notify(ctx context.Context, n Notice) error {
 	body, err := json.Marshal(notifyInput{Title: n.Title, Body: n.Body, ThreadID: n.ThreadID, InterruptionLevel: n.Level})
 	if err != nil {
@@ -54,7 +54,11 @@ func (p *PDW) Notify(ctx context.Context, n Notice) error {
 	}
 	var out struct {
 		Data struct {
-			Error string `json:"error"`
+			Error  string `json:"error"`
+			Report struct {
+				Devices int `json:"devices"`
+				Sent    int `json:"sent"`
+			} `json:"report"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
@@ -62,6 +66,10 @@ func (p *PDW) Notify(ctx context.Context, n Notice) error {
 	}
 	if out.Data.Error != "" {
 		return fmt.Errorf("PDW notify: %s", clip(out.Data.Error, 200))
+	}
+	// PDW answers without an error when no device is registered or every device failed
+	if out.Data.Report.Sent == 0 {
+		return fmt.Errorf("PDW notify reached no device (%d registered)", out.Data.Report.Devices)
 	}
 	return nil
 }
