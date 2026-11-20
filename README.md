@@ -1109,6 +1109,8 @@ Orchestrator choices pair a Neon, Carbon or Argon planner with a Hydrogen worker
 For the current IDs and CLI releases, see [Antigravity's model list](https://antigravity.google/docs/cli/headless/).
 Each host gets these options when its Antigravity CLI lists them for the signed-in account.
 The installed version and a saved model preference alone do not establish access.
+Spawn forms read models from the host's Paseo catalog, with “other…” for an ID not yet listed.
+Argon remains usable for existing agents and explicit choices.
 
 The Neon migration adds `gemini-4-neon-xhigh` to existing `frontier_models_model` groups with
 room for a member and an observed Antigravity Gemini weekly pool. Antigravity's disabled provider
