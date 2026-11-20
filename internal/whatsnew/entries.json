@@ -1,5 +1,13 @@
 [
   {
+    "id": "workflow-run-additional-input",
+    "released": "2026-11-20",
+    "title": "Send a follow-up to a running workflow",
+    "summary": "Use Additional input on a running or stalled workflow run to send a note to its orchestrator. Sending a note resumes a stalled run at its current step. The note and its delivery status appear under What happened. If the orchestrator is asking you a question, use the reply box.",
+    "media": "workflow-run-follow-up.gif",
+    "mediaAlt": "A running workflow receives a follow-up asking for keyboard shortcuts, and the run history shows delivery to the orchestrator."
+  },
+  {
     "id": "neon-frontier",
     "released": "2026-11-20",
     "title": "Gemini 4 Neon Extra High in Frontier Models",

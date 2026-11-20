@@ -10,8 +10,9 @@ import (
 )
 
 // An input is Zach's input to a run's orchestrator: his reply to its ask, or more input (an email in
-// the run's thread). workflow_run_input_deliveries links it to every message that carried it. A
-// host whose Paseo daemon is down fails what it is sent, so an input recorded then can fail to
+// the run's thread or a note from its run page). workflow_run_input_deliveries links it to every
+// message that carried it. A host whose Paseo daemon is down fails messages it is sent, so an
+// input recorded then can fail to
 // arrive (run 2c75da8c, 2026-11-19: the orchestrator asked the answered question again and the
 // reply's instruction was lost). Such an input goes again, verbatim and once delivered never again,
 // with the next message to the orchestrator: a watchdog continuation, Resume or more input; and
@@ -19,7 +20,7 @@ import (
 type input struct {
 	Event int64
 	At    time.Time
-	Kind  string // reply or message
+	Kind  string // reply, message or input
 	Text  string // the message first sent for it, verbatim
 }
 
@@ -45,7 +46,7 @@ func undeliveredInputs(ctx context.Context, tx pgx.Tx, runID string, now time.Ti
 	})
 }
 
-// recordInput records Zach's input (a reply or message event) and the send_message made for it.
+// recordInput records Zach's input event and the send_message made for it.
 func (e *Engine) recordInput(ctx context.Context, tx pgx.Tx, r run, kind string, step *int, eventText, commandID string) error {
 	var event int64
 	if err := tx.QueryRow(ctx, `INSERT INTO workflow_run_events (run_id, account_id, at, kind, step, text)

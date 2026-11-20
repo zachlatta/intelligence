@@ -150,12 +150,15 @@ automatic recovery only handles idle orchestrators and does not restart or repla
 `workflow_run_continuations` (event, attempt, command and creation time) expose recovery through SQL.
 
 Zach's replies and later input reach the orchestrator as messages, which fail while its host's
-Paseo daemon is down. `workflow_run_input_deliveries` links each `reply` or `message` event to every
-message that carried it (`original`, `redelivery`, or `ask`), and the view `workflow_run_inputs`
-says whether each was `delivered`. An input whose every carrier failed or expired goes again,
-verbatim and marked as Zach's reply to the open ask, at the head of the next message to the
-orchestrator: a continuation, Resume, or more input. An `ask` made while a reply is undelivered does
-not reach Zach: the move answers with the reply instead, and the run keeps running.
+Paseo daemon is down. Use **Additional input** on a running or stalled run's page to send a follow-up
+to its existing orchestrator. Sending a follow-up to a stalled run resumes it at its current step.
+A waiting run shows the reply box. The note and delivery status appear under **What happened**.
+`workflow_run_input_deliveries` links each `reply`, `message` or `input` event to every message that
+carried it (`original`, `redelivery`, or `ask`). The view `workflow_run_inputs` shows whether each
+was delivered, is pending, or has been retried. An input whose every carrier failed or expired goes
+again verbatim at the head of the next message to the orchestrator: a continuation, Resume, or
+more input. A reply is marked as the answer to the open ask. An `ask` made while a reply is
+undelivered does not reach Zach: the move answers with the reply instead, and the run keeps running.
 Run row locks and the unique `(run_id, event_id, attempt)` key coordinate server instances.
 Each continuation attempt and the stalled transition write an event and update `updated_at`, so
 both appear in What happened. Finished-turn attention is not a permission block; only a current
@@ -1864,6 +1867,9 @@ origin (another site's request is refused with 403), and those with a body must 
   whatever its host's load, or sends a run's queued start retry the same way (it still counts as
   a retry) (204; 409 for a run that is not queued, or a retry still in its backoff, past its
   deadline or whose host is not ready).
+- `POST /api/workflow-runs/{id}/input` with `{"text"}`: records a follow-up and queues delivery
+  to the orchestrator of a running or stalled run (204; 409 if the run is waiting for a reply or
+  has no active orchestrator). Requires a same-origin browser session.
 - `POST /api/workflow-runs/{id}/reply` with `{"text"}`: answers the note the run waits on (204;
   409 when it waits on none). `POST /api/workflow-runs/{id}/cancel` with `{}`: ends the run and
   stops its orchestrator (204).

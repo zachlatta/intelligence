@@ -1194,19 +1194,56 @@ func (e *Engine) MessageTx(ctx context.Context, tx pgx.Tx, account int64, runID,
 			return e.event(ctx, tx, r, "message", nil, nil, what)
 		}
 	}
-	if err := e.unstall(ctx, tx, r, "Resumed: new input arrived for the existing orchestrator."); err != nil {
-		return err
-	}
 	waiting := ""
 	if r.Status == Waiting {
 		waiting = "\n\nYou are still waiting on Zach's reply to your note: this is not it."
+	}
+	prompt := fmt.Sprintf("%s:\n\n%s%s\n\nDecide what it means for the run, and carry on.", what, text, waiting)
+	return e.sendInput(ctx, tx, r, "message", what, prompt, continuation)
+}
+
+// AddInput sends a note from the run page to an existing orchestrator.
+func (e *Engine) AddInput(ctx context.Context, account int64, runID, text string) error {
+	if err := agenttext.Validate(text); err != nil {
+		return bad("%s", err)
+	}
+	if strings.TrimSpace(text) == "" {
+		return bad("additional input needs text")
+	}
+	if strings.ContainsRune(text, 0) {
+		return bad("additional input cannot contain a NUL character")
+	}
+	return e.forAccount(ctx, account, runID, func(tx pgx.Tx, r run) error {
+		if r.Status == Waiting {
+			return conflict("the orchestrator is asking you a question; use the reply box")
+		}
+		if (r.Status != Running && r.Status != Stalled) || r.Orchestrator == "" {
+			return conflict("additional input needs a running or stalled run with an orchestrator (%s)", r.Status)
+		}
+		// Enrolled host names can be reused. Hold ownership until the message commits.
+		var host string
+		if err := tx.QueryRow(ctx, "SELECT host FROM host_keys WHERE host=$1 AND account_id=$2 FOR KEY SHARE", r.Host, account).Scan(&host); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return conflict("this run's host is no longer enrolled in this account")
+			}
+			return err
+		}
+		prompt := "Additional input for this run:\n\n" + text +
+			"\n\nTake this into account as you continue the run. If the run is waiting on an answer, keep waiting for the reply."
+		return e.sendInput(ctx, tx, r, "input", text, prompt, nil)
+	})
+}
+
+// sendInput records the new input and any redeliveries with their shared command.
+func (e *Engine) sendInput(ctx context.Context, tx pgx.Tx, r run, kind, eventText, prompt string, continuation *string) error {
+	if err := e.unstall(ctx, tx, r, "Resumed: new input arrived for the existing orchestrator."); err != nil {
+		return err
 	}
 	lost, err := undeliveredInputs(ctx, tx, r.ID, e.Now())
 	if err != nil {
 		return err
 	}
-	args, _ := json.Marshal(hostclient.AgentArgs{AgentID: r.Orchestrator, AfterCommand: continuation, Text: withRedelivery(lost, fmt.Sprintf("%s:\n\n%s%s\n\n"+
-		"Decide what it means for the run, and carry on.", what, text, waiting))})
+	args, _ := json.Marshal(hostclient.AgentArgs{AgentID: r.Orchestrator, AfterCommand: continuation, Text: withRedelivery(lost, prompt)})
 	c, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.SendMessageKind, args, replyTTL, e.Now())
 	if err != nil {
 		return err
@@ -1214,7 +1251,7 @@ func (e *Engine) MessageTx(ctx context.Context, tx pgx.Tx, account int64, runID,
 	if err := e.carried(ctx, tx, r, lost, "redelivery", &c.ID); err != nil {
 		return err
 	}
-	return e.recordInput(ctx, tx, r, "message", ptr(r.Step), what, c.ID)
+	return e.recordInput(ctx, tx, r, kind, ptr(r.Step), eventText, c.ID)
 }
 
 // RunStatus is account's run's status and workflow.

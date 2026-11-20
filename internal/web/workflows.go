@@ -207,6 +207,23 @@ func (a *app) replyToRun(v viewer) http.HandlerFunc {
 	}
 }
 
+// addRunInput records additional input for the run's orchestrator.
+func (a *app) addRunInput(v viewer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Text string `json:"text"`
+		}
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+		if err := a.wf.AddInput(r.Context(), v.acct.ID, r.PathValue("id"), req.Text); err != nil {
+			workflowError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 // cancelRun: POST /api/workflow-runs/{id}/cancel {}.
 func (a *app) cancelRun(v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -518,6 +535,8 @@ type runEvent struct {
 	Step, ToStep *int
 	Text         string
 	At           time.Time
+	InputStatus  string
+	InputError   string
 }
 
 // stepView is one step of a run as its page shows it.
@@ -945,8 +964,13 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 		}
 		run := runs[0]
 		// A model suggestion reads as its saved choice; its full text stays in SQL.
-		rows, err = v.pool.Query(ctx, `SELECT e.kind,e.step,e.to_step,e.text,e.at,s.snapshot->'selected',s.token
-            FROM workflow_run_events e LEFT JOIN workflow_model_suggestions s ON s.id=e.suggestion_id
+		rows, err = v.pool.Query(ctx, `SELECT e.kind,e.step,e.to_step,e.text,e.at,s.snapshot->'selected',s.token,
+            CASE WHEN i.delivered THEN 'delivered' WHEN i.pending THEN 'pending'
+                 WHEN i.event_id IS NOT NULL THEN 'failed' ELSE '' END, COALESCE(c.error, '')
+            FROM workflow_run_events e
+            LEFT JOIN workflow_model_suggestions s ON s.id=e.suggestion_id
+            LEFT JOIN workflow_run_inputs i ON i.event_id=e.id AND i.run_id=e.run_id AND e.kind='input'
+            LEFT JOIN commands c ON c.id=i.command_id
             WHERE e.run_id=$1 ORDER BY e.id`, id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -956,7 +980,7 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 			var e runEvent
 			var selected []byte
 			var token *string
-			err := row.Scan(&e.Kind, &e.Step, &e.ToStep, &e.Text, &e.At, &selected, &token)
+			err := row.Scan(&e.Kind, &e.Step, &e.ToStep, &e.Text, &e.At, &selected, &token, &e.InputStatus, &e.InputError)
 			if err == nil && e.Kind == "model_suggestion" {
 				e.Text = modelSuggestionLine(selected, token)
 			}

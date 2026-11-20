@@ -140,6 +140,7 @@
   .events .md { white-space: normal; }
   .events .md > :first-child { margin-top: 0; }
   .events .md > :last-child { margin-bottom: 0; }
+  .events .input-note { margin-top: .2rem; }
   .run-meta { display: flex; flex-wrap: wrap; gap: .3rem 1.2rem; font-size: 13px; color: var(--muted); margin-top: .35rem; align-items: center; }
   .run-meta b { color: var(--fg-2); font-weight: 500; }
   dialog { border: 1px solid var(--line-strong); border-radius: var(--radius-lg); padding: 0; background: var(--panel); color: var(--fg); width: min(36rem, 92vw); box-shadow: var(--shadow-md); }
@@ -779,13 +780,22 @@ render();
 </div>{{end}}
 {{if .ArchiveStatus}}<p class="banner{{if and (ne .ArchiveStatus "failed") (ne .ArchiveStatus "expired")}} note{{end}}">Workspace archive: {{.ArchiveStatus}}{{if .ArchiveError}} — {{.ArchiveError}}{{end}}</p>{{end}}
 </div>
-<p class="banner" id="error" hidden></p>
+<p class="banner" id="error" role="alert" hidden></p>
 <div id="ask">{{if eq .Run.Status "waiting"}}
 <section class="card note"><div class="card-head"><h2>The orchestrator is asking you</h2><span class="meta grow">at {{(index .Run.Steps .Run.Step).Title}}</span></div>
   <div class="card-body"><div class="md" id="note">{{markdown .Run.Note}}</div>
     <div class="reply-host" data-submit="#send"{{if $.Dictation}} data-dictation="{{$.Dictation}}"{{end}}><textarea id="reply" placeholder="Reply in your own words. The orchestrator reads it and decides what to do."></textarea>
-      <div class="side"><button class="btn primary sm" id="send" title="⌘/Ctrl Enter">Send</button>{{if $.Dictation}}{{template "dictationbutton"}}{{end}}</div></div>
-  </div></section>{{end}}</div>
+      <div class="side"><button class="btn primary sm" id="send" data-run-action="reply" title="⌘/Ctrl Enter">Send</button>{{if $.Dictation}}{{template "dictationbutton"}}{{end}}</div></div>
+  </div></section>
+{{else if and (eq .Run.Status "running" "stalled") .Run.Orchestrator}}
+<section class="card">
+  <div class="card-head"><h2 id="additional-input-heading">Additional input</h2></div>
+  <div class="card-body">
+    <div class="reply-host" data-submit="#send"{{if .Dictation}} data-dictation="{{.Dictation}}"{{end}}><textarea id="additional-input" aria-labelledby="additional-input-heading" placeholder="Send a follow-up to the orchestrator."></textarea>
+      <div class="side"><button class="btn primary sm" id="send" data-run-action="input" title="⌘/Ctrl Enter">Send</button>{{if .Dictation}}{{template "dictationbutton"}}{{end}}</div></div>
+  </div>
+</section>{{end}}</div>
+<p class="meta" id="input-saved" role="status" hidden>Note saved. See <a href="#run-history">What happened</a> for delivery status.</p>
 <div id="steps" class="builder">
   <div class="pipe">
     <div class="node fixed"><div class="nh"><div><div class="kind">Before the orchestrator</div><div class="ttl">Find the project</div></div>
@@ -802,12 +812,12 @@ render();
     <div class="node k-{{.Kind}} r-{{.State}}"><div class="nh"><div style="min-width:0"><div class="kind">{{kind .Kind}} {{.N}}</div><div class="ttl">{{.Title}}</div></div>
       <span class="grow-r">{{with .SpentLabel}}<span class="spent" title="{{$s.SpentDetail}}">{{.}}</span>{{end}}{{if gt (len .Visits) 1}}<span class="meta">{{len .Visits}} times</span>{{end}}<span class="status st-{{.State}}">{{.Label}}</span></span></div>
       <div class="nb"><details><summary class="meta">Instructions</summary><div class="instr" style="-webkit-line-clamp:unset">{{.Instructions}}</div></details>
-        {{if .Events}}<ul class="events">{{range .Events}}<li><span class="t">{{at .At "time"}}</span><div class="md">{{localMarkdown .Line}}</div></li>{{end}}</ul>{{end}}</div></div>
+        {{if .Events}}<ul class="events">{{range .Events}}<li><span class="t">{{at .At "time"}}</span>{{template "run-event-body" .}}</li>{{end}}</ul>{{end}}</div></div>
     {{if lt (add $i 1) (len $.Steps)}}<div class="link{{if eq .State "done" "skipped"}} done{{end}}"></div>{{end}}
     {{end}}
   </div>
-  <aside class="card"><div class="card-head"><h2>What happened</h2></div><div class="card-body">
-    <ul class="events">{{range .Events}}<li><span class="t">{{at .At "short"}}</span>{{with .Step}}<b>{{add . 1}}.</b> {{end}}<div class="md">{{localMarkdown .Line}}</div></li>{{end}}</ul></div></aside>
+  <aside class="card" id="run-history"><div class="card-head"><h2>What happened</h2></div><div class="card-body">
+    <ul class="events">{{range .Events}}<li><span class="t">{{at .At "short"}}</span>{{with .Step}}<b>{{add . 1}}.</b> {{end}}{{template "run-event-body" .}}</li>{{end}}</ul></div></aside>
 </div>
 {{if .Dictation}}<script src="/dictation.js"></script>
 {{end}}<script>
@@ -815,6 +825,8 @@ render();
 const run = {{json .Run.ID}};
 const $ = (s) => document.querySelector(s);
 const err = (m) => { const e = $("#error"); e.hidden = !m; e.textContent = m || ""; };
+let sending = false, refreshVersion = 0;
+const drafts = new Map();
 async function post(path, body) {
   const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!res.ok) throw new Error(await res.text());
@@ -836,35 +848,66 @@ function bind() {
     if (!confirm("Cancel this run? Its orchestrator is stopped; the worktree stays.")) return;
     try { await post(`/api/workflow-runs/${run}/cancel`, {}); refresh(true); } catch (e) { err(e.message); }
   };
-  if ($("#send")) $("#send").onclick = async (ev) => {
-    const text = $("#reply").value.trim();
-    if (!text) return $("#reply").focus();
-    ev.target.disabled = true;
-    try { await post(`/api/workflow-runs/${run}/reply`, { text }); $("#reply").value = ""; refresh(true); }
-    catch (e) { err(e.message); ev.target.disabled = false; }
+  const reply = $("#ask textarea"), send = $("#send");
+  if (!reply || !send) return;
+  reply.onkeydown = (e) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.isComposing) {
+      e.preventDefault();
+      send.click();
+    }
+  };
+  send.onclick = async () => {
+    if (sending) return;
+    const text = reply.value.trim();
+    if (!text) return reply.focus();
+    const action = send.dataset.runAction;
+    err("");
+    $("#input-saved").hidden = true;
+    sending = send.disabled = reply.readOnly = true;
+    try {
+      await post(`/api/workflow-runs/${run}/${action}`, { text });
+      reply.value = "";
+      if (action === "input") $("#input-saved").hidden = false;
+      await refresh(true);
+    } catch (e) {
+      err(e.message);
+    } finally {
+      sending = send.disabled = reply.readOnly = false;
+    }
   };
   // dictation into the reply, once for each reply box (a refresh can bring a new one); a replaced
   // box's shortcuts stop acting once it leaves the page
-  const reply = $("#reply"), send = $("#send");
-  if (window.dictation && reply && !reply.dataset.dictating) {
+  if (window.dictation && !reply.dataset.dictating) {
     reply.dataset.dictating = "on";
     dictation({ text: reply, tokenPath: reply.parentElement.dataset.dictation, mic: document.getElementById("dictate"),
-      row: send.parentElement, label: () => send.textContent, send: () => send.click(), active: () => reply.isConnected,
+      row: send.parentElement, label: () => send.textContent, send: () => send.click(), active: () => reply.isConnected && !sending,
       onstart: () => err(""), warn: (msg) => err(msg) });
   }
 }
-// keep the page current; leave a reply being written alone
+// Keep the page current and retain drafts when the run switches between input and reply.
 async function refresh(all) {
+  if (sending && !all) return;
+  const version = ++refreshVersion;
   try {
     const res = await fetch(location.href, { cache: "no-store" });
     if (!res.ok) return;
     const next = new DOMParser().parseFromString(await res.text(), "text/html");
+    if (version !== refreshVersion || (sending && !all)) return;
     globalThis.localTime?.scan(next); // as the page shows it, so an unchanged section compares equal
     document.title = next.title;
-    const reply = $("#reply"), writing = reply && (reply.value || document.activeElement === reply || reply.classList.contains("listening"));
-    for (const id of ["live", "steps"].concat(writing && !all ? [] : ["ask"])) {
+    const reply = $("#ask textarea"), nextReply = next.getElementById("ask")?.querySelector("textarea");
+    const listening = reply && reply.classList.contains("listening");
+    const writing = reply && (reply.value || document.activeElement === reply);
+    const keep = listening || (reply?.id === nextReply?.id && writing && !all);
+    for (const id of ["live", "steps"].concat(keep ? [] : ["ask"])) {
       const n = next.getElementById(id), cur = document.getElementById(id);
-      if (n && cur && n.innerHTML !== cur.innerHTML) cur.replaceWith(n);
+      if (n && cur && n.innerHTML !== cur.innerHTML) {
+        if (id === "ask") {
+          if (reply) drafts.set(reply.id, reply.value);
+          if (nextReply) nextReply.value = drafts.get(nextReply.id) || "";
+        }
+        cur.replaceWith(n);
+      }
     }
     bind();
   } catch {}
@@ -873,6 +916,16 @@ bind();
 setInterval(refresh, 4000);
 </script>
 {{template "wffoot" .}}{{end}}
+
+{{define "run-event-body" -}}
+{{if eq .Kind "input" -}}
+<div><b>Additional input</b> · <span>
+  {{- if eq .InputStatus "delivered"}}Delivered to orchestrator
+  {{- else if eq .InputStatus "pending"}}Delivery pending
+  {{- else}}Delivery failed{{end -}}
+</span>{{if eq .InputStatus "failed"}}{{with .InputError}}<div>{{localText .}}</div>{{end}}{{end}}<div class="input-note">{{.Text}}</div></div>
+{{- else}}<div class="md">{{localMarkdown .Line}}</div>{{end}}
+{{- end}}
 
 {{define "voice-status"}}
 <p role="status">{{.Message}}</p>

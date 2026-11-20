@@ -254,6 +254,7 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	mux.HandleFunc("DELETE /api/workflows/{id}", a.write(a.deleteWorkflow))
 	mux.HandleFunc("POST /api/workflow-runs", a.write(a.startRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/reply", a.write(a.replyToRun))
+	mux.HandleFunc("POST /api/workflow-runs/{id}/input", a.write(a.addRunInput))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/cancel", a.write(a.cancelRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/start", a.write(a.startQueuedRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/resume", a.write(a.resumeRun))
