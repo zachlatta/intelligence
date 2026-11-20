@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -42,6 +43,7 @@ type Daemon struct {
 	accepted           int
 	timelines          map[string]timeline
 	created            map[string]map[string]any // what each creation idempotency key made
+	createdRequest     map[string]string         // each agent creation key's request, to refuse a different one
 	nextID             int
 
 	schedules   []map[string]any  // schedules.go
@@ -336,7 +338,13 @@ func (f *Daemon) change(c *websocket.Conn, id string, msg map[string]any) bool {
 		f.pushLocked("workspace_update", map[string]any{"kind": "upsert", "workspace": w})
 		f.write(c, session("workspace.create.response", map[string]any{"requestId": id, "workspace": w, "setupTerminalId": nil, "error": nil}))
 	case "agent.create.request":
+		request := agentRequest(msg)
 		if a, ok := f.created[key]; ok && key != "" {
+			if f.createdRequest[key] != request {
+				// Paseo keys a creation to its request: a different one under the same key is refused
+				f.write(c, session("agent.create.response", map[string]any{"requestId": id, "agent": nil, "error": "agent_request_key_conflict"}))
+				return true
+			}
 			f.write(c, session("agent.create.response", map[string]any{"requestId": id, "agent": a, "error": nil}))
 			return true
 		}
@@ -367,6 +375,12 @@ func (f *Daemon) change(c *websocket.Conn, id string, msg map[string]any) bool {
 		}
 		f.agents = append(f.agents, a)
 		f.remember(key, a)
+		if key != "" {
+			if f.createdRequest == nil {
+				f.createdRequest = map[string]string{}
+			}
+			f.createdRequest[key] = request
+		}
 		f.pushLocked("agent_update", map[string]any{"kind": "upsert", "agent": a, "project": map[string]any{}})
 		f.write(c, session("agent.create.response", map[string]any{"requestId": id, "agent": a, "error": nil}))
 	case "archive_workspace_request":
@@ -464,6 +478,14 @@ func (f *Daemon) change(c *websocket.Conn, id string, msg map[string]any) bool {
 		return false
 	}
 	return true
+}
+
+// agentRequest is what Paseo compares when an agent creation key is reused: everything but the request id.
+func agentRequest(msg map[string]any) string {
+	m := maps.Clone(msg)
+	delete(m, "requestId")
+	b, _ := json.Marshal(m)
+	return string(b)
 }
 
 func (f *Daemon) remember(key string, v map[string]any) {
