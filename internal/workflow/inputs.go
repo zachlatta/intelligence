@@ -72,7 +72,7 @@ func redelivery(ins []input) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("Zach's input below never reached you: it was recorded while your host could not deliver it. Here it is verbatim, oldest first. Act on it before anything else.\n\n")
+	b.WriteString("Zach's input below may not have reached you: it was recorded while your host could not deliver it, and its message failed or timed out. Here it is verbatim, oldest first. Act on it before anything else, but check first: if you already did what it asks (a timed-out message may still have arrived), do not do it again.\n\n")
 	for _, in := range ins {
 		at := in.At.UTC().Format(time.RFC3339)
 		if in.Kind == "reply" {
@@ -105,4 +105,4 @@ func answeredAsk(ins []input) bool {
 	return false
 }
 
-const answeredAskMessage = "Not asked: Zach already answered your question, and his reply never reached you. Act on it; the run is still running.\n\n"
+const answeredAskMessage = "Not asked: Zach already answered your question, and his reply may not have reached you. Act on it; the run is still running. Do not end your turn: carry on in this turn as his reply says.\n\n"

@@ -24,13 +24,14 @@ ALTER TABLE workflow_run_input_deliveries ENABLE ROW LEVEL SECURITY;
 CREATE POLICY own_rows ON workflow_run_input_deliveries FOR SELECT USING (account_id=current_account_id());
 
 -- One row per input: delivered once a carrier succeeded (or an ask's answer carried it; a carrier
--- whose command row is gone counts as delivered), pending while one may still arrive.
+-- whose command row is gone counts as delivered), pending while one may still arrive (unfinished
+-- and not yet past its expiry).
 CREATE VIEW workflow_run_inputs WITH (security_invoker = true) AS
 SELECT o.run_id, o.account_id, o.event_id, e.at, e.kind, o.command_id,
  EXISTS (SELECT 1 FROM workflow_run_input_deliveries d LEFT JOIN commands c ON c.id=d.command_id
    WHERE d.event_id=o.event_id AND (d.command_id IS NULL OR c.status='succeeded')) AS delivered,
  EXISTS (SELECT 1 FROM workflow_run_input_deliveries d JOIN commands c ON c.id=d.command_id
-   WHERE d.event_id=o.event_id AND c.status IN ('queued','sent','running')) AS pending,
+   WHERE d.event_id=o.event_id AND c.status IN ('queued','sent','running') AND c.expires_at>now()) AS pending,
  (SELECT count(*) FROM workflow_run_input_deliveries d WHERE d.event_id=o.event_id AND d.via<>'original') AS redeliveries
 FROM workflow_run_input_deliveries o JOIN workflow_run_events e ON e.id=o.event_id
 WHERE o.via='original';

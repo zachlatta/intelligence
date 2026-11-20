@@ -3,8 +3,10 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -85,6 +87,10 @@ func TestAReplyThatFailedToSendReachesTheOrchestratorOnce(t *testing.T) {
 				if !strings.Contains(text, "Zach's reply to your note") || !strings.Contains(text, "Do not ask it again") {
 					t.Errorf("continuation does not mark the reply as the answer to the open ask:\n%s", text)
 				}
+				// A send that expired may still have run: the orchestrator must not repeat what it did.
+				if !strings.Contains(text, "may not have reached you") || !strings.Contains(text, "do not do it again") {
+					t.Errorf("continuation does not warn against repeating an action already taken:\n%s", text)
+				}
 				if strings.Index(text, reply) > strings.Index(text, "Continue this workflow") {
 					t.Errorf("the reply comes after the generic continuation:\n%s", text)
 				}
@@ -98,6 +104,9 @@ func TestAReplyThatFailedToSendReachesTheOrchestratorOnce(t *testing.T) {
 				code, msg := move(t, h, key, run, map[string]string{"move": "ask", "note": "Re-sent: Land the exporter?"})
 				if code != 200 || !strings.Contains(msg, reply) || !strings.Contains(msg, "already answered") {
 					t.Fatalf("re-ask: %d %s", code, msg)
+				}
+				if !strings.Contains(msg, "Do not end your turn") {
+					t.Errorf("the refused ask lets the orchestrator end its turn:\n%s", msg)
 				}
 				if r := readRun(t, h, run); r["status"] != workflow.Running || r["note"] != "" {
 					t.Fatalf("a re-ask of an answered question went to Zach: %v", r)
@@ -167,7 +176,7 @@ func TestInputDeliveryMigrationLinksEarlierInputs(t *testing.T) {
 	if len(want) != 2 {
 		t.Fatalf("recorded inputs = %v, want a reply and a message", want)
 	}
-	sql, err := os.ReadFile("../db/migrations/20261120T1200_input_delivery.sql")
+	sql, err := os.ReadFile("../db/migrations/20261120T1048_input_delivery.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,5 +211,15 @@ func TestInputDeliveryMigrationLinksEarlierInputs(t *testing.T) {
 		if got[ev] != c {
 			t.Errorf("event %s: backfill linked %s, want %s", ev, got[ev], c)
 		}
+	}
+
+	// A send past its expiry is no longer pending, as undeliveredInputs has it, even before the
+	// sweep marks it expired.
+	if _, err := d.Owner.Exec(t.Context(), "UPDATE commands SET expires_at = now() - interval '1 minute' WHERE id::text = ANY($1)", slices.Collect(maps.Values(want))); err != nil {
+		t.Fatal(err)
+	}
+	code, r := sqlPost(t, h, q(`SELECT count(*) FILTER (WHERE pending), count(*) FILTER (WHERE NOT delivered) FROM workflow_run_inputs WHERE run_id='`+run+`'`))
+	if code != 200 || len(r.Rows) != 1 || r.Rows[0][0] != float64(0) || r.Rows[0][1] != float64(2) {
+		t.Fatalf("expired sends: %d %+v, want no pending and two undelivered inputs", code, r)
 	}
 }
