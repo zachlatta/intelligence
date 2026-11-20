@@ -249,6 +249,52 @@ func TestRetryDeliveryReusesPaseoCreationKey(t *testing.T) {
 	}
 }
 
+// A start retry after a lost connection rebuilds its prompt (a voice memo's orchestrator lists the
+// live runs), so Paseo refuses the reused key as a conflict although it made the agent the first
+// time. The retry attaches to that agent, found by the command label it was made with
+// (run 05fd6160, 2026-11-18).
+func TestRetryKeyConflictAttachesToTheAgentAlreadyMade(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	for _, kind := range []string{CreateWorkspaceKind, CreateAgentKind} {
+		args := func(prompt string) json.RawMessage {
+			if kind == CreateWorkspaceKind {
+				return json.RawMessage(`{"cwd":"/w/app","worktree":true,"branch":"conflict","agent":{"provider":"claude","prompt":"` + prompt + `"}}`)
+			}
+			return json.RawMessage(`{"cwd":"/w/app","provider":"claude","prompt":"` + prompt + `"}`)
+		}
+		first, err := w.Execute(t.Context(), Command{ID: "made-" + kind, Kind: kind, Args: args("live runs: none")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		again, err := w.Execute(t.Context(), Command{ID: "retry-" + kind, IdempotencyKey: "made-" + kind, Kind: kind, Args: args("live runs: one")})
+		if err != nil || again != first {
+			t.Fatalf("%s: retry = %+v, %v; want the agent made first, %+v", kind, again, err, first)
+		}
+	}
+	if n := len(d.Requests("agent.create.request")); n != 4 {
+		t.Errorf("agent create requests = %d, want 4", n)
+	}
+}
+
+func TestRetryKeyConflictWithNoAgentLeftStillFails(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	first, err := w.Execute(t.Context(), Command{ID: "gone", Kind: CreateAgentKind, Args: json.RawMessage(`{"cwd":"/w/app","provider":"claude","prompt":"a"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := execute(t, w, ArchiveAgentKind, `{"agentId":"`+first.AgentID+`"}`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = w.Execute(t.Context(), Command{ID: "retry", IdempotencyKey: "gone", Kind: CreateAgentKind, Args: json.RawMessage(`{"cwd":"/w/app","provider":"claude","prompt":"b"}`)})
+	if err == nil || !strings.Contains(err.Error(), "agent_request_key_conflict") {
+		t.Errorf("err = %v, want the conflict when no agent carries the key", err)
+	}
+}
+
 func TestExecuteEveryOtherKind(t *testing.T) {
 	d := daemon(t)
 	w := watcher(t, d)

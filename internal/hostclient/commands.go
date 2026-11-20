@@ -504,7 +504,33 @@ func createAgent(ctx context.Context, c *paseo.Client, a CreateAgentArgs, cmdID,
 	}
 	ag, err := c.CreateAgent(ctx, paseo.CreateAgent{WorkspaceID: a.WorkspaceID, Cwd: a.Cwd, Provider: a.Provider, Model: a.Model,
 		Thinking: a.Thinking, Mode: a.Mode, Title: a.Title, Prompt: a.Prompt, Labels: labels, IdempotencyKey: key})
+	if err != nil && strings.Contains(err.Error(), keyConflict) {
+		// A start retry after a lost connection rebuilds its request (an orchestrator's prompt lists
+		// the live runs), and Paseo refuses a different request under the key it already made an
+		// agent for. That agent is the one this command asked for: attach to it.
+		if made, ok := agentMadeBy(ctx, c, cmdID, a.WorkspaceID); ok {
+			return CommandResult{AgentID: made.ID, WorkspaceID: made.WorkspaceID}, nil
+		}
+	}
 	return CommandResult{AgentID: ag.ID, WorkspaceID: ag.WorkspaceID}, err
+}
+
+// keyConflict is Paseo's refusal of a creation key reused with a different request.
+const keyConflict = "agent_request_key_conflict"
+
+// agentMadeBy finds the live agent a command made, by the label createAgent gives it, in workspace
+// (any, if ""). Without one (the agent was archived, or the listing failed), the conflict stands.
+func agentMadeBy(ctx context.Context, c *paseo.Client, cmdID, workspace string) (paseo.Agent, bool) {
+	agents, err := c.Agents(ctx)
+	if err != nil {
+		return paseo.Agent{}, false
+	}
+	for _, ag := range agents {
+		if ag.Labels["intelligence.command"] == cmdID && (workspace == "" || ag.WorkspaceID == workspace) {
+			return ag, true
+		}
+	}
+	return paseo.Agent{}, false
 }
 
 // Runner runs the commands a host receives, each once: a command delivered again while it runs is
