@@ -1,6 +1,6 @@
--- Spend fixed-reset quota before it expires. A reset that is a full window
--- away at each reading, or recently moved forward within its own window,
--- gives no reliable pace target. In that case use the available headroom.
+-- Spend fixed-reset quota before it expires. A reset a full window away
+-- scores like a fresh window, whether or not it has started counting usage.
+-- A forward shift between in-progress readings makes the deadline uncertain.
 CREATE OR REPLACE VIEW model_group_candidates WITH (security_invoker = true) AS
 WITH pooled AS (
  SELECT m.*, 2 * (SELECT count(*) FROM workflow_model_suggestions s
@@ -16,12 +16,14 @@ WITH pooled AS (
  SELECT m.*, g.token, g.name AS group_name, g.revision, h.name AS host,
         c.remaining_pct, c.last_observed, c.resets_at,
         headroom.remaining_pct - CASE
-          WHEN (m.eligible_until IS NULL OR m.eligible_until >= c.resets_at) AND (
-            abs(extract(epoch FROM c.resets_at - c.last_observed) - c.window_seconds) <= 60
-            OR (prior.last_observed >= c.last_observed - interval '15 minutes'
-                AND prior.resets_at > c.last_observed
-                AND c.resets_at > prior.resets_at + interval '1 minute')
-          ) THEN 0
+          WHEN (m.eligible_until IS NULL OR m.eligible_until >= c.resets_at)
+            AND c.used_pct > 0 AND prior.used_pct > 0
+            AND extract(epoch FROM c.resets_at - c.last_observed) < c.window_seconds - 60
+            AND extract(epoch FROM prior.resets_at - prior.last_observed) < c.window_seconds - 60
+            AND prior.last_observed >= c.last_observed - interval '15 minutes'
+            AND prior.resets_at > c.last_observed
+            AND c.resets_at > prior.resets_at + interval '1 minute'
+          THEN 0
           ELSE 100 * extract(epoch FROM least(c.resets_at, m.eligible_until) - now()) / nullif(c.window_seconds,0)
         END
           - m.penalty AS score,
@@ -55,7 +57,7 @@ WITH pooled AS (
  JOIN host_keys k ON k.account_id=m.account_id JOIN hosts h ON h.name=k.host
  LEFT JOIN usage_current c ON c.provider=m.provider AND c.account=m.login AND c.window_id=m.long_window
  LEFT JOIN LATERAL (
-   SELECT r.resets_at, r.last_observed
+   SELECT r.resets_at, r.last_observed, r.used_pct
    FROM usage_readings r
    WHERE r.provider=c.provider AND r.account=c.account AND r.window_id=c.window_id
      AND r.last_observed < c.last_observed

@@ -207,7 +207,7 @@ func TestModelGroupBalancesHeadroomAcrossResetPhases(t *testing.T) {
 	h, d := dbServer(t)
 	rep := wfReport()
 	rep.Paseo.Providers = []hostclient.Provider{
-		{Name: "antigravity", Available: true, Models: []hostclient.Model{{ID: "gemini-4-neon-medium", Label: "Neon Medium"}}},
+		{Name: "antigravity", Available: true, Models: []hostclient.Model{{ID: "gemini-4-neon-medium", Label: "Neon Medium"}, {ID: "opus"}}},
 		{Name: "codex", Available: true, Models: []hostclient.Model{{ID: "sol"}}},
 		{Name: "claude", Available: true, Models: []hostclient.Model{{ID: "claude-fable-5-2"}}},
 	}
@@ -225,20 +225,33 @@ func TestModelGroupBalancesHeadroomAcrossResetPhases(t *testing.T) {
 		INSERT INTO usage_active(host,provider,account,since,until)
 		SELECT 'host-1',provider,account,now(),now() FROM usage_accounts;
 		INSERT INTO usage_readings(provider,account,window_id,window_seconds,used_pct,resets_at,first_observed,last_observed) VALUES
-		('antigravity','one','gemini/7d',604800,0,now()+interval '7 days',now(),now()),
+		('antigravity','one','gemini/7d',604800,0.1,now()+interval '6 days 20 hours',now(),now()),
 		('antigravity','one','gemini/5h',18000,0,now()+interval '5 hours',now(),now()),
-		('antigravity','one','claude-gpt/5h',18000,100,now()+interval '5 hours',now(),now()),
-		('codex','one','7d',604800,20,now()+interval '3 days',now(),now()),
+		('antigravity','one','claude-gpt/7d',604800,0,now()+interval '7 days',now(),now()),
+		('antigravity','one','claude-gpt/5h',18000,0,now()+interval '5 hours',now(),now()),
+		('codex','one','7d',604800,65,now()+interval '3 days',now(),now()),
 		('claude','one','7d',604800,96,now()+interval '2 days',now(),now()),
 		('claude','one','fable/7d',604800,0,now()+interval '2 days',now(),now());`)
 	rec := call(t, h, "POST", "/api/model-groups", `{"name":"Balanced","members":[
 		{"provider":"codex","model":"sol","login":"one","longWindow":"7d","enabled":true},
 		{"provider":"antigravity","model":"gemini-4-neon-medium","login":"one","longWindow":"gemini/7d","enabled":true},
+		{"provider":"antigravity","model":"opus","login":"one","longWindow":"claude-gpt/7d","enabled":true},
 		{"provider":"claude","model":"claude-fable-5-2","login":"one","longWindow":"fable/7d","enabled":true}
 	]}`, sameOriginFetch)
 	if rec.Code != 201 {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body)
 	}
+
+	// A reset tracking now + one week at 0% should not score a full week
+	// ahead of a stable window that has just begun to see usage.
+	code, r := sqlPost(t, h, q(`SELECT long_window,round(score::numeric,1)::text
+		FROM model_group_candidates WHERE token='balanced_model' AND provider='antigravity' AND eligible
+		ORDER BY score DESC,position`))
+	if code != 200 || len(r.Rows) != 2 || r.Rows[0][0] != "gemini/7d" ||
+		r.Rows[0][1] != "2.3" || r.Rows[1][1] != "0.0" {
+		t.Fatalf("idle and barely used weekly quotas should have similar scores: %d %+v", code, r)
+	}
+	exec(`UPDATE usage_readings SET used_pct=100 WHERE window_id='claude-gpt/5h'`)
 
 	assertTop := func(want string) {
 		t.Helper()

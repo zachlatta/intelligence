@@ -1104,8 +1104,9 @@ orchestrator keep their explicit models.
 On step entry, each token expands to a compact recommendation; one appended note per group
 holds the reason, meter time and launch settings. Suggestions favor quota likely to go unused before
 a fixed reset or plan end, subtracting the percentage of the longest window still to run from the
-remaining quota percentage. If the reset is still a full window away at the meter reading, or recent
-readings show it moving forward before it arrives, the score uses the remaining quota percentage.
+remaining quota percentage. A reset one full window away gets the same pace treatment at zero
+usage and just after work begins. When two recent in-progress readings show the deadline moving
+forward before it arrives, the score uses the remaining quota percentage.
 Each suggestion subtracts 2 points from the shared pool for 60 minutes. Suggestions require fresh meters and a 5%
 reserve, including in shorter windows of the selected pool. Fable must clear both its own weekly
 cap and the shared Claude cap, and its ranking uses the lower of the two remaining percentages.
