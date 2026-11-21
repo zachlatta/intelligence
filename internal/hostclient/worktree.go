@@ -27,21 +27,36 @@ func refreshWorkflowBase(ctx context.Context, cwd string) string {
 	if err != nil {
 		return ""
 	}
+	var branch, tip string
 	for line := range strings.SplitSeq(head, "\n") {
-		symref, isHead := strings.CutSuffix(line, "\tHEAD")
-		branch, isBranch := strings.CutPrefix(symref, "ref: refs/heads/")
-		if !isHead || !isBranch || branch == "HEAD" {
+		value, isHead := strings.CutSuffix(line, "\tHEAD")
+		if !isHead {
 			continue
 		}
-		ref := "refs/heads/" + branch
-		if _, err := git("check-ref-format", ref); err != nil {
-			return ""
+		if name, ok := strings.CutPrefix(value, "ref: refs/heads/"); ok {
+			branch = name
+		} else {
+			tip = value
 		}
-		base := "origin/" + branch
-		if _, err := git("fetch", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head", "--refmap=", "origin", "+"+ref+":refs/remotes/"+base); err != nil {
-			return ""
+	}
+	if branch == "" || branch == "HEAD" || tip == "" {
+		return ""
+	}
+	ref := "refs/heads/" + branch
+	if _, err := git("check-ref-format", ref); err != nil {
+		return ""
+	}
+	base := "origin/" + branch
+	trackingRef := "refs/remotes/" + base
+	for range 2 {
+		if _, err := git("fetch", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head", "--refmap=", "origin", "+"+ref+":"+trackingRef); err == nil {
+			return base
 		}
-		return base
+		// Worktrees share the tracking ref. Another fetch may have already
+		// advanced it, causing this fetch's ref update to fail.
+		if _, err := git("merge-base", "--is-ancestor", "--", tip, trackingRef); err == nil {
+			return base
+		}
 	}
 	return ""
 }

@@ -23,12 +23,15 @@ func worktreeGit(t *testing.T, dir string, args ...string) string {
 func TestWorkflowWorktreeBase(t *testing.T) {
 	for _, tc := range []struct {
 		name, branch string
+		fetchRace    string
 		offline      bool
 		manual       bool
 		base         string
 	}{
 		{name: "main", branch: "main"},
 		{name: "renamed default", branch: "release/current"},
+		{name: "concurrent fetch already updated ref", branch: "main", fetchRace: "updated"},
+		{name: "concurrent fetch needs one retry", branch: "main", fetchRace: "retry"},
 		{name: "fetch fails with a cached ref", branch: "main", offline: true},
 		{name: "manual workspace", branch: "main", manual: true},
 		{name: "explicit base", branch: "main", base: "main"},
@@ -67,6 +70,9 @@ func TestWorkflowWorktreeBase(t *testing.T) {
 			worktreeGit(t, origin, "symbolic-ref", "HEAD", "refs/heads/"+tc.branch)
 			if tc.offline {
 				worktreeGit(t, checkout, "remote", "set-url", "origin", filepath.Join(dir, "missing.git"))
+			}
+			if tc.fetchRace != "" {
+				simulateWorktreeFetchRace(t, dir, tc.fetchRace)
 			}
 
 			d := daemon(t)
@@ -118,6 +124,9 @@ func TestWorkflowWorktreeBase(t *testing.T) {
 			if want := "origin/" + tc.branch; base != want {
 				t.Fatalf("Paseo received base %q, want %q", base, want)
 			}
+			if res.WorktreeBaseFallback {
+				t.Fatalf("used the fetched base but reported fallback: %+v", res)
+			}
 
 			// Materialize the branch-off request using Git and the exact base sent to Paseo.
 			created := filepath.Join(dir, "run")
@@ -135,4 +144,32 @@ func TestWorkflowWorktreeBase(t *testing.T) {
 			replay(filepath.Join(dir, "missing.git"))
 		})
 	}
+}
+
+// A second fetch can update the tracking ref before Git reports a lock or
+// stale old value. Emulate those outcomes without relying on their timing.
+func simulateWorktreeFetchRace(t *testing.T, dir, mode string) {
+	t.Helper()
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WORKTREE_TEST_GIT", git)
+	t.Setenv("WORKTREE_TEST_FETCH_RACE", mode)
+	t.Setenv("WORKTREE_TEST_FETCH_MARKER", filepath.Join(dir, "fetch-attempted"))
+	shim := `#!/bin/sh
+if [ "$1" = fetch ] && [ ! -e "$WORKTREE_TEST_FETCH_MARKER" ]; then
+    touch "$WORKTREE_TEST_FETCH_MARKER" || exit 1
+    if [ "$WORKTREE_TEST_FETCH_RACE" = updated ]; then
+        "$WORKTREE_TEST_GIT" "$@" || exit 1
+    fi
+    echo "error: fetching ref failed: incorrect old value provided" >&2
+    exit 1
+fi
+exec "$WORKTREE_TEST_GIT" "$@"
+`
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(shim), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
