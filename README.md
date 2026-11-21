@@ -501,7 +501,10 @@ against its daemon and reports `running`, then `succeeded` with a result (`{"wor
 - `create_workspace`: `cwd`, and optionally `title`; with `worktree: true`, a new git worktree of the
   repository at `cwd`, on `branch` from `base`. With `agent` (`create_agent`'s args, without
   `workspaceId` or `cwd`), an agent is then started in the new workspace. If that agent fails, the
-  command fails but its result still names the workspace it made.
+  command fails but its result still names the workspace it made. A worktree with no `base` for a
+  run's orchestrator (labels `intelligence.run` and `intelligence.role=orchestrator`) starts from
+  origin's freshly fetched default branch; if that fetch fails, Paseo uses its usual base and the
+  result says `worktreeBaseFallback: true`.
 - `create_agent`: `provider` (`claude`, `codex`, ...), `workspaceId` (it runs in that workspace's
   directory) or `cwd`, and optionally `model`, `thinking`, `mode`, `title`, `prompt` (its first
   message) and `labels`. The agent is labelled `intelligence.command=<command id>`.
