@@ -217,7 +217,7 @@ function modelGroupPools(windows, provider, login) {
               " min old"
           : "",
       );
-      text(card, "reason", best ? "More quota likely to remain at reset." : "");
+      text(card, "reason", best ? "Ranked by available quota and time to reset." : "");
       text(
         card,
         "members",

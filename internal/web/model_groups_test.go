@@ -203,6 +203,87 @@ func TestModelGroupUsesObservedQuotaPools(t *testing.T) {
 	}
 }
 
+func TestModelGroupBalancesHeadroomAcrossResetPhases(t *testing.T) {
+	h, d := dbServer(t)
+	rep := wfReport()
+	rep.Paseo.Providers = []hostclient.Provider{
+		{Name: "antigravity", Available: true, Models: []hostclient.Model{{ID: "gemini-4-neon-medium", Label: "Neon Medium"}}},
+		{Name: "codex", Available: true, Models: []hostclient.Model{{ID: "sol"}}},
+		{Name: "claude", Available: true, Models: []hostclient.Model{{ID: "claude-fable-5-2"}}},
+	}
+	sendReport(t, h, rep)
+	exec := func(query string) {
+		t.Helper()
+		if _, err := d.Owner.Exec(t.Context(), query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`INSERT INTO usage_accounts(provider,account,first_seen,last_seen)
+		SELECT provider,'one',now(),now() FROM unnest(ARRAY['antigravity','codex','claude']) AS provider;
+		INSERT INTO usage_sources(host,provider,account,ok,received_at)
+		SELECT 'host-1',provider,account,true,now() FROM usage_accounts;
+		INSERT INTO usage_active(host,provider,account,since,until)
+		SELECT 'host-1',provider,account,now(),now() FROM usage_accounts;
+		INSERT INTO usage_readings(provider,account,window_id,window_seconds,used_pct,resets_at,first_observed,last_observed) VALUES
+		('antigravity','one','gemini/7d',604800,0,now()+interval '7 days',now(),now()),
+		('antigravity','one','gemini/5h',18000,0,now()+interval '5 hours',now(),now()),
+		('antigravity','one','claude-gpt/5h',18000,100,now()+interval '5 hours',now(),now()),
+		('codex','one','7d',604800,20,now()+interval '3 days',now(),now()),
+		('claude','one','7d',604800,96,now()+interval '2 days',now(),now()),
+		('claude','one','fable/7d',604800,0,now()+interval '2 days',now(),now());`)
+	rec := call(t, h, "POST", "/api/model-groups", `{"name":"Balanced","members":[
+		{"provider":"codex","model":"sol","login":"one","longWindow":"7d","enabled":true},
+		{"provider":"antigravity","model":"gemini-4-neon-medium","login":"one","longWindow":"gemini/7d","enabled":true},
+		{"provider":"claude","model":"claude-fable-5-2","login":"one","longWindow":"fable/7d","enabled":true}
+	]}`, sameOriginFetch)
+	if rec.Code != 201 {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+
+	assertTop := func(want string) {
+		t.Helper()
+		code, r := sqlPost(t, h, q(`SELECT provider FROM model_group_candidates
+			WHERE token='balanced_model' AND eligible ORDER BY score DESC, position LIMIT 1`))
+		if code != 200 || len(r.Rows) != 1 || r.Rows[0][0] != want {
+			t.Fatalf("want preferred provider %s: %d %+v", want, code, r)
+		}
+	}
+	assertTop("antigravity")
+	// The same ranking must determine the model that workers are actually offered.
+	def := workflow.Starting
+	def.Steps = append([]workflow.Step(nil), def.Steps...)
+	def.Project = workflow.Project{Mode: "fixed", Directory: "/w/app"}
+	def.Steps[0].Instructions = "Use {{balanced_model}}."
+	wf := createWorkflow(t, h, def)
+	stream := openStream(t, h, "host-1")
+	startRun(t, h, wf, "Balance plan usage")
+	var ws hostclient.CreateWorkspaceArgs
+	if err := json.Unmarshal(stream.command().Args, &ws); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ws.Agent.Prompt, "Use Neon Medium via antigravity/gemini-4-neon-medium") {
+		t.Fatalf("wrong model in worker instructions: %s", ws.Agent.Prompt)
+	}
+
+	// When headroom is similar, the earlier reset still takes priority.
+	exec(`UPDATE usage_readings SET used_pct=4 WHERE provider='codex'`)
+	assertTop("codex")
+	exec(`UPDATE usage_readings SET used_pct=20 WHERE provider='codex'`)
+
+	exec(`UPDATE usage_readings SET used_pct=100 WHERE window_id='gemini/5h'`)
+	assertTop("codex")
+	exec(`UPDATE usage_readings SET used_pct=0,resets_at=NULL WHERE window_id='gemini/5h'`)
+	assertTop("codex")
+
+	// Fable must have room in both weekly windows regardless of which one is selected.
+	exec(`UPDATE model_group_members SET long_window='7d' WHERE provider='claude';
+	      UPDATE usage_readings SET used_pct=0 WHERE provider='claude' AND window_id='7d';
+	      UPDATE usage_readings SET used_pct=96 WHERE provider='claude' AND window_id='fable/7d'`)
+	assertTop("codex")
+	exec(`UPDATE usage_readings SET used_pct=0 WHERE provider='claude' AND window_id='fable/7d'`)
+	assertTop("claude")
+}
+
 // Members keep only what the editor chooses: the provider is the plan's provider, and shorter
 // windows in a pool are read live from usage, so neither is stored a second time.
 func TestModelGroupSchemaStoresNoDerivedCopies(t *testing.T) {

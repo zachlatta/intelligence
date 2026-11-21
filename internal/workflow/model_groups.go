@@ -353,7 +353,7 @@ func (e *Engine) suggestModel(ctx context.Context, tx pgx.Tx, r run, step int, t
 		if thinking != "" {
 			msg += " --thinking " + thinking
 		}
-		msg += ". More quota likely to remain at reset; plan " + chosen["login"].(string) + "; meter read " + chosen["last_observed"].(string) + ". Use these settings over generic model lists unless the task explicitly names another model."
+		msg += ". Ranked by available quota and time to reset; plan " + chosen["login"].(string) + "; meter read " + chosen["last_observed"].(string) + ". Use these settings over generic model lists unless the task explicitly names another model."
 		provider = p
 		login = chosen["login"]
 		window = chosen["long_window"]
