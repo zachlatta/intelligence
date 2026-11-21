@@ -186,30 +186,47 @@ func sha(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// SessionMetadata describes the request that created a session.
+type SessionMetadata struct {
+	UserAgent       string
+	CreatedFromPath string
+}
+
 // StartSession signs a browser in as a: the token goes in its cookie.
-func (s *Store) StartSession(ctx context.Context, a Account) (token string, expires time.Time, err error) {
+func (s *Store) StartSession(ctx context.Context, a Account, meta SessionMetadata) (token string, expires time.Time, err error) {
 	token, now := randomToken(), s.Now()
 	expires = now.Add(SessionLife)
-	_, err = s.p.Exec(ctx, `INSERT INTO sessions (token_hash, account_id, created_at, expires_at, last_seen_at) VALUES ($1, $2, $3, $4, $3)`,
-		sha(token), a.ID, now, expires)
+	ua := meta.UserAgent[:min(len(meta.UserAgent), 1024)]
+	ua = strings.ReplaceAll(strings.ToValidUTF8(ua, ""), "\x00", "")
+	_, err = s.p.Exec(ctx, `INSERT INTO sessions (token_hash, account_id, created_at, expires_at, last_seen_at, user_agent, created_from_path)
+		VALUES ($1, $2, $3, $4, $3, $5, $6)`, sha(token), a.ID, now, expires, ua, meta.CreatedFromPath)
 	return token, expires, err
 }
 
-// Session is the account signed in with token, or ErrNoSession.
-func (s *Store) Session(ctx context.Context, token string) (Account, error) {
+// BrowserSession is an authenticated session with its original expiry.
+type BrowserSession struct {
+	Account
+	ExpiresAt       time.Time
+	CreatedFromPath string
+}
+
+// Session is the browser session signed in with token, or ErrNoSession.
+func (s *Store) Session(ctx context.Context, token string) (BrowserSession, error) {
 	if token == "" {
-		return Account{}, ErrNoSession
+		return BrowserSession{}, ErrNoSession
 	}
-	var a Account
+	var session BrowserSession
 	// last_seen_at is kept to the minute, so most requests write nothing
 	err := s.p.QueryRow(ctx, `WITH seen AS (
 			UPDATE sessions SET last_seen_at = $2 WHERE token_hash = $1 AND expires_at > $2 AND last_seen_at < $2 - interval '1 minute')
-		SELECT a.id, a.username, a.role_name FROM sessions s JOIN accounts a ON a.id = s.account_id
-		WHERE s.token_hash = $1 AND s.expires_at > $2`, sha(token), s.Now()).Scan(&a.ID, &a.Username, &a.Role)
+		SELECT a.id, a.username, a.role_name, s.expires_at, s.created_from_path
+		FROM sessions s JOIN accounts a ON a.id = s.account_id
+		WHERE s.token_hash = $1 AND s.expires_at > $2`, sha(token), s.Now()).
+		Scan(&session.ID, &session.Username, &session.Role, &session.ExpiresAt, &session.CreatedFromPath)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Account{}, ErrNoSession
+		return BrowserSession{}, ErrNoSession
 	}
-	return a, err
+	return session, err
 }
 
 // EndSession signs token's browser out.

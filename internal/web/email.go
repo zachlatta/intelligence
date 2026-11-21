@@ -151,9 +151,8 @@ func (a *app) gmailDisconnect(v viewer) http.HandlerFunc {
 	}
 }
 
-// gmailCallback: GET /gmail/callback: where Google sends the browser (a web client). The session
-// cookie is SameSite=Strict, so it is not sent on Google's redirect: this page posts the code from
-// this origin, where it is.
+// gmailCallback receives Google's browser redirect. The page posts the code to the
+// same-origin JSON endpoint that connects the mailbox.
 func gmailCallback(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Referrer-Policy", "no-referrer")

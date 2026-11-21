@@ -60,7 +60,7 @@ func TestCreateAndSignIn(t *testing.T) {
 func TestSessions(t *testing.T) {
 	s, d := store(t)
 	a, _ := s.Create(ctx, "ann", goodPassword)
-	tok, exp, err := s.StartSession(ctx, a)
+	tok, exp, err := s.StartSession(ctx, a, accounts.SessionMetadata{})
 	if err != nil || len(tok) < 40 || exp.Before(time.Now().Add(29*24*time.Hour)) {
 		t.Fatalf("session %q %v %v", tok, exp, err)
 	}
@@ -81,7 +81,7 @@ func TestSessions(t *testing.T) {
 	if _, err := s.Session(ctx, tok); !errors.Is(err, accounts.ErrNoSession) {
 		t.Errorf("expired: %v", err)
 	}
-	tok2, _, _ := s.StartSession(ctx, a)
+	tok2, _, _ := s.StartSession(ctx, a, accounts.SessionMetadata{})
 	if err := s.EndSession(ctx, tok2); err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestSessions(t *testing.T) {
 func TestChangingThePasswordEndsOtherSessions(t *testing.T) {
 	s, _ := store(t)
 	a, _ := s.Create(ctx, "ann", goodPassword)
-	other, _, _ := s.StartSession(ctx, a)
+	other, _, _ := s.StartSession(ctx, a, accounts.SessionMetadata{})
 	if err := s.ChangePassword(ctx, a.ID, "wrong password!", "a brand new password"); !errors.Is(err, accounts.ErrBadCredentials) {
 		t.Errorf("wrong current: %v", err)
 	}

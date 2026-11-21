@@ -57,7 +57,7 @@ func fixtureFor(t *testing.T, d dbtest.DB) *fixture {
 
 func sessionFor(t *testing.T, s *accounts.Store, a accounts.Account) *http.Cookie {
 	t.Helper()
-	tok, _, err := s.StartSession(context.Background(), a)
+	tok, _, err := s.StartSession(context.Background(), a, accounts.SessionMetadata{CreatedFromPath: "/api/session"})
 	if err != nil {
 		t.Fatal(err)
 	}

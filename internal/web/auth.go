@@ -21,9 +21,10 @@ const sessionCookie = "intelligence_session"
 // viewer is who a request is from: a signed-in account, and what it reads through. Everything
 // it reads goes through its own Postgres role, so it sees only its own rows.
 type viewer struct {
-	acct accounts.Account
-	pool *pgxpool.Pool   // the account's read-only pool
-	reg  *fleet.Registry // reads through pool
+	acct         accounts.Account
+	pool         *pgxpool.Pool   // the account's read-only pool
+	reg          *fleet.Registry // reads through pool
+	legacyCookie *http.Cookie    // same token and expiry with the current cookie attributes
 }
 
 // hostCaller is shared by run moves and proposal-only CLI writes. A host key
@@ -48,8 +49,7 @@ func (a *app) hostWrite(h func(accounts.Account, string) http.HandlerFunc) http.
 			http.Error(w, "cross-site request refused", http.StatusForbidden)
 			return
 		}
-		if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/json" {
-			http.Error(w, "send JSON", http.StatusUnsupportedMediaType)
+		if !requireJSON(w, r) {
 			return
 		}
 		acct, host, ok := a.hostCaller(w, r)
@@ -65,15 +65,19 @@ func (a *app) viewerOf(r *http.Request) (viewer, error) {
 	if err != nil {
 		return viewer{}, accounts.ErrNoSession
 	}
-	acct, err := a.store.Session(r.Context(), c.Value)
+	session, err := a.store.Session(r.Context(), c.Value)
 	if err != nil {
 		return viewer{}, err
 	}
-	p, err := a.store.Reader(r.Context(), acct)
+	p, err := a.store.Reader(r.Context(), session.Account)
 	if err != nil {
 		return viewer{}, err
 	}
-	return viewer{acct: acct, pool: p, reg: fleet.New(p)}, nil
+	v := viewer{acct: session.Account, pool: p, reg: fleet.New(p)}
+	if session.CreatedFromPath == "" && r.Method == http.MethodGet {
+		v.legacyCookie = sessionCookieFor(c.Value, session.ExpiresAt)
+	}
+	return v, nil
 }
 
 // page serves h to a signed-in browser, and sends any other to sign in, then back.
@@ -85,12 +89,19 @@ func (a *app) page(h func(v viewer) http.HandlerFunc) http.HandlerFunc {
 			if r.URL.RawQuery != "" {
 				next += "?" + r.URL.RawQuery
 			}
+			w.Header().Set("Cache-Control", "no-store")
 			http.Redirect(w, r, "/login?next="+url.QueryEscape(next), http.StatusSeeOther)
 			return
 		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
+		}
+		if v.legacyCookie != nil {
+			// A direct visit can still carry an old Strict cookie. Reissue it
+			// with the original expiry so subsequent external links work.
+			w.Header().Set("Cache-Control", "no-store")
+			http.SetCookie(w, v.legacyCookie)
 		}
 		h(v)(w, r)
 	}
@@ -108,7 +119,7 @@ func (a *app) read(h func(v viewer) http.HandlerFunc) http.HandlerFunc {
 
 // write serves h to a signed-in account's same-origin JSON request (or bodiless one, for a
 // DELETE), and refuses any other. JSON is required because another site cannot send it without
-// the server's leave; the cookie is SameSite=Strict as well.
+// the server's leave.
 func (a *app) write(h func(v viewer) http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !sameOrigin(r) {
@@ -119,8 +130,7 @@ func (a *app) write(h func(v viewer) http.HandlerFunc) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/json" && (r.Method != http.MethodDelete || r.ContentLength > 0) {
-			http.Error(w, "send JSON", http.StatusUnsupportedMediaType)
+		if (r.Method != http.MethodDelete || r.ContentLength > 0) && !requireJSON(w, r) {
 			return
 		}
 		h(v)(w, r)
@@ -140,9 +150,8 @@ func (a *app) signedIn(w http.ResponseWriter, r *http.Request) (viewer, bool) {
 	return v, true
 }
 
-// sameOrigin refuses a browser request another site started. The cookie is SameSite=Strict as
-// well; this also stops a sibling site (same-site, another origin). Sec-Fetch-Site, which the
-// browser sets, decides when present: behind a proxy the Host seen here need not be the one the
+// sameOrigin refuses a browser request another origin started, including a sibling site.
+// Sec-Fetch-Site, which the browser sets, decides when present: behind a proxy the Host seen here need not be the one the
 // browser used. Without it, Origin (if any) must name this host.
 func sameOrigin(r *http.Request) bool {
 	if s := r.Header.Get("Sec-Fetch-Site"); s != "" {
@@ -155,9 +164,31 @@ func sameOrigin(r *http.Request) bool {
 	return true
 }
 
-func setSession(w http.ResponseWriter, token string, expires time.Time) {
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: token, Path: "/", Expires: expires,
-		MaxAge: int(time.Until(expires).Seconds()), HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
+func sessionCookieFor(token string, expires time.Time) *http.Cookie {
+	// Lax sends the cookie on top-level GET navigations, including links in email.
+	return &http.Cookie{Name: sessionCookie, Value: token, Path: "/", Expires: expires,
+		MaxAge: int(time.Until(expires).Seconds()), HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode}
+}
+
+func (a *app) startBrowserSession(w http.ResponseWriter, r *http.Request, acct accounts.Account) bool {
+	token, expires, err := a.store.StartSession(r.Context(), acct, accounts.SessionMetadata{
+		UserAgent:       r.UserAgent(),
+		CreatedFromPath: r.URL.Path,
+	})
+	if err != nil {
+		accountError(w, err)
+		return false
+	}
+	http.SetCookie(w, sessionCookieFor(token, expires))
+	return true
+}
+
+func requireJSON(w http.ResponseWriter, r *http.Request) bool {
+	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/json" {
+		http.Error(w, "send JSON", http.StatusUnsupportedMediaType)
+		return false
+	}
+	return true
 }
 
 // decode reads a small JSON body into v, answering the request itself when it cannot.
@@ -195,6 +226,9 @@ func (a *app) signUp(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cross-site request refused", http.StatusForbidden)
 		return
 	}
+	if !requireJSON(w, r) {
+		return
+	}
 	var req struct{ Username, Password string }
 	if !decode(w, r, &req) {
 		return
@@ -204,12 +238,9 @@ func (a *app) signUp(w http.ResponseWriter, r *http.Request) {
 		accountError(w, err)
 		return
 	}
-	tok, exp, err := a.store.StartSession(r.Context(), acct)
-	if err != nil {
-		accountError(w, err)
+	if !a.startBrowserSession(w, r, acct) {
 		return
 	}
-	setSession(w, tok, exp)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(acct)
@@ -221,6 +252,9 @@ func (a *app) signIn(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cross-site request refused", http.StatusForbidden)
 		return
 	}
+	if !requireJSON(w, r) {
+		return
+	}
 	var req struct{ Username, Password string }
 	if !decode(w, r, &req) {
 		return
@@ -230,12 +264,9 @@ func (a *app) signIn(w http.ResponseWriter, r *http.Request) {
 		accountError(w, err)
 		return
 	}
-	tok, exp, err := a.store.StartSession(r.Context(), acct)
-	if err != nil {
-		accountError(w, err)
+	if !a.startBrowserSession(w, r, acct) {
 		return
 	}
-	setSession(w, tok, exp)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -252,7 +283,7 @@ func (a *app) signOut(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Path: "/", MaxAge: -1, HttpOnly: true, Secure: true,
-		SameSite: http.SameSiteStrictMode})
+		SameSite: http.SameSiteLaxMode})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -268,12 +299,9 @@ func (a *app) changePassword(v viewer) http.HandlerFunc {
 			accountError(w, err)
 			return
 		}
-		tok, exp, err := a.store.StartSession(r.Context(), v.acct)
-		if err != nil {
-			accountError(w, err)
+		if !a.startBrowserSession(w, r, v.acct) {
 			return
 		}
-		setSession(w, tok, exp)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

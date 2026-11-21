@@ -299,8 +299,15 @@ untrusted drafts until the owner approves the exact change in a signed-in browse
 An account is a username (lowercase letters, digits, `-` and `_`) and a password of at least 12
 characters, hashed with argon2id. Anyone who can reach the server can make one; an account starts
 with no hosts and sees nothing until one joins it. A signed-in browser holds a random session
-token in a cookie (HttpOnly, Secure, SameSite=Strict, 30 days); Postgres keeps only its hash.
-Signing out ends that session; changing the password ends all of them.
+token in a host-only cookie (HttpOnly, Secure, SameSite=Lax, 30 days). Lax lets a browser send its
+cookie when opening a top-level link from email. A direct visit with an existing Strict cookie
+updates its attributes and preserves the token and expiration. Postgres keeps only the token hash.
+The fixed expiry is 30 days from sign-in. Signing out ends that session, and changing the password
+ends all of them.
+
+The `sessions` table exposes `user_agent` and `created_from_path` through read-only SQL. The path
+identifies the session-issuing API route and excludes the query string. Both fields are empty for
+sessions created before these columns were added.
 
 There are no shared tokens. A host joins an account with a code:
 
@@ -1224,7 +1231,7 @@ the account and enrollment routes, the host binaries and the streams (with a hos
 
 Writes from a browser (everything but the host's own enrollment calls) must come from this
 origin (another site's request is refused with 403), and those with a body must send JSON (else
-415), which another site cannot send without the server's leave; the cookie is SameSite=Strict too.
+415), which another site cannot send without the server's leave.
 - `POST /api/dictation/token` with `{}`: a token for one AssemblyAI streaming session (60 seconds to
   open it, 30 minutes long), minted with the server's key, which the browser never sees: 200
   `{"token", "url", "expiresIn"}`; 503 with no `ASSEMBLYAI_API_KEY`, 502 with AssemblyAI's reason
@@ -1299,8 +1306,8 @@ origin (another site's request is refused with 403), and those with a body must 
 - `POST /api/gmail/sign-in` with `{}`: `{"url", "paste"}`, Google's consent page; `paste` when the
   client is a Desktop one, whose redirect to `http://localhost` does not load and is pasted back.
   503 when email triggers are off.
-- `GET /gmail/callback`: where Google sends a web client's browser. The session cookie is
-  SameSite=Strict, so it is not sent on that redirect: the page posts the code from this origin.
+- `GET /gmail/callback`: where Google sends a web client's browser. The page posts the code
+  from this origin to the JSON endpoint that connects the mailbox.
 - `POST /api/gmail/connect` with `{"code", "state"}` or `{"url"}` (where Google sent the browser):
   connects the mailbox, `{"address"}`; 400 for a sign-in started by another account or expired.
 - `PUT /api/gmail/owners` with `{"owners": [addresses]}` (204), and `DELETE /api/gmail` (204;

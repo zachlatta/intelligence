@@ -64,7 +64,7 @@ func TestSignUpSignInAndSignOut(t *testing.T) {
 		t.Fatalf("sign up: %d %s", up.Code, up.Body)
 	}
 	c := cookieOf(t, up)
-	if !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteStrictMode || c.MaxAge <= 0 || c.Path != "/" || strings.Contains(c.Value, "password") {
+	if !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteLaxMode || c.MaxAge <= 0 || c.Path != "/" || strings.Contains(c.Value, "password") {
 		t.Errorf("cookie = %+v", c)
 	}
 	if page := call(t, h, http.MethodGet, "/", "", nil, c); page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "ann") {
