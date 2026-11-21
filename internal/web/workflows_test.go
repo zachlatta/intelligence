@@ -349,6 +349,35 @@ func TestAFixedProjectStartsTheOrchestratorAtOnce(t *testing.T) {
 	}
 }
 
+func TestWorktreeBaseFallbackIsRecordedOnce(t *testing.T) {
+	for _, status := range []string{hostclient.CommandSucceeded, hostclient.CommandFailed} {
+		t.Run(status, func(t *testing.T) {
+			h, _ := dbServer(t)
+			b := sendReport(t, h, wfReport())
+			def := workflow.Starting
+			def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+			run := startRun(t, h, createWorkflow(t, h, def), "Use the fetched base")
+			cmd := b.command()
+			for range 2 {
+				ack := b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{
+					ID: cmd.ID, Status: status,
+					Result: json.RawMessage(`{"workspaceId":"ws","agentId":"orch","worktreeBaseFallback":true}`),
+				}})
+				if ack.Error != "" {
+					t.Fatal(ack.Error)
+				}
+			}
+			code, result := sqlPost(t, h, q(`SELECT text FROM workflow_run_events WHERE kind = 'worktree_base_fallback' AND run_id = '`+run+`'`))
+			if code != http.StatusOK || len(result.Rows) != 1 || !strings.Contains(result.Rows[0][0].(string), "origin") {
+				t.Fatalf("fallback events: %d %v", code, result.Rows)
+			}
+			if status == hostclient.CommandSucceeded && readRun(t, h, run)["status"] != workflow.Running {
+				t.Fatal("fallback prevented the workflow from starting")
+			}
+		})
+	}
+}
+
 // TestARunFromBeforeCleanTitlesIsNamedFromItsTask: a run started before titles were the cleaned
 // task (its title the input's first line) and still finding its project is named from its task.
 func TestARunFromBeforeCleanTitlesIsNamedFromItsTask(t *testing.T) {

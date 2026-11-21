@@ -704,6 +704,16 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 		if c.Kind == hostclient.ContinueEmailKind {
 			return e.emailContinued(ctx, tx, r, c, res)
 		}
+		if r.Status == StartingOrchestrator && c.Kind == hostclient.CreateWorkspaceKind && res.WorktreeBaseFallback {
+			// Retry reconciliation may process the same finished command again.
+			_, err := tx.Exec(ctx, `INSERT INTO workflow_run_events (run_id, account_id, at, kind, text)
+				SELECT $1, $2, $3, 'worktree_base_fallback', $4 WHERE NOT EXISTS
+				(SELECT 1 FROM workflow_run_events WHERE run_id=$1 AND kind='worktree_base_fallback')`,
+				r.ID, r.Account, at, "Could not resolve or fetch origin's default branch. Using Paseo's usual worktree base.")
+			if err != nil {
+				return err
+			}
+		}
 		if c.Status != hostclient.CommandSucceeded {
 			what := "could not start the project finder"
 			if r.Status == StartingOrchestrator {

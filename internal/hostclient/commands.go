@@ -140,14 +140,15 @@ func (c Command) waitsForTurn() bool {
 
 // CommandResult is what a command made or changed.
 type CommandResult struct {
-	NotDelivered   bool   `json:"notDelivered,omitempty"` // failure before calling SendMessage
-	FailureStage   string `json:"failureStage,omitempty"`
-	AgentGone      bool   `json:"agentGone,omitempty"`
-	WorkspaceID    string `json:"workspaceId,omitempty"`
-	AgentID        string `json:"agentId,omitempty"`
-	ScheduleID     string `json:"scheduleId,omitempty"`
-	RunID          string `json:"runId,omitempty"`          // run_schedule: the run it started
-	ArchivedAgents int    `json:"archivedAgents,omitempty"` // archive_workspace: how many agents went with it
+	NotDelivered         bool   `json:"notDelivered,omitempty"` // failure before calling SendMessage
+	FailureStage         string `json:"failureStage,omitempty"`
+	AgentGone            bool   `json:"agentGone,omitempty"`
+	WorkspaceID          string `json:"workspaceId,omitempty"`
+	AgentID              string `json:"agentId,omitempty"`
+	ScheduleID           string `json:"scheduleId,omitempty"`
+	RunID                string `json:"runId,omitempty"`          // run_schedule: the run it started
+	ArchivedAgents       int    `json:"archivedAgents,omitempty"` // archive_workspace: how many agents went with it
+	WorktreeBaseFallback bool   `json:"worktreeBaseFallback,omitempty"`
 }
 
 // ParseCommand decodes args for kind strictly (no unknown fields) and checks what it needs. The
@@ -355,16 +356,37 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 		return result, nil
 	case CreateWorkspaceArgs:
 		a.Cwd = expandHome(a.Cwd, home)
-		ws, err := c.CreateWorkspace(ctx, paseo.CreateWorkspace{Cwd: a.Cwd, Worktree: a.Worktree, Branch: a.Branch, Base: a.Base,
-			Title: a.Title, IdempotencyKey: key})
+		workflowBase := a.Worktree && a.Base == "" && a.Agent != nil &&
+			a.Agent.Labels["intelligence.run"] != "" && a.Agent.Labels["intelligence.role"] == "orchestrator"
+		if workflowBase {
+			a.Base = refreshWorkflowBase(ctx, a.Cwd)
+		}
+		fallback := workflowBase && a.Base == ""
+		request := paseo.CreateWorkspace{Cwd: a.Cwd, Worktree: a.Worktree, Branch: a.Branch, Base: a.Base,
+			Title: a.Title, IdempotencyKey: key}
+		ws, err := c.CreateWorkspace(ctx, request)
+		if workflowBase && a.Base != "" && errors.Is(err, paseo.ErrWorkspaceCreationKeyConflict) {
+			// An earlier delivery may have fallen back. Replay that exact
+			// request under the same key, including after an unreported result.
+			request.Base = ""
+			ws, err = c.CreateWorkspace(ctx, request)
+			fallback = !errors.Is(err, paseo.ErrWorkspaceCreationKeyConflict)
+		}
+		if workflowBase && errors.Is(err, paseo.ErrWorkspaceCreationKeyConflict) {
+			// An earlier delivery may have made the workspace with a different base
+			// if origin's default or its availability changed. Resume that creation.
+			fallback = false
+			ws, err = c.WorkspaceCreation(ctx, key)
+		}
 		if err != nil || a.Agent == nil {
-			return CommandResult{WorkspaceID: ws.ID}, err
+			return CommandResult{WorkspaceID: ws.ID, WorktreeBaseFallback: fallback}, err
 		}
 		ag := *a.Agent
 		ag.WorkspaceID, ag.Cwd = ws.ID, ws.Directory
 		// its own idempotency key: a repeat returns the same agent, never the workspace
 		res, err := createAgent(ctx, c, ag, key, key+":agent")
 		res.WorkspaceID = ws.ID
+		res.WorktreeBaseFallback = fallback
 		if err != nil {
 			err = fmt.Errorf("made workspace %s, but its agent: %w", ws.ID, err)
 		}

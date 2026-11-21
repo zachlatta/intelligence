@@ -43,7 +43,7 @@ type Daemon struct {
 	accepted           int
 	timelines          map[string]timeline
 	created            map[string]map[string]any // what each creation idempotency key made
-	createdRequest     map[string]string         // each agent creation key's request, to refuse a different one
+	createdRequest     map[string]string         // each creation key's request, to refuse a different one
 	nextID             int
 
 	schedules   []map[string]any  // schedules.go
@@ -309,8 +309,18 @@ func (f *Daemon) change(c *websocket.Conn, id string, msg map[string]any) bool {
 	str := func(k string) string { s, _ := msg[k].(string); return s }
 	key := str("idempotencyKey")
 	switch msg["type"] {
+	case "creation.subscribe.request":
+		var snapshot map[string]any
+		if w := f.created[key]; w != nil && w["workspaceKind"] != nil && str("kind") == "workspace" {
+			snapshot = map[string]any{"phase": "completed", "workspace": w}
+		}
+		f.write(c, session("creation.subscribe.response", map[string]any{"requestId": id, "snapshot": snapshot, "error": nil}))
 	case "workspace.create.request":
 		if w, ok := f.created[key]; ok && key != "" {
+			if f.createdRequest[key] != creationRequest(msg) {
+				f.write(c, session("workspace.create.response", map[string]any{"requestId": id, "workspace": nil, "error": "workspace_request_key_conflict"}))
+				return true
+			}
 			f.write(c, session("workspace.create.response", map[string]any{"requestId": id, "workspace": w, "setupTerminalId": nil, "error": nil}))
 			return true
 		}
@@ -334,13 +344,12 @@ func (f *Daemon) change(c *websocket.Conn, id string, msg map[string]any) bool {
 			w["name"], w["title"] = t, t
 		}
 		f.workspaces = append(f.workspaces, w)
-		f.remember(key, w)
+		f.remember(key, msg, w)
 		f.pushLocked("workspace_update", map[string]any{"kind": "upsert", "workspace": w})
 		f.write(c, session("workspace.create.response", map[string]any{"requestId": id, "workspace": w, "setupTerminalId": nil, "error": nil}))
 	case "agent.create.request":
-		request := agentRequest(msg)
 		if a, ok := f.created[key]; ok && key != "" {
-			if f.createdRequest[key] != request {
+			if f.createdRequest[key] != creationRequest(msg) {
 				// Paseo keys a creation to its request: a different one under the same key is refused
 				f.write(c, session("agent.create.response", map[string]any{"requestId": id, "agent": nil, "error": "agent_request_key_conflict"}))
 				return true
@@ -374,13 +383,7 @@ func (f *Daemon) change(c *websocket.Conn, id string, msg map[string]any) bool {
 			a["model"] = m
 		}
 		f.agents = append(f.agents, a)
-		f.remember(key, a)
-		if key != "" {
-			if f.createdRequest == nil {
-				f.createdRequest = map[string]string{}
-			}
-			f.createdRequest[key] = request
-		}
+		f.remember(key, msg, a)
 		f.pushLocked("agent_update", map[string]any{"kind": "upsert", "agent": a, "project": map[string]any{}})
 		f.write(c, session("agent.create.response", map[string]any{"requestId": id, "agent": a, "error": nil}))
 	case "archive_workspace_request":
@@ -480,22 +483,24 @@ func (f *Daemon) change(c *websocket.Conn, id string, msg map[string]any) bool {
 	return true
 }
 
-// agentRequest is what Paseo compares when an agent creation key is reused: everything but the request id.
-func agentRequest(msg map[string]any) string {
+// creationRequest fingerprints creations for replay, excluding the delivery's request ID.
+func creationRequest(msg map[string]any) string {
 	m := maps.Clone(msg)
 	delete(m, "requestId")
 	b, _ := json.Marshal(m)
 	return string(b)
 }
 
-func (f *Daemon) remember(key string, v map[string]any) {
+func (f *Daemon) remember(key string, msg, v map[string]any) {
 	if key == "" {
 		return
 	}
 	if f.created == nil {
 		f.created = map[string]map[string]any{}
+		f.createdRequest = map[string]string{}
 	}
 	f.created[key] = v
+	f.createdRequest[key] = creationRequest(msg)
 }
 
 func (f *Daemon) find(items []map[string]any, id string) int {

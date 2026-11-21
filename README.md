@@ -700,7 +700,10 @@ version it started with. A run:
    (`workflow.ProjectRule`): everything a run commits there is published.
 2. **Starts the orchestrator in the worktree.** The server archives the finder and queues
    `create_workspace`: a git worktree of the repository (or the home directory, for none) with the
-   orchestrator in it. Its names say which workflow runs, what for and which run: the workspace is
+   orchestrator in it. Before creating a worktree, the host resolves origin's current default branch
+   and fetches that branch. The worktree starts at the fetched tip, leaving the host checkout on
+   its current commit. If origin cannot be resolved or fetched, Paseo uses its usual base and
+   Intelligence records a `worktree_base_fallback` event. The workspace is named
    `<workflow>: <task> · <run>` and the branch `wf-<workflow>-<task>-<run>`. The task is the
    input's first real sentence, as written, with only these removed:
    - lines that are only a heading or a label (`Task:`, `## Goal`, `TASK (from Zach):`), email

@@ -21,6 +21,9 @@ type CreateWorkspace struct {
 	IdempotencyKey string
 }
 
+// ErrWorkspaceCreationKeyConflict means the daemon already has a different request for this key.
+var ErrWorkspaceCreationKeyConflict = errors.New("workspace_request_key_conflict")
+
 // CreateWorkspace creates a workspace and returns it.
 func (c *Client) CreateWorkspace(ctx context.Context, w CreateWorkspace) (Workspace, error) {
 	if w.Cwd == "" {
@@ -47,12 +50,33 @@ func (c *Client) CreateWorkspace(ctx context.Context, w CreateWorkspace) (Worksp
 		Workspace *Workspace `json:"workspace"`
 	}
 	if err := c.command(ctx, req, &p); err != nil {
+		if err.Error() == "workspace.create.request: "+ErrWorkspaceCreationKeyConflict.Error() {
+			return Workspace{}, fmt.Errorf("workspace.create.request: %w", ErrWorkspaceCreationKeyConflict)
+		}
 		return Workspace{}, err
 	}
 	if p.Workspace == nil {
 		return Workspace{}, errors.New("workspace.create: the daemon returned no workspace")
 	}
 	return *p.Workspace, nil
+}
+
+// WorkspaceCreation reads the completed workspace for a creation's idempotency key.
+func (c *Client) WorkspaceCreation(ctx context.Context, key string) (Workspace, error) {
+	var p struct {
+		Snapshot *struct {
+			Phase     string     `json:"phase"`
+			Workspace *Workspace `json:"workspace"`
+		} `json:"snapshot"`
+	}
+	req := map[string]any{"type": "creation.subscribe.request", "kind": "workspace", "idempotencyKey": key, "subscribe": false}
+	if err := c.command(ctx, req, &p); err != nil {
+		return Workspace{}, err
+	}
+	if p.Snapshot == nil || p.Snapshot.Phase != "completed" || p.Snapshot.Workspace == nil {
+		return Workspace{}, ErrWorkspaceCreationKeyConflict
+	}
+	return *p.Snapshot.Workspace, nil
 }
 
 // CreateAgent is an agent to start. IdempotencyKey makes a repeat return the first agent.
