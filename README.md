@@ -601,11 +601,11 @@ Every 5 minutes each host reads every provider's own meter (`internal/usage`) an
 stream as a `usage` frame. Paseo's own usage report is not used: it shows only the logged-in Claude
 login and misses providers.
 
-- Claude: `cswap list --json`, so every login cswap holds, not only the active one. Verified Ultra
-  accounts have a weekly allowance without a five-hour cap. Fable also has a separate weekly
-  cap and spends the general weekly allowance. A login is its
+- Claude: `cswap list --json`, so every login cswap holds, not only the active one. A login is its
   email (two organizations of one email are two logins); cswap's number for it is kept as `slot`,
-  which can change. The reading's time is cswap's `usageFetchedAt`: cswap caches.
+  which can change. The reading's time is cswap's `usageFetchedAt`: cswap caches. Ultra logins
+  report a weekly allowance and no five-hour window. Fable has its own weekly cap (`fable/7d`) and
+  also spends the general weekly allowance (`7d`).
 - Codex: the subscription meter (`chatgpt.com/backend-api/wham/usage`) with the login's own token
   from `~/.codex/auth.json`, sent nowhere else; when the meter fails, the newest rate-limit reading in
   the local sessions, noted as such. Pro currently reports a weekly allowance. Shorter windows
@@ -1106,12 +1106,12 @@ holds the reason, meter time and launch settings. Suggestions favor quota likely
 a fixed reset or plan end, subtracting the percentage of the longest window still to run from the
 remaining quota percentage. A reset one full window away gets the same pace treatment at zero
 usage and just after work begins. When two recent in-progress readings show the deadline moving
-forward before it arrives, the score uses the remaining quota percentage.
-Each suggestion subtracts 2 points from the shared pool for 60 minutes. Suggestions require fresh meters and a 5%
+forward before it arrives, the score uses the remaining quota percentage. Each suggestion
+subtracts 2 points from the shared pool for 60 minutes. Suggestions require fresh meters and a 5%
 reserve, including in shorter windows of the selected pool. Fable must clear both its own weekly
 cap and the shared Claude cap, and its ranking uses the lower of the two remaining percentages.
-Claude's recent suggestions count toward the shared weekly reserve. Inactive logins cannot be selected. Groups affect
-future suggestions, not delivered ones. Before another worker, refresh with
+Claude's recent suggestions count toward the shared weekly reserve. Inactive logins cannot be
+selected. Groups affect future suggestions, not delivered ones. Before another worker, refresh with
 `intelligence workflow suggest --run <id> frontier_model` (`--exclude provider/model` skips a route).
 Queued runs allocate when they launch; startup retries rebuild the prompt with fresh suggestions.
 Direct edits and proposal approvals validate group tokens before saving a workflow.

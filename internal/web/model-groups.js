@@ -241,9 +241,7 @@ function modelGroupPools(windows, provider, login) {
         text(
           row,
           "status",
-          c.eligible
-            ? "Available"
-            : c.reason || "Quota reserved for recent suggestions",
+          c.eligible ? "Available" : c.reason,
         );
         alternatives.append(row);
       }
