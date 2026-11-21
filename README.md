@@ -306,8 +306,10 @@ The fixed expiry is 30 days from sign-in. Signing out ends that session, and cha
 ends all of them.
 
 The `sessions` table exposes `user_agent` and `created_from_path` through read-only SQL. The path
-identifies the session-issuing API route and excludes the query string. Both fields are empty for
-sessions created before these columns were added.
+records the page the browser was trying to reach when it signed in or created an account. It keeps
+record UUIDs and replaces other route parameters with placeholders. Query strings and fragments
+are discarded. Direct sign-ins record `/login`, and password changes record `/account`. Both fields
+are empty for sessions created before these columns were added.
 
 There are no shared tokens. A host joins an account with a code:
 
@@ -1219,6 +1221,7 @@ the account and enrollment routes, the host binaries and the streams (with a hos
   (201); 409 for a taken username, 400 for one that cannot be used or a password under 12 characters.
 - `POST /api/session` with `{"username", "password"}`: signs a browser in (204, with the session
   cookie); 401 for a wrong username or password. `DELETE /api/session` signs it out.
+  Both sign-in and account creation accept an optional `next` local path for session diagnostics.
 - `PUT /api/account/password` with `{"current", "password"}`: changes the password, signs every
   browser of the account out and this one in again (204).
 - `POST /api/host-enrollments` with `{"host"}` (from a host, no account): 201 with `{"id",

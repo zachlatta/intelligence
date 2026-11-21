@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -119,14 +120,34 @@ func TestSessionCreationMetadataIsReadableViaSQL(t *testing.T) {
 	const ua = "Mozilla/5.0 (Linux; Android 16; Mobile) Chrome"
 	headers := map[string]string{"User-Agent": ua, "Sec-Fetch-Site": "same-origin"}
 	const password = "a new test password"
+	const run = "/workflow-runs/00000000-0000-4000-8000-000000000001"
+	const proposal = "/workflow-proposals/00000000-0000-4000-8000-000000000002"
+	next := run + "?key=private#section"
+	landing := call(t, h, http.MethodGet, run+"?key=private", "", nil)
+	if got := landing.Header().Get("Location"); landing.Code != http.StatusSeeOther || got != "/login?next="+url.QueryEscape(run+"?key=private") {
+		t.Fatalf("return-to redirect: %d %q", landing.Code, got)
+	}
+	login := call(t, h, http.MethodGet, landing.Header().Get("Location"), "", nil)
+	if !strings.Contains(login.Body.String(), `data-next="`+run+`?key=private"`) ||
+		!strings.Contains(login.Body.String(), `next: form.dataset.next.split(/[?#]/, 1)[0]`) {
+		t.Fatal("login form should send the path from the return-to redirect")
+	}
 	var cookies []*http.Cookie
 	for _, req := range []struct {
-		method, path, body string
-		status             int
+		method, path, body, source string
+		status                     int
 	}{
-		{http.MethodPost, "/api/accounts", `{"username":"ann","password":"` + testPassword + `"}`, http.StatusCreated},
-		{http.MethodPost, "/api/session", `{"username":"ann","password":"` + testPassword + `"}`, http.StatusNoContent},
-		{http.MethodPut, "/api/account/password", `{"current":"` + testPassword + `","password":"` + password + `"}`, http.StatusNoContent},
+		{http.MethodPost, "/api/accounts", `{"username":"ann","password":"` + testPassword + `","next":"` + proposal + `?view=diff#review"}`, proposal, http.StatusCreated},
+		{http.MethodPost, "/api/session", `{"username":"ann","password":"` + testPassword + `","next":"` + next + `"}`, run, http.StatusNoContent},
+		{http.MethodPost, "/api/session", `{"username":"ann","password":"` + testPassword + `","next":"/workflows?tab=runs"}`, "/workflows", http.StatusNoContent},
+		{http.MethodPost, "/api/session", `{"username":"ann","password":"` + testPassword + `","next":"https://external.example/a?key=private"}`, "/login", http.StatusNoContent},
+		{http.MethodPost, "/api/session", `{"username":"ann","password":"` + testPassword + `","next":"//external.example/a"}`, "/login", http.StatusNoContent},
+		{http.MethodPost, "/api/session", `{"username":"ann","password":"` + testPassword + `","next":"/%2Fexternal.example/a"}`, "/login", http.StatusNoContent},
+		{http.MethodPost, "/api/session", `{"username":"ann","password":"` + testPassword + `","next":"/%5Cexternal.example/a"}`, "/login", http.StatusNoContent},
+		{http.MethodPost, "/api/session", `{"username":"ann","password":"` + testPassword + `","next":"/workflow-runs/made-up-secret"}`, "/workflow-runs/{id}", http.StatusNoContent},
+		{http.MethodPost, "/api/session", `{"username":"ann","password":"` + testPassword + `","next":"/made-up-secret"}`, "/login", http.StatusNoContent},
+		{http.MethodPost, "/api/session", `{"username":"ann","password":"` + testPassword + `"}`, "/login", http.StatusNoContent},
+		{http.MethodPut, "/api/account/password", `{"current":"` + testPassword + `","password":"` + password + `"}`, "/account", http.StatusNoContent},
 	} {
 		res := call(t, h, req.method, req.path+"?ignored=private", req.body, headers, cookies...)
 		if res.Code != req.status {
@@ -134,7 +155,7 @@ func TestSessionCreationMetadataIsReadableViaSQL(t *testing.T) {
 		}
 		cookies = []*http.Cookie{cookieOf(t, res)}
 		res = call(t, h, http.MethodPost, "/api/sql", q("SELECT user_agent, created_from_path, expires_at - created_at = interval '30 days' AS fixed_life FROM sessions ORDER BY created_at DESC LIMIT 1"), sameOriginFetch, cookies...)
-		if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"rows":[["`+ua+`","`+req.path+`",true]]`) {
+		if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"rows":[["`+ua+`","`+req.source+`",true]]`) {
 			t.Errorf("session metadata for %s: %d %s", req.path, res.Code, res.Body)
 		}
 	}

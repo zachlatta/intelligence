@@ -170,10 +170,10 @@ func sessionCookieFor(token string, expires time.Time) *http.Cookie {
 		MaxAge: int(time.Until(expires).Seconds()), HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode}
 }
 
-func (a *app) startBrowserSession(w http.ResponseWriter, r *http.Request, acct accounts.Account) bool {
+func (a *app) startBrowserSession(w http.ResponseWriter, r *http.Request, acct accounts.Account, sourcePath string) bool {
 	token, expires, err := a.store.StartSession(r.Context(), acct, accounts.SessionMetadata{
 		UserAgent:       r.UserAgent(),
-		CreatedFromPath: r.URL.Path,
+		CreatedFromPath: sourcePath,
 	})
 	if err != nil {
 		accountError(w, err)
@@ -229,7 +229,7 @@ func (a *app) signUp(w http.ResponseWriter, r *http.Request) {
 	if !requireJSON(w, r) {
 		return
 	}
-	var req struct{ Username, Password string }
+	var req struct{ Username, Password, Next string }
 	if !decode(w, r, &req) {
 		return
 	}
@@ -238,7 +238,7 @@ func (a *app) signUp(w http.ResponseWriter, r *http.Request) {
 		accountError(w, err)
 		return
 	}
-	if !a.startBrowserSession(w, r, acct) {
+	if !a.startBrowserSession(w, r, acct, a.sessionSourcePath(req.Next)) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -255,7 +255,7 @@ func (a *app) signIn(w http.ResponseWriter, r *http.Request) {
 	if !requireJSON(w, r) {
 		return
 	}
-	var req struct{ Username, Password string }
+	var req struct{ Username, Password, Next string }
 	if !decode(w, r, &req) {
 		return
 	}
@@ -264,7 +264,7 @@ func (a *app) signIn(w http.ResponseWriter, r *http.Request) {
 		accountError(w, err)
 		return
 	}
-	if !a.startBrowserSession(w, r, acct) {
+	if !a.startBrowserSession(w, r, acct, a.sessionSourcePath(req.Next)) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -299,7 +299,7 @@ func (a *app) changePassword(v viewer) http.HandlerFunc {
 			accountError(w, err)
 			return
 		}
-		if !a.startBrowserSession(w, r, v.acct) {
+		if !a.startBrowserSession(w, r, v.acct, "/account") {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)

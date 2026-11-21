@@ -4,7 +4,6 @@ import (
 	_ "embed"
 	"html/template"
 	"net/http"
-	"strings"
 
 	"github.com/zachlatta/intelligence/internal/fleet"
 	"github.com/zachlatta/intelligence/internal/hostclient"
@@ -32,14 +31,6 @@ var accountHTML string
 
 var spawnTmpl = template.Must(template.New("spawn").Funcs(template.FuncMap{"short": short, "ago": ago}).
 	Parse(spawnHTML + layoutHTML + accountHTML))
-
-// localPath is next if it is a path on this site, else "/".
-func localPath(next string) string {
-	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.HasPrefix(next, "/\\") {
-		return "/"
-	}
-	return next
-}
 
 func render(w http.ResponseWriter, name string, data map[string]any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

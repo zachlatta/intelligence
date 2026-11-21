@@ -55,6 +55,7 @@ type Config struct {
 // app is the server's shared parts.
 type app struct {
 	cfg     Config
+	routes  *http.ServeMux
 	store   *accounts.Store
 	reg     *fleet.Registry // as the owner: for the host streams and for writes
 	changes *fleet.Changes
@@ -99,7 +100,7 @@ func New(cfg Config) http.Handler {
 	roles := db.NewAccountRoles(cfg.DB, cfg.Readonly)
 	context.AfterFunc(cfg.Context, roles.Close)
 	store := accounts.New(cfg.DB, roles)
-	a := &app{cfg: cfg, store: store, reg: reg, changes: changes, wf: workflow.NewEngine(cfg.DB, cfg.Now)}
+	a := &app{cfg: cfg, routes: http.NewServeMux(), store: store, reg: reg, changes: changes, wf: workflow.NewEngine(cfg.DB, cfg.Now)}
 	if cfg.QueueLimits != nil {
 		a.wf.Limits = *cfg.QueueLimits
 	}
@@ -120,7 +121,7 @@ func New(cfg Config) http.Handler {
 		}
 		go a.mail.Run(cfg.Context, interval)
 	}
-	mux := http.NewServeMux()
+	mux := a.routes
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 		defer cancel()
