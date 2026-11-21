@@ -1102,9 +1102,11 @@ pool. Unmetered entries can be saved disabled until usage is available. The find
 orchestrator keep their explicit models.
 
 On step entry, each token expands to a compact recommendation; one appended note per group
-holds the reason, meter time and launch settings. Suggestions rank by the remaining quota percentage
-in the longest window, adding up to 10 points as the reset or plan end approaches. Each suggestion
-subtracts 2 points from the shared pool for 60 minutes. Suggestions require fresh meters and a 5%
+holds the reason, meter time and launch settings. Suggestions favor quota likely to go unused before
+a fixed reset or plan end, subtracting the percentage of the longest window still to run from the
+remaining quota percentage. If the reset is still a full window away at the meter reading, or recent
+readings show it moving forward before it arrives, the score uses the remaining quota percentage.
+Each suggestion subtracts 2 points from the shared pool for 60 minutes. Suggestions require fresh meters and a 5%
 reserve, including in shorter windows of the selected pool. Fable must clear both its own weekly
 cap and the shared Claude cap, and its ranking uses the lower of the two remaining percentages.
 Claude's recent suggestions count toward the shared weekly reserve. Inactive logins cannot be selected. Groups affect

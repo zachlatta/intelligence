@@ -1,5 +1,6 @@
--- Keep the score comparable across plans with different reset phases. A nearly
--- full plan should compete even if its provider starts the clock on first use.
+-- Spend fixed-reset quota before it expires. A reset that is a full window
+-- away at each reading, or recently moved forward within its own window,
+-- gives no reliable pace target. In that case use the available headroom.
 CREATE OR REPLACE VIEW model_group_candidates WITH (security_invoker = true) AS
 WITH pooled AS (
  SELECT m.*, 2 * (SELECT count(*) FROM workflow_model_suggestions s
@@ -14,8 +15,15 @@ WITH pooled AS (
 ), inputs AS (
  SELECT m.*, g.token, g.name AS group_name, g.revision, h.name AS host,
         c.remaining_pct, c.last_observed, c.resets_at,
-        headroom.remaining_pct + 10 * greatest(0, least(1,
-          1 - extract(epoch FROM least(c.resets_at, coalesce(m.eligible_until,c.resets_at)) - now()) / nullif(c.window_seconds,0)))
+        headroom.remaining_pct - CASE
+          WHEN (m.eligible_until IS NULL OR m.eligible_until >= c.resets_at) AND (
+            abs(extract(epoch FROM c.resets_at - c.last_observed) - c.window_seconds) <= 60
+            OR (prior.last_observed >= c.last_observed - interval '15 minutes'
+                AND prior.resets_at > c.last_observed
+                AND c.resets_at > prior.resets_at + interval '1 minute')
+          ) THEN 0
+          ELSE 100 * extract(epoch FROM least(c.resets_at, m.eligible_until) - now()) / nullif(c.window_seconds,0)
+        END
           - m.penalty AS score,
         CASE
           WHEN EXISTS (SELECT 1 FROM provider_plan_settings ps WHERE ps.provider=m.provider AND NOT ps.enabled) THEN 'Provider disabled'
@@ -46,6 +54,13 @@ WITH pooled AS (
  FROM pooled m JOIN model_groups g ON g.id=m.group_id AND g.account_id=m.account_id AND g.deleted_at IS NULL
  JOIN host_keys k ON k.account_id=m.account_id JOIN hosts h ON h.name=k.host
  LEFT JOIN usage_current c ON c.provider=m.provider AND c.account=m.login AND c.window_id=m.long_window
+ LEFT JOIN LATERAL (
+   SELECT r.resets_at, r.last_observed
+   FROM usage_readings r
+   WHERE r.provider=c.provider AND r.account=c.account AND r.window_id=c.window_id
+     AND r.last_observed < c.last_observed
+   ORDER BY r.first_observed DESC LIMIT 1
+ ) prior ON true
  CROSS JOIN LATERAL (SELECT m.provider='claude' AND m.model LIKE 'claude-fable-%' AS fable) limits
  LEFT JOIN usage_current shared ON limits.fable AND shared.provider=m.provider AND shared.account=m.login AND shared.window_id='7d'
  LEFT JOIN usage_current scoped ON limits.fable AND scoped.provider=m.provider AND scoped.account=m.login AND scoped.window_id='fable/7d'

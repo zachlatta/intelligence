@@ -265,10 +265,19 @@ func TestModelGroupBalancesHeadroomAcrossResetPhases(t *testing.T) {
 		t.Fatalf("wrong model in worker instructions: %s", ws.Agent.Prompt)
 	}
 
-	// When headroom is similar, the earlier reset still takes priority.
-	exec(`UPDATE usage_readings SET used_pct=4 WHERE provider='codex'`)
+	// With fixed resets, an expiring half-full plan outranks a fresher plan
+	// with more headroom.
+	exec(`UPDATE usage_readings SET used_pct=50,resets_at=now()+interval '6 hours' WHERE provider='codex';
+	      UPDATE usage_readings SET used_pct=30,resets_at=now()+interval '4 days' WHERE window_id='gemini/7d'`)
 	assertTop("codex")
-	exec(`UPDATE usage_readings SET used_pct=20 WHERE provider='codex'`)
+
+	// When the weekly reset moves forward before the old one arrives,
+	// compare headroom even if the new reset is less than a full week away.
+	exec(`UPDATE usage_readings SET first_observed=now()-interval '5 minutes',
+	          last_observed=now()-interval '5 minutes' WHERE window_id='gemini/7d';
+	      INSERT INTO usage_readings(provider,account,window_id,window_seconds,used_pct,resets_at,first_observed,last_observed)
+	      VALUES ('antigravity','one','gemini/7d',604800,30,now()+interval '4 days 5 minutes',now(),now())`)
+	assertTop("antigravity")
 
 	exec(`UPDATE usage_readings SET used_pct=100 WHERE window_id='gemini/5h'`)
 	assertTop("codex")
