@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestProposalAnswerCLIValidation(t *testing.T) {
@@ -31,6 +32,21 @@ func TestProposalAnswerCLIValidation(t *testing.T) {
 	}
 	if _, _, err := parseAnswerProposalCLI([]string{"--proposal", id, "--question", "42", "--note", "-"}, strings.NewReader(strings.Repeat("a", 20001))); err == nil {
 		t.Fatal("accepted oversized answer")
+	}
+}
+
+func TestProposalAnswerCLIReopen(t *testing.T) {
+	id := "11111111-1111-4111-8111-111111111111"
+	_, body, err := parseAnswerProposalCLI([]string{"--proposal", id, "--question", "42", "--note", "-", "--reopen"}, strings.NewReader("Reopened for review."))
+	var got struct {
+		Reopen     bool
+		QuestionID int64
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(body, &got); err != nil || !got.Reopen || got.QuestionID != 42 {
+		t.Fatalf("reopen body: %s %v", body, err)
 	}
 }
 
@@ -133,6 +149,7 @@ func TestTheCLISendsEachMoveWithTheBoxsKey(t *testing.T) {
 		{[]string{"project", "--run", "r1", "none"}, Move{Move: "project", Directory: "none"}},
 		{[]string{"next", "--run", "r1", "--summary", "built it"}, Move{Move: "next", Summary: "built it"}},
 		{[]string{"summarize", "--run", "r1", "--summary", "Summarize workflow run titles"}, Move{Move: "summarize", Summary: "Summarize workflow run titles"}},
+		{[]string{"status", "--run", "r1", "--now", "Running checks.", "--eta", "2026-12-01T22:00:00Z"}, Move{Move: "status", Now: "Running checks.", ETA: "2026-12-01T22:00:00Z"}},
 		{[]string{"back", "--run", "r1", "build", "--why", "no test"}, Move{Move: "back", Step: "build", Why: "no test"}},
 		{[]string{"back", "--why", "no test", "--run", "r1", "build"}, Move{Move: "back", Step: "build", Why: "no test"}},
 		{[]string{"skip", "--run", "r1", "--why", "only what he asked"}, Move{Move: "skip", Why: "only what he asked"}},
@@ -197,5 +214,103 @@ func TestTheCLIReadsAHostInstalledAsADevBox(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "devbox.key"), []byte("old-key"), 0o600)
 	if code, _, errOut := runCLI(t, home, "", "next", "--run", "r1"); code != 0 || (*reqs)[0].Header.Get("Authorization") != "Bearer old-key" {
 		t.Errorf("%d %q", code, errOut)
+	}
+}
+
+func TestRunAnswerCLI(t *testing.T) {
+	id := "11111111-1111-4111-8111-111111111111"
+	args := []string{"--run", id, "--channel", "email", "--message-id", "sent-demo", "--thread-id", "thread-demo", "--sent-at", "2026-11-11T20:00:00Z", "--checked"}
+	path, body, err := parseAnswerCLI(args)
+	if err != nil || path != "/api/workflow-runs/"+id+"/answers" {
+		t.Fatalf("%s %v", path, err)
+	}
+	var a Answer
+	if json.Unmarshal(body, &a) != nil || !a.Checked || a.MessageID != "sent-demo" {
+		t.Fatalf("%s", body)
+	}
+	for _, args := range [][]string{nil, {"--run", "../x"}, {"--run", id, "--sent-at", "bad"}} {
+		if _, _, err := parseAnswerCLI(args); err == nil {
+			t.Fatalf("accepted %v", args)
+		}
+	}
+	msg := mustStepMessage(t, Starting, 0, Vars{Run: id})
+	if !strings.Contains(msg, "workflow answer --run "+id) {
+		t.Fatal("missing answer instruction")
+	}
+}
+
+func TestAnswerCLIRecordsSteeredAndNotNeeded(t *testing.T) {
+	id := "11111111-1111-4111-8111-111111111111"
+	to := "22222222-2222-4222-8222-222222222222"
+	path, body, err := parseAnswerCLI([]string{"--run", id, "--steered-to", to, "--sent-at", "Thu, 12 Nov 2026 18:24:00 -0500", "--reason", "Folded into the deck run"})
+	if err != nil || path != "/api/workflow-runs/"+id+"/answer-resolution" {
+		t.Fatalf("steered: %s %v", path, err)
+	}
+	var r AnswerResolution
+	if json.Unmarshal(body, &r) != nil || r.Kind != "steered" || r.SteeredTo != to || r.Reason != "Folded into the deck run" || r.At.UTC().Format(time.RFC3339) != "2026-11-12T23:24:00Z" {
+		t.Fatalf("steered body: %s", body)
+	}
+	path, body, err = parseAnswerCLI([]string{"--run", id, "--not-needed", "A recorded meeting, not a request"})
+	if err != nil || path != "/api/workflow-runs/"+id+"/answer-resolution" {
+		t.Fatalf("not needed: %s %v", path, err)
+	}
+	r = AnswerResolution{}
+	if json.Unmarshal(body, &r) != nil || r.Kind != "not_needed" || r.Reason != "A recorded meeting, not a request" || !r.At.IsZero() {
+		t.Fatalf("not needed body: %s", body)
+	}
+	for _, args := range [][]string{
+		{"--run", id, "--steered-to", "not-a-run"},
+		{"--run", id, "--steered-to", id},
+		{"--run", id, "--not-needed", "  "},
+		{"--run", id, "--steered-to", to, "--not-needed", "both"},
+		{"--run", id, "--steered-to", to, "--channel", "email", "--message-id", "sent"},
+		{"--run", id, "--not-needed", "x", "--checked"},
+		{"--run", id, "--channel", "email", "--message-id", "sent", "--reason", "only with a resolution"},
+	} {
+		if _, _, err := parseAnswerCLI(args); err == nil {
+			t.Errorf("accepted %v", args)
+		}
+	}
+	for _, want := range []string{"--steered-to", "--not-needed"} {
+		if !strings.Contains(RunAnswerRule, want) || !strings.Contains(CLIUsage, want) {
+			t.Errorf("instructions or usage omit %s", want)
+		}
+	}
+}
+
+func TestRunAnswerCLIAcceptsMailDatesAndOmittedTime(t *testing.T) {
+	for _, date := range []string{"", "Thu, 12 Nov 2026 14:13:23 -0500", "Thu, 12 Nov 2026 14:13:23 -0500 (EST)"} {
+		args := []string{"--run", "11111111-1111-4111-8111-111111111111", "--channel", "email", "--message-id", "sent-example"}
+		if date != "" {
+			args = append(args, "--sent-at", date)
+		}
+		_, body, err := parseAnswerCLI(args)
+		if err != nil {
+			t.Errorf("date %q: %v", date, err)
+			continue
+		}
+		var a Answer
+		if err := json.Unmarshal(body, &a); err != nil {
+			t.Fatal(err)
+		}
+		if date != "" && a.SentAt.UTC().Format("2006-01-02T15:04:05Z") != "2026-11-12T19:13:23Z" {
+			t.Fatalf("wrong mail date: %s", body)
+		}
+	}
+}
+
+func TestAnswerInstructionsCoverRequestersAndEarlyExits(t *testing.T) {
+	for _, want := range []string{"requester", "fail", "skip", "--sent-at", "RFC 5322", "server"} {
+		if !strings.Contains(RunAnswerRule, want) {
+			t.Errorf("answer instructions miss %q", want)
+		}
+	}
+	if !strings.Contains(DeliverableEmailRule, "intelligence workflow answer") {
+		t.Error("email delivery instructions omit recording")
+	}
+	prompt := mustOrchestratorPrompt(t, "Example", Starting, Vars{Run: "run-example"})
+	commandList, _, _ := strings.Cut(prompt, "next after the last step")
+	if !strings.Contains(commandList, "intelligence workflow answer --run run-example") {
+		t.Error("command list omits answer")
 	}
 }

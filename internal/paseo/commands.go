@@ -21,6 +21,9 @@ type CreateWorkspace struct {
 	IdempotencyKey string
 }
 
+// ErrWorkspaceCreationKeyConflict means the daemon already has a different request for this key.
+var ErrWorkspaceCreationKeyConflict = errors.New("workspace_request_key_conflict")
+
 // CreateWorkspace creates a workspace and returns it.
 func (c *Client) CreateWorkspace(ctx context.Context, w CreateWorkspace) (Workspace, error) {
 	if w.Cwd == "" {
@@ -47,12 +50,33 @@ func (c *Client) CreateWorkspace(ctx context.Context, w CreateWorkspace) (Worksp
 		Workspace *Workspace `json:"workspace"`
 	}
 	if err := c.command(ctx, req, &p); err != nil {
+		if err.Error() == "workspace.create.request: "+ErrWorkspaceCreationKeyConflict.Error() {
+			return Workspace{}, fmt.Errorf("workspace.create.request: %w", ErrWorkspaceCreationKeyConflict)
+		}
 		return Workspace{}, err
 	}
 	if p.Workspace == nil {
 		return Workspace{}, errors.New("workspace.create: the daemon returned no workspace")
 	}
 	return *p.Workspace, nil
+}
+
+// WorkspaceCreation reads the completed workspace for a creation's idempotency key.
+func (c *Client) WorkspaceCreation(ctx context.Context, key string) (Workspace, error) {
+	var p struct {
+		Snapshot *struct {
+			Phase     string     `json:"phase"`
+			Workspace *Workspace `json:"workspace"`
+		} `json:"snapshot"`
+	}
+	req := map[string]any{"type": "creation.subscribe.request", "kind": "workspace", "idempotencyKey": key, "subscribe": false}
+	if err := c.command(ctx, req, &p); err != nil {
+		return Workspace{}, err
+	}
+	if p.Snapshot == nil || p.Snapshot.Phase != "completed" || p.Snapshot.Workspace == nil {
+		return Workspace{}, ErrWorkspaceCreationKeyConflict
+	}
+	return *p.Snapshot.Workspace, nil
 }
 
 // CreateAgent is an agent to start. IdempotencyKey makes a repeat return the first agent.
@@ -115,6 +139,42 @@ func (c *Client) ArchiveWorkspace(ctx context.Context, id string) error {
 // ArchiveAgent stops and archives an agent.
 func (c *Client) ArchiveAgent(ctx context.Context, id string) error {
 	return c.command(ctx, map[string]any{"type": "archive_agent_request", "agentId": id}, nil)
+}
+
+// RefreshAgent loads the same persisted agent, unarchiving it if needed. Modern
+// clients must explicitly recover the owning workspace first. It does not start a turn.
+func (c *Client) RefreshAgent(ctx context.Context, id string) error {
+	return c.command(ctx, map[string]any{"type": "refresh_agent_request", "agentId": id}, nil)
+}
+
+// InspectAgent includes archived persistence records, unlike Agents' live subscription.
+func (c *Client) InspectAgent(ctx context.Context, id string) (*Agent, error) {
+	var p struct {
+		Agent *Agent `json:"agent"`
+	}
+	err := c.command(ctx, map[string]any{"type": "fetch_agent_request", "agentId": id}, &p)
+	return p.Agent, err
+}
+
+// WorkspaceRecovery is the daemon's durable recovery plan, without workspace secrets.
+type WorkspaceRecovery struct {
+	Kind    string `json:"kind"`
+	Action  string `json:"action"`
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
+}
+
+func (c *Client) InspectWorkspaceRecovery(ctx context.Context, id string) (WorkspaceRecovery, error) {
+	var p struct {
+		State WorkspaceRecovery `json:"state"`
+	}
+	err := c.command(ctx, map[string]any{"type": "workspace.recovery.inspect.request", "workspaceId": id}, &p)
+	return p.State, err
+}
+
+// RestoreWorkspace recreates an archived worktree and unarchives its workspace.
+func (c *Client) RestoreWorkspace(ctx context.Context, id string) error {
+	return c.command(ctx, map[string]any{"type": "workspace.recovery.restore.request", "workspaceId": id}, nil)
 }
 
 // SetWorkspaceTitle renames a workspace; "" goes back to the name the daemon derives.

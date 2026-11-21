@@ -44,6 +44,7 @@ const (
 // ([attachment:<uuid>]) name nothing and are left out; an input of images alone is named
 // "Attached image" or "<n> attached images".
 func taskName(input string) string {
+	input = voiceMemoTaskInput(input)
 	images := len(attachment.Reference.FindAllString(input, -1))
 	input = attachment.Reference.ReplaceAllString(input, "")
 	words := taskWords(input)

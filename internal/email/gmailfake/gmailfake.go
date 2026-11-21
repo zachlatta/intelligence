@@ -149,6 +149,14 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 			list = append(list, map[string]string{"id": s.messages[i].m.ID, "threadId": s.messages[i].m.ThreadID})
 		}
 		writeJSON(w, map[string]any{"messages": list})
+	case strings.HasPrefix(rest, "threads/"):
+		var messages []email.GmailMessage
+		for _, e := range s.messages {
+			if e.m.ThreadID == strings.TrimPrefix(rest, "threads/") {
+				messages = append(messages, e.m)
+			}
+		}
+		writeJSON(w, map[string]any{"messages": messages})
 	case strings.HasPrefix(rest, "messages/"):
 		for _, e := range s.messages {
 			if e.m.ID == strings.TrimPrefix(rest, "messages/") {

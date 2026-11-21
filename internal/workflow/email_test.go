@@ -144,3 +144,24 @@ func TestAnEmailBecomesTheRunsInput(t *testing.T) {
 		t.Errorf("a thank-you subject: the run's title = %q", got)
 	}
 }
+
+func TestEmailInputNamesMailboxAndReadCommand(t *testing.T) {
+	m := Mail{MessageID: "m1", ThreadID: "t1", To: []string{"alias@example.com"}}
+	// The mailbox is authoritative, not To/Delivered-To (which can be aliases).
+	// The repository is public and carries no real address: the bot mailbox is recognised by its
+	// account name, and the prompt names the address the Gmail connection actually has.
+	for _, mailbox := range []string{"zrl-bot@example.com", "ZRL-Bot@example.org"} {
+		m.Mailbox = mailbox
+		want := `Gmail message m1 in thread t1 in ` + mailbox + ` (not in PDW). Read it with pdw call zrl_bot_email_control__get_thread --data '{"thread_id":"t1"}'.`
+		if !strings.Contains(m.Input(true), want) {
+			t.Errorf("%s: missing bot mailbox and exact thread command", mailbox)
+		}
+	}
+	for _, mailbox := range []string{"other@example.com", "not-zrl-bot@example.com"} {
+		m.Mailbox = mailbox
+		p := m.Input(true)
+		if !strings.Contains(p, "in "+mailbox) || !strings.Contains(p, "intelligence__query") || strings.Contains(p, "zrl_bot_email_control") {
+			t.Errorf("%s: wrong mailbox read instructions", mailbox)
+		}
+	}
+}

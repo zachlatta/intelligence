@@ -24,7 +24,7 @@ import (
 //go:embed email.html
 var emailHTML string
 
-var emailTmpl = template.Must(template.New("email").Funcs(template.FuncMap{"short": short, "ago": ago}).Parse(emailHTML + layoutHTML))
+var emailTmpl = template.Must(template.New("email").Funcs(localFuncs).Funcs(template.FuncMap{"short": short, "ago": ago}).Parse(emailHTML + layoutHTML))
 
 // baseURL is the server's origin as the browser reaches it: PUBLIC_URL, else the request's.
 func (a *app) baseURL(r *http.Request) string {

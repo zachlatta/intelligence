@@ -31,6 +31,7 @@ func TestProposalAnswerUsesDeskCatalog(t *testing.T) {
 		{name: "no desk falls back visibly", first: []hostclient.Project{project("other", "/catalog/desk-copy"), {ID: "plain-dir", Name: "desk", Kind: "directory", Directory: "/catalog/not-a-repository"}}, wantHost: "host-1", wantCwd: "~"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			h, d := dbServer(t)
 			rep := wfReport()
 			rep.Paseo.Projects = tc.first

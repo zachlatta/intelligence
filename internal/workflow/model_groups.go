@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/zachlatta/intelligence/internal/fleet"
 )
 
 // ModelGroup is a shared allowlist. Token is immutable, including after a rename.
@@ -270,11 +271,21 @@ func (e *Engine) fillModels(ctx context.Context, tx pgx.Tx, r run, step int) (De
 	if len(notes) > 0 {
 		text += "\n\nModel suggestions:\n" + strings.Join(notes, "\n")
 	}
+	disabled, err := fleet.DisabledProviders(ctx, tx)
+	if err != nil {
+		return d, err
+	}
+	if rule := fleet.ProviderRule(disabled); rule != "" {
+		text += "\n\n" + rule
+	}
 	d.Steps[step].Instructions = text
 	return d, nil
 }
 
-type modelSuggestion struct{ Inline, Note string }
+// modelSuggestion is one allocation: Inline replaces the token; Note goes under Model suggestions.
+type modelSuggestion struct {
+	Inline, Note string
+}
 
 func (e *Engine) suggestModel(ctx context.Context, tx pgx.Tx, r run, step int, token string, exclude []string) (modelSuggestion, error) {
 	if err := lockModels(ctx, tx, r.Account); err != nil {

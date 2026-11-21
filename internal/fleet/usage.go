@@ -23,7 +23,7 @@ func (r *Registry) RecordUsage(ctx context.Context, host string, rep usage.Repor
 			if s.Missing || s.Provider == "" {
 				continue
 			}
-			if err := setSource(ctx, tx, host, s.Provider, "", s.Error, "", collected, at); err != nil {
+			if err := setSource(ctx, tx, host, s.Provider, "", s.Error, "", collected, at, time.Time{}); err != nil {
 				return err
 			}
 			if s.Error != "" {
@@ -42,12 +42,13 @@ func (r *Registry) RecordUsage(ctx context.Context, host string, rep usage.Repor
 	})
 }
 
-func setSource(ctx context.Context, tx pgx.Tx, host, provider, account, errMsg, note string, observed, at time.Time) error {
-	_, err := tx.Exec(ctx, `INSERT INTO usage_sources (host, provider, account, ok, error, note, observed_at, received_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+func setSource(ctx context.Context, tx pgx.Tx, host, provider, account, errMsg, note string, observed, at, expires time.Time) error {
+	_, err := tx.Exec(ctx, `INSERT INTO usage_sources (host, provider, account, ok, error, note, observed_at, received_at, login_expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (host, provider, account) DO UPDATE SET ok = EXCLUDED.ok, error = EXCLUDED.error, note = EXCLUDED.note,
-		observed_at = EXCLUDED.observed_at, received_at = EXCLUDED.received_at`,
-		host, provider, account, errMsg == "", errMsg, note, nullTime(observed), at)
+		observed_at = EXCLUDED.observed_at, received_at = EXCLUDED.received_at,
+		login_expires_at = coalesce(EXCLUDED.login_expires_at, usage_sources.login_expires_at)`,
+		host, provider, account, errMsg == "", errMsg, note, nullTime(observed), at, nullTime(expires))
 	return err
 }
 
@@ -72,7 +73,10 @@ func recordAccount(ctx context.Context, tx pgx.Tx, host, provider string, a usag
 		provider, a.ID, a.Label, a.Plan, slot, obs); err != nil {
 		return err
 	}
-	if err := setSource(ctx, tx, host, provider, a.ID, a.Error, a.Note, obs, at); err != nil {
+	if err := setSource(ctx, tx, host, provider, a.ID, a.Error, a.Note, obs, at, a.LoginExpiresAt); err != nil {
+		return err
+	}
+	if err := noteLoginHealth(ctx, tx, host, provider, a.ID, a.Error, a.Active, obs); err != nil {
 		return err
 	}
 	if a.Active {
@@ -206,7 +210,7 @@ func (r *Registry) Plans(ctx context.Context) (PlansView, error) {
 			AND s.received_at > now() - interval '`+recent+`' ORDER BY s.received_at DESC LIMIT 1), ''),
 		coalesce((SELECT s.note FROM usage_sources s WHERE s.provider = a.provider AND s.account = a.account AND s.ok
 			ORDER BY s.received_at DESC LIMIT 1), '')
-		FROM usage_accounts a`)
+		FROM usage_accounts a WHERE NOT EXISTS (SELECT 1 FROM provider_plan_settings ps WHERE ps.provider=a.provider AND NOT ps.enabled)`)
 	if err != nil {
 		return v, err
 	}
@@ -255,7 +259,8 @@ func (r *Registry) Plans(ctx context.Context) (PlansView, error) {
 		sort.SliceStable(ws, func(a, b int) bool { return windowRank(ws[a].ID) < windowRank(ws[b].ID) })
 	}
 	rows, err = r.p.Query(ctx, `SELECT host || ': ' || provider || ': ' || error FROM usage_sources
-		WHERE account = '' AND NOT ok AND received_at > now() - interval '`+recent+`' ORDER BY host, provider`)
+		WHERE account = '' AND NOT ok AND received_at > now() - interval '`+recent+`'
+		AND NOT EXISTS (SELECT 1 FROM provider_plan_settings ps WHERE ps.provider=usage_sources.provider AND NOT ps.enabled) ORDER BY host, provider`)
 	if err != nil {
 		return v, err
 	}

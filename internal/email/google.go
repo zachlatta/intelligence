@@ -272,7 +272,7 @@ func (m *Mailbox) get(ctx context.Context, path string, q url.Values, out any) e
 			units = 2
 		case path == "messages":
 			units = 5
-		case strings.HasPrefix(path, "messages/"):
+		case strings.HasPrefix(path, "messages/"), strings.HasPrefix(path, "threads/"):
 			units = 60
 		}
 		if err := p.Wait(ctx, units); err != nil {
@@ -364,6 +364,15 @@ func (m *Mailbox) Message(ctx context.Context, id string) (GmailMessage, error) 
 	var g GmailMessage
 	err := m.get(ctx, "messages/"+url.PathEscape(id), url.Values{"format": {"full"}}, &g)
 	return g, err
+}
+
+// Thread includes sent replies, with their full MIME bodies for follow-up continuity.
+func (m *Mailbox) Thread(ctx context.Context, id string) ([]GmailMessage, error) {
+	var result struct {
+		Messages []GmailMessage `json:"messages"`
+	}
+	err := m.get(ctx, "threads/"+url.PathEscape(id), url.Values{"format": {"full"}}, &result)
+	return result.Messages, err
 }
 
 // Added is the ids of the messages added to the mailbox since history id start, oldest first, and

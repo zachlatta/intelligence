@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/zachlatta/intelligence/internal/agenttext"
 	"github.com/zachlatta/intelligence/internal/hostclient"
 	"github.com/zachlatta/intelligence/internal/paseo"
 )
@@ -23,6 +24,7 @@ import (
 // Definition is one version of a workflow: the host it runs on, what starts it, how its project
 // is found, its orchestrator, and its steps, in order.
 type Definition struct {
+	Priority     string           `json:"priority,omitempty"`  // empty is Automatic, resolved from Trigger when each run starts
 	Host         string           `json:"host"`                // the account's host every run happens on
 	Trigger      string           `json:"trigger"`             // task (submitted on the Workflows page), manual, email or voice_memo
 	Email        *EmailFilter     `json:"email,omitempty"`     // email: which email starts a run
@@ -62,15 +64,17 @@ type Step struct {
 
 // Triggers, project modes and step kinds.
 const (
-	TriggerTask      = "task"
-	TriggerManual    = "manual"
-	TriggerEmail     = "email"      // an email to the account's connected Gmail matches Email
-	TriggerVoiceMemo = "voice_memo" // a new PDW voice memo recording matches VoiceMemo
-	ProjectMatch     = "match"
-	ProjectFixed     = "fixed"
-	KindStep         = "step"
-	KindGate         = "gate"
-	KindSignoff      = "signoff"
+	PriorityNormal    = "normal"
+	PriorityImmediate = "immediate"
+	TriggerTask       = "task"
+	TriggerManual     = "manual"
+	TriggerEmail      = "email"      // an email to the account's connected Gmail matches Email
+	TriggerVoiceMemo  = "voice_memo" // a new PDW voice memo recording matches VoiceMemo
+	ProjectMatch      = "match"
+	ProjectFixed      = "fixed"
+	KindStep          = "step"
+	KindGate          = "gate"
+	KindSignoff       = "signoff"
 )
 
 var stepID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
@@ -83,13 +87,36 @@ func Parse(b []byte) (Definition, error) {
 	if err := dec.Decode(&d); err != nil {
 		return d, fmt.Errorf("bad workflow: %w", err)
 	}
-	return d, d.Validate()
+	if err := d.Validate(); err != nil {
+		return d, err
+	}
+	return d.normalized(), nil
+}
+
+func (d Definition) normalized() Definition {
+	if d.Project.Mode == ProjectFixed && d.Project.Directory != "" {
+		d.Project.Directory = path.Clean(d.Project.Directory)
+	}
+	return d
+}
+
+// EffectivePriority resolves Automatic without changing the saved configuration.
+func (d Definition) EffectivePriority() string {
+	if d.Priority != "" {
+		return d.Priority
+	}
+	if d.Trigger == TriggerEmail || d.Trigger == TriggerVoiceMemo {
+		return PriorityImmediate
+	}
+	return PriorityNormal
 }
 
 // Validate says what in d cannot run.
 func (d Definition) Validate() error {
 	blank := func(s string) bool { return strings.TrimSpace(s) == "" }
 	switch {
+	case d.Priority != "" && d.Priority != PriorityNormal && d.Priority != PriorityImmediate:
+		return errors.New("priority must be normal or immediate")
 	case d.Host == "":
 		return errors.New("a workflow needs a host to run on")
 	case !hostclient.ValidName(d.Host):
@@ -154,9 +181,11 @@ func (d Definition) Index(id string) int {
 	return -1
 }
 
-// Vars fill a step's instructions: {{run}}, {{input}}, {{repo}} and {{branch}}.
+// Vars fill a step's instructions: {{run}}, {{input}}, {{repo}} and {{branch}}. Live, when set,
+// is the account's other live runs, which an email or voice-memo run checks before building.
 type Vars struct {
 	Run, Input, Repo, Branch string
+	Live                     *LiveRuns
 }
 
 func (v Vars) fill(s string) string {
@@ -165,7 +194,7 @@ func (v Vars) fill(s string) string {
 
 // ProjectPrompt is what the project finder is told: its instructions, the input, the host's
 // repositories, routing guidance (including for saved definitions), and how to answer.
-func ProjectPrompt(run string, d Definition, input string, repos []string) string {
+func ProjectPrompt(run string, d Definition, input string, repos []string) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n\nThe task:\n\n%s\n\n", strings.TrimSpace(d.Project.Instructions), strings.TrimSpace(input))
 	if len(repos) == 0 {
@@ -178,7 +207,7 @@ func ProjectPrompt(run string, d Definition, input string, repos []string) strin
 		"  intelligence workflow project --run %[1]s <directory>\n"+
 		"  intelligence workflow project --run %[1]s none\n\n"+
 		"none means the task belongs in no repository: the orchestrator then works in the home directory.", run)
-	return b.String()
+	return agenttext.Checked(b.String())
 }
 
 const projectRoutingGuidance = `Choose by the requested work product, not by topic overlap or where source data lives.
@@ -234,20 +263,31 @@ func subAgentModes() string {
 // OrchestratorPrompt is the orchestrator's first message: its standing instructions, the mode its
 // sub-agents start in, the run, the steps, the commands that move it, the workflow contract, and
 // the first step.
-func OrchestratorPrompt(name string, d Definition, v Vars) string {
+func OrchestratorPrompt(name string, d Definition, v Vars) (string, error) {
 	var b strings.Builder
+	if d.Trigger == TriggerEmail {
+		b.WriteString(EmailReplyRule + "\n\n")
+	}
 	fmt.Fprintf(&b, "%s\n\n%s\n\nThis is run %s of the workflow “%s”. You are its orchestrator", strings.TrimSpace(d.Orchestrator.Instructions), subAgentModes(), v.Run, name)
 	if v.Repo != "" {
 		fmt.Fprintf(&b, ", in a worktree of %s on branch %s", v.Repo, v.Branch)
 	}
 	b.WriteString(".\n\nBefore starting workers, find this agent's workspace ID with Paseo's workspace listing. Pass --workspace <id> explicitly to every worker so it uses this workspace's working directory; --cwd alone can inherit the parent's workspace. Verify each worker with paseo inspect before it edits files. Stop a misplaced worker and relaunch it in the correct workspace. Do not create a replacement worktree in another repository or fall back to a main checkout; if the task names a repository that differs from this run's project, ask Zach before proceeding")
 	fmt.Fprintf(&b, ".\n\nWhat started it:\n\n%s\n\n", strings.TrimSpace(v.Input))
-	fmt.Fprintf(&b, "Before starting work, summarize the whole task above as a concise action title (3–8 words, at most 80 characters). Describe the requested outcome, not just the prompt's opening words. Preserve important constraints and negations. For example: \"Summarize workflow run titles\". Save it with:\n\n  intelligence workflow summarize --run %s --summary \"<short task summary>\"\n\nUse proper shell quoting for your text. This only labels the run and does not advance a step. If saving the summary fails, continue with the workflow; do not block the task on it.\n\n", v.Run)
+	if v.Live != nil {
+		b.WriteString(liveRunsSection(v.Run, *v.Live) + "\n\n")
+	}
+	fmt.Fprintf(&b, "Before starting work, summarize the whole task above as a concise action title (3–8 words, at most 80 characters). Describe the requested outcome, not just the prompt's opening words. Preserve important constraints and negations. In summaries, run titles and email subjects, keep people's names as Zach said or wrote them; never add a surname or identity unless this run verified it with evidence. Cite the source used to verify an identity in the reply. Generated titles and summaries are not identity evidence. Leave unresolved names as given. If you choose among ambiguous names, say who and why in one reply line, citing the source. Pass this names rule to every worker. For example: \"Summarize workflow run titles\". Save it with:\n\n  intelligence workflow summarize --run %s --summary \"<short task summary>\"\n\nUse proper shell quoting for your text. This only labels the run and does not advance a step. If saving the summary fails, continue with the workflow; do not block the task on it.\n\n", v.Run)
+	b.WriteString("Report current activity at the start and at each step change, and whenever you wait on an outside party or a long job for more than 10 minutes. Say what you are doing or waiting on in one plain sentence; never type clock times or the word since in the line. The status command records the time itself. For an external wait pass --waiting-on \"<who>\"; sign-off automatically shows waiting on Zach. Refresh while a long wait continues; do not leave an old line pretending to be current. Include an honest completion ETA as RFC3339 when known; omit --eta when unknown so the server can estimate from workflow history. Do not invent an ETA. This reports activity without advancing the run.\n\n")
 	b.WriteString("Its steps:\n\n")
 	for i, s := range d.Steps {
 		fmt.Fprintf(&b, "%d. %s (%s, id %s)\n", i+1, s.Title, s.Kind, s.ID)
 	}
 	fmt.Fprintf(&b, "\nYou get one step at a time. Move the run with these commands:\n\n"+
+		"  intelligence workflow status --run %[1]s --now \"<one plain sentence>\" [--eta <RFC3339>]    save current activity and ETA\n"+
+		"  intelligence workflow answer --run %[1]s --channel email --message-id <sent-id> [--thread-id <thread-id>] [--sent-at <date>] [--checked]    record an answer to the requester\n"+
+		"  intelligence workflow answer --run %[1]s --steered-to <other run id> [--reason \"<text>\"] [--sent-at <handover time>]    another run took this request; its answer counts\n"+
+		"  intelligence workflow answer --run %[1]s --not-needed \"<reason>\"    no answer is due: the input is not a request\n"+
 		"  intelligence workflow next --run %[1]s --summary \"<one line>\"    this step is done; prints the next one\n"+
 		"  intelligence workflow back --run %[1]s <step id> --why \"<what is missing>\"    send the work back to an earlier step\n"+
 		"  intelligence workflow skip --run %[1]s --why \"<why>\"    skip a step its instructions let you skip\n"+
@@ -265,15 +305,22 @@ func OrchestratorPrompt(name string, d Definition, v Vars) string {
 		"Preserve scratch needed by later steps. A worker reports back and ends its turn; the orchestrator owns reuse and archiving. " +
 		"After a successful ask, end your turn and wait for the reply message; do not poll or create a wakeup.\n\n" +
 		PublicRepoRule + "\n\n")
-	b.WriteString(StepMessage(d, 0, v))
-	return b.String()
+	b.WriteString("Lifecycle: after next, skip or back, keep working in the same turn using the returned instructions. Wait for sub-agents in the foreground. End your turn only after a successful ask or after the run is finished, done or failed.\n\n")
+	step, err := StepMessage(d, 0, v)
+	if err != nil {
+		return "", err
+	}
+	b.WriteString(step)
+	return agenttext.Checked(b.String())
 }
 
 // StepMessage is step i's title and filled instructions, as the orchestrator gets them.
-func StepMessage(d Definition, i int, v Vars) string {
+func StepMessage(d Definition, i int, v Vars) (string, error) {
 	s := d.Steps[i]
-	return fmt.Sprintf("Step %d of %d: %s\n\n%s", i+1, len(d.Steps), s.Title, strings.TrimSpace(v.fill(s.Instructions))+"\n\n"+UnattendedShellRule+"\n\n"+FileDeliveryRule+"\n\n"+DeliverableEmailRule)
+	return agenttext.Checked(fmt.Sprintf("Step %d of %d: %s\n\n%s", i+1, len(d.Steps), s.Title, strings.TrimSpace(v.fill(s.Instructions))+"\n\n"+CredentialHandoffRule+"\n\n"+UnattendedShellRule+"\n\n"+v.fill(SharedDeliverableRule)+"\n\n"+FileDeliveryRule+"\n\n"+DeliverableEmailRule+"\n\n"+v.fill(RunAnswerRule)))
 }
+
+const CredentialHandoffRule = "Never paste credentials into a sub-agent's prompt, brief, message, command text or report. Pass an environment variable name or the path of a 0600 file on the worker's host, never its value. Use the worker's existing scoped credentials when available; keep credential files outside tracked files. Pass this rule to every worker."
 
 // DeliverableEmailRule is appended at runtime, like FileDeliveryRule, so saved workflows get it
 // too. Without it a run whose result is a report finished with that report only on its run page
@@ -286,7 +333,7 @@ const DeliverableEmailRule = "When the run's result is a deliverable for Zach ra
 	"with files.zachlatta.com links to the full report and files under the file-delivery rule above; never only a link or a local path. " +
 	"Earlier steps draft the email (subject and HTML body) in the worktree and pass it on; only the last step sends it, or, when the run ends early (fail or skip to the end), a worker the orchestrator starts before it moves the run. " +
 	"Before sending, search zrl-bot's sent mail from the run's request date, not a recent-days window: by subject, by the report's URL, and in the request thread if there is one. " +
-	"Inspect every match, send only if none already delivered it, so it goes out once, and put the sent message's id (or the earlier delivery's) in the run's final summary. " +
+	"Inspect every match, send only if none already delivered it, so it goes out once, and put the sent message's id (or the earlier delivery's) in the run's final summary, and record it with intelligence workflow answer --run <run id> --channel email --message-id <sent id> --thread-id <thread id> [--sent-at <date>] [--checked]. " +
 	"Pass this deliverable-email rule to every worker."
 
 // FileDeliveryRule is appended at runtime so saved workflows get it too. Uploading belongs
@@ -312,7 +359,7 @@ Start a sub-agent in this workspace with the paseo CLI, for example:
 
 Then paseo wait <id> until it is done, and paseo logs <id> to read what it did. paseo send <id> "<message>" gives a sub-agent more work and keeps its context: use it when work comes back to a sub-agent that did it. A checker must be a fresh sub-agent that did none of the work. Archive sub-agents you are done with (paseo archive <id>).
 
-Use frontier models, and spread the work across the plans: claude/claude-opus-5-5, codex and antigravity/gemini-4-carbon-high (Gemini 4 Carbon).`
+Use frontier models, and spread the work across the plans: claude/claude-opus-5-5 and codex.`
 
 // Starting is the workflow an account starts with (its Host set to one of the account's): a task from the Workflows page, its project
 // found, the work, three gates, Zach's sign-off for broader changes, a public repository check, and landing.
@@ -359,4 +406,16 @@ var Starting = Definition{
 
 // UnattendedShellRule is included for saved workflows too, not only Starting.
 const UnattendedShellRule = "Agents run unattended. Pass this shell guidance to each sub-agent. " +
-	"Even bypass mode can ask for permission on shell safety checks. Intelligence denies those prompts and asks for a safer approach. Use Write/Edit tools for prompt files and other multiline content instead of shell heredocs; split compound commands and use git -C instead of cd && git. A denial does not authorize broader actions. If blocked, report why."
+	"Even bypass mode can ask for permission on shell safety checks. Intelligence denies those prompts and asks for a safer approach. Use Write/Edit tools for prompt files and other multiline content instead of shell heredocs; split compound commands and use git -C instead of cd && git. " + hostclient.RemovalRule + " Do not retry the same blocked command. A denial does not authorize broader actions. If blocked, report why."
+
+// RunAnswerRule applies to saved workflows too, including code and service tasks.
+const RunAnswerRule = "Record every answer sent to the requester, including requesters other than Zach, with intelligence workflow answer --run {{run}} --channel email --message-id <sent message id> [--thread-id <thread id>] [--sent-at <date>] [--checked]. " +
+	"The final step must do this before finishing. On an early exit (fail or skip to the end), the authorized worker that sends the answer must record it before the orchestrator ends the run. Only a step authorized to send may send. " +
+	"Use --checked only when the sent answer passed the required review. Record earlier unchecked sends too. Use the actual send time in RFC 3339 or RFC 5322 format when available; immediately after sending, omit --sent-at if the mail tool returns no timestamp, and the server defaults to now(). " +
+	"For an earlier delivery, inspect the message and supply its actual send date and identifiers; do not use the current time. For another response channel, use that channel and its message identifier. Do not invent a send or record an unsent draft. If no checked answer was delivered, report that explicitly. " +
+	"Every run that owes an answer ends with exactly one of: a recorded checked answer, a steer, or not-needed. " +
+	"If this run hands its request to another live run instead of answering it, do it with intelligence workflow steer --run {{run}} --into <the other run's id> --note <file>, which sends that run the request and records the steer; nothing more to record. " +
+	"If it was handed over some other way (for example, by messaging a running run's agent directly), record that with intelligence workflow answer --run {{run}} --steered-to <the other run's id> [--reason \"<what was handed over>\"] [--sent-at <when it was handed over>] (find it in workflow_runs: the run whose orchestrator_id is the agent you steered, or that agent's parent); " +
+	"the other run's checked answer sent after the handover then counts for this one, so tell that run to answer with the request folded in. " +
+	"If no answer is due because the input is not a request (a recorded meeting or conversation, a retracted or duplicate request, a notification), record intelligence workflow answer --run {{run}} --not-needed \"<why no answer is due>\" instead of sending one. " +
+	"A request that was acted on still gets an answer; not-needed is not for work done but not reported. Pass this rule to every worker."

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -29,12 +30,60 @@ type DB struct {
 	ReadonlyURL string // how Readonly connects
 }
 
-// New makes a fresh database, migrates it and sets up its read-only role. Both go when the test ends.
+var migratedTemplate *databaseTemplate
+
+type databaseTemplate struct {
+	once sync.Once
+	name string
+	err  error
+}
+
+// RunWithTemplate migrates one database on first use and clones it for subsequent fixtures.
+// Call it from TestMain. Each New still makes its own database and roles.
+func RunWithTemplate(m *testing.M) int {
+	tmpl := &databaseTemplate{}
+	migratedTemplate = tmpl
+	code := m.Run()
+	if tmpl.name != "" {
+		if err := tmpl.drop(); err != nil {
+			fmt.Fprintln(os.Stderr, "drop test database template:", err)
+			return 1
+		}
+	}
+	return code
+}
+
+func (tmpl *databaseTemplate) prepare(ctx context.Context, admin *pgx.Conn, name, dsn string) {
+	if _, tmpl.err = admin.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{name}.Sanitize()); tmpl.err != nil {
+		return
+	}
+	tmpl.name = name
+	p, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		tmpl.err = err
+		return
+	}
+	defer p.Close()
+	tmpl.err = db.Migrate(ctx, p)
+}
+
+func (tmpl *databaseTemplate) drop() error {
+	ctx := context.Background()
+	admin, err := pgx.Connect(ctx, os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		return err
+	}
+	defer admin.Close(ctx)
+	_, err = admin.Exec(ctx, "DROP DATABASE "+pgx.Identifier{tmpl.name}.Sanitize())
+	return err
+}
+
+// New makes a fresh migrated database and sets up its read-only role. Both go when the test ends.
 func New(t testing.TB) DB {
 	t.Helper()
 	base := os.Getenv("TEST_DATABASE_URL")
 	if base == "" {
-		t.Fatal("TEST_DATABASE_URL is not set: run make test, which starts a throwaway Postgres")
+		t.Fatal("TEST_DATABASE_URL is not set: run make test or make test-pkg PKG=./internal/yourpackage")
 	}
 	ctx := context.Background()
 	suffix := randHex(t)
@@ -44,7 +93,20 @@ func New(t testing.TB) DB {
 	if err != nil {
 		t.Fatalf("connect TEST_DATABASE_URL: %v", err)
 	}
-	if _, err := admin.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{name}.Sanitize()); err != nil {
+
+	t.Cleanup(func() { _ = admin.Close(context.Background()) })
+	create := "CREATE DATABASE " + pgx.Identifier{name}.Sanitize()
+	if tmpl := migratedTemplate; tmpl != nil {
+		tmpl.once.Do(func() {
+			templateName := "tmpl_" + suffix
+			tmpl.prepare(ctx, admin, templateName, withDB(t, base, templateName, "", ""))
+		})
+		if tmpl.err != nil {
+			t.Fatalf("prepare test database template: %v", tmpl.err)
+		}
+		create += " TEMPLATE " + pgx.Identifier{tmpl.name}.Sanitize()
+	}
+	if _, err := admin.Exec(ctx, create); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -58,13 +120,14 @@ func New(t testing.TB) DB {
 			}
 		}
 		_, _ = admin.Exec(ctx, "DROP ROLE IF EXISTS "+pgx.Identifier{role}.Sanitize())
-		_ = admin.Close(ctx)
 	})
 
 	ownerURL := withDB(t, base, name, "", "")
 	owner := pool(t, ownerURL)
-	if err := db.Migrate(ctx, owner); err != nil {
-		t.Fatalf("migrate: %v", err)
+	if migratedTemplate == nil {
+		if err := db.Migrate(ctx, owner); err != nil {
+			t.Fatalf("migrate: %v", err)
+		}
 	}
 	if err := db.EnsureReadonlyRole(ctx, owner, role, pass); err != nil {
 		t.Fatalf("read-only role: %v", err)

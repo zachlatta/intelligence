@@ -12,8 +12,102 @@ import (
 	"github.com/zachlatta/intelligence/internal/paseo/paseotest"
 )
 
+func TestContinueEmailRestoresArchivedAgentAndRetriesWithoutRefreshingLiveTurn(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	if _, err := execute(t, w, ArchiveAgentKind, `{"agentId":"a1"}`); err != nil {
+		t.Fatal(err)
+	}
+	cmd := Command{ID: "follow-up", Kind: ContinueEmailKind, Args: json.RawMessage(`{"agentId":"a1","text":"Did you do it?"}`)}
+	for range 2 {
+		res, err := w.Execute(t.Context(), cmd)
+		if err != nil || res.AgentID != "a1" {
+			t.Fatalf("continuation: %+v %v", res, err)
+		}
+	}
+	if n := len(d.Requests("refresh_agent_request")); n != 1 {
+		t.Fatalf("refreshes=%d; retry must not interrupt the running turn", n)
+	}
+	for _, r := range d.Requests("send_agent_message_request") {
+		if r["agentId"] != "a1" || r["messageId"] != "follow-up" {
+			t.Fatalf("send=%v", r)
+		}
+	}
+	res, err := execute(t, w, ContinueEmailKind, `{"agentId":"missing","text":"hello"}`)
+	if err == nil || !res.AgentGone {
+		t.Fatalf("gone: %+v %v", res, err)
+	}
+}
+
+func TestContinueEmailRestoresDeletedWorktreeBeforeRefreshAndLaterCleanup(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	if _, err := execute(t, w, ArchiveWorkspaceKind, `{"workspaceId":"w1"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := execute(t, w, ContinueEmailKind, `{"agentId":"a1","text":"Reply to the follow-up"}`); err != nil {
+		t.Fatalf("restoration failed: %v", err)
+	}
+	if len(d.Requests("workspace.recovery.restore.request")) != 1 {
+		t.Fatal("worktree was not explicitly restored")
+	}
+	if _, err := execute(t, w, ArchiveWorkspaceKind, `{"workspaceId":"w1"}`); err != nil {
+		t.Fatalf("later cleanup: %v", err)
+	}
+	eventually(t, w, "cleaned up again", func(s PaseoStatus) bool {
+		for _, ws := range s.Workspaces {
+			if ws.ID == "w1" {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+func TestContinueEmailFailureStages(t *testing.T) {
+	for _, tc := range []struct {
+		kind, stage  string
+		notDelivered bool
+	}{
+		{"fetch_agent_request", "inspect_agent", true},
+		{"workspace.recovery.inspect.request", "inspect_workspace", true},
+		{"unrecoverable_workspace", "inspect_workspace", true},
+		{"workspace.recovery.restore.request", "restore_workspace", true},
+		{"refresh_agent_request", "refresh_agent", true},
+		{"send_agent_message_request", "send_message", false},
+	} {
+		t.Run(tc.stage, func(t *testing.T) {
+			d := daemon(t)
+			w := watcher(t, d)
+			eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+			if _, err := execute(t, w, ArchiveWorkspaceKind, `{"workspaceId":"w1"}`); err != nil {
+				t.Fatal(err)
+			}
+			if tc.kind == "unrecoverable_workspace" {
+				d.UnrecoverableWorkspace("w1", "project_directory_missing")
+			} else {
+				d.FailRequest(tc.kind, "simulated RPC error")
+			}
+			res, err := execute(t, w, ContinueEmailKind, `{"agentId":"a1","text":"Follow-up"}`)
+			if err == nil || res.NotDelivered != tc.notDelivered || res.FailureStage != tc.stage {
+				t.Fatalf("failure stage: %+v %v", res, err)
+			}
+			want := 0
+			if !tc.notDelivered {
+				want = 1
+			}
+			if got := len(d.Requests("send_agent_message_request")); got != want {
+				t.Fatalf("sends=%d want %d", got, want)
+			}
+		})
+	}
+}
+
 func TestParseCommandChecksEachKind(t *testing.T) {
 	good := map[string]string{
+		ContinueEmailKind:              `{"agentId":"a1","text":"follow-up"}`,
 		CreateWorkspaceKind:            `{"cwd":"/w/app","worktree":true,"branch":"fix","base":"main","title":"Fix","agent":{"provider":"claude","prompt":"go"}}`,
 		CreateAgentKind:                `{"workspaceId":"w1","provider":"claude","prompt":"go"}`,
 		ArchiveWorkspaceKind:           `{"workspaceId":"w1"}`,
@@ -152,6 +246,52 @@ func TestRetryDeliveryReusesPaseoCreationKey(t *testing.T) {
 		if err != nil || again != first {
 			t.Fatalf("retry duplicated creation: %+v %+v %v", first, again, err)
 		}
+	}
+}
+
+// A start retry after a lost connection rebuilds its prompt (a voice memo's orchestrator lists the
+// live runs), so Paseo refuses the reused key as a conflict although it made the agent the first
+// time. The retry attaches to that agent, found by the command label it was made with
+// (run 05fd6160, 2026-11-18).
+func TestRetryKeyConflictAttachesToTheAgentAlreadyMade(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	for _, kind := range []string{CreateWorkspaceKind, CreateAgentKind} {
+		args := func(prompt string) json.RawMessage {
+			if kind == CreateWorkspaceKind {
+				return json.RawMessage(`{"cwd":"/w/app","worktree":true,"branch":"conflict","agent":{"provider":"claude","prompt":"` + prompt + `"}}`)
+			}
+			return json.RawMessage(`{"cwd":"/w/app","provider":"claude","prompt":"` + prompt + `"}`)
+		}
+		first, err := w.Execute(t.Context(), Command{ID: "made-" + kind, Kind: kind, Args: args("live runs: none")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		again, err := w.Execute(t.Context(), Command{ID: "retry-" + kind, IdempotencyKey: "made-" + kind, Kind: kind, Args: args("live runs: one")})
+		if err != nil || again != first {
+			t.Fatalf("%s: retry = %+v, %v; want the agent made first, %+v", kind, again, err, first)
+		}
+	}
+	if n := len(d.Requests("agent.create.request")); n != 4 {
+		t.Errorf("agent create requests = %d, want 4", n)
+	}
+}
+
+func TestRetryKeyConflictWithNoAgentLeftStillFails(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	first, err := w.Execute(t.Context(), Command{ID: "gone", Kind: CreateAgentKind, Args: json.RawMessage(`{"cwd":"/w/app","provider":"claude","prompt":"a"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := execute(t, w, ArchiveAgentKind, `{"agentId":"`+first.AgentID+`"}`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = w.Execute(t.Context(), Command{ID: "retry", IdempotencyKey: "gone", Kind: CreateAgentKind, Args: json.RawMessage(`{"cwd":"/w/app","provider":"claude","prompt":"b"}`)})
+	if err == nil || !strings.Contains(err.Error(), "agent_request_key_conflict") {
+		t.Errorf("err = %v, want the conflict when no agent carries the key", err)
 	}
 }
 

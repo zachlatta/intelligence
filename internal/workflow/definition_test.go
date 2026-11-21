@@ -4,10 +4,27 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
+func TestSavedEmailWorkflowGetsFollowUpReplyRules(t *testing.T) {
+	d := Starting
+	d.Trigger = TriggerEmail
+	d.Orchestrator.Instructions = "Saved instructions without the new rules."
+	p, err := OrchestratorPrompt("Saved email task", d, Vars{Run: "follow-up", Input: "Did you do it?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Correction:", "number, recommendation or yes/no", "Done", "Changed", "Nothing was changed", "first words must be yes/no", "earlier sent answers do not count"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+}
+
 func TestOrchestratorSummarizesTheTaskBeforeStartingWork(t *testing.T) {
-	p := OrchestratorPrompt("Saved workflow", Starting, Vars{Run: "run-1", Input: "a long task"})
+	p := mustOrchestratorPrompt(t, "Saved workflow", Starting, Vars{Run: "run-1", Input: "a long task"})
 	for _, want := range []string{"intelligence workflow summarize --run run-1 --summary", "3–8 words", "whole task", "If saving the summary fails, continue"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("missing summary instruction %q", want)
@@ -15,9 +32,32 @@ func TestOrchestratorSummarizesTheTaskBeforeStartingWork(t *testing.T) {
 	}
 }
 
-func TestStartingWorkflowRecommendsCarbon(t *testing.T) {
-	p := OrchestratorPrompt("task", Starting, Vars{Run: "r"})
-	for _, want := range []string{"antigravity/gemini-4-carbon-high", "claude/claude-opus-5-5", "codex"} {
+func TestSavedOrchestratorPreservesNamesBeforeSummarizing(t *testing.T) {
+	d := clone(Starting)
+	d.Orchestrator.Instructions = "Custom saved workflow instructions"
+	p := mustOrchestratorPrompt(t, "Saved", d, Vars{Run: "run-1", Input: "Send the transcript to Maxwell"})
+	for _, want := range []string{
+		"In summaries, run titles and email subjects, keep people's names as Zach said or wrote them",
+		"never add a surname or identity unless this run verified it with evidence",
+		"Cite the source used to verify an identity in the reply",
+		"Generated titles and summaries are not identity evidence",
+		"Leave unresolved names as given",
+		"If you choose among ambiguous names, say who and why in one reply line, citing the source",
+		"Pass this names rule to every worker",
+	} {
+		at := strings.Index(p, want)
+		if at < 0 || at > strings.Index(p, "intelligence workflow summarize --run") {
+			t.Errorf("names rule must precede summarize command: missing %q", want)
+		}
+	}
+}
+
+func TestStartingWorkflowRecommendsSubscribedPlans(t *testing.T) {
+	if strings.Contains(OrchestratorInstructions, "antigravity/") || strings.Contains(OrchestratorInstructions, "muse/") {
+		t.Error("starting guidance recommends an unsubscribed provider")
+	}
+	p := mustOrchestratorPrompt(t, "task", Starting, Vars{Run: "r"})
+	for _, want := range []string{"claude/claude-opus-5-5", "codex"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("frontier guidance missing %q", want)
 		}
@@ -82,7 +122,7 @@ func TestParseRefusesWhatCannotRun(t *testing.T) {
 }
 
 func TestOrchestratorPinsWorkersToItsWorkspace(t *testing.T) {
-	p := OrchestratorPrompt("Tasks", Starting, Vars{Run: "run-1", Repo: "/w/files", Branch: "fix-files"})
+	p := mustOrchestratorPrompt(t, "Tasks", Starting, Vars{Run: "run-1", Repo: "/w/files", Branch: "fix-files"})
 	for _, want := range []string{"--workspace", "paseo inspect", "working directory", "Stop a misplaced worker"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("missing %q in prompt", want)
@@ -94,7 +134,7 @@ func TestSavedWorkflowStepsRequirePublicFileDelivery(t *testing.T) {
 	d := clone(Starting)
 	d.Orchestrator.Instructions = "Custom saved instructions"
 	for i := range d.Steps {
-		for _, prompt := range []string{OrchestratorPrompt("Saved", d, Vars{}), StepMessage(d, i, Vars{})} {
+		for _, prompt := range []string{mustOrchestratorPrompt(t, "Saved", d, Vars{}), mustStepMessage(t, d, i, Vars{})} {
 			for _, want := range []string{"files.zachlatta.com", "public, unguessable", "no authentication", "file-share", "anonymous GET", "text/plain; charset=utf-8", "Pass this file-delivery rule to every worker"} {
 				if !strings.Contains(prompt, want) {
 					t.Errorf("step %d misses file-delivery instruction %q", i, want)
@@ -113,7 +153,7 @@ func TestSavedWorkflowStepsEmailDeliverablesEvenWhenNothingLands(t *testing.T) {
 	d.Orchestrator.Instructions = "Custom saved instructions"
 	d.Steps[len(d.Steps)-1].Instructions = "Land on main the way AGENTS.md says."
 	for i := range d.Steps {
-		for _, prompt := range []string{OrchestratorPrompt("Saved", d, Vars{}), StepMessage(d, i, Vars{})} {
+		for _, prompt := range []string{mustOrchestratorPrompt(t, "Saved", d, Vars{}), mustStepMessage(t, d, i, Vars{})} {
 			for _, want := range []string{
 				"report, investigation, answer, proposal, plan, deck or analysis",
 				"in any repository", "even when nothing lands",
@@ -132,7 +172,7 @@ func TestSavedWorkflowStepsEmailDeliverablesEvenWhenNothingLands(t *testing.T) {
 }
 
 func TestSignoffPermitsFileDeliveryAndProtectsPrivateData(t *testing.T) {
-	for _, prompt := range []string{OrchestratorPrompt("Tasks", Starting, Vars{}), StepMessage(Starting, 4, Vars{})} {
+	for _, prompt := range []string{mustOrchestratorPrompt(t, "Tasks", Starting, Vars{}), mustStepMessage(t, Starting, 4, Vars{})} {
 		for _, want := range []string{
 			"allowed in any step, including sign-off", "not deferred to landing",
 			"unless a step explicitly forbids uploads", "donor, contact, financial or student data",
@@ -161,7 +201,7 @@ func TestFileDeliveryKeepsInternalMetricsRestricted(t *testing.T) {
 }
 
 func TestTheProjectFinderIsToldTheRepositoriesAndHowToAnswer(t *testing.T) {
-	p := ProjectPrompt("run-1", Starting, "Show each agent's model", []string{"/srv/dev/app", "/srv/dev/site"})
+	p := mustProjectPrompt(t, "run-1", Starting, "Show each agent's model", []string{"/srv/dev/app", "/srv/dev/site"})
 	for _, want := range []string{Starting.Project.Instructions, "Show each agent's model", "- /srv/dev/app\n- /srv/dev/site",
 		"intelligence workflow project --run run-1 <directory>", "intelligence workflow project --run run-1 none"} {
 		if !strings.Contains(p, want) {
@@ -174,7 +214,7 @@ func TestProjectFinderRoutesDeliverablesByOutputRatherThanDataSource(t *testing.
 	for _, instructions := range []string{Starting.Project.Instructions, "Pick the repository this task belongs in."} {
 		d := Starting
 		d.Project.Instructions = instructions // Existing saved definitions get the policy too.
-		p := ProjectPrompt("run-1", d,
+		p := mustProjectPrompt(t, "run-1", d,
 			"Give me a report (deck) on program growth using warehouse data.",
 			[]string{"/srv/dev/data-warehouse", "/srv/dev/desk"})
 		for _, want := range []string{
@@ -196,7 +236,7 @@ func TestProjectFinderRoutesDeliverablesByOutputRatherThanDataSource(t *testing.
 
 func TestTheOrchestratorGetsTheRunTheStepsAndTheFirstStep(t *testing.T) {
 	vars := Vars{Run: "run-1", Input: "Show each agent's model", Repo: "/srv/dev/app", Branch: "wf-run1"}
-	p := OrchestratorPrompt("Task from Intelligence", Starting, vars)
+	p := mustOrchestratorPrompt(t, "Task from Intelligence", Starting, vars)
 	for _, want := range []string{Starting.Orchestrator.Instructions, "run run-1 of the workflow “Task from Intelligence”",
 		"Show each agent's model", "1. Do the work (step, id build)", "5. Zach's sign-off (signoff, id signoff)",
 		"intelligence workflow next --run run-1", "intelligence workflow back --run run-1 <step id>",
@@ -213,7 +253,7 @@ func TestTheOrchestratorGetsTheRunTheStepsAndTheFirstStep(t *testing.T) {
 func TestAStepsInstructionsFillItsVariables(t *testing.T) {
 	d := clone(Starting)
 	d.Steps[0].Instructions = "Do {{input}} in {{repo}} on {{branch}} for run {{run}}; leave {{unknown}}."
-	got := StepMessage(d, 0, Vars{Run: "r", Input: "it", Repo: "/a", Branch: "b"})
+	got := mustStepMessage(t, d, 0, Vars{Run: "r", Input: "it", Repo: "/a", Branch: "b"})
 	if !strings.Contains(got, "Step 1 of 7: Do the work") || !strings.Contains(got, "Do it in /a on b for run r; leave {{unknown}}.") {
 		t.Errorf("message = %q", got)
 	}
@@ -258,7 +298,7 @@ func TestTheOrchestratorStartsSubAgentsInTheModeThatNeverAsks(t *testing.T) {
 	// A definition saved before the modes were in its instructions still gets them: the prompt says them.
 	d := clone(Starting)
 	d.Orchestrator.Instructions = "You run a workflow. Start sub-agents with paseo run."
-	p := OrchestratorPrompt("Task", d, Vars{Run: "run-1", Input: "x"})
+	p := mustOrchestratorPrompt(t, "Task", d, Vars{Run: "run-1", Input: "x"})
 	for _, want := range []string{"--mode bypassPermissions for claude", "--mode full-access for codex", "--mode allowAll for muse", "--mode full-access for antigravity"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("orchestrator prompt misses %q:\n%s", want, p)
@@ -271,7 +311,7 @@ func TestTheOrchestratorStartsSubAgentsInTheModeThatNeverAsks(t *testing.T) {
 func TestSavedWorkflowsKeepWorkersInsideTheirAssignedStep(t *testing.T) {
 	d := clone(Starting)
 	d.Orchestrator.Instructions = "Coordinate this task."
-	p := OrchestratorPrompt("Saved workflow", d, Vars{Run: "run-1"})
+	p := mustOrchestratorPrompt(t, "Saved workflow", d, Vars{Run: "run-1"})
 	for _, want := range []string{
 		"Workflow instructions take precedence over conflicting shared skill defaults",
 		"Pass each sub-agent its role, current step, run id, task context and limits",
@@ -296,16 +336,26 @@ func TestLandingOwnsApprovedExternalChanges(t *testing.T) {
 	d := clone(Starting)
 	d.Orchestrator.Instructions = "Coordinate this task."
 	d.Steps[d.Index("land")].Instructions = "Land on main and wait for the deploy."
-	if p := OrchestratorPrompt("Saved workflow", d, Vars{Run: "run-1"}); !strings.Contains(p, want) {
+	if p := mustOrchestratorPrompt(t, "Saved workflow", d, Vars{Run: "run-1"}); !strings.Contains(p, want) {
 		t.Errorf("saved workflow does not assign approved external changes to landing")
 	}
-	if p := StepMessage(Starting, Starting.Index("land"), Vars{Run: "run-1"}); !strings.Contains(p, want) {
+	if p := mustStepMessage(t, Starting, Starting.Index("land"), Vars{Run: "run-1"}); !strings.Contains(p, want) {
 		t.Errorf("landing step does not own approved external changes")
 	}
 }
 
+func TestWorkflowCredentialHandoffRule(t *testing.T) {
+	for _, p := range []string{mustOrchestratorPrompt(t, "Saved", Starting, Vars{}), mustStepMessage(t, Starting, 0, Vars{})} {
+		for _, want := range []string{"Never paste credentials", "environment variable", "0600"} {
+			if !strings.Contains(p, want) {
+				t.Errorf("missing credential handoff rule %q", want)
+			}
+		}
+	}
+}
+
 func TestWorkflowPromptsAvoidPermissionTraps(t *testing.T) {
-	for _, p := range []string{OrchestratorPrompt("task", Starting, Vars{Run: "r"}), StepMessage(Starting, 0, Vars{})} {
+	for _, p := range []string{mustOrchestratorPrompt(t, "task", Starting, Vars{Run: "r"}), mustStepMessage(t, Starting, 0, Vars{})} {
 		if n := strings.Count(p, UnattendedShellRule); n != 1 {
 			t.Errorf("unattended guidance occurs %d times, want once", n)
 		}
@@ -317,8 +367,37 @@ func TestWorkflowPromptsAvoidPermissionTraps(t *testing.T) {
 	}
 }
 
+func TestWorkflowPromptsDenyRemovalAndPreserveScratch(t *testing.T) {
+	saved := clone(Starting)
+	saved.Orchestrator.Instructions = "Coordinate this task."
+	for i := range saved.Steps {
+		saved.Steps[i].Instructions = "Do the authorized step."
+	}
+	for name, d := range map[string]Definition{"starting": Starting, "saved": saved} {
+		t.Run(name, func(t *testing.T) {
+			prompts := []string{mustOrchestratorPrompt(t, "task", d, Vars{Run: "r"})}
+			for i := range d.Steps {
+				prompts = append(prompts, mustStepMessage(t, d, i, Vars{Run: "r"}))
+			}
+			for i, p := range prompts {
+				// The wording is pinned once, in hostclient; prompts reuse the denial's own text.
+				for _, want := range []string{hostclient.RemovalRule, "Do not retry the same blocked command"} {
+					if !strings.Contains(p, want) {
+						t.Errorf("prompt %d misses %q", i, want)
+					}
+				}
+				for _, bad := range []string{"literal absolute paths", "delete scratch", "remove scratch"} {
+					if strings.Contains(p, bad) {
+						t.Errorf("prompt %d contains %q", i, bad)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestUnattendedModeGuidanceIsNotDuplicated(t *testing.T) {
-	p := OrchestratorPrompt("task", Starting, Vars{Run: "r"})
+	p := mustOrchestratorPrompt(t, "task", Starting, Vars{Run: "r"})
 	for _, provider := range Providers() {
 		want := "--mode " + agentMode(provider) + " for " + provider
 		if n := strings.Count(p, want); n != 1 {
@@ -335,7 +414,7 @@ func TestUnattendedModeGuidanceIsNotDuplicated(t *testing.T) {
 func TestTheProjectFinderKeepsResultsOutOfPublicRepositories(t *testing.T) {
 	d := clone(Starting)
 	d.Project.Instructions = "Pick the repository this task belongs in."
-	p := ProjectPrompt("run-1", d, "Give me a report on growth", []string{"/srv/dev/warehouse", "/srv/dev/notes"})
+	p := mustProjectPrompt(t, "run-1", d, "Give me a report on growth", []string{"/srv/dev/warehouse", "/srv/dev/notes"})
 	if n := strings.Count(p, ProjectRule); n != 1 {
 		t.Fatalf("the finder's standing rule occurs %d times, want once:\n%s", n, p)
 	}
@@ -352,7 +431,7 @@ func TestSavedWorkflowsKeepResultsOutOfPublicRepositories(t *testing.T) {
 	d := clone(Starting)
 	d.Orchestrator.Instructions = "Coordinate this task."
 	d.Steps = d.Steps[:1]
-	p := OrchestratorPrompt("Saved workflow", d, Vars{Run: "run-1", Repo: "/srv/dev/warehouse"})
+	p := mustOrchestratorPrompt(t, "Saved workflow", d, Vars{Run: "run-1", Repo: "/srv/dev/warehouse"})
 	if n := strings.Count(p, PublicRepoRule); n != 1 {
 		t.Fatalf("the public repository rule occurs %d times, want once", n)
 	}
@@ -411,4 +490,50 @@ func TestPublicRepositoryChecksReadEveryOutgoingCommit(t *testing.T) {
 	if !strings.Contains(gate, "reports outside work/") {
 		t.Error("gate does not look for reports outside work/")
 	}
+}
+
+func TestOrchestratorLifecycleForEveryDefinition(t *testing.T) {
+	for _, d := range []Definition{Starting, {Orchestrator: Orchestrator{Instructions: "Custom"}, Steps: []Step{{ID: "one", Title: "One"}}}} {
+		p := mustOrchestratorPrompt(t, "Saved", d, Vars{})
+		for _, want := range []string{"after next, skip or back", "same turn", "foreground", "only after a successful ask"} {
+			if !strings.Contains(p, want) {
+				t.Errorf("missing lifecycle rule %q", want)
+			}
+		}
+	}
+}
+
+func TestParseRejectsRemovedStepModelFields(t *testing.T) {
+	b, _ := json.Marshal(onHost(clone(Starting)))
+	for _, field := range []string{`"model":"{{frontier_model}}"`, `"model":"codex/sol"`, `"thinking":"high"`} {
+		raw := strings.Replace(string(b), `"steps":[{`, `"steps":[{`+field+",", 1)
+		if _, err := Parse([]byte(raw)); err == nil || !strings.Contains(err.Error(), "unknown field") {
+			t.Errorf("removed step field %s: %v", field, err)
+		}
+	}
+}
+
+func mustProjectPrompt(t *testing.T, run string, d Definition, input string, repos []string) string {
+	t.Helper()
+	p, err := ProjectPrompt(run, d, input, repos)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+func mustOrchestratorPrompt(t *testing.T, name string, d Definition, v Vars) string {
+	t.Helper()
+	p, err := OrchestratorPrompt(name, d, v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+func mustStepMessage(t *testing.T, d Definition, i int, v Vars) string {
+	t.Helper()
+	p, err := StepMessage(d, i, v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }

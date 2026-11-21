@@ -349,6 +349,35 @@ func TestAFixedProjectStartsTheOrchestratorAtOnce(t *testing.T) {
 	}
 }
 
+func TestWorktreeBaseFallbackIsRecordedOnce(t *testing.T) {
+	for _, status := range []string{hostclient.CommandSucceeded, hostclient.CommandFailed} {
+		t.Run(status, func(t *testing.T) {
+			h, _ := dbServer(t)
+			b := sendReport(t, h, wfReport())
+			def := workflow.Starting
+			def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+			run := startRun(t, h, createWorkflow(t, h, def), "Use the fetched base")
+			cmd := b.command()
+			for range 2 {
+				ack := b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{
+					ID: cmd.ID, Status: status,
+					Result: json.RawMessage(`{"workspaceId":"ws","agentId":"orch","worktreeBaseFallback":true}`),
+				}})
+				if ack.Error != "" {
+					t.Fatal(ack.Error)
+				}
+			}
+			code, result := sqlPost(t, h, q(`SELECT text FROM workflow_run_events WHERE kind = 'worktree_base_fallback' AND run_id = '`+run+`'`))
+			if code != http.StatusOK || len(result.Rows) != 1 || !strings.Contains(result.Rows[0][0].(string), "origin") {
+				t.Fatalf("fallback events: %d %v", code, result.Rows)
+			}
+			if status == hostclient.CommandSucceeded && readRun(t, h, run)["status"] != workflow.Running {
+				t.Fatal("fallback prevented the workflow from starting")
+			}
+		})
+	}
+}
+
 // TestARunFromBeforeCleanTitlesIsNamedFromItsTask: a run started before titles were the cleaned
 // task (its title the input's first line) and still finding its project is named from its task.
 func TestARunFromBeforeCleanTitlesIsNamedFromItsTask(t *testing.T) {
@@ -511,10 +540,10 @@ func TestWorkflowPages(t *testing.T) {
 	if !strings.Contains(ed.Body.String(), `"host":"host-1"`) || !strings.Contains(ed.Body.String(), `const hosts = ["host-1"]`) {
 		t.Errorf("the editor should show the workflow's host and offer the account's")
 	}
-	// the editor offers the providers whose agents can run without asking, and only those
-	providers, _ := json.Marshal(workflow.Providers())
+	// The editor offers enabled providers with an unattended mode.
+	providers, _ := json.Marshal([]string{"claude", "codex", "antigravity"})
 	if !strings.Contains(ed.Body.String(), "const providers = "+string(providers)+";") || strings.Contains(ed.Body.String(), "<option>claude</option>") {
-		t.Errorf("the editor's providers should be workflow.Providers() = %s", providers)
+		t.Errorf("the editor should offer enabled unattended providers %s", providers)
 	}
 	// a fixed project is picked from the repositories the account's hosts reported
 	if !strings.Contains(ed.Body.String(), `const allRepos = [{"directory":"/w/app","project":"example/app","hosts":["host-1"]}]`) {
@@ -1268,6 +1297,49 @@ func TestDeletingAWorkflowKeepsItsRuns(t *testing.T) {
 	for _, page := range []string{list, get(t, h, "/workflows/"+keep, nil).Body.String()} {
 		if !strings.Contains(page, `"DELETE"`) || !strings.Contains(page, "confirm(") || !strings.Contains(page, ">Delete<") {
 			t.Error("a workflows page lacks the Delete action")
+		}
+	}
+}
+
+func TestMoveRepliesControlTurnLifetime(t *testing.T) {
+	for _, ending := range []string{"next", "skip", "done", "fail", "ask"} {
+		t.Run(ending, func(t *testing.T) {
+			h, _ := dbServer(t)
+			sendReport(t, h, wfReport())
+			key := keyOf(t, h, "host-1")
+			b := openStream(t, h, "host-1")
+			def := workflow.Starting
+			def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+			def.Steps = def.Steps[:2]
+			run := startRun(t, h, createWorkflow(t, h, def), "turn lifetime")
+			succeed(t, b, b.command(), `{"workspaceId":"w-run","agentId":"orch-1"}`)
+			for _, m := range []map[string]string{{"move": "next"}, {"move": "back", "step": "build", "why": "retry"}, {"move": "skip", "why": "allowed"}} {
+				code, msg := move(t, h, key, run, m)
+				if code != 200 || !strings.Contains(msg, "Continue in this same turn") {
+					t.Fatalf("%v: %d %s", m, code, msg)
+				}
+			}
+			code, msg := move(t, h, key, run, map[string]string{"move": ending, "why": "reason", "note": "question"})
+			if code != 200 || !strings.Contains(strings.ToLower(msg), "end your turn") || strings.Contains(msg, "Continue in this same turn") {
+				t.Fatalf("ending: %d %s", code, msg)
+			}
+		})
+	}
+}
+
+func TestWorkflowsPageStylesWaitingCalloutAndStickyInspector(t *testing.T) {
+	run := runRow{ID: "r1", Status: "waiting", Workflow: "Task", Title: "Approve deploy", CreatedAt: t0, Version: 1, Host: "host-1", Repo: "acme/app"}
+	rec := httptest.NewRecorder()
+	renderWorkflows(rec, "list", map[string]any{
+		"Workflows": []map[string]any{{"ID": "w1", "Name": "Task", "Version": 1, "IsDefault": true, "Description": "", "Definition": workflow.Starting}},
+		"Waiting":   []runRow{run},
+		"List":      runsPage{Runs: []runRow{run}, Page: 1, Total: 1},
+		"Now":       t0,
+	})
+	body := rec.Body.String()
+	for _, want := range []string{`class="banner callout"`, "<thead>", "top: calc(var(--topbar-h) + 1rem)"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("workflows page misses %q", want)
 		}
 	}
 }

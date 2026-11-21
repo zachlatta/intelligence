@@ -76,7 +76,7 @@ func (r *Registry) StoreTranscript(ctx context.Context, b hostclient.TranscriptB
 				return err
 			}
 		}
-		return nil
+		return recordInterruptions(ctx, tx, b.Host, b.AgentID, b.Entries, at)
 	})
 }
 

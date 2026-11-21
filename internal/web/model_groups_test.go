@@ -285,6 +285,9 @@ func TestModelGroupNames(t *testing.T) {
 
 func TestModelGroupCanConfigureUnknownMeters(t *testing.T) {
 	h, d := dbServer(t)
+	if _, err := d.Owner.Exec(t.Context(), `UPDATE provider_plan_settings SET enabled=true WHERE provider='muse'`); err != nil {
+		t.Fatal(err)
+	}
 	rep := wfReport()
 	rep.Paseo.Providers = []hostclient.Provider{{Name: "muse", Available: true, Models: []hostclient.Model{{ID: "wonder", Thinking: []string{"high"}}}}}
 	sendReport(t, h, rep)
@@ -495,11 +498,66 @@ func TestModelGroupRankingAndWorkflowExpansion(t *testing.T) {
 	}
 }
 
+// A member on a host login that is broken (an open login_incidents row, or one on the host's unknown
+// login) is not suggested; once the incident is resolved it is again.
+func TestModelGroupSkipsABrokenLogin(t *testing.T) {
+	h, d := dbServer(t)
+	rep := wfReport()
+	rep.Paseo.Providers = []hostclient.Provider{{Name: "codex", Available: true, Models: []hostclient.Model{{ID: "sol", Thinking: []string{"high"}}}}}
+	sendReport(t, h, rep)
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := d.Owner.Exec(t.Context(), q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`INSERT INTO usage_accounts(provider,account,first_seen,last_seen) VALUES('codex','one',now(),now())`)
+	exec(`INSERT INTO usage_sources(host,provider,account,ok,received_at) VALUES('host-1','codex','one',true,now())`)
+	exec(`INSERT INTO usage_readings(provider,account,window_id,window_seconds,used_pct,resets_at,first_observed,last_observed) VALUES('codex','one','7d',604800,30,now()+interval '1 day',now(),now())`)
+	exec(`INSERT INTO usage_active(host,provider,account,since,until) VALUES('host-1','codex','one',now(),now())`)
+	body, _ := json.Marshal(map[string]any{"name": "Frontier", "members": []any{map[string]any{"provider": "codex", "model": "sol", "thinking": "high", "login": "one", "longWindow": "7d", "enabled": true}}})
+	if rec := call(t, h, "POST", "/api/model-groups", string(body), sameOriginFetch); rec.Code != 201 {
+		t.Fatalf("create %d %s", rec.Code, rec.Body)
+	}
+	candidate := func(want string, eligible bool) {
+		t.Helper()
+		code, r := sqlPost(t, h, q(`SELECT eligible,reason FROM model_group_candidates`))
+		if code != 200 || len(r.Rows) != 1 || r.Rows[0][0] != eligible || r.Rows[0][1] != want {
+			t.Fatalf("want %q %v: %d %+v", want, eligible, code, r)
+		}
+	}
+	candidate("", true)
+	for _, login := range []string{"one", ""} {
+		exec(`INSERT INTO login_incidents(host,provider,login,reason,source,opened_at,last_seen_at) VALUES('host-1','codex',$1,'login_expired','transcript',now(),now())`, login)
+		candidate("Login broken", false)
+		exec(`UPDATE login_incidents SET resolved_at=now(), resolved_by='manual'`)
+		candidate("", true)
+	}
+	// another login's incident on the host is not this member's
+	exec(`INSERT INTO login_incidents(host,provider,login,reason,source,opened_at,last_seen_at) VALUES('host-1','codex','two','login_expired','meter',now(),now())`)
+	candidate("", true)
+}
+
 // model-groups.js is served like the other embedded scripts: revalidated by an ETag of its content.
 func TestModelGroupsScriptIsServed(t *testing.T) {
 	rec := get(t, dictationServer(t, "", ""), "/model-groups.js", nil)
 	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/javascript") ||
 		!strings.Contains(rec.Body.String(), "model-groups") || rec.Header().Get("ETag") == "" || rec.Header().Get("Cache-Control") != "no-cache" {
 		t.Errorf("/model-groups.js: %d %q, etag %q", rec.Code, rec.Header().Get("Content-Type"), rec.Header().Get("ETag"))
+	}
+}
+
+func TestWorkflowAPIRejectsStepModelFields(t *testing.T) {
+	h, _ := dbServer(t)
+	sendReport(t, h, wfReport())
+	def := workflow.Starting
+	def.Host = "host-1"
+	body, _ := json.Marshal(map[string]any{"name": "Removed model", "definition": def})
+	for _, field := range []string{`"model":"{{frontier_model}}"`, `"thinking":"high"`} {
+		raw := strings.Replace(string(body), `"steps":[{`, `"steps":[{`+field+",", 1)
+		rec := call(t, h, "POST", "/api/workflows", raw, sameOriginFetch)
+		if rec.Code != 400 || !strings.Contains(rec.Body.String(), "unknown field") {
+			t.Fatalf("removed field %s: %d %s", field, rec.Code, rec.Body)
+		}
 	}
 }

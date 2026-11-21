@@ -70,8 +70,8 @@ func TestABusyHostQueuesNewRunsAndStartsThemInOrder(t *testing.T) {
 	if reason := runField(t, h, first, "queue_reason").(string); !strings.Contains(reason, "CPU") || !strings.Contains(reason, "97%") {
 		t.Errorf("the reason should say the CPU is busy: %q", reason)
 	}
-	if reason := runField(t, h, second, "queue_reason").(string); reason != "1 run queued on host-1 ahead of it" {
-		t.Errorf("the reason should say what is queued ahead: %q", reason)
+	if reason := runField(t, h, second, "queue_reason").(string); !strings.Contains(reason, "CPU") || !strings.Contains(reason, "97%") {
+		t.Errorf("the reason should say what it waits for, as the first's does: %q", reason)
 	}
 	code, r := sqlPost(t, h, q("SELECT run_id::text, position, host FROM workflow_run_queue ORDER BY position"))
 	if code != http.StatusOK || len(r.Rows) != 2 || r.Rows[0][0] != first || r.Rows[1][0] != second || r.Rows[0][2] != "host-1" {
@@ -93,6 +93,9 @@ func TestABusyHostQueuesNewRunsAndStartsThemInOrder(t *testing.T) {
 	hostMinute(t, b, start, 70, 0.3) // (its command may come before the ack, which call skips: read the runs)
 	if s := runField(t, h, first, "status"); s != "starting" {
 		t.Fatalf("the first queued run should start first: %v", s)
+	}
+	if reason := runField(t, h, first, "queue_reason"); reason != "" {
+		t.Errorf("dequeued run retains stale reason: %v", reason)
 	}
 	if ws := runField(t, h, first, "workspace_title").(string); !strings.Contains(ws, runHex(first)) {
 		t.Errorf("workspace = %q", ws)
@@ -124,7 +127,7 @@ func TestABusyHostQueuesNewRunsAndStartsThemInOrder(t *testing.T) {
 	for _, row := range r.Rows {
 		kinds = append(kinds, row[0].(string))
 	}
-	if strings.Join(kinds, ",") != "started,queued,dequeued,project" {
+	if strings.Join(kinds, ",") != "started,project,queued,dequeued" {
 		t.Errorf("events = %v", kinds)
 	}
 }
@@ -156,7 +159,7 @@ func TestAQueuedRunCanBeStartedNowOrCanceled(t *testing.T) {
 	wf := fixedWorkflow(t, h)
 	first := startRun(t, h, wf, "first")
 	second := startRun(t, h, wf, "second")
-	if reason := runField(t, h, first, "queue_reason").(string); !strings.Contains(reason, "memory 97% used now, over 100% with this one") {
+	if reason := runField(t, h, first, "queue_reason").(string); !strings.Contains(reason, "memory 97% used now, about 98% with this one (queues at 80%)") {
 		t.Errorf("reason = %q", reason)
 	}
 	if code, msg := move(t, h, key, first, map[string]string{"move": "next"}); code != http.StatusConflict || !strings.Contains(msg, "queued") {
@@ -274,7 +277,7 @@ func TestEachHostLearnsARunsFootprint(t *testing.T) {
 	// two hours: the first with no runs at 10% CPU, the second with two runs at 50%
 	now := time.Now().UTC().Truncate(time.Minute)
 	if _, err := d.Owner.Exec(t.Context(), `INSERT INTO host_minutes (host, minute, samples, cpus, cpu_avg_pct, load1, mem_total, mem_available_min)
-		SELECT 'host-1', $1::timestamptz - i * interval '1 minute', 12, 8, CASE WHEN i <= 60 THEN 50 ELSE 10 END, 1, 100, 70
+		SELECT 'host-1', $1::timestamptz - i * interval '1 minute', 12, 8, CASE WHEN i <= 60 THEN 50 ELSE 10 END, 1, 107374182400, 75161927680
 		FROM generate_series(1, 120) i`, now); err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +395,7 @@ func TestContradictoryHistoryIsNotLearned(t *testing.T) {
 	wf := fixedWorkflow(t, h)
 	now := time.Now().UTC().Truncate(time.Minute)
 	if _, err := d.Owner.Exec(t.Context(), `INSERT INTO host_minutes (host, minute, samples, cpus, cpu_avg_pct, load1, mem_total, mem_available_min)
-		SELECT 'host-1', $1::timestamptz - i * interval '1 minute', 12, 8, CASE WHEN i <= 60 THEN 10 ELSE 50 END, 1, 100, 70
+		SELECT 'host-1', $1::timestamptz - i * interval '1 minute', 12, 8, CASE WHEN i <= 60 THEN 10 ELSE 50 END, 1, 107374182400, 75161927680
 		FROM generate_series(1, 120) i`, now); err != nil {
 		t.Fatal(err)
 	}
@@ -519,7 +522,7 @@ func TestAHostAwayForLongKeepsItsQueue(t *testing.T) {
 		t.Fatalf("%d of 5 queued, want all", queued)
 	}
 	code, r := sqlPost(t, h, q("SELECT queue_reason FROM workflow_run_queue WHERE position = 1"))
-	want := "host-1 has no room yet: waiting for host-1 to report again (last measured " + m.Format("15:04 MST") + ")"
+	want := "host-1 has no room yet: waiting for host-1 to report again (last measured " + m.UTC().Format(time.RFC3339) + ")"
 	if code != http.StatusOK || r.Rows[0][0] != want {
 		t.Errorf("reason = %+v, want %q", r, want)
 	}

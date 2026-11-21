@@ -29,7 +29,7 @@ var spawnHTML string
 //go:embed account.html
 var accountHTML string
 
-var spawnTmpl = template.Must(template.New("spawn").Funcs(template.FuncMap{"short": short, "ago": ago}).
+var spawnTmpl = template.Must(template.New("spawn").Funcs(localFuncs).Funcs(template.FuncMap{"short": short, "ago": ago}).
 	Parse(spawnHTML + layoutHTML + accountHTML))
 
 func render(w http.ResponseWriter, name string, data map[string]any) {
