@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"mime"
 	"net/http"
 	"net/url"
 	"strings"
@@ -90,8 +89,7 @@ func (a *app) mcp(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unsupported MCP protocol version", 400)
 		return
 	}
-	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/json" {
-		http.Error(w, "send JSON", 415)
+	if !requireJSON(w, r) {
 		return
 	}
 	var msg struct {

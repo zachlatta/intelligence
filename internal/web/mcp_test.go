@@ -101,6 +101,9 @@ func TestMCPProtocolErrorsAndOrigin(t *testing.T) {
 			t.Errorf("%s: %d", method, r.Code)
 		}
 	}
+	if r := call(t, anon(h), "POST", "/mcp", `{"jsonrpc":"2.0","id":1,"method":"ping"}`, map[string]string{"Authorization": "Bearer " + token, "Content-Type": "text/plain"}); r.Code != 415 || strings.TrimSpace(r.Body.String()) != "send JSON" {
+		t.Errorf("non-JSON: %d %s", r.Code, r.Body)
+	}
 	for _, origin := range []string{"https://evil.example", "null", "https://example.com"} {
 		r := call(t, anon(h), "POST", "/mcp", `{"jsonrpc":"2.0","id":1,"method":"ping"}`, map[string]string{"Authorization": "Bearer " + token, "Origin": origin, "Sec-Fetch-Site": "none"})
 		if r.Code != 403 {
