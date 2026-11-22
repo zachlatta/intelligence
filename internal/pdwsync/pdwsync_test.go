@@ -17,14 +17,14 @@ func ptrStr(s string) *string        { return &s }
 func TestEvaluateVerdicts(t *testing.T) {
 	now := time.Date(2026, 11, 22, 17, 15, 0, 0, time.UTC)
 
-	t.Run("slack ok", func(t *testing.T) {
+	t.Run("slack ok uses last_write_at and keeps poller_last_run_at separate", func(t *testing.T) {
 		rows := []PipelineRow{{
 			Pipeline:                   "slack",
 			Label:                      "Slack",
 			Status:                     "ok",
 			RunStatus:                  "ok",
 			DataStatus:                 "ok",
-			LastRunAt:                  ptrTime(now.Add(-4 * time.Minute)),
+			LastRunAt:                  ptrTime(now.Add(-2 * time.Minute)),
 			LastWriteAt:                ptrTime(now.Add(-4 * time.Minute)),
 			ExpectedRunIntervalSeconds: ptrInt64(1800),
 		}}
@@ -33,19 +33,67 @@ func TestEvaluateVerdicts(t *testing.T) {
 			t.Fatalf("verdict = %s, want ok (reason: %s)", r.Verdict, r.Reason)
 		}
 		if r.LastSyncAt == nil || !r.LastSyncAt.Equal(now.Add(-4*time.Minute)) {
-			t.Fatalf("last_sync_at = %v", r.LastSyncAt)
+			t.Fatalf("last_sync_at = %v, want last_write_at (-4m)", r.LastSyncAt)
 		}
 		if r.AgeSeconds == nil || *r.AgeSeconds != 240 {
 			t.Fatalf("age_seconds = %v, want 240", r.AgeSeconds)
 		}
+		if r.PollerLastRunAt == nil || !r.PollerLastRunAt.Equal(now.Add(-2*time.Minute)) {
+			t.Fatalf("poller_last_run_at = %v, want -2m", r.PollerLastRunAt)
+		}
 	})
 
-	t.Run("slack behind by age", func(t *testing.T) {
+	t.Run("slack fresh heartbeat with 3h-old write is broken", func(t *testing.T) {
 		rows := []PipelineRow{{
 			Pipeline:                   "slack",
 			Status:                     "ok",
 			RunStatus:                  "ok",
-			LastRunAt:                  ptrTime(now.Add(-45 * time.Minute)),
+			DataStatus:                 "ok",
+			LastRunAt:                  ptrTime(now.Add(-2 * time.Minute)),
+			LastWriteAt:                ptrTime(now.Add(-3 * time.Hour)),
+			ExpectedRunIntervalSeconds: ptrInt64(1800),
+		}}
+		r := Evaluate("slack", rows, now)
+		if r.Verdict != VerdictBroken {
+			t.Fatalf("verdict = %s, want broken (reason: %s)", r.Verdict, r.Reason)
+		}
+		if r.LastSyncAt == nil || !r.LastSyncAt.Equal(now.Add(-3*time.Hour)) {
+			t.Fatalf("last_sync_at = %v, want -3h", r.LastSyncAt)
+		}
+		if r.PollerLastRunAt == nil || !r.PollerLastRunAt.Equal(now.Add(-2*time.Minute)) {
+			t.Fatalf("poller_last_run_at = %v, want -2m", r.PollerLastRunAt)
+		}
+	})
+
+	t.Run("gmail fresh heartbeat with 3h-old write is broken", func(t *testing.T) {
+		rows := []PipelineRow{{
+			Pipeline:                   "gmail",
+			Status:                     "ok",
+			RunStatus:                  "ok",
+			DataStatus:                 "ok",
+			LastRunAt:                  ptrTime(now.Add(-1 * time.Minute)),
+			LastWriteAt:                ptrTime(now.Add(-3 * time.Hour)),
+			ExpectedRunIntervalSeconds: ptrInt64(600),
+		}}
+		r := Evaluate("gmail", rows, now)
+		if r.Verdict != VerdictBroken {
+			t.Fatalf("verdict = %s, want broken (reason: %s)", r.Verdict, r.Reason)
+		}
+		if r.LastSyncAt == nil || !r.LastSyncAt.Equal(now.Add(-3*time.Hour)) {
+			t.Fatalf("last_sync_at = %v, want -3h", r.LastSyncAt)
+		}
+		if r.PollerLastRunAt == nil || !r.PollerLastRunAt.Equal(now.Add(-1*time.Minute)) {
+			t.Fatalf("poller_last_run_at = %v, want -1m", r.PollerLastRunAt)
+		}
+	})
+
+	t.Run("slack behind by write age", func(t *testing.T) {
+		rows := []PipelineRow{{
+			Pipeline:                   "slack",
+			Status:                     "ok",
+			RunStatus:                  "ok",
+			LastRunAt:                  ptrTime(now.Add(-2 * time.Minute)),
+			LastWriteAt:                ptrTime(now.Add(-45 * time.Minute)),
 			ExpectedRunIntervalSeconds: ptrInt64(1800),
 		}}
 		r := Evaluate("slack", rows, now)
@@ -54,12 +102,13 @@ func TestEvaluateVerdicts(t *testing.T) {
 		}
 	})
 
-	t.Run("slack behind by sla detector while poller ok", func(t *testing.T) {
+	t.Run("slack behind by sla detector while writes ok", func(t *testing.T) {
 		rows := []PipelineRow{{
 			Pipeline:                   "slack",
 			Status:                     "ok",
 			RunStatus:                  "ok",
-			LastRunAt:                  ptrTime(now.Add(-3 * time.Minute)),
+			LastRunAt:                  ptrTime(now.Add(-2 * time.Minute)),
+			LastWriteAt:                ptrTime(now.Add(-3 * time.Minute)),
 			ExpectedRunIntervalSeconds: ptrInt64(1800),
 			SLADetectorStatus:          ptrStr("stale"),
 		}}
@@ -77,7 +126,8 @@ func TestEvaluateVerdicts(t *testing.T) {
 			Pipeline:                   "slack",
 			Status:                     "attention",
 			RunStatus:                  "failing",
-			LastRunAt:                  ptrTime(now.Add(-6 * time.Hour)),
+			LastRunAt:                  ptrTime(now.Add(-5 * time.Minute)),
+			LastWriteAt:                ptrTime(now.Add(-6 * time.Hour)),
 			ExpectedRunIntervalSeconds: ptrInt64(1800),
 			LastError:                  ptrStr("token_revoked: Slack OAuth needs reconnect"),
 			LastErrorAt:                ptrTime(now.Add(-10 * time.Minute)),
@@ -91,50 +141,39 @@ func TestEvaluateVerdicts(t *testing.T) {
 		}
 	})
 
-	t.Run("slack broken by age threshold", func(t *testing.T) {
-		rows := []PipelineRow{{
-			Pipeline:                   "slack",
-			Status:                     "ok",
-			RunStatus:                  "ok",
-			LastRunAt:                  ptrTime(now.Add(-3 * time.Hour)),
-			ExpectedRunIntervalSeconds: ptrInt64(1800),
-		}}
-		r := Evaluate("slack", rows, now)
-		if r.Verdict != VerdictBroken {
-			t.Fatalf("verdict = %s, want broken (reason: %s)", r.Verdict, r.Reason)
-		}
-	})
-
-	t.Run("gmail behind and broken thresholds", func(t *testing.T) {
+	t.Run("gmail behind and broken thresholds on last_write_at", func(t *testing.T) {
 		behind := Evaluate("gmail", []PipelineRow{{
 			Pipeline:                   "gmail",
 			Status:                     "ok",
 			RunStatus:                  "ok",
-			LastRunAt:                  ptrTime(now.Add(-15 * time.Minute)),
+			LastRunAt:                  ptrTime(now.Add(-1 * time.Minute)),
+			LastWriteAt:                ptrTime(now.Add(-15 * time.Minute)),
 			ExpectedRunIntervalSeconds: ptrInt64(600),
 		}}, now)
 		if behind.Verdict != VerdictBehind {
-			t.Fatalf("gmail 15m: verdict = %s, want behind", behind.Verdict)
+			t.Fatalf("gmail 15m write: verdict = %s, want behind", behind.Verdict)
 		}
 		broken := Evaluate("gmail", []PipelineRow{{
 			Pipeline:                   "gmail",
 			Status:                     "ok",
 			RunStatus:                  "ok",
-			LastRunAt:                  ptrTime(now.Add(-2*time.Hour - time.Minute)),
+			LastRunAt:                  ptrTime(now.Add(-1 * time.Minute)),
+			LastWriteAt:                ptrTime(now.Add(-2*time.Hour - time.Minute)),
 			ExpectedRunIntervalSeconds: ptrInt64(600),
 		}}, now)
 		if broken.Verdict != VerdictBroken {
-			t.Fatalf("gmail 2h1m: verdict = %s, want broken", broken.Verdict)
+			t.Fatalf("gmail 2h1m write: verdict = %s, want broken", broken.Verdict)
 		}
 	})
 
-	t.Run("voice-memos aggregates multiple pipelines and ignores unknown sla", func(t *testing.T) {
+	t.Run("voice-memos keeps heartbeat even with old writes and ignores unknown sla", func(t *testing.T) {
 		rows := []PipelineRow{
 			{
 				Pipeline:                   "alice_voice_recordings",
 				Status:                     "ok",
 				RunStatus:                  "ok",
 				LastRunAt:                  ptrTime(now.Add(-13 * time.Hour)),
+				LastWriteAt:                ptrTime(now.Add(-90 * 24 * time.Hour)),
 				ExpectedRunIntervalSeconds: ptrInt64(172800),
 				SLADetectorStatus:          ptrStr("ok"),
 			},
@@ -143,6 +182,7 @@ func TestEvaluateVerdicts(t *testing.T) {
 				Status:                     "ok",
 				RunStatus:                  "ok",
 				LastRunAt:                  ptrTime(now.Add(-6 * time.Minute)),
+				LastWriteAt:                ptrTime(now.Add(-10 * 24 * time.Hour)),
 				ExpectedRunIntervalSeconds: ptrInt64(1800),
 				SLADetectorStatus:          ptrStr("unknown"),
 			},
@@ -151,6 +191,7 @@ func TestEvaluateVerdicts(t *testing.T) {
 				Status:                     "ok",
 				RunStatus:                  "ok",
 				LastRunAt:                  ptrTime(now.Add(-4 * time.Minute)),
+				LastWriteAt:                ptrTime(now.Add(-10 * time.Hour)),
 				ExpectedRunIntervalSeconds: ptrInt64(1800),
 				SLADetectorStatus:          ptrStr("ok"),
 			},
@@ -182,16 +223,17 @@ func TestEvaluateVerdicts(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back to last_write_at when last_run_at is nil", func(t *testing.T) {
+	t.Run("slack with fresh heartbeat and nil write is broken", func(t *testing.T) {
 		rows := []PipelineRow{{
 			Pipeline:                   "slack",
 			Status:                     "ok",
-			LastWriteAt:                ptrTime(now.Add(-5 * time.Minute)),
+			RunStatus:                  "ok",
+			LastRunAt:                  ptrTime(now.Add(-2 * time.Minute)),
 			ExpectedRunIntervalSeconds: ptrInt64(1800),
 		}}
 		r := Evaluate("slack", rows, now)
-		if r.Verdict != VerdictOK || r.LastSyncAt == nil || !r.LastSyncAt.Equal(now.Add(-5*time.Minute)) {
-			t.Fatalf("fallback failed: %+v", r)
+		if r.Verdict != VerdictBroken {
+			t.Fatalf("verdict = %s, want broken when last_write_at is nil", r.Verdict)
 		}
 	})
 }
@@ -202,7 +244,7 @@ func TestCLI(t *testing.T) {
 	nowFunc = func() time.Time { return now }
 	t.Cleanup(func() { nowFunc = oldNow })
 
-	t.Run("text output for slack", func(t *testing.T) {
+	t.Run("text output for slack shows last_sync_at and poller_last_run_at separately", func(t *testing.T) {
 		var gotSQL string
 		query := func(_ context.Context, _, sql string) ([]PipelineRow, error) {
 			gotSQL = sql
@@ -210,7 +252,8 @@ func TestCLI(t *testing.T) {
 				Pipeline:                   "slack",
 				Status:                     "ok",
 				RunStatus:                  "ok",
-				LastRunAt:                  ptrTime(now.Add(-2 * time.Minute)),
+				LastRunAt:                  ptrTime(now.Add(-1 * time.Minute)),
+				LastWriteAt:                ptrTime(now.Add(-5 * time.Minute)),
 				ExpectedRunIntervalSeconds: ptrInt64(1800),
 			}}, nil
 		}
@@ -223,7 +266,13 @@ func TestCLI(t *testing.T) {
 			t.Fatalf("unexpected sql: %s", gotSQL)
 		}
 		text := out.String()
-		for _, want := range []string{"source: slack", "verdict: ok", "last_sync_at: 2026-11-22T17:13:00Z", "age: 2m"} {
+		for _, want := range []string{
+			"source: slack",
+			"verdict: ok",
+			"last_sync_at: 2026-11-22T17:10:00Z",
+			"age: 5m",
+			"poller_last_run_at: 2026-11-22T17:14:00Z (age 1m)",
+		} {
 			if !strings.Contains(text, want) {
 				t.Errorf("output missing %q:\n%s", want, text)
 			}

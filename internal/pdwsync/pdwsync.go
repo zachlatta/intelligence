@@ -60,6 +60,8 @@ type PipelineReport struct {
 	LastSyncAt      *time.Time `json:"last_sync_at,omitempty"`
 	AgeSeconds      *int64     `json:"age_seconds,omitempty"`
 	Age             string     `json:"age,omitempty"`
+	PollerLastRunAt *time.Time `json:"poller_last_run_at,omitempty"`
+	PollerAge       string     `json:"poller_age,omitempty"`
 	LastWriteAt     *time.Time `json:"last_write_at,omitempty"`
 	NewestEventAt   *time.Time `json:"newest_event_at,omitempty"`
 	PDWStatus       string     `json:"pdw_status,omitempty"`
@@ -72,15 +74,17 @@ type PipelineReport struct {
 
 // Report is the evaluated health of a logical PDW source (one or more pipelines).
 type Report struct {
-	Source     string           `json:"source"`
-	CheckedAt  time.Time        `json:"checked_at"`
-	Verdict    Verdict          `json:"verdict"`
-	LastSyncAt *time.Time       `json:"last_sync_at,omitempty"`
-	AgeSeconds *int64           `json:"age_seconds,omitempty"`
-	Age        string           `json:"age,omitempty"`
-	LastError  string           `json:"last_error,omitempty"`
-	Reason     string           `json:"reason"`
-	Pipelines  []PipelineReport `json:"pipelines"`
+	Source          string           `json:"source"`
+	CheckedAt       time.Time        `json:"checked_at"`
+	Verdict         Verdict          `json:"verdict"`
+	LastSyncAt      *time.Time       `json:"last_sync_at,omitempty"`
+	AgeSeconds      *int64           `json:"age_seconds,omitempty"`
+	Age             string           `json:"age,omitempty"`
+	PollerLastRunAt *time.Time       `json:"poller_last_run_at,omitempty"`
+	PollerAge       string           `json:"poller_age,omitempty"`
+	LastError       string           `json:"last_error,omitempty"`
+	Reason          string           `json:"reason"`
+	Pipelines       []PipelineReport `json:"pipelines"`
 }
 
 // QueryFunc runs a read-only PDW SQL query and decodes pipeline health rows.
@@ -193,6 +197,8 @@ func Evaluate(source string, rows []PipelineRow, now time.Time) Report {
 	rep.LastSyncAt = worst.LastSyncAt
 	rep.AgeSeconds = worst.AgeSeconds
 	rep.Age = worst.Age
+	rep.PollerLastRunAt = worst.PollerLastRunAt
+	rep.PollerAge = worst.PollerAge
 	rep.LastError = worst.LastError
 	if len(rep.Pipelines) == 1 {
 		rep.Reason = worst.Reason
@@ -204,17 +210,32 @@ func Evaluate(source string, rows []PipelineRow, now time.Time) Report {
 	return rep
 }
 
+// usesWriteTimestamp reports whether pipeline is judged on last_write_at (last time
+// data actually landed) rather than the poller heartbeat. Continuous feeds like Slack
+// and Gmail write frequently, whereas voice-memo sources have normal quiet periods.
+func usesWriteTimestamp(pipeline string) bool {
+	return pipeline == "slack" || pipeline == "gmail"
+}
+
 func evaluatePipeline(row PipelineRow, now time.Time) PipelineReport {
 	behindThresh, brokenThresh := thresholds(row)
 	pr := PipelineReport{
 		Pipeline:        row.Pipeline,
 		Label:           row.Label,
 		Verdict:         VerdictOK,
+		PollerLastRunAt: utcPtr(row.LastRunAt),
 		LastWriteAt:     utcPtr(row.LastWriteAt),
 		NewestEventAt:   utcPtr(row.NewestEventAt),
 		PDWStatus:       strings.ToLower(strings.TrimSpace(row.Status)),
 		BehindThreshold: formatDuration(behindThresh),
 		BrokenThreshold: formatDuration(brokenThresh),
+	}
+	if pr.PollerLastRunAt != nil {
+		pollerAge := now.Sub(*pr.PollerLastRunAt)
+		if pollerAge < 0 {
+			pollerAge = 0
+		}
+		pr.PollerAge = formatDuration(pollerAge)
 	}
 	if row.SLADetectorStatus != nil {
 		pr.SLADetector = strings.ToLower(strings.TrimSpace(*row.SLADetectorStatus))
@@ -223,14 +244,27 @@ func evaluatePipeline(row PipelineRow, now time.Time) PipelineReport {
 		pr.LastError = strings.TrimSpace(*row.LastError)
 	}
 
-	// Prefer last_run_at (poller/uploader heartbeat), falling back to last_write_at then newest_event_at.
-	switch {
-	case row.LastRunAt != nil:
-		pr.LastSyncAt = utcPtr(row.LastRunAt)
-	case row.LastWriteAt != nil:
-		pr.LastSyncAt = utcPtr(row.LastWriteAt)
-	case row.NewestEventAt != nil:
-		pr.LastSyncAt = utcPtr(row.NewestEventAt)
+	writeBased := usesWriteTimestamp(row.Pipeline)
+	if writeBased {
+		// For Slack and Gmail, a failing poller can keep last_run_at fresh while
+		// nothing lands; judge last successful sync on last_write_at (never heartbeat).
+		switch {
+		case row.LastWriteAt != nil:
+			pr.LastSyncAt = utcPtr(row.LastWriteAt)
+		case row.NewestEventAt != nil:
+			pr.LastSyncAt = utcPtr(row.NewestEventAt)
+		}
+	} else {
+		// Voice memos are usage-driven and legitimately quiet for days/weeks:
+		// prefer last_run_at (uploader/poller heartbeat), falling back to last_write_at.
+		switch {
+		case row.LastRunAt != nil:
+			pr.LastSyncAt = utcPtr(row.LastRunAt)
+		case row.LastWriteAt != nil:
+			pr.LastSyncAt = utcPtr(row.LastWriteAt)
+		case row.NewestEventAt != nil:
+			pr.LastSyncAt = utcPtr(row.NewestEventAt)
+		}
 	}
 
 	var age time.Duration
@@ -245,6 +279,7 @@ func evaluatePipeline(row PipelineRow, now time.Time) PipelineReport {
 	}
 
 	runStatus := strings.ToLower(strings.TrimSpace(row.RunStatus))
+	dataStatus := strings.ToLower(strings.TrimSpace(row.DataStatus))
 	status := pr.PDWStatus
 	errRows := int64Val(row.StateErrorRows)
 	attnRows := int64Val(row.StateAttentionRows)
@@ -257,6 +292,9 @@ func evaluatePipeline(row PipelineRow, now time.Time) PipelineReport {
 	if isBrokenStatus(runStatus) && runStatus != status {
 		brokenReasons = append(brokenReasons, "run_status is "+runStatus)
 	}
+	if writeBased && isBrokenStatus(dataStatus) && dataStatus != status {
+		brokenReasons = append(brokenReasons, "data_status is "+dataStatus)
+	}
 	if errRows > 0 {
 		brokenReasons = append(brokenReasons, fmt.Sprintf("%d state error row(s)", errRows))
 	}
@@ -266,10 +304,14 @@ func evaluatePipeline(row PipelineRow, now time.Time) PipelineReport {
 	if hasActiveError {
 		brokenReasons = append(brokenReasons, "error: "+pr.LastError)
 	}
+	syncKind := "last sync"
+	if writeBased {
+		syncKind = "last write"
+	}
 	if pr.LastSyncAt == nil || status == "no_data" {
-		brokenReasons = append(brokenReasons, "no last sync timestamp recorded")
+		brokenReasons = append(brokenReasons, "no "+syncKind+" timestamp recorded")
 	} else if age >= brokenThresh {
-		brokenReasons = append(brokenReasons, fmt.Sprintf("last sync %s ago (broken threshold >= %s)", pr.Age, pr.BrokenThreshold))
+		brokenReasons = append(brokenReasons, fmt.Sprintf("%s %s ago (broken threshold >= %s)", syncKind, pr.Age, pr.BrokenThreshold))
 	}
 
 	if len(brokenReasons) > 0 {
@@ -285,11 +327,14 @@ func evaluatePipeline(row PipelineRow, now time.Time) PipelineReport {
 	if (runStatus == "late" || runStatus == "unknown") && runStatus != status {
 		behindReasons = append(behindReasons, "run_status is "+runStatus)
 	}
+	if writeBased && (dataStatus == "late" || dataStatus == "unknown") && dataStatus != status {
+		behindReasons = append(behindReasons, "data_status is "+dataStatus)
+	}
 	if pr.LastSyncAt != nil && age >= behindThresh {
-		behindReasons = append(behindReasons, fmt.Sprintf("last sync %s ago (behind threshold >= %s)", pr.Age, pr.BehindThreshold))
+		behindReasons = append(behindReasons, fmt.Sprintf("%s %s ago (behind threshold >= %s)", syncKind, pr.Age, pr.BehindThreshold))
 	}
 	if isBehindSLA(pr.SLADetector) {
-		behindReasons = append(behindReasons, fmt.Sprintf("poller ran %s ago, but SLA detector reports %s", pr.Age, pr.SLADetector))
+		behindReasons = append(behindReasons, fmt.Sprintf("%s %s ago, but SLA detector reports %s", syncKind, pr.Age, pr.SLADetector))
 	}
 
 	if len(behindReasons) > 0 {
@@ -299,8 +344,8 @@ func evaluatePipeline(row PipelineRow, now time.Time) PipelineReport {
 	}
 
 	pr.Verdict = VerdictOK
-	pr.Reason = fmt.Sprintf("%s synced %s ago (status %s; thresholds: behind >= %s, broken >= %s)",
-		row.Pipeline, pr.Age, orDefault(status, "ok"), pr.BehindThreshold, pr.BrokenThreshold)
+	pr.Reason = fmt.Sprintf("%s %s %s ago (status %s; thresholds: behind >= %s, broken >= %s)",
+		row.Pipeline, syncKind, pr.Age, orDefault(status, "ok"), pr.BehindThreshold, pr.BrokenThreshold)
 	return pr
 }
 
@@ -404,6 +449,9 @@ func (r Report) Format() string {
 		fmt.Fprintf(&b, "age: %s\n", r.Age)
 	} else {
 		b.WriteString("last_sync_at: unknown\n")
+	}
+	if len(r.Pipelines) == 1 && r.PollerLastRunAt != nil && usesWriteTimestamp(r.Pipelines[0].Pipeline) {
+		fmt.Fprintf(&b, "poller_last_run_at: %s (age %s)\n", r.PollerLastRunAt.UTC().Format(time.RFC3339), r.PollerAge)
 	}
 	if r.LastError != "" {
 		fmt.Fprintf(&b, "last_error: %s\n", r.LastError)
