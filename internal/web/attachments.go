@@ -17,17 +17,17 @@ func (a *app) uploadAttachment(v viewer) http.HandlerFunc {
 		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 6<<20))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&req); err != nil {
-			http.Error(w, "invalid image upload", http.StatusBadRequest)
-			return
-		}
-		media, err := attachment.Validate(req.Data)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, "invalid file upload", http.StatusBadRequest)
 			return
 		}
 		name := strings.TrimSpace(req.Name)
 		if name == "" || len(name) > 255 {
-			http.Error(w, "image name must be 1–255 bytes", http.StatusBadRequest)
+			http.Error(w, "file name must be 1–255 bytes", http.StatusBadRequest)
+			return
+		}
+		media, err := attachment.ValidateFile(name, req.Data)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		var id string

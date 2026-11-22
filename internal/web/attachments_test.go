@@ -79,10 +79,16 @@ func TestImageAttachments(t *testing.T) {
 			t.Fatalf("message delivery: %s", command.Args)
 		}
 	}
-	for _, data := range []string{`{"name":"x.svg","data":"PHN2Zz4="}`, `{"name":"x.png","data":"bad"}`} {
+	// Arbitrary non-image files (e.g. SVG, PDF, plain text) are accepted too.
+	rec = call(t, h, http.MethodPost, "/api/attachments", `{"name":"x.svg","data":"PHN2Zz4="}`, sameOriginFetch)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("svg upload: %d %s", rec.Code, rec.Body)
+	}
+	corruptPNG := base64.StdEncoding.EncodeToString([]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0})
+	for _, data := range []string{`{"name":"x.png","data":"bad"}`, `{"name":"empty.txt","data":""}`, `{"name":"corrupt.png","data":"` + corruptPNG + `"}`} {
 		rec = call(t, h, http.MethodPost, "/api/attachments", data, sameOriginFetch)
 		if rec.Code != 400 {
-			t.Fatalf("invalid upload: %d", rec.Code)
+			t.Fatalf("invalid upload (%s): %d", data, rec.Code)
 		}
 	}
 	rec = call(t, anon(h), http.MethodPost, "/api/attachments", string(body), sameOriginFetch)
@@ -169,5 +175,119 @@ func TestTooManyImageAttachmentsRefusesRun(t *testing.T) {
 	rec = call(t, h, http.MethodPost, "/api/hosts/host-1/commands", string(message), sameOriginFetch)
 	if rec.Code != 400 {
 		t.Fatalf("message image limit: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestWorkflowRunReplyAndInputAttachments(t *testing.T) {
+	h, _ := dbServer(t)
+	sendReport(t, h, wfReport())
+	b := openStream(t, h, "host-1")
+	wf := createWorkflow(t, h, workflow.Starting)
+	run := startRun(t, h, wf, "Check the Slack screenshot")
+	cmd := b.command()
+	succeed(t, b, cmd, `{"agentId":"finder-1"}`)
+	key := keyOf(t, h, "host-1")
+	if code, msg := move(t, h, key, run, map[string]string{"move": "project", "directory": "/w/app"}); code != 200 {
+		t.Fatalf("project: %d %s", code, msg)
+	}
+	cmds := commandsByKind(t, b, 2)
+	succeed(t, b, cmds[hostclient.CreateWorkspaceKind], `{"workspaceId":"ws-1","agentId":"orch-1"}`)
+	if code, msg := move(t, h, key, run, map[string]string{"move": "ask", "note": "Paste a screenshot or attach the file."}); code != 200 {
+		t.Fatalf("ask: %d %s", code, msg)
+	}
+
+	// Waiting run page renders the reply attachment container and binds imageAttachments.
+	page := get(t, h, "/workflow-runs/"+run, nil)
+	if page.Code != 200 || !strings.Contains(page.Body.String(), `src="/attachments.js"`) ||
+		!strings.Contains(page.Body.String(), `id="reply-attachments"`) ||
+		!strings.Contains(page.Body.String(), `imageAttachments(`) {
+		t.Fatalf("waiting run page missing attachment UI: %d", page.Code)
+	}
+
+	// Upload an image and an arbitrary PDF file.
+	var imgBuf bytes.Buffer
+	png.Encode(&imgBuf, image.NewRGBA(image.Rect(0, 0, 2, 2)))
+	upload := func(name string, raw []byte) string {
+		body, _ := json.Marshal(map[string]any{"name": name, "data": raw})
+		rec := call(t, h, http.MethodPost, "/api/attachments", string(body), sameOriginFetch)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("upload %s: %d %s", name, rec.Code, rec.Body)
+		}
+		var out struct {
+			Reference string `json:"reference"`
+		}
+		json.Unmarshal(rec.Body.Bytes(), &out)
+		return out.Reference
+	}
+	imgRef := upload("slack.png", imgBuf.Bytes())
+	pdfBytes := []byte("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n")
+	pdfRef := upload("notes.pdf", pdfBytes)
+
+	// Send reply with both attachments (no extra prose required, or with prose).
+	replyBody, _ := json.Marshal(map[string]string{"text": "Here you go:\n\nAttached files:\n" + imgRef + "\n" + pdfRef})
+	rec := call(t, h, http.MethodPost, "/api/workflow-runs/"+run+"/reply", string(replyBody), sameOriginFetch)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("reply with attachments: %d %s", rec.Code, rec.Body)
+	}
+	replyCmd := b.command()
+	var delivered hostclient.AgentArgs
+	if err := json.Unmarshal(replyCmd.Args, &delivered); err != nil {
+		t.Fatal(err)
+	}
+	if len(delivered.Attachments) != 2 {
+		t.Fatalf("expected 2 delivered attachments, got %d: %s", len(delivered.Attachments), replyCmd.Args)
+	}
+	if !bytes.Equal(delivered.Attachments[0].Data, imgBuf.Bytes()) || delivered.Attachments[0].MediaType != "image/png" {
+		t.Fatalf("first attachment mismatch: %+v", delivered.Attachments[0].MediaType)
+	}
+	if !bytes.Equal(delivered.Attachments[1].Data, pdfBytes) || delivered.Attachments[1].MediaType != "application/pdf" || delivered.Attachments[1].Name != "notes.pdf" {
+		t.Fatalf("second attachment mismatch: %q %q", delivered.Attachments[1].MediaType, delivered.Attachments[1].Name)
+	}
+	if strings.Contains(delivered.Text, "[attachment:") ||
+		!strings.Contains(delivered.Text, delivered.Attachments[0].Path()) ||
+		!strings.Contains(delivered.Text, delivered.Attachments[1].Path()) ||
+		!strings.Contains(delivered.Text, "notes.pdf") {
+		t.Fatalf("unexpected delivered reply text: %s", delivered.Text)
+	}
+
+	// Additional input on the now-running run also delivers file attachments.
+	txtBytes := []byte("follow-up log line\n")
+	txtRef := upload("error.log", txtBytes)
+	inputBody, _ := json.Marshal(map[string]string{"text": "Attached files:\n" + txtRef})
+	rec = call(t, h, http.MethodPost, "/api/workflow-runs/"+run+"/input", string(inputBody), sameOriginFetch)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("input with attachment: %d %s", rec.Code, rec.Body)
+	}
+	inputCmd := b.command()
+	var deliveredInput hostclient.AgentArgs
+	if err := json.Unmarshal(inputCmd.Args, &deliveredInput); err != nil {
+		t.Fatal(err)
+	}
+	if len(deliveredInput.Attachments) != 1 || !bytes.Equal(deliveredInput.Attachments[0].Data, txtBytes) ||
+		!strings.HasSuffix(deliveredInput.Attachments[0].Path(), ".log") ||
+		!strings.Contains(deliveredInput.Text, deliveredInput.Attachments[0].Path()) {
+		t.Fatalf("unexpected delivered input: %s", inputCmd.Args)
+	}
+
+	// Cross-account attachment reference is rejected on /input too.
+	ts := h.(*testServer)
+	bob, err := ts.store.Create(t.Context(), "bob-reply", testPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asBob := sessionFor(t, ts.store, bob)
+	bobUpload, _ := json.Marshal(map[string]any{"name": "secret.txt", "data": []byte("bob secret")})
+	rec = call(t, h, http.MethodPost, "/api/attachments", string(bobUpload), sameOriginFetch, asBob)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("bob upload: %d %s", rec.Code, rec.Body)
+	}
+	var bobOut struct {
+		Reference string `json:"reference"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &bobOut)
+	badInput, _ := json.Marshal(map[string]string{"text": "Steal " + bobOut.Reference})
+	rec = call(t, h, http.MethodPost, "/api/workflow-runs/"+run+"/input", string(badInput), sameOriginFetch)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("cross-account attachment in input: %d %s", rec.Code, rec.Body)
 	}
 }

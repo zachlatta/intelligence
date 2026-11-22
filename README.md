@@ -1348,22 +1348,26 @@ All activity fields are readable through `/api/sql`; status writes use the exist
 
 ### Attachments
 
-Workflow task submission (including the Run dialog), new agent/workspace forms, and existing-session
-chat boxes share an image picker: click **＋ Attach**, drop files onto the form, or paste into the prompt. Thumbnails
-can be removed before submission. PNG, JPEG and GIF are supported, up to 8 images, 4 MiB per image,
-8 MiB total and 40 megapixels per image. Images upload when the task is submitted.
+Workflow task submission (including the Run dialog), workflow run reply and additional-input boxes,
+new agent/workspace forms, and existing-session chat boxes share a file and image picker: click
+**＋ Attach**, drop files onto the box, or paste into the prompt. Thumbnails (for images) or file
+badges (for other files) can be removed before submission. Images and arbitrary files are supported,
+up to 8 files, 4 MiB per file, 8 MiB total (and 40 megapixels for PNG, JPEG and GIF images). Files
+upload when the message or task is submitted.
 
-`POST /api/attachments` takes JSON `{"name":"screenshot.png","data":"<base64 image bytes>"}`
+`POST /api/attachments` takes JSON `{"name":"screenshot.png","data":"<base64 file bytes>"}`
 and returns 201 with `{"id","reference"}`. Append the returned `[attachment:<uuid>]` reference to
-a workflow's input, an agent's prompt, or a `send_message` command's `text`. Image bytes, media type, name and owner are stored in
+a workflow's input, a workflow run reply or additional input, an agent's prompt, or a `send_message`
+command's `text`. File bytes, media type, name and owner are stored in
 `public.attachments`; all are readable through `/api/sql`, restricted to their account by RLS.
-The command queue resolves references only for the destination host's account and carries images
-in the authenticated host stream. Before starting an agent, the host writes private delivery
-copies under `.factory-scratch/attachments/` in its working directory and replaces references in
-the prompt with those file paths. Workflows deliver copies to both the project finder and the
-orchestrator in its new workspace; the prompt tells it to pass the paths to sub-agents. Images
-are files for the agent's image-reading tools, rather than base64 in the model prompt. Host copies
-and uploaded images currently remain until their directory or account is removed.
+The command queue resolves references only for the destination host's account and carries files
+in the authenticated host stream. Before starting an agent or delivering a message, the host writes
+private delivery copies under `.factory-scratch/attachments/` in its working directory and replaces
+references in the prompt with those file paths. Workflows deliver copies to both the project finder
+and the orchestrator in its new workspace, and to the orchestrator's working directory on replies
+and additional input; the prompt tells it to pass the paths to sub-agents. Files are written to disk
+for the agent's file- and image-reading tools, rather than base64 in the model prompt. Host copies
+and uploaded files currently remain until their directory or account is removed.
 
 Session chat supports images with Steer, Interrupt, and Queue, including images without text.
 After the server accepts the message, its previews clear; a failed submission keeps them for retry.

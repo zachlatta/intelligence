@@ -178,3 +178,51 @@ func TestImageDeliveryToExistingSession(t *testing.T) {
 		})
 	}
 }
+
+func TestFileAttachmentDeliveryToExistingSession(t *testing.T) {
+	scratch := filepath.Join("..", "..", ".factory-scratch")
+	if err := os.MkdirAll(scratch, 0700); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(scratch, "chat-files-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir, err = filepath.Abs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pdfData := []byte("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n")
+	file := attachment.Image{
+		ID:        "00000000-0000-4000-8000-000000000002",
+		Name:      "report.pdf",
+		MediaType: "application/pdf",
+		Data:      pdfData,
+	}
+	d := daemon(t)
+	ag := paseotest.Agent("a1", "w1", "idle")
+	ag["cwd"] = dir
+	d.SetAgents(ag)
+	w := watcher(t, d)
+	eventually(t, w, "agent", func(s PaseoStatus) bool { return len(s.Agents) == 1 })
+	args, _ := json.Marshal(map[string]any{
+		"agentId":     "a1",
+		"text":        "Read " + file.Path(),
+		"attachments": []attachment.Image{file},
+	})
+	if _, err := execute(t, w, SendMessageKind, string(args)); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, file.Path())
+	if !strings.HasSuffix(path, ".pdf") {
+		t.Fatalf("expected .pdf path, got %q", path)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(got, pdfData) {
+		t.Fatalf("delivered file: %v", err)
+	}
+	if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0600 {
+		t.Fatalf("file permissions: %v %v", st, err)
+	}
+}
