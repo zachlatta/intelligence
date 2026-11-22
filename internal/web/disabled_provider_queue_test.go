@@ -56,6 +56,9 @@ func TestDisabledOrchestratorCannotStrandProjectFinder(t *testing.T) {
 				b := sendReport(t, h, wfReport())
 				def := workflow.Starting
 				def.Orchestrator.Provider = provider
+				if provider == "antigravity" {
+					def.Orchestrator.Thinking = ""
+				}
 				if _, err := d.Owner.Exec(t.Context(), `UPDATE provider_plan_settings SET enabled=$2 WHERE provider=$1`, provider, alreadyRunning); err != nil {
 					t.Fatal(err)
 				}
@@ -137,8 +140,14 @@ func TestDisabledProviderDoesNotBlockHostQueue(t *testing.T) {
 					if finder {
 						def.Project = workflow.Starting.Project
 						def.Project.Provider = provider
+						if provider == "antigravity" {
+							def.Project.Thinking = ""
+						}
 					} else {
 						def.Orchestrator.Provider = provider
+						if provider == "antigravity" {
+							def.Orchestrator.Thinking = ""
+						}
 					}
 					wf := createWorkflow(t, h, def)
 					if _, err := d.Owner.Exec(t.Context(), `UPDATE provider_plan_settings SET enabled=$2 WHERE provider=$1`, provider, retry); err != nil {

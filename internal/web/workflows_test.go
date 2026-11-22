@@ -514,6 +514,19 @@ func TestAWorkflowThatCannotRunIsRefused(t *testing.T) {
 	if rec := call(t, h, http.MethodPost, "/api/workflows", wfBody(t, " ", workflow.Starting), sameOriginFetch); rec.Code != http.StatusBadRequest {
 		t.Errorf("no name: %d", rec.Code)
 	}
+	ag := workflow.Starting
+	ag.Orchestrator.Provider = "antigravity"
+	ag.Orchestrator.Model = "gemini-4-neon-medium"
+	ag.Orchestrator.Thinking = "medium"
+	if rec := call(t, h, http.MethodPost, "/api/workflows", wfBody(t, "antigravity with thinking", ag), sameOriginFetch); rec.Code != http.StatusBadRequest ||
+		!strings.Contains(rec.Body.String(), "model ID") {
+		t.Errorf("antigravity with thinking = %d %s", rec.Code, rec.Body)
+	}
+	ag.Orchestrator.Thinking = ""
+	sendReport(t, h, wfReport())
+	if rec := call(t, h, http.MethodPost, "/api/workflows", wfBody(t, "antigravity clean", ag), sameOriginFetch); rec.Code != http.StatusCreated {
+		t.Errorf("antigravity without thinking = %d %s", rec.Code, rec.Body)
+	}
 }
 
 func TestWorkflowPages(t *testing.T) {

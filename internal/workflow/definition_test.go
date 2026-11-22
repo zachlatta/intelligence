@@ -102,6 +102,16 @@ func TestParseRefusesWhatCannotRun(t *testing.T) {
 		"no orchestrator":    {func(d *Definition) { d.Orchestrator.Provider = "" }, "provider"},
 		"no project agent":   {func(d *Definition) { d.Project.Provider = "" }, "provider"},
 		"orchestrator blank": {func(d *Definition) { d.Orchestrator.Instructions = "" }, "instructions"},
+		"antigravity orch thinking": {func(d *Definition) {
+			d.Orchestrator.Provider = "antigravity"
+			d.Orchestrator.Model = "gemini-4-neon-medium"
+			d.Orchestrator.Thinking = "medium"
+		}, "model ID"},
+		"antigravity proj thinking": {func(d *Definition) {
+			d.Project.Provider = "antigravity"
+			d.Project.Model = "gemini-4-neon-medium"
+			d.Project.Thinking = "high"
+		}, "model ID"},
 	} {
 		d := ok()
 		c.mod(&d)
@@ -114,10 +124,13 @@ func TestParseRefusesWhatCannotRun(t *testing.T) {
 		t.Error("an unknown field should be refused")
 	}
 	fixed := ok()
-	fixed.Project = Project{Mode: "fixed", Directory: "/home/someone/dev/app"}
+	fixed.Project = Project{Mode: "fixed", Directory: "/home/someone/dev/app", Provider: "antigravity", Thinking: "medium"}
+	fixed.Orchestrator.Provider = "antigravity"
+	fixed.Orchestrator.Model = "gemini-4-neon-medium"
+	fixed.Orchestrator.Thinking = ""
 	b, _ := json.Marshal(fixed)
 	if _, err := Parse(b); err != nil {
-		t.Errorf("a fixed project needs no agent: %v", err)
+		t.Errorf("a fixed project needs no agent and antigravity without thinking is valid: %v", err)
 	}
 }
 
