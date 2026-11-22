@@ -119,6 +119,7 @@ func TestParseCommandChecksEachKind(t *testing.T) {
 		SendMessageKind + " steer":     `{"agentId":"a1","text":"hi","behavior":"steer"}`,
 		SendMessageKind + " interrupt": `{"agentId":"a1","text":"hi","behavior":"interrupt"}`,
 		SendMessageKind + " queue":     `{"agentId":"a1","text":"hi","behavior":"queue"}`,
+		SwitchLoginKind:                `{"provider":"claude","login":"two@example.com","from":"one@example.com","why":"one is out of quota"}`,
 	}
 	for name, args := range good {
 		kind, _, _ := strings.Cut(name, " ")
@@ -144,6 +145,9 @@ func TestParseCommandChecksEachKind(t *testing.T) {
 		CancelAgentKind + " behavior":              `{"agentId":"a1","behavior":"queue"}`,
 		"delete_everything x":                      `{}`,
 		CreateWorkspaceKind + " not an object":     `[1]`,
+		SwitchLoginKind + " no login":              `{"provider":"claude"}`,
+		SwitchLoginKind + " codex":                 `{"provider":"codex","login":"two"}`,
+		SwitchLoginKind + " slot":                  `{"provider":"claude","login":"two","slot":2}`,
 	}
 	for name, args := range bad {
 		kind, _, _ := strings.Cut(name, " ")

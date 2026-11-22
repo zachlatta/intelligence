@@ -25,12 +25,12 @@ func materializeImages(cwd string, images []attachment.Image) error {
 		if len(img.ID) != 36 || !attachment.Reference.MatchString("[attachment:"+img.ID+"]") {
 			return fmt.Errorf("invalid attachment ID")
 		}
-		media, err := attachment.Validate(img.Data)
+		media, err := attachment.ValidateFile(img.Name, img.Data)
 		if err != nil {
 			return err
 		}
 		if media != img.MediaType {
-			return fmt.Errorf("image type mismatch")
+			return fmt.Errorf("attachment type mismatch")
 		}
 		if total += len(img.Data); total > attachment.MaxTotal {
 			return fmt.Errorf("too many image attachments")
