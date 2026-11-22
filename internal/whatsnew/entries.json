@@ -8,6 +8,14 @@
     "mediaAlt": "The workflow editor's Orchestrator panel with provider codex, model gpt-6.2-sol, thinking high and Speed set to Ultrafast."
   },
   {
+    "id": "multi-host-plan-auth",
+    "released": "2026-11-22",
+    "title": "Per-host plan auth status across multiple hosts",
+    "summary": "Each plan card on Hosts and Plans now shows every host signed into that login with its own slot and auth status (active, standby, expiring, broken, read error or stale), plus host-attributed errors. Hosts without cswap fall back to claude auth status so they join active-login tracking, model-group suggestions and expiry alerts with host-appropriate re-auth commands.",
+    "media": "multi-host-plan-auth-live.png",
+    "mediaAlt": "A local Intelligence instance showing the Hosts page with per-host plan auth badges across box-alpha and box-beta (active, expiring, broken) and the login alert banner."
+  },
+  {
     "id": "antigravity-neon-medium",
     "released": "2026-11-20",
     "title": "Antigravity is back with Gemini 4 Neon Medium",

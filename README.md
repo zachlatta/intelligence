@@ -603,10 +603,14 @@ stream as a `usage` frame. Paseo's own usage report is not used: it shows only t
 login and misses providers.
 
 - Claude: `cswap list --json`, so every login cswap holds, not only the active one. A login is its
-  email (two organizations of one email are two logins); cswap's number for it is kept as `slot`,
-  which can change. The reading's time is cswap's `usageFetchedAt`: cswap caches. Ultra logins
-  report a weekly allowance and no five-hour window. Fable has its own weekly cap (`fable/7d`) and
-  also spends the general weekly allowance (`7d`).
+  email (two organizations of one email are two logins); each host keeps its own cswap `slot` and
+  `auth_source` in `usage_sources`. The reading's time is cswap's `usageFetchedAt`: cswap caches.
+  Ultra logins report a weekly allowance and no five-hour window. Fable has its own weekly cap
+  (`fable/7d`) and also spends the general weekly allowance (`7d`). On hosts without `cswap`, the
+  host falls back to `claude auth status` (`auth_source = 'claude_cli'`), recording the signed-in
+  email, plan and `loginExpiresAt` so the host participates in active-login tracking, model-group
+  suggestions (using fresh quota readings from another host on the same login), expiry alerts and
+  host-appropriate re-auth commands.
 - Codex: the subscription meter (`chatgpt.com/backend-api/wham/usage`) with the login's own token
   from `~/.codex/auth.json`, sent nowhere else; when the meter fails, the newest rate-limit reading in
   the local sessions, noted as such. Pro currently reports a weekly allowance. Shorter windows
@@ -629,8 +633,10 @@ host's tool used, and when (cswap switches Claude logins).
 The views: `usage_current` (each window's latest value; `remaining_pct` is null once the window
 has reset with no reading since, and `stale` after 15 minutes without one), `usage_pace` (% left
 minus % of the window still to run: positive is under-spending), `usage_cycles` (the most of each
-window used before each reset, so how much of each week each login used) and `usage_totals`
-(logins, and weeks of quota left across them, per provider).
+window used before each reset, so how much of each week each login used), `usage_totals`
+(logins, and weeks of quota left across them, per provider), and `plan_host_auth` (each host's
+auth status for every login: `active`, `standby`, `expiring`, `broken`, `error` or `stale`, with
+its per-host slot, `auth_source` and `login_expires_at`, shown as badges on Plans and `/`).
 
 ### Host resources
 
@@ -1625,11 +1631,15 @@ stopped once a working login is active, and asks for the fix.
 
 The fix text and the command come from SQL functions (`login_fix`, `login_fix_command`,
 `login_fix_first_step`), so every note says the same. For a Claude login cswap manages (its email is
-known), the command is the whole safe sequence from the 2026-11-19 fix: sign in inside a throwaway
+known and `auth_source` is not `claude_cli`), the command is the whole safe sequence from the
+2026-11-19 fix: sign in inside a throwaway
 `CLAUDE_CONFIG_DIR` (`claude auth login --claudeai --email …`), `cswap add` and `export` there with a
 throwaway `XDG_DATA_HOME`, then `cswap import --force` into the host's store. It never signs in over
-the live login every agent on the host uses, which a bare `claude auth login` would. Where the login
-is unknown (no cswap meter), the button says Copy first step and copies only `claude auth login
+the live login every agent on the host uses, which a bare `claude auth login` would. On a host
+without cswap (`auth_source = 'claude_cli'`), the command is `claude auth login --claudeai --email …`
+directly, and a routine `claude auth status` check will not close a transcript auth incident until a
+fresh sign-in advances `login_expires_at` (or someone marks it fixed). Where the login
+is unknown (no cswap meter or CLI status), the button says Copy first step and copies only `claude auth login
 --claudeai`, and How to fix says to use a throwaway config directory if cswap manages the host.
 Signing in still happens on the host (an OAuth link to open and a code to paste).
 

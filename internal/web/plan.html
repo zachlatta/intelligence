@@ -1,11 +1,16 @@
 {{define "plan"}}{{/* one login's plan, with the time to measure from: planAt .Now plan */}}{{with .Login}}
 <div class="plan-head">
   <span class="name">{{.Label}}</span>
-  <span class="badge">{{.Provider}}{{if .Slot}} #{{.Slot}}{{end}}</span>
+  <span class="badge">{{.Provider}}{{if and .Slot (not .Hosts)}} #{{.Slot}}{{end}}</span>
   {{if .Plan}}<span class="badge blue">{{.Plan}}</span>{{end}}
-  <span class="meta grow">{{if .ActiveOn}}active on {{join .ActiveOn ", "}}{{end}}</span>
+  <span class="meta grow">{{if and .ActiveOn (not .Hosts)}}active on {{join .ActiveOn ", "}}{{end}}</span>
 </div>
-{{if .Error}}<p class="plan-err">{{.Error}}</p>{{end}}
+{{if .Hosts}}
+<div class="plan-hosts">{{range .Hosts}}<span class="badge {{hostAuthClass .}}" title="{{hostAuthTitle $.Now .}}">{{hostAuthLabel $.Now .}}</span>{{end}}</div>
+{{end}}
+{{$shownErr := false}}
+{{range .Hosts}}{{if and .Error (or (eq .Status "error") (eq .Status "broken"))}}<p class="plan-err">{{.Host}}: {{.Error}}</p>{{$shownErr = true}}{{end}}{{end}}
+{{if and (not $shownErr) .Error}}<p class="plan-err">{{.Error}}</p>{{end}}
 {{if .Note}}<p class="meta plan-note">{{.Note}}</p>{{end}}
 {{range .Windows}}
 <div class="win {{paceClass .}}" title="{{pct .UsedPct}} used{{if .Stale}}; last read {{ago $.Now .LastObserved}}{{end}}">

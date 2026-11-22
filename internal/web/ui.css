@@ -250,6 +250,7 @@ legend { font-size: 12.5px; font-weight: 600; color: var(--fg-2); padding: 0 .4r
 /* a login's plan: its windows as meters */
 .plan-head { display: flex; flex-wrap: wrap; gap: .2rem .6rem; align-items: center; margin-bottom: .35rem; }
 .plan-head .name { font-weight: 600; }
+.plan-hosts { display: flex; flex-wrap: wrap; gap: .3rem .4rem; align-items: center; margin-bottom: .35rem; }
 .win { display: flex; flex-wrap: wrap; gap: .15rem .75rem; align-items: center; font-size: 13px; padding: .15rem 0; font-variant-numeric: tabular-nums; }
 .win .wid { min-width: 3.5rem; color: var(--muted); font-family: var(--mono); font-size: 12px; }
 .win .left { min-width: 5.75rem; font-variant-numeric: tabular-nums; font-weight: 600; }

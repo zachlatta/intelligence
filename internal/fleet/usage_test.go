@@ -353,3 +353,63 @@ func TestUsageHistoryAndWeeklyPeaks(t *testing.T) {
 		t.Errorf("peaks = %+v", peaks)
 	}
 }
+
+func TestMultiHostPlanAuthKeepsPerHostSlotsAndStatus(t *testing.T) {
+	d := dbtest.New(t)
+	r := New(d.Owner)
+	now := time.Now().UTC().Truncate(time.Second)
+	reset := now.Add(84 * time.Hour)
+	// Two online hosts in the same account.
+	h1 := full()
+	h1.Name = "host-1"
+	h2 := full()
+	h2.Name = "host-2"
+	record(t, r, h1, now)
+	record(t, r, h2, now)
+	if _, err := d.Owner.Exec(ctx, "UPDATE hosts SET stream_id = gen_random_uuid(), last_seen = $1 WHERE name IN ('host-1', 'host-2')", now); err != nil {
+		t.Fatal(err)
+	}
+	// host-1 manages both logins via cswap (ada #1 active, grace #2 standby).
+	a1 := ada(true, week(20, reset))
+	a1.AuthSource = usage.AuthCswap
+	a1.LoginExpiresAt = now.Add(20 * 24 * time.Hour)
+	g1 := grace(false, week(10, reset))
+	g1.AuthSource = usage.AuthCswap
+	g1.LoginExpiresAt = now.Add(2 * 24 * time.Hour) // expiring soon on host-1
+	recordUsage(t, r, "host-1", claudeRead(now, a1, g1))
+
+	// host-2 uses claude_cli (no cswap) signed into grace, with no local quota windows.
+	g2 := usage.Account{
+		ID:             "grace@example.com",
+		Label:          "grace@example.com",
+		Plan:           "max",
+		Active:         true,
+		AuthSource:     usage.AuthClaudeCLI,
+		ObservedAt:     now,
+		LoginExpiresAt: now.Add(25 * 24 * time.Hour),
+	}
+	recordUsage(t, r, "host-2", claudeRead(now, g2))
+
+	v, err := r.Plans(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Plans) != 2 {
+		t.Fatalf("plans = %+v", v.Plans)
+	}
+	// grace should show host-2 active (claude_cli, no slot) and host-1 expiring (cswap, slot 2),
+	// while still carrying the quota window read by host-1.
+	gr := v.Plans[1]
+	if gr.Account != "grace@example.com" || len(gr.Windows) != 1 || len(gr.ActiveOn) != 1 || gr.ActiveOn[0] != "host-2" {
+		t.Fatalf("grace = %+v", gr)
+	}
+	if len(gr.Hosts) != 2 {
+		t.Fatalf("grace hosts = %+v", gr.Hosts)
+	}
+	if gr.Hosts[0].Host != "host-2" || gr.Hosts[0].Status != "active" || gr.Hosts[0].AuthSource != usage.AuthClaudeCLI || gr.Hosts[0].Slot != 0 {
+		t.Errorf("grace host[0] = %+v", gr.Hosts[0])
+	}
+	if gr.Hosts[1].Host != "host-1" || gr.Hosts[1].Status != "expiring" || gr.Hosts[1].AuthSource != usage.AuthCswap || gr.Hosts[1].Slot != 2 {
+		t.Errorf("grace host[1] = %+v", gr.Hosts[1])
+	}
+}
