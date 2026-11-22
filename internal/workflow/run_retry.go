@@ -59,6 +59,14 @@ func (e *Engine) RetryRun(ctx context.Context, account int64, runID string) (str
 		if r.Status != Failed {
 			return conflict("only a failed run can be retried (%s)", strings.ReplaceAll(r.Status, "_", " "))
 		}
+		var existing string
+		err = tx.QueryRow(ctx, `SELECT id::text FROM workflow_runs WHERE retried_from_run_id = $1 ORDER BY created_at DESC LIMIT 1`, r.ID).Scan(&existing)
+		if err == nil {
+			return conflict("this run was already retried as run %s", existing)
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
 		newID, err = e.retryRunLocked(ctx, tx, account, r, false)
 		return err
 	})

@@ -173,6 +173,15 @@ func TestWorkflowUpdateAutoRetriesFailedStartRuns(t *testing.T) {
 		t.Fatalf("original run answer status = %d %+v", code, st)
 	}
 
+	// Manual retry after an automatic re-run must be refused with 409 naming the existing retry,
+	// and the Retry button must be hidden on the already-retried run's page.
+	if rec := call(t, h, http.MethodPost, "/api/workflow-runs/"+eligible+"/retry", `{}`, sameOriginFetch); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), retryID) {
+		t.Fatalf("manual retry after auto-retry = %d %q, want 409 mentioning %s", rec.Code, rec.Body.String(), retryID)
+	}
+	if page := get(t, h, "/workflow-runs/"+eligible, nil).Body.String(); strings.Contains(page, `id="retry"`) {
+		t.Fatal("already auto-retried run page should hide Retry button")
+	}
+
 	// Updating the workflow again to v3 does NOT re-retry eligible.
 	body3, _ := json.Marshal(map[string]any{"name": "Voice Memo Received", "description": "v3", "definition": updated})
 	if rec := call(t, h, http.MethodPut, "/api/workflows/"+wfID, string(body3), sameOriginFetch); rec.Code != http.StatusOK {
@@ -247,25 +256,30 @@ func TestWorkflowRunRetryAPIAndPage(t *testing.T) {
 	if code != http.StatusOK || len(res.Rows) != 1 || res.Rows[0][0] != input || res.Rows[0][1] != runID {
 		t.Fatalf("retry run SQL = %d %+v, want input=%q retried_from=%s", code, res, input, runID)
 	}
-	// Both pages link to each other.
-	if page := get(t, h, "/workflow-runs/"+runID, nil).Body.String(); !strings.Contains(page, "/workflow-runs/"+out.ID) {
-		t.Fatalf("old run page should link to retry run %s", out.ID)
+	// Both pages link to each other, and the already-retried run hides the Retry button.
+	if page := get(t, h, "/workflow-runs/"+runID, nil).Body.String(); !strings.Contains(page, "/workflow-runs/"+out.ID) || strings.Contains(page, `id="retry"`) {
+		t.Fatalf("old run page should link to retry run %s and hide Retry button", out.ID)
 	}
 	if page := get(t, h, "/workflow-runs/"+out.ID, nil).Body.String(); !strings.Contains(page, "/workflow-runs/"+runID) {
 		t.Fatalf("new run page should link to failed run %s", runID)
 	}
 
-	// Deleting the workflow disables retry.
-	if _, err := d.Owner.Exec(t.Context(), `UPDATE workflow_runs SET status='canceled', finished_at=now() WHERE id=$1`, out.ID); err != nil {
+	// A second POST /retry on the same failed run returns 409 mentioning the existing retry's id.
+	if rec := call(t, h, http.MethodPost, path, `{}`, sameOriginFetch); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), out.ID) {
+		t.Fatalf("second retry = %d %q, want 409 mentioning %s", rec.Code, rec.Body.String(), out.ID)
+	}
+
+	// Deleting the workflow disables retry for an unretried failed run too.
+	if _, err := d.Owner.Exec(t.Context(), `UPDATE workflow_runs SET status='failed', error='boom', pending_command=NULL, finished_at=now() WHERE id=$1`, out.ID); err != nil {
 		t.Fatal(err)
 	}
 	if rec := call(t, h, http.MethodDelete, "/api/workflows/"+wfID, "", sameOriginFetch); rec.Code != http.StatusNoContent {
 		t.Fatalf("delete workflow = %d %s", rec.Code, rec.Body)
 	}
-	if rec := call(t, h, http.MethodPost, path, `{}`, sameOriginFetch); rec.Code != http.StatusConflict {
+	if rec := call(t, h, http.MethodPost, "/api/workflow-runs/"+out.ID+"/retry", `{}`, sameOriginFetch); rec.Code != http.StatusConflict {
 		t.Fatalf("retry on deleted workflow = %d %s, want 409", rec.Code, rec.Body)
 	}
-	if page := get(t, h, "/workflow-runs/"+runID, nil).Body.String(); strings.Contains(page, `id="retry"`) {
+	if page := get(t, h, "/workflow-runs/"+out.ID, nil).Body.String(); strings.Contains(page, `id="retry"`) {
 		t.Fatal("failed run page for deleted workflow should not show Retry button")
 	}
 }
