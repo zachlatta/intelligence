@@ -135,12 +135,16 @@ func (d Definition) Validate() error {
 		return errors.New("a fixed project needs the absolute directory of its repository on the host")
 	case d.Project.Mode == ProjectMatch && blank(d.Project.Provider):
 		return errors.New("the project finder needs a provider")
+	case d.Project.Mode == ProjectMatch && strings.TrimSpace(d.Project.Provider) == "antigravity" && !blank(d.Project.Thinking):
+		return errors.New("project finder: antigravity selects thinking level through the model ID; leave thinking empty")
 	case d.Project.Mode == ProjectMatch && blank(d.Project.Instructions):
 		return errors.New("the project finder needs instructions")
 	case d.Project.Mode != ProjectMatch && d.Project.Mode != ProjectFixed:
 		return fmt.Errorf("project mode %q: want %s or %s", d.Project.Mode, ProjectMatch, ProjectFixed)
 	case blank(d.Orchestrator.Provider):
 		return errors.New("the orchestrator needs a provider")
+	case strings.TrimSpace(d.Orchestrator.Provider) == "antigravity" && !blank(d.Orchestrator.Thinking):
+		return errors.New("orchestrator: antigravity selects thinking level through the model ID; leave thinking empty")
 	case blank(d.Orchestrator.Instructions):
 		return errors.New("the orchestrator needs instructions")
 	case len(d.Steps) == 0:

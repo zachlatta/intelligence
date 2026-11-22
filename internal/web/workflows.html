@@ -544,11 +544,14 @@ function emailPanel(f) {
 function inspector() {
   const d = def();
   const chips = `<div class="vars">${["input", "repo", "branch", "run"].map(V).map((v) => `<button type="button" data-var="${v}">${v}</button>`).join("")}</div>`;
-  const agentFields = (o, pre) => `<div class="fields">
+  const agentFields = (o, pre) => {
+      const ag = (o.provider || "").trim() === "antigravity";
+      return `<div class="fields">
       <div><label>Provider</label><input data-${pre}="provider" value="${esc(o.provider)}" list="providers"></div>
       <div><label>Model</label><input data-${pre}="model" value="${esc(o.model)}" placeholder="provider default"></div>
-      <div><label>Thinking</label><select data-${pre}="thinking">${opts(THINKING.map((t) => [t, t || "default"]), o.thinking || "")}</select></div></div>
+      <div><label>Thinking</label><select data-${pre}="thinking"${ag ? " disabled" : ""}>${ag ? `<option value="">in model ID</option>` : opts(THINKING.map((t) => [t, t || "default"]), o.thinking || "")}</select></div></div>
       <datalist id="providers">${providers.map((p) => `<option>${esc(p)}</option>`).join("")}</datalist>`;
+  };
   const panel = (ttl, sub, body) => `<div class="card-head"><h2>${ttl}</h2>${sub ? `<span class="meta grow">${sub}</span>` : ""}</div><div class="card-body">${body}</div>`;
   if (sel === "__trigger") {
     const hostOpts = hosts.map((h) => [h, h]);
@@ -643,6 +646,15 @@ function bind() {
     const structural = el.tagName === "SELECT";
     el.addEventListener(structural ? "change" : "input", () => {
       target()[el.dataset[attr]] = el.value;
+      if (el.dataset[attr] === "provider") {
+        const thinkingEl = $(`#inspector [data-${attr}="thinking"]`);
+        if (thinkingEl) {
+          const ag = el.value.trim() === "antigravity";
+          if (ag) target().thinking = "";
+          thinkingEl.disabled = ag;
+          thinkingEl.innerHTML = ag ? `<option value="">in model ID</option>` : opts(THINKING.map((t) => [t, t || "default"]), target().thinking || "");
+        }
+      }
       if (structural) return markDirty(true);
       markDirty(false);
       const s = def().steps.find((x) => x.id === sel), card = s && $(`#pipe .node[data-id="${CSS.escape(s.id)}"]`);

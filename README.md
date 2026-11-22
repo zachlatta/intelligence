@@ -13,9 +13,10 @@ One binary, five commands:
 
 - `intelligence` (or `intelligence server`): the web app. It runs in Coolify with a Postgres
   database, reachable only on the tailnet.
-- `intelligence host`: runs on each host as a systemd user service. It keeps one connection to
-  the local Paseo daemon over the daemon's own WebSocket protocol (`internal/paseo`), reads its
-  status, workspaces and agents, then follows the updates the daemon pushes. It holds one
+- `intelligence host`: runs on each host as a systemd user service (Linux) or a launchd user agent
+  (macOS). It keeps one connection to the local Paseo daemon over the daemon's own WebSocket
+  protocol (`internal/paseo`), reads its status, workspaces and agents, then follows the updates
+  the daemon pushes. It holds one
   WebSocket stream to the server (below) for its reports, its agents' transcripts, its plans' usage
   and the server's commands, each handled on its own (`hostclient.Client`), so a slow transcript upload
   holds up no report. The host dials out, so it needs no inbound port, and the server never dials a host.
@@ -779,6 +780,10 @@ version it started with. A run:
    never asks for permission (the one its paseo catalog marks unattended): `bypassPermissions`
    for Claude, `full-access` for Codex, `allowAll` for Muse, `full-access` for Antigravity. The
    editor offers these providers (`workflow.Providers`); one typed in by hand keeps its default.
+   Antigravity takes its thinking level from the model ID (`gemini-4-neon-medium`), so a finder or
+   orchestrator on Antigravity has no thinking level: saving one is refused, the editor disables
+   the selector, and migration `20261122T0719_clear_antigravity_workflow_thinking` removed it from
+   active workflows as a new version.
    The server starts the finder and the orchestrator in it; `paseo run` would start a sub-agent in
    the provider's default mode, which may ask, so the orchestrator's first message tells it to pass
    `--mode` (in the prompt, not the saved instructions, so every version gets it). A step is only
@@ -2110,7 +2115,8 @@ Host (in `~/.config/intelligence/host.env`):
 - `HOST_SERVER`: the server's base URL.
 - `HOST_KEY_FILE`: optional; where the host keeps its key; default `~/.config/intelligence/host.key`.
   With none there, the host joins an account (above).
-- `HOST_NAME`: optional; default the lowercased hostname.
+- `HOST_NAME`: optional; default the lowercased hostname (on a Mac often `name.local`: set it to
+  choose the name).
 - `HOST_INTERVAL`: optional time between re-reads of the daemon's status (reported when it
   changes); default `15s`.
 - `HOST_PASEO_HOME`: optional Paseo home; default `~/.paseo`.
@@ -2138,9 +2144,19 @@ Probe (in `/etc/intelligence/probe.env`, written by `deploy/install-probe`):
   runs on, and `tailscale serve` publishes it over HTTPS to the tailnet only. That machine's details
   are kept outside this repo.
 - Host: once per host, from a checkout of `main`, run `deploy/install-host` (the first run needs
-  `HOST_SERVER` in the environment). It prints the host's code: enter it on the server's `/account`
-  page. After that the host updates itself.
-  Logs: `journalctl --user -u intelligence-host`.
+  `HOST_SERVER` in the environment; it builds the client, so it needs Go). It prints the host's code:
+  enter it on the server's `/account` page. After that the host updates itself. Running it again
+  rebuilds and restarts the client and keeps `host.env` and the key.
+  - Linux: a systemd user service, `intelligence-host`. Logs: `journalctl --user -u intelligence-host`.
+  - macOS: a launchd user agent, `~/Library/LaunchAgents/intelligence-host.plist` (label
+    `intelligence-host`), started at login and restarted when it exits. Logs:
+    `~/Library/Logs/intelligence-host.log`; a code printed later: `grep 'enter the code'` in that
+    file. Status: `launchctl print gui/$(id -u)/intelligence-host`. launchd gives agents a bare
+    `PATH`, so the agent gets the installing shell's `PATH` (with `~/.local/bin` and Homebrew's `bin`
+    in front): run the script from a shell that finds `paseo` and the agents' CLIs, and again after
+    that changes. The agent reads `host.env` when it starts. To remove it: `launchctl bootout
+    gui/$(id -u)/intelligence-host` and delete the plist. A Mac reports the host's own numbers
+    (below) but not each agent's processes, CPU or OOM kills: those read `/proc` and the eBPF probe.
 - eBPF probe: once per Linux host, after the host client, run `deploy/install-probe` (it needs
   sudo). After that the probe updates itself. Logs: `journalctl -u intelligence-probe`.
 

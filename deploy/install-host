@@ -1,63 +1,169 @@
 #!/usr/bin/env bash
-# Install the host client on this machine, as a systemd user service. After that it keeps itself
-# on the server's version (self-update), so this is needed once per host.
-# Run from a checkout of this repo, as the user whose Paseo daemon it reports:
+# Install the host client on this machine: on Linux as a systemd user service, on macOS as a launchd
+# user agent. After that it keeps itself on the server's version (self-update), so this is needed
+# once per host. Run from a checkout of this repo, as the user whose Paseo daemon it reports (it
+# needs Go to build the client):
 #
 #   deploy/install-host
 #
 # The first run writes ~/.config/intelligence/host.env (mode 600) from HOST_SERVER in the
 # environment; later runs keep that file and only rebuild and restart. A host with no key yet joins
 # an account: this prints its code, to enter on the server's account page.
+#
+# Logs: Linux, journalctl --user -u intelligence-host; macOS, ~/Library/Logs/intelligence-host.log.
+# On macOS the agent's PATH is this shell's PATH (with ~/.local/bin and Homebrew's bin added), so
+# run it from a shell that finds paseo and the agents' CLIs; run it again after that changes.
+#
+# Portable to macOS's bash 3.2 and BSD tools: no timeout, journalctl or GNU-only flags there.
 set -euo pipefail
 
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
-env_file="$HOME/.config/intelligence/host.env"
-unit_dir="$HOME/.config/systemd/user"
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+conf_dir="$HOME/.config/intelligence"
+env_file="$conf_dir/host.env"
+key_file="$conf_dir/host.key"
+bin="$HOME/.local/bin/intelligence"
+case "$(uname -s)" in
+  Darwin) system=macos ;;
+  *) system=linux ;;
+esac
 
 # a host installed before dev boxes were called hosts: take over its env file, key and unit
-old_dir="$HOME/.config/intelligence"
-if [ -f "$old_dir/devbox.env" ] && [ ! -f "$env_file" ]; then
-  (umask 077; sed 's/^DEVBOX_/HOST_/' "$old_dir/devbox.env" > "$env_file") && rm "$old_dir/devbox.env"
-  echo "moved $old_dir/devbox.env to $env_file"
+if [ -f "$conf_dir/devbox.env" ] && [ ! -f "$env_file" ]; then
+  (umask 077; sed 's/^DEVBOX_/HOST_/' "$conf_dir/devbox.env" > "$env_file") && rm "$conf_dir/devbox.env"
+  echo "moved $conf_dir/devbox.env to $env_file"
 fi
-if [ -f "$old_dir/devbox.key" ] && [ ! -f "$old_dir/host.key" ]; then
-  mv "$old_dir/devbox.key" "$old_dir/host.key"
-fi
-if [ -f "$unit_dir/intelligence-devbox.service" ]; then
-  systemctl --user disable --now intelligence-devbox.service >/dev/null 2>&1 || true
-  rm -rf "$unit_dir/intelligence-devbox.service" "$unit_dir/intelligence-devbox.service.d"
+if [ -f "$conf_dir/devbox.key" ] && [ ! -f "$key_file" ]; then
+  mv "$conf_dir/devbox.key" "$key_file"
 fi
 
 if [ ! -f "$env_file" ]; then
   : "${HOST_SERVER:?set HOST_SERVER (the base URL of the server) for the first install}"
-  mkdir -p "$(dirname "$env_file")"
+  mkdir -p "$conf_dir"
   (umask 077; printf 'HOST_SERVER=%s\n' "$HOST_SERVER" > "$env_file")
   echo "wrote $env_file"
 fi
 
 rev=$(git -C "$repo" rev-parse HEAD)
-mkdir -p "$HOME/.local/bin" "$unit_dir"
+mkdir -p "$(dirname "$bin")"
 (cd "$repo" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.buildCommit=$rev" \
-  -o "$HOME/.local/bin/intelligence.new" ./cmd/intelligence)
-mv "$HOME/.local/bin/intelligence.new" "$HOME/.local/bin/intelligence"
-install -m 644 "$repo/deploy/intelligence-host.service" "$unit_dir/intelligence-host.service"
-# earlier installs set the version in a drop-in; the binary carries it now
-rm -f "$unit_dir/intelligence-host.service.d/version.conf"
-rmdir "$unit_dir/intelligence-host.service.d" 2>/dev/null || true
+  -o "$bin.new" ./cmd/intelligence)
+# a rename, not a copy over the old file: macOS kills a process whose binary changes in place
+mv "$bin.new" "$bin"
 
-systemctl --user daemon-reload
-systemctl --user enable intelligence-host.service >/dev/null
-systemctl --user restart intelligence-host.service
-systemctl --user --no-pager status intelligence-host.service | head -5
-
-key_file="$HOME/.config/intelligence/host.key"
-if [ ! -s "$key_file" ]; then
+# wait_for_code prints the host's code from the log lines its command prints, for up to 30s
+wait_for_code() {
+  [ ! -s "$key_file" ] || return 0
   echo "waiting for the host's code..."
+  local line=""
   for _ in $(seq 1 30); do
-    line=$(journalctl --user -u intelligence-host.service --since "-2min" --no-pager -o cat 2>/dev/null | grep "enter the code" | tail -1 || true)
-    if [ -n "$line" ]; then echo "$line"; break; fi
+    line=$("$@" 2>/dev/null | grep "enter the code" | tail -1 || true)
+    if [ -n "$line" ]; then echo "$line"; return 0; fi
     sleep 1
   done
-  [ -n "${line:-}" ] || echo "no code yet: journalctl --user -u intelligence-host | grep 'enter the code'"
+  return 1
+}
+
+if [ "$system" = linux ]; then
+  unit_dir="$HOME/.config/systemd/user"
+  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  if [ -f "$unit_dir/intelligence-devbox.service" ]; then
+    systemctl --user disable --now intelligence-devbox.service >/dev/null 2>&1 || true
+    rm -rf "$unit_dir/intelligence-devbox.service" "$unit_dir/intelligence-devbox.service.d"
+  fi
+  mkdir -p "$unit_dir"
+  install -m 644 "$repo/deploy/intelligence-host.service" "$unit_dir/intelligence-host.service"
+  # earlier installs set the version in a drop-in; the binary carries it now
+  rm -f "$unit_dir/intelligence-host.service.d/version.conf"
+  rmdir "$unit_dir/intelligence-host.service.d" 2>/dev/null || true
+
+  systemctl --user daemon-reload
+  systemctl --user enable intelligence-host.service >/dev/null
+  systemctl --user restart intelligence-host.service
+  systemctl --user --no-pager status intelligence-host.service | head -5
+
+  wait_for_code journalctl --user -u intelligence-host.service --since "-2min" --no-pager -o cat ||
+    echo "no code yet: journalctl --user -u intelligence-host | grep 'enter the code'"
+  exit 0
 fi
+
+# macOS: a launchd user agent, started at login and restarted when it exits
+label=intelligence-host
+plist="$HOME/Library/LaunchAgents/$label.plist"
+log="$HOME/Library/Logs/$label.log"
+mkdir -p "$(dirname "$plist")" "$(dirname "$log")"
+touch "$log"
+
+# launchd starts agents with a bare PATH: give the client this shell's, so it finds paseo and the
+# agents' CLIs, with ~/.local/bin and Homebrew's bin in front
+agent_path="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:${PATH:-/usr/bin:/bin}:/usr/bin:/bin:/usr/sbin:/sbin"
+command -v paseo >/dev/null 2>&1 || echo "note: paseo is not on PATH; the host reports nothing until it is"
+
+xml() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+
+# the agent reads host.env when it starts (as systemd's EnvironmentFile does), so edits to it take
+# effect on the next restart
+tmp="$plist.new"
+cat > "$tmp" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$label</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>set -a; . "\$0"; set +a; exec "\$1" host</string>
+    <string>$(xml "$env_file")</string>
+    <string>$(xml "$bin")</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>$(xml "$HOME")</string>
+    <key>PATH</key>
+    <string>$(xml "$agent_path")</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>$(xml "$log")</string>
+  <key>StandardErrorPath</key>
+  <string>$(xml "$log")</string>
+</dict>
+</plist>
+EOF
+chmod 644 "$tmp"
+mv "$tmp" "$plist"
+
+# the logged-in user's GUI domain; over SSH with no one logged in, the user's background domain
+uid=$(id -u)
+domain="gui/$uid"
+launchctl print "$domain" >/dev/null 2>&1 || domain="user/$uid"
+
+# only what the log gains from here on: an earlier run's code is stale
+log_from=$(($(wc -c < "$log") + 1))
+
+# reinstall: unload the old agent (if any) and load the new plist; bootout returns before the agent
+# is gone, so retry bootstrap for a few seconds
+launchctl bootout "$domain/$label" >/dev/null 2>&1 || true
+launchctl enable "$domain/$label" >/dev/null 2>&1 || true
+loaded=""
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if launchctl bootstrap "$domain" "$plist" 2>/dev/null; then loaded=1; break; fi
+  sleep 1
+done
+[ -n "$loaded" ] || launchctl bootstrap "$domain" "$plist"
+launchctl kickstart -k "$domain/$label"
+launchctl print "$domain/$label" 2>/dev/null | grep -E '^[[:space:]]*(state|pid|last exit code) =' || true
+echo "logs: $log"
+
+wait_for_code tail -c "+$log_from" "$log" ||
+  echo "no code yet: grep 'enter the code' $log"
