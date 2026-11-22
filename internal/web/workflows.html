@@ -865,7 +865,7 @@ function bind() {
   send.onclick = async () => {
     if (sending) return;
     const raw = reply.value.trim();
-    const hasFiles = Boolean(replyAttachments?.hasImages());
+    const hasFiles = Boolean(replyAttachments?.hasFiles());
     if (!raw && !hasFiles) return reply.focus();
     const action = send.dataset.runAction;
     err("");
@@ -908,7 +908,7 @@ async function refresh(all) {
     document.title = next.title;
     const reply = $("#ask textarea"), nextReply = next.getElementById("ask")?.querySelector("textarea");
     const listening = reply && reply.classList.contains("listening");
-    const hasFiles = Boolean(replyAttachments?.hasImages());
+    const hasFiles = Boolean(replyAttachments?.hasFiles());
     const writing = reply && (reply.value || hasFiles || document.activeElement === reply);
     const sameAsk = reply && nextReply && reply.id === nextReply.id &&
       ($("#note")?.innerHTML ?? "") === (next.getElementById("note")?.innerHTML ?? "") &&

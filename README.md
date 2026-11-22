@@ -1817,10 +1817,11 @@ origin (another site's request is refused with 403), and those with a body must 
 - `GET /dictation.js`: the dictation engine shared by the chat box, the new agent and workspace forms,
   the new and edit schedule forms, the new task box, the workflow run dialog, the reply to a
   waiting run and workflow proposal questions.
-- `POST /api/attachments` with `{"name", "data"}` (base64 PNG, JPEG or GIF): stores one image in
-  `attachments` and answers 201 with `{"id", "reference"}` (see Attachments, above).
-- `GET /attachments.js`: the image picker shared by the chat box, the new agent and workspace forms,
-  the workflows task box and the workflow run dialog.
+- `POST /api/attachments` with `{"name", "data"}` (base64 file bytes, up to 4 MiB): stores one file
+  in `attachments` and answers 201 with `{"id", "reference"}` (see Attachments, above).
+- `GET /attachments.js`: the file and image picker shared by the chat box, the new agent and
+  workspace forms, the workflows task box, the workflow run dialog and the workflow run reply and
+  additional-input boxes.
 - `GET /submitkeys.js`: loaded by every page with its stylesheet. Cmd/Ctrl+Enter in any text box
   sends it: the default button of its form, or, for a box outside a form, the button named by the
   nearest `data-submit` ancestor. A disabled button sends nothing; plain Enter is unchanged.

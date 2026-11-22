@@ -80,11 +80,6 @@ var mediaTypeExts = map[string]string{
 	"application/x-tar":         "tar",
 }
 
-// Validate checks data within the limits and returns its media type.
-func Validate(data []byte) (string, error) {
-	return ValidateFile("", data)
-}
-
 // ValidateFile checks data within the limits, decodes PNG/JPEG/GIF images to guard against
 // corrupt or oversized pixel dimensions, and returns a deterministic media type.
 func ValidateFile(name string, data []byte) (string, error) {
