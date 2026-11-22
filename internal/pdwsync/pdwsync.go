@@ -219,6 +219,11 @@ func usesWriteTimestamp(pipeline string) bool {
 
 func evaluatePipeline(row PipelineRow, now time.Time) PipelineReport {
 	behindThresh, brokenThresh := thresholds(row)
+	gmailSplit := row.Pipeline == "gmail"
+	var dataBehindThresh, dataBrokenThresh time.Duration
+	if gmailSplit {
+		dataBehindThresh, dataBrokenThresh = dataThresholds(row)
+	}
 	pr := PipelineReport{
 		Pipeline:        row.Pipeline,
 		Label:           row.Label,
@@ -230,8 +235,13 @@ func evaluatePipeline(row PipelineRow, now time.Time) PipelineReport {
 		BehindThreshold: formatDuration(behindThresh),
 		BrokenThreshold: formatDuration(brokenThresh),
 	}
+	if gmailSplit {
+		pr.BehindThreshold = formatDuration(dataBehindThresh)
+		pr.BrokenThreshold = formatDuration(dataBrokenThresh)
+	}
+	var pollerAge time.Duration
 	if pr.PollerLastRunAt != nil {
-		pollerAge := now.Sub(*pr.PollerLastRunAt)
+		pollerAge = now.Sub(*pr.PollerLastRunAt)
 		if pollerAge < 0 {
 			pollerAge = 0
 		}
@@ -247,7 +257,7 @@ func evaluatePipeline(row PipelineRow, now time.Time) PipelineReport {
 	writeBased := usesWriteTimestamp(row.Pipeline)
 	if writeBased {
 		// For Slack and Gmail, a failing poller can keep last_run_at fresh while
-		// nothing lands; judge last successful sync on last_write_at (never heartbeat).
+		// nothing lands; report last successful sync from last_write_at (never heartbeat).
 		switch {
 		case row.LastWriteAt != nil:
 			pr.LastSyncAt = utcPtr(row.LastWriteAt)
@@ -308,10 +318,24 @@ func evaluatePipeline(row PipelineRow, now time.Time) PipelineReport {
 	if writeBased {
 		syncKind = "last write"
 	}
-	if pr.LastSyncAt == nil || status == "no_data" {
-		brokenReasons = append(brokenReasons, "no "+syncKind+" timestamp recorded")
-	} else if age >= brokenThresh {
-		brokenReasons = append(brokenReasons, fmt.Sprintf("%s %s ago (broken threshold >= %s)", syncKind, pr.Age, pr.BrokenThreshold))
+	if gmailSplit {
+		// Gmail: judge poller liveness on last_run_at (10m/2h) and data freshness on
+		// last_write_at against expected_data_interval_seconds (6h/12h), because mail
+		// legitimately arrives in bursts with >10m gaps.
+		if pr.PollerLastRunAt != nil && pollerAge >= brokenThresh {
+			brokenReasons = append(brokenReasons, fmt.Sprintf("poller last ran %s ago (broken threshold >= %s)", pr.PollerAge, formatDuration(brokenThresh)))
+		}
+		if pr.LastSyncAt == nil || status == "no_data" {
+			brokenReasons = append(brokenReasons, "no "+syncKind+" timestamp recorded")
+		} else if age >= dataBrokenThresh {
+			brokenReasons = append(brokenReasons, fmt.Sprintf("%s %s ago (broken threshold >= %s)", syncKind, pr.Age, pr.BrokenThreshold))
+		}
+	} else {
+		if pr.LastSyncAt == nil || status == "no_data" {
+			brokenReasons = append(brokenReasons, "no "+syncKind+" timestamp recorded")
+		} else if age >= brokenThresh {
+			brokenReasons = append(brokenReasons, fmt.Sprintf("%s %s ago (broken threshold >= %s)", syncKind, pr.Age, pr.BrokenThreshold))
+		}
 	}
 
 	if len(brokenReasons) > 0 {
@@ -330,7 +354,14 @@ func evaluatePipeline(row PipelineRow, now time.Time) PipelineReport {
 	if writeBased && (dataStatus == "late" || dataStatus == "unknown") && dataStatus != status {
 		behindReasons = append(behindReasons, "data_status is "+dataStatus)
 	}
-	if pr.LastSyncAt != nil && age >= behindThresh {
+	if gmailSplit {
+		if pr.PollerLastRunAt != nil && pollerAge >= behindThresh {
+			behindReasons = append(behindReasons, fmt.Sprintf("poller last ran %s ago (behind threshold >= %s)", pr.PollerAge, formatDuration(behindThresh)))
+		}
+		if pr.LastSyncAt != nil && age >= dataBehindThresh {
+			behindReasons = append(behindReasons, fmt.Sprintf("%s %s ago (behind threshold >= %s)", syncKind, pr.Age, pr.BehindThreshold))
+		}
+	} else if pr.LastSyncAt != nil && age >= behindThresh {
 		behindReasons = append(behindReasons, fmt.Sprintf("%s %s ago (behind threshold >= %s)", syncKind, pr.Age, pr.BehindThreshold))
 	}
 	if isBehindSLA(pr.SLADetector) {
@@ -344,9 +375,25 @@ func evaluatePipeline(row PipelineRow, now time.Time) PipelineReport {
 	}
 
 	pr.Verdict = VerdictOK
+	if gmailSplit {
+		pr.Reason = fmt.Sprintf("%s %s %s ago (poller ran %s ago, status %s; write thresholds: behind >= %s, broken >= %s; poller thresholds: behind >= %s, broken >= %s)",
+			row.Pipeline, syncKind, pr.Age, orDefault(pr.PollerAge, "unknown"), orDefault(status, "ok"),
+			pr.BehindThreshold, pr.BrokenThreshold, formatDuration(behindThresh), formatDuration(brokenThresh))
+		return pr
+	}
 	pr.Reason = fmt.Sprintf("%s %s %s ago (status %s; thresholds: behind >= %s, broken >= %s)",
 		row.Pipeline, syncKind, pr.Age, orDefault(status, "ok"), pr.BehindThreshold, pr.BrokenThreshold)
 	return pr
+}
+
+func dataThresholds(row PipelineRow) (behind, broken time.Duration) {
+	if row.ExpectedDataIntervalSeconds != nil && *row.ExpectedDataIntervalSeconds > 0 {
+		behind = time.Duration(*row.ExpectedDataIntervalSeconds) * time.Second
+	} else {
+		behind = 6 * time.Hour
+	}
+	broken = 2 * behind
+	return behind, broken
 }
 
 func thresholds(row PipelineRow) (behind, broken time.Duration) {

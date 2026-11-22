@@ -38,6 +38,8 @@ func TestSavedEmailAndVoiceMemoWorkflowsGetPDWSyncRules(t *testing.T) {
 			"intelligence workflow status --run run-sync-1",
 			"Do not call `intelligence workflow ask`",
 			"Only the orchestrator of a run whose requester is Zach",
+			"For a voice-memo run, the requester is Zach",
+			"only to Zach (never into a thread other people can see)",
 			"not Zach",
 			"poll silently",
 			"authorized to send",

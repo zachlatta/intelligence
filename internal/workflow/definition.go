@@ -464,7 +464,8 @@ const RunAnswerRule = "Record every answer sent to the requester, including requ
 const PDWSyncRule = "When a task depends on data that has not yet synced into PDW (for example a linked Slack message, a fresh email or a voice memo): " +
 	"before waiting or messaging anyone, run `intelligence pdw sync-health --source <slack|gmail|voice-memos>` to check that source's last successful sync, age and verdict (ok, behind or broken). " +
 	"If the verdict is ok, poll PDW briefly in the foreground (up to a few minutes) for normal sync lag before sending any update, then re-check sync-health if the record is still missing. " +
-	"Only the orchestrator of a run whose requester is Zach sends the status-and-paste message below. " +
+	"Only the orchestrator of a run whose requester is Zach sends the status-and-paste message below. For a voice-memo run, the requester is Zach. " +
+	"Send the status-and-paste message only to Zach (never into a thread other people can see). " +
 	"If the requester is not Zach, do not send an early status or paste-offer message and do not bypass review or send gates: check sync health, poll silently in the foreground (up to 24 hours), and let the step authorized to send mention any delay if needed. " +
 	"When the requester is Zach and the source is behind or broken (or the record is still missing after the brief wait), the orchestrator sends Zach one concise first message (reply in the email thread for an email run, or email him for a voice-memo run) that: " +
 	"(1) states plainly whether the source's PDW sync is broken or behind, including its last successful sync time, age and any error reported by the helper; " +

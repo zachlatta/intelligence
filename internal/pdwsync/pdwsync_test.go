@@ -65,25 +65,55 @@ func TestEvaluateVerdicts(t *testing.T) {
 		}
 	})
 
-	t.Run("gmail fresh heartbeat with 3h-old write is broken", func(t *testing.T) {
+	t.Run("gmail fresh poller with 25m-old write and ok data_status is ok", func(t *testing.T) {
 		rows := []PipelineRow{{
-			Pipeline:                   "gmail",
-			Status:                     "ok",
-			RunStatus:                  "ok",
-			DataStatus:                 "ok",
-			LastRunAt:                  ptrTime(now.Add(-1 * time.Minute)),
-			LastWriteAt:                ptrTime(now.Add(-3 * time.Hour)),
-			ExpectedRunIntervalSeconds: ptrInt64(600),
+			Pipeline:                    "gmail",
+			Status:                      "ok",
+			RunStatus:                   "ok",
+			DataStatus:                  "ok",
+			LastRunAt:                   ptrTime(now.Add(-1 * time.Minute)),
+			LastWriteAt:                 ptrTime(now.Add(-25 * time.Minute)),
+			ExpectedRunIntervalSeconds:  ptrInt64(600),
+			ExpectedDataIntervalSeconds: ptrInt64(21600),
 		}}
 		r := Evaluate("gmail", rows, now)
-		if r.Verdict != VerdictBroken {
-			t.Fatalf("verdict = %s, want broken (reason: %s)", r.Verdict, r.Reason)
+		if r.Verdict != VerdictOK {
+			t.Fatalf("verdict = %s, want ok (reason: %s)", r.Verdict, r.Reason)
 		}
-		if r.LastSyncAt == nil || !r.LastSyncAt.Equal(now.Add(-3*time.Hour)) {
-			t.Fatalf("last_sync_at = %v, want -3h", r.LastSyncAt)
+		if r.LastSyncAt == nil || !r.LastSyncAt.Equal(now.Add(-25*time.Minute)) {
+			t.Fatalf("last_sync_at = %v, want -25m", r.LastSyncAt)
 		}
 		if r.PollerLastRunAt == nil || !r.PollerLastRunAt.Equal(now.Add(-1*time.Minute)) {
 			t.Fatalf("poller_last_run_at = %v, want -1m", r.PollerLastRunAt)
+		}
+	})
+
+	t.Run("gmail poller liveness judged on last_run_at", func(t *testing.T) {
+		behind := Evaluate("gmail", []PipelineRow{{
+			Pipeline:                    "gmail",
+			Status:                      "ok",
+			RunStatus:                   "ok",
+			DataStatus:                  "ok",
+			LastRunAt:                   ptrTime(now.Add(-15 * time.Minute)),
+			LastWriteAt:                 ptrTime(now.Add(-20 * time.Minute)),
+			ExpectedRunIntervalSeconds:  ptrInt64(600),
+			ExpectedDataIntervalSeconds: ptrInt64(21600),
+		}}, now)
+		if behind.Verdict != VerdictBehind {
+			t.Fatalf("gmail 15m poller: verdict = %s, want behind (reason: %s)", behind.Verdict, behind.Reason)
+		}
+		broken := Evaluate("gmail", []PipelineRow{{
+			Pipeline:                    "gmail",
+			Status:                      "ok",
+			RunStatus:                   "ok",
+			DataStatus:                  "ok",
+			LastRunAt:                   ptrTime(now.Add(-3 * time.Hour)),
+			LastWriteAt:                 ptrTime(now.Add(-3 * time.Hour)),
+			ExpectedRunIntervalSeconds:  ptrInt64(600),
+			ExpectedDataIntervalSeconds: ptrInt64(21600),
+		}}, now)
+		if broken.Verdict != VerdictBroken {
+			t.Fatalf("gmail 3h poller: verdict = %s, want broken (reason: %s)", broken.Verdict, broken.Reason)
 		}
 	})
 
@@ -141,28 +171,32 @@ func TestEvaluateVerdicts(t *testing.T) {
 		}
 	})
 
-	t.Run("gmail behind and broken thresholds on last_write_at", func(t *testing.T) {
+	t.Run("gmail data freshness thresholds on last_write_at use expected_data_interval", func(t *testing.T) {
 		behind := Evaluate("gmail", []PipelineRow{{
-			Pipeline:                   "gmail",
-			Status:                     "ok",
-			RunStatus:                  "ok",
-			LastRunAt:                  ptrTime(now.Add(-1 * time.Minute)),
-			LastWriteAt:                ptrTime(now.Add(-15 * time.Minute)),
-			ExpectedRunIntervalSeconds: ptrInt64(600),
+			Pipeline:                    "gmail",
+			Status:                      "ok",
+			RunStatus:                   "ok",
+			DataStatus:                  "ok",
+			LastRunAt:                   ptrTime(now.Add(-1 * time.Minute)),
+			LastWriteAt:                 ptrTime(now.Add(-7 * time.Hour)),
+			ExpectedRunIntervalSeconds:  ptrInt64(600),
+			ExpectedDataIntervalSeconds: ptrInt64(21600),
 		}}, now)
 		if behind.Verdict != VerdictBehind {
-			t.Fatalf("gmail 15m write: verdict = %s, want behind", behind.Verdict)
+			t.Fatalf("gmail 7h write: verdict = %s, want behind (reason: %s)", behind.Verdict, behind.Reason)
 		}
 		broken := Evaluate("gmail", []PipelineRow{{
-			Pipeline:                   "gmail",
-			Status:                     "ok",
-			RunStatus:                  "ok",
-			LastRunAt:                  ptrTime(now.Add(-1 * time.Minute)),
-			LastWriteAt:                ptrTime(now.Add(-2*time.Hour - time.Minute)),
-			ExpectedRunIntervalSeconds: ptrInt64(600),
+			Pipeline:                    "gmail",
+			Status:                      "ok",
+			RunStatus:                   "ok",
+			DataStatus:                  "ok",
+			LastRunAt:                   ptrTime(now.Add(-1 * time.Minute)),
+			LastWriteAt:                 ptrTime(now.Add(-13 * time.Hour)),
+			ExpectedRunIntervalSeconds:  ptrInt64(600),
+			ExpectedDataIntervalSeconds: ptrInt64(21600),
 		}}, now)
 		if broken.Verdict != VerdictBroken {
-			t.Fatalf("gmail 2h1m write: verdict = %s, want broken", broken.Verdict)
+			t.Fatalf("gmail 13h write: verdict = %s, want broken (reason: %s)", broken.Verdict, broken.Reason)
 		}
 	})
 
