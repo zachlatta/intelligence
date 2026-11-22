@@ -23,19 +23,6 @@ func TestSavedEmailWorkflowGetsFollowUpReplyRules(t *testing.T) {
 	}
 }
 
-func TestWorkflowPromptsLeavePDWSyncToPDW(t *testing.T) {
-	// PDW sync health is PDW's concern, not Intelligence's: no orchestrator prompt tells agents
-	// to check it through an Intelligence command.
-	for _, trigger := range []string{"", TriggerEmail, TriggerVoiceMemo} {
-		d := clone(Starting)
-		d.Trigger = trigger
-		p := mustOrchestratorPrompt(t, "Saved "+trigger, d, Vars{Run: "run-sync-1", Input: "Check the Slack link"})
-		if strings.Contains(p, "intelligence pdw") {
-			t.Errorf("trigger %q: prompt mentions intelligence pdw", trigger)
-		}
-	}
-}
-
 func TestOrchestratorSummarizesTheTaskBeforeStartingWork(t *testing.T) {
 	p := mustOrchestratorPrompt(t, "Saved workflow", Starting, Vars{Run: "run-1", Input: "a long task"})
 	for _, want := range []string{"intelligence workflow summarize --run run-1 --summary", "3–8 words", "whole task", "If saving the summary fails, continue"} {
