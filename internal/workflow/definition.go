@@ -42,6 +42,7 @@ type Project struct {
 	Provider     string `json:"provider,omitempty"`  // match: the finder agent
 	Model        string `json:"model,omitempty"`
 	Thinking     string `json:"thinking,omitempty"`
+	ServiceTier  string `json:"serviceTier,omitempty"` // codex speed, as for the orchestrator
 	Instructions string `json:"instructions,omitempty"`
 }
 
@@ -50,7 +51,28 @@ type Orchestrator struct {
 	Provider     string `json:"provider"`
 	Model        string `json:"model,omitempty"`
 	Thinking     string `json:"thinking,omitempty"`
+	ServiceTier  string `json:"serviceTier,omitempty"` // codex speed: "" (Paseo's default), priority (Fast) or ultrafast
 	Instructions string `json:"instructions"`
+}
+
+// ServiceTiers are the codex speeds an agent can be started at, beside the default (""). Paseo
+// passes the one chosen to Codex as the service_tier feature value on every turn.
+var ServiceTiers = []string{"priority", "ultrafast"}
+
+// checkServiceTier says why provider cannot run at tier, if it cannot.
+func checkServiceTier(who, provider, tier string) error {
+	if tier == "" {
+		return nil
+	}
+	if strings.TrimSpace(provider) != "codex" {
+		return fmt.Errorf("%s: only codex takes a service tier; leave it empty for %s", who, strings.TrimSpace(provider))
+	}
+	for _, t := range ServiceTiers {
+		if tier == t {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s: service tier %q: want %s, or empty for the default", who, tier, strings.Join(ServiceTiers, " or "))
 }
 
 // Step is instructions to the orchestrator. Its kind changes only how it reads: a step does work,
@@ -149,6 +171,14 @@ func (d Definition) Validate() error {
 		return errors.New("the orchestrator needs instructions")
 	case len(d.Steps) == 0:
 		return errors.New("a workflow needs at least one step")
+	}
+	if d.Project.Mode == ProjectMatch {
+		if err := checkServiceTier("project finder", d.Project.Provider, d.Project.ServiceTier); err != nil {
+			return err
+		}
+	}
+	if err := checkServiceTier("orchestrator", d.Orchestrator.Provider, d.Orchestrator.ServiceTier); err != nil {
+		return err
 	}
 	if d.Email != nil {
 		if err := d.Email.Normalize(); err != nil {

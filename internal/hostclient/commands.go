@@ -107,6 +107,7 @@ type CreateAgentArgs struct {
 	Model       string             `json:"model,omitempty"`
 	Thinking    string             `json:"thinking,omitempty"`
 	Mode        string             `json:"mode,omitempty"`
+	ServiceTier string             `json:"serviceTier,omitempty"` // codex speed (priority, ultrafast)
 	Title       string             `json:"title,omitempty"`
 	Prompt      string             `json:"prompt,omitempty"`
 	Labels      map[string]string  `json:"labels,omitempty"`
@@ -548,7 +549,7 @@ func createAgent(ctx context.Context, c *paseo.Client, a CreateAgentArgs, cmdID,
 		labels[k] = v
 	}
 	ag, err := c.CreateAgent(ctx, paseo.CreateAgent{WorkspaceID: a.WorkspaceID, Cwd: a.Cwd, Provider: a.Provider, Model: a.Model,
-		Thinking: a.Thinking, Mode: a.Mode, Title: a.Title, Prompt: a.Prompt, Labels: labels, IdempotencyKey: key})
+		Thinking: a.Thinking, Mode: a.Mode, ServiceTier: a.ServiceTier, Title: a.Title, Prompt: a.Prompt, Labels: labels, IdempotencyKey: key})
 	if err != nil && strings.Contains(err.Error(), keyConflict) {
 		// A start retry after a lost connection rebuilds its request (an orchestrator's prompt lists
 		// the live runs), and Paseo refuses a different request under the key it already made an

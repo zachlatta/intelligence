@@ -78,6 +78,26 @@ func TestCreateAgent(t *testing.T) {
 	}
 }
 
+func TestCreateAgentSendsTheServiceTierAsAFeatureValue(t *testing.T) {
+	f := paseotest.New(t, token)
+	c := dial(t, f)
+	if _, err := c.CreateAgent(ctx5(t), CreateAgent{Cwd: "/w/wks_1", Provider: "codex", Model: "gpt-6.2-sol", Thinking: "high",
+		ServiceTier: "ultrafast", IdempotencyKey: "cmd-4"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := f.Requests("agent.create.request")[0]["config"].(map[string]any)
+	fv, _ := cfg["featureValues"].(map[string]any)
+	if fv["service_tier"] != "ultrafast" {
+		t.Errorf("config = %v: the tier is the codex service_tier feature value, set at creation", cfg)
+	}
+	if _, err := c.CreateAgent(ctx5(t), CreateAgent{Cwd: "/w/wks_1", Provider: "claude", IdempotencyKey: "cmd-5"}); err != nil {
+		t.Fatal(err)
+	}
+	if cfg := f.Requests("agent.create.request")[1]["config"].(map[string]any); cfg["featureValues"] != nil {
+		t.Errorf("config = %v: no tier, no feature values", cfg)
+	}
+}
+
 func TestDaemonRefusalsAreErrors(t *testing.T) {
 	f := paseotest.New(t, token)
 	c := dial(t, f)

@@ -70,6 +70,9 @@ func TestMeterStatusSaysWhenALoginIsBroken(t *testing.T) {
 			t.Fatalf("%s: %+v %v", status, r, ok)
 		}
 	}
+	if r, ok := MeterStatus("claude", "claude auth status: not logged in"); !ok || r.Code != LoggedOut {
+		t.Fatalf("claude auth status: %+v %v", r, ok)
+	}
 	// token_expired is cswap deferring a refresh, retried on its own; a failed fetch says nothing
 	for _, s := range []string{"cswap usage status: token_expired", "cswap usage status: unavailable", "", "codex meter: 503"} {
 		if r, ok := MeterStatus("claude", s); ok {

@@ -8,6 +8,22 @@
     "mediaAlt": "Plans → Model groups in a local instance: Claude Opus 5.5 shows After a login switch, with one login marked Needs login switch and the active login at its quota reserve."
   },
   {
+    "id": "workflow-codex-speed",
+    "released": "2026-11-22",
+    "title": "Run a workflow's Codex agents at Fast or Ultrafast speed",
+    "summary": "In a workflow's editor, a Codex orchestrator or project finder now has a Speed setting: Normal, Fast or Ultrafast. The agent starts at that speed and keeps it for every turn. Faster speeds use more of the plan. Other providers have no speed setting.",
+    "media": "workflow-codex-speed.png",
+    "mediaAlt": "The workflow editor's Orchestrator panel with provider codex, model gpt-6.2-sol, thinking high and Speed set to Ultrafast."
+  },
+  {
+    "id": "multi-host-plan-auth",
+    "released": "2026-11-22",
+    "title": "Per-host plan auth status across multiple hosts",
+    "summary": "Each plan card on Hosts and Plans now shows every host signed into that login with its own slot and auth status (active, standby, expiring, broken, read error or stale), plus host-attributed errors. Hosts without cswap fall back to claude auth status so they join active-login tracking, model-group suggestions and expiry alerts with host-appropriate re-auth commands.",
+    "media": "multi-host-plan-auth-live.png",
+    "mediaAlt": "A local Intelligence instance showing the Hosts page with per-host plan auth badges across box-alpha and box-beta (active, expiring, broken) and the login alert banner."
+  },
+  {
     "id": "antigravity-neon-medium",
     "released": "2026-11-20",
     "title": "Antigravity is back with Gemini 4 Neon Medium",

@@ -7,8 +7,11 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/zachlatta/intelligence/internal/fleet"
 	"github.com/zachlatta/intelligence/internal/hostclient"
+	"github.com/zachlatta/intelligence/internal/usage"
 	"github.com/zachlatta/intelligence/internal/workflow"
 )
 
@@ -846,5 +849,55 @@ func TestWorkflowAPIRejectsStepModelFields(t *testing.T) {
 		if rec.Code != 400 || !strings.Contains(rec.Body.String(), "unknown field") {
 			t.Fatalf("removed field %s: %d %s", field, rec.Code, rec.Body)
 		}
+	}
+}
+
+// A host signed into Claude directly via `claude auth status` (no cswap) is eligible in
+// model_group_candidates using fresh quota readings from another host on the same login,
+// and a login incident on one host only blocks that host.
+func TestModelGroupWorksOnClaudeCLIHostWithSharedQuota(t *testing.T) {
+	h, d := dbServer(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	rep1 := wfReport()
+	rep1.Name = "host-1"
+	rep1.Paseo.Providers = []hostclient.Provider{{Name: "claude", Available: true, Models: []hostclient.Model{{ID: "claude-opus-5-5", Thinking: []string{"medium"}}}}}
+	sendReport(t, h, rep1)
+	rep2 := wfReport()
+	rep2.Name = "host-2"
+	rep2.Paseo.Providers = []hostclient.Provider{{Name: "claude", Available: true, Models: []hostclient.Model{{ID: "claude-opus-5-5", Thinking: []string{"medium"}}}}}
+	sendReport(t, h, rep2)
+	reg := fleet.New(d.Owner)
+	if err := reg.RecordUsage(t.Context(), "host-1", usage.Report{CollectedAt: now, Sources: []usage.Source{{
+		Provider: usage.Claude, Accounts: []usage.Account{{
+			ID: "ada@example.com", Label: "ada@example.com", Slot: 1, Active: true, AuthSource: usage.AuthCswap, ObservedAt: now,
+			Windows: []usage.Window{{ID: "7d", Seconds: usage.Week, UsedPct: 20, ResetsAt: now.Add(48 * time.Hour)}},
+		}},
+	}}}, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.RecordUsage(t.Context(), "host-2", usage.Report{CollectedAt: now, Sources: []usage.Source{{
+		Provider: usage.Claude, Accounts: []usage.Account{{
+			ID: "ada@example.com", Label: "ada@example.com", Active: true, AuthSource: usage.AuthClaudeCLI, ObservedAt: now,
+		}},
+	}}}, now); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]any{"name": "Frontier", "members": []any{map[string]any{
+		"provider": "claude", "model": "claude-opus-5-5", "thinking": "medium", "login": "ada@example.com", "longWindow": "7d", "enabled": true,
+	}}})
+	if rec := call(t, h, "POST", "/api/model-groups", string(body), sameOriginFetch); rec.Code != 201 {
+		t.Fatalf("create %d %s", rec.Code, rec.Body)
+	}
+	code, r := sqlPost(t, h, q(`SELECT host, eligible, reason FROM model_group_candidates ORDER BY host`))
+	if code != 200 || len(r.Rows) != 2 || r.Rows[0][0] != "host-1" || r.Rows[0][1] != true || r.Rows[1][0] != "host-2" || r.Rows[1][1] != true {
+		t.Fatalf("both hosts should be eligible: %d %+v", code, r)
+	}
+	// A broken login on host-2 blocks host-2 only.
+	if _, err := d.Owner.Exec(t.Context(), `INSERT INTO login_incidents(host,provider,login,reason,source,opened_at,last_seen_at) VALUES('host-2','claude','ada@example.com','logged_out','meter',now(),now())`); err != nil {
+		t.Fatal(err)
+	}
+	code, r = sqlPost(t, h, q(`SELECT host, eligible, reason FROM model_group_candidates ORDER BY host`))
+	if code != 200 || len(r.Rows) != 2 || r.Rows[0][1] != true || r.Rows[1][1] != false || r.Rows[1][2] != "Login broken" {
+		t.Fatalf("host-2 only should be blocked: %d %+v", code, r)
 	}
 }

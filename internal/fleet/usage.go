@@ -23,7 +23,7 @@ func (r *Registry) RecordUsage(ctx context.Context, host string, rep usage.Repor
 			if s.Missing || s.Provider == "" {
 				continue
 			}
-			if err := setSource(ctx, tx, host, s.Provider, "", s.Error, "", collected, at, time.Time{}); err != nil {
+			if err := setSource(ctx, tx, host, s.Provider, "", s.Error, "", nil, "", collected, at, time.Time{}); err != nil {
 				return err
 			}
 			if s.Error != "" {
@@ -42,13 +42,15 @@ func (r *Registry) RecordUsage(ctx context.Context, host string, rep usage.Repor
 	})
 }
 
-func setSource(ctx context.Context, tx pgx.Tx, host, provider, account, errMsg, note string, observed, at, expires time.Time) error {
-	_, err := tx.Exec(ctx, `INSERT INTO usage_sources (host, provider, account, ok, error, note, observed_at, received_at, login_expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+func setSource(ctx context.Context, tx pgx.Tx, host, provider, account, errMsg, note string, slot *int, authSource string, observed, at, expires time.Time) error {
+	_, err := tx.Exec(ctx, `INSERT INTO usage_sources (host, provider, account, ok, error, note, slot, auth_source, observed_at, received_at, login_expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (host, provider, account) DO UPDATE SET ok = EXCLUDED.ok, error = EXCLUDED.error, note = EXCLUDED.note,
+		slot = EXCLUDED.slot,
+		auth_source = CASE WHEN EXCLUDED.auth_source <> '' THEN EXCLUDED.auth_source ELSE usage_sources.auth_source END,
 		observed_at = EXCLUDED.observed_at, received_at = EXCLUDED.received_at,
 		login_expires_at = coalesce(EXCLUDED.login_expires_at, usage_sources.login_expires_at)`,
-		host, provider, account, errMsg == "", errMsg, note, nullTime(observed), at, nullTime(expires))
+		host, provider, account, errMsg == "", errMsg, note, slot, authSource, nullTime(observed), at, nullTime(expires))
 	return err
 }
 
@@ -73,10 +75,15 @@ func recordAccount(ctx context.Context, tx pgx.Tx, host, provider string, a usag
 		provider, a.ID, a.Label, a.Plan, slot, obs); err != nil {
 		return err
 	}
-	if err := setSource(ctx, tx, host, provider, a.ID, a.Error, a.Note, obs, at, a.LoginExpiresAt); err != nil {
+	var prevExpires *time.Time
+	if err := tx.QueryRow(ctx, `SELECT login_expires_at FROM usage_sources WHERE host = $1 AND provider = $2 AND account = $3`,
+		host, provider, a.ID).Scan(&prevExpires); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
-	if err := noteLoginHealth(ctx, tx, host, provider, a.ID, a.Error, a.Active, obs); err != nil {
+	if err := setSource(ctx, tx, host, provider, a.ID, a.Error, a.Note, slot, a.AuthSource, obs, at, a.LoginExpiresAt); err != nil {
+		return err
+	}
+	if err := noteLoginHealth(ctx, tx, host, provider, a.ID, a.AuthSource, a.Error, a.Active, obs, prevExpires, a.LoginExpiresAt); err != nil {
 		return err
 	}
 	if a.Active {
@@ -160,6 +167,23 @@ func sameTime(a, b *time.Time) bool {
 	return a.Equal(*b)
 }
 
+// PlanHost is one host's auth and read state for a login (plan_host_auth).
+type PlanHost struct {
+	Host            string    `json:"host"`
+	Online          bool      `json:"online"`
+	Active          bool      `json:"active"`
+	Slot            int       `json:"slot,omitempty"`
+	AuthSource      string    `json:"authSource,omitempty"`
+	Status          string    `json:"status"` // active, standby, broken, expiring, error, stale
+	Error           string    `json:"error,omitempty"`
+	Note            string    `json:"note,omitempty"`
+	ObservedAt      time.Time `json:"observedAt,omitzero"`
+	ReceivedAt      time.Time `json:"receivedAt,omitzero"`
+	LoginExpiresAt  time.Time `json:"loginExpiresAt,omitzero"`
+	IncidentReason  string    `json:"incidentReason,omitempty"`
+	IncidentMessage string    `json:"incidentMessage,omitempty"`
+}
+
 // Plan is one login's plan as last read: each window, which hosts use it now, and what is wrong.
 type Plan struct {
 	Provider string       `json:"provider"`
@@ -169,6 +193,7 @@ type Plan struct {
 	Slot     int          `json:"slot,omitempty"`
 	LastSeen time.Time    `json:"lastSeen"`
 	ActiveOn []string     `json:"activeOn,omitempty"` // hosts whose tool uses this login now
+	Hosts    []PlanHost   `json:"hosts,omitempty"`    // each host's auth state for this login
 	Error    string       `json:"error,omitempty"`    // the newest read of it failed
 	Note     string       `json:"note,omitempty"`
 	Windows  []PlanWindow `json:"windows,omitempty"`
@@ -257,6 +282,33 @@ func (r *Registry) Plans(ctx context.Context) (PlansView, error) {
 	for i := range v.Plans {
 		ws := v.Plans[i].Windows
 		sort.SliceStable(ws, func(a, b int) bool { return windowRank(ws[a].ID) < windowRank(ws[b].ID) })
+	}
+	rows, err = r.p.Query(ctx, `SELECT provider, account, host, host_online, active, coalesce(slot, 0), auth_source,
+		status, error, note, observed_at, received_at, login_expires_at, incident_reason, incident_message
+		FROM plan_host_auth
+		WHERE NOT EXISTS (SELECT 1 FROM provider_plan_settings ps WHERE ps.provider = plan_host_auth.provider AND NOT ps.enabled)
+		ORDER BY provider, account, active DESC, host`)
+	if err != nil {
+		return v, err
+	}
+	for rows.Next() {
+		var prov, acct string
+		var h PlanHost
+		var obs, exp *time.Time
+		if err := rows.Scan(&prov, &acct, &h.Host, &h.Online, &h.Active, &h.Slot, &h.AuthSource,
+			&h.Status, &h.Error, &h.Note, &obs, &h.ReceivedAt, &exp, &h.IncidentReason, &h.IncidentMessage); err != nil {
+			rows.Close()
+			return v, err
+		}
+		h.ObservedAt = deref(obs)
+		h.LoginExpiresAt = deref(exp)
+		if i, ok := idx[[2]string{prov, acct}]; ok {
+			v.Plans[i].Hosts = append(v.Plans[i].Hosts, h)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return v, err
 	}
 	rows, err = r.p.Query(ctx, `SELECT host || ': ' || provider || ': ' || error FROM usage_sources
 		WHERE account = '' AND NOT ok AND received_at > now() - interval '`+recent+`'

@@ -87,6 +87,7 @@ type CreateAgent struct {
 	Model       string
 	Thinking    string // thinking option id
 	Mode        string // provider mode id (permissions)
+	ServiceTier string // codex speed: the service_tier feature value (priority, ultrafast); "" is the default
 	Title       string
 	Prompt      string // the first message, sent once it starts
 	Labels      map[string]string
@@ -104,6 +105,10 @@ func (c *Client) CreateAgent(ctx context.Context, a CreateAgent) (Agent, error) 
 		if v != "" {
 			cfg[k] = v
 		}
+	}
+	if a.ServiceTier != "" {
+		// set at creation, Paseo keeps it in the agent's config and sends it with every turn
+		cfg["featureValues"] = map[string]any{"service_tier": a.ServiceTier}
 	}
 	labels := a.Labels
 	if labels == nil {

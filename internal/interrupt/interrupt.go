@@ -79,6 +79,9 @@ func MeterStatus(provider, readError string) (Reason, bool) {
 	if provider != "claude" {
 		return Reason{}, false
 	}
+	if readError == "claude auth status: not logged in" {
+		return Reason{Code: LoggedOut, Summary: summary(LoggedOut), Message: "claude auth status: this host is not signed in to Claude"}, true
+	}
 	status, ok := strings.CutPrefix(readError, "cswap usage status: ")
 	if !ok {
 		return Reason{}, false

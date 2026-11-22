@@ -186,6 +186,20 @@ func TestExecuteCreatesAnAgentInAWorkspacesDirectory(t *testing.T) {
 	eventually(t, w, "the new agent", func(s PaseoStatus) bool { return len(s.Agents) == 3 })
 }
 
+func TestExecuteCreatesAnAgentAtItsServiceTier(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	args := `{"cwd":"/w/app","agent":{"provider":"codex","model":"gpt-6.2-sol","thinking":"high","serviceTier":"ultrafast","prompt":"go"}}`
+	if _, err := execute(t, w, CreateWorkspaceKind, args); err != nil {
+		t.Fatal(err)
+	}
+	cfg := d.Requests("agent.create.request")[0]["config"].(map[string]any)
+	if fv, _ := cfg["featureValues"].(map[string]any); fv["service_tier"] != "ultrafast" {
+		t.Errorf("config = %v: the service tier goes to Paseo as a feature value", cfg)
+	}
+}
+
 func TestExecuteCreatesAWorkspaceWithAnAgentInIt(t *testing.T) {
 	d := daemon(t)
 	w := watcher(t, d)
