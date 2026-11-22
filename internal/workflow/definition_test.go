@@ -23,6 +23,33 @@ func TestSavedEmailWorkflowGetsFollowUpReplyRules(t *testing.T) {
 	}
 }
 
+func TestSavedEmailAndVoiceMemoWorkflowsGetPDWSyncRules(t *testing.T) {
+	for _, trigger := range []string{TriggerEmail, TriggerVoiceMemo} {
+		d := clone(Starting)
+		d.Trigger = trigger
+		d.Orchestrator.Instructions = "Saved workflow instructions."
+		p := mustOrchestratorPrompt(t, "Saved "+trigger, d, Vars{Run: "run-sync-1", Input: "Check the Slack link"})
+		for _, want := range []string{
+			"intelligence pdw sync-health --source",
+			"behind or broken",
+			"paste",
+			"check now",
+			"24 hours",
+			"intelligence workflow status --run run-sync-1",
+			"Do not call `intelligence workflow ask`",
+		} {
+			if !strings.Contains(p, want) {
+				t.Errorf("trigger %s: missing %q", trigger, want)
+			}
+		}
+	}
+	// Task workflows (e.g. Factory Task) do not get the email/voice-memo PDW sync rule.
+	taskPrompt := mustOrchestratorPrompt(t, "Factory Task", Starting, Vars{Run: "run-task-1", Input: "Fix bug"})
+	if strings.Contains(taskPrompt, "intelligence pdw sync-health") {
+		t.Errorf("task workflow unexpectedly got PDW sync rule")
+	}
+}
+
 func TestOrchestratorSummarizesTheTaskBeforeStartingWork(t *testing.T) {
 	p := mustOrchestratorPrompt(t, "Saved workflow", Starting, Vars{Run: "run-1", Input: "a long task"})
 	for _, want := range []string{"intelligence workflow summarize --run run-1 --summary", "3–8 words", "whole task", "If saving the summary fails, continue"} {
