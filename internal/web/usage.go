@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/zachlatta/intelligence/internal/fleet"
+	"github.com/zachlatta/intelligence/internal/usage"
 )
 
 //go:embed usage.html
@@ -280,15 +281,15 @@ func hostAuthTitle(now time.Time, h fleet.PlanHost) string {
 	var parts []string
 	if h.AuthSource != "" {
 		switch h.AuthSource {
-		case "cswap":
+		case usage.AuthCswap:
 			parts = append(parts, "via cswap")
-		case "claude_cli":
+		case usage.AuthClaudeCLI:
 			parts = append(parts, "via claude CLI (no local meter)")
-		case "codex_auth":
+		case usage.AuthCodex:
 			parts = append(parts, "via Codex auth")
-		case "agy_cli":
+		case usage.AuthAntigravity:
 			parts = append(parts, "via Antigravity CLI")
-		case "muse_cli":
+		case usage.AuthMuse:
 			parts = append(parts, "via Muse CLI")
 		default:
 			parts = append(parts, "via "+h.AuthSource)

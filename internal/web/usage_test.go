@@ -39,7 +39,7 @@ func TestIndexShowsEachLoginsPlan(t *testing.T) {
 	h, d := dbServer(t)
 	seedUsage(t, d)
 	body := get(t, h, "/", nil).Body.String()
-	for _, want := range []string{`href="/usage"`, "ada@example.com", "#1", "70% left", "active on host-1", "resets in 3d 12h",
+	for _, want := range []string{`href="/usage"`, "ada@example.com", "#1", "70% left", "host-1 #1 · active", "resets in 3d 12h",
 		"grace@example.com", "cswap usage status: expired", "host-1: codex: codex meter: 401 Unauthorized"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("index misses %q", want)
@@ -143,6 +143,13 @@ func TestIndexAndUsageShowPerHostPlanAuth(t *testing.T) {
 		for _, want := range []string{"plan-hosts", "host-1 #1", "host-2", "active"} {
 			if !strings.Contains(body, want) {
 				t.Errorf("%s misses %q", path, want)
+			}
+		}
+		// The per-host badges carry each host's slot and state, so the header repeats neither:
+		// one host's slot or "active on" a host whose badge says otherwise would mislead.
+		for _, unwanted := range []string{`<span class="badge">claude #1</span>`, "active on host-1"} {
+			if strings.Contains(body, unwanted) {
+				t.Errorf("%s header repeats per-host state %q", path, unwanted)
 			}
 		}
 	}
