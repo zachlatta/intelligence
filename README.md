@@ -191,6 +191,19 @@ fresh online host without active or permission-blocked workers or pending comman
 204 on success, 409 when unsafe or not stalled, and 404 outside the account. Missing, closed or
 permission-blocked agents need inspection; Resume never replaces them or approves tools.
 
+**Retry** on a failed run's page calls `POST /api/workflow-runs/{id}/retry` with `{}`. It starts a
+new run of the same workflow, on its latest version, with the same input, and opens it. The new
+run's `workflow_runs.retried_from_run_id` names the failed run, both timelines record the link
+(`retried`, `retry_of`), and a failed run that expected an answer is settled as steered to the new
+run (`workflow_run_answer_resolutions`), so the new run's answer counts for it. A run can be retried
+once: the button is gone, and the route answers 409, once a retry exists; also 409 for a run that is
+not failed or whose workflow was deleted. When a workflow gets a new version (an edit, a restore or
+an approved proposal), its runs that failed to start in the last 24 hours
+(`workflow.AutoRetryWindow`: no orchestrator, an older version, not yet retried, no checked answer
+or answer resolution) are retried the same way in that transaction, the event reading
+“Automatically retried”. A retry the queue or a disabled provider refuses is logged and skipped,
+never blocking the save.
+
 ### The stream
 
 A host dials `GET /api/hosts/{host}/stream` (a WebSocket, with its own key) and keeps it
@@ -916,7 +929,10 @@ lost response does not create a second workspace or agent. Because the retry reb
 (an orchestrator's lists the live runs), Paseo can refuse the reused key with
 `agent_request_key_conflict` although it made the agent the first time; the host then reports the
 live agent labelled with the original command (`intelligence.command`) and the run goes on with it.
-Only when no such agent is left does the conflict fail the start.
+When no live agent carries that label (Paseo refused the first request, so it made nothing, or the
+agent was archived), the host sends the request once more under a fresh creation key made from the
+retry command's ID. Only when the host cannot list the daemon's agents does the conflict fail the
+start.
 
 The existing durable `commands` queue handles host reconnects. `workflow_runs.start_retries`,
 `start_retry_at` and `error` expose the retry count, queued retry time and last failure through
@@ -1670,6 +1686,19 @@ gets `recovered_at`.
   under the top bar for each, with whether the phone notification went out. It goes when the host
   reports again. It shows for every account's own hosts, phone or not.
 
+### Failed run alerts
+
+When a run that expects an answer (an email or voice memo run) fails, by any path (its start
+retries run out, the queue refuses it, a disabled provider, a `fail` move), the same transaction
+adds one row to `workflow_run_failure_alerts` (the run, its title and error), so the alert is never
+repeated across retries or restarts. Task runs get none. With `PDW_NOTIFY_KEY` set, an alert on a run
+of `PDW_INTELLIGENCE_ACCOUNT`'s (`notify`) goes out as soon as the failure commits, through PDW's
+`notify` tool (time-sensitive, thread `intelligence-workflow-failures`): the workflow, the error in
+plain words and that fixing the workflow re-runs it (Retry, above). One server instance sends at a
+time (a Postgres advisory lock). A send that fails keeps its error (`alert_error`) and is retried by
+the start retry worker every 5 seconds, up to 10 times; the text sent is kept (`alert_text`,
+`alert_sent_at`).
+
 ### Self-update
 
 Every response carries `X-Intelligence-Version`, the server's commit. The image builds the host
@@ -1914,6 +1943,9 @@ origin (another site's request is refused with 403), and those with a body must 
   whatever its host's load, or sends a run's queued start retry the same way (it still counts as
   a retry) (204; 409 for a run that is not queued, or a retry still in its backoff, past its
   deadline or whose host is not ready).
+- `POST /api/workflow-runs/{id}/retry` with `{}`: starts a new run of a failed run's workflow (latest
+  version) with the same input (201 `{"id"}`, with its `Location`; 409 for a run that is not failed,
+  already retried, or whose workflow was deleted). Requires a same-origin browser session.
 - `POST /api/workflow-runs/{id}/input` with `{"text"}`: records a follow-up and queues delivery
   to the orchestrator of a running or stalled run (204; 409 if the run is waiting for a reply or
   has no active orchestrator). Requires a same-origin browser session.
@@ -2070,8 +2102,9 @@ Unset all three to disable polling. Removing configuration preserves cursors and
 
 `PDW_NOTIFY_KEY` is optional: a PDW access token whose scope reaches its tools API (an agent
 token), for the phone notification when a host of `PDW_INTELLIGENCE_ACCOUNT`'s with active runs
-stops reporting (Silent hosts, above). It needs `PDW_URL` and `PDW_INTELLIGENCE_ACCOUNT`. Unset,
-silent hosts show only as a banner. `NOTIFY_TIME_ZONE` (default `America/New_York`) is the zone the
+stops reporting (Silent hosts, above), and when one of its email or voice memo runs fails (Failed
+run alerts, above). It needs `PDW_URL` and `PDW_INTELLIGENCE_ACCOUNT`. Unset, silent hosts show
+only as a banner and failed runs only on their pages. `NOTIFY_TIME_ZONE` (default `America/New_York`) is the zone the
 notification gives times in.
 
 `VOICE_MEMO_POLL_INTERVAL` is optional: a Go duration, default `1s`, minimum `1s`.

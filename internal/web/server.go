@@ -30,7 +30,8 @@ type Config struct {
 	// PDWURL, PDWKey and PDWAccount turn voice memo triggers on for the account named PDWAccount.
 	PDWURL, PDWKey, PDWAccount string
 	// HostAlerts, when set, gets one phone notification when a host of PDWAccount's with active
-	// runs stops reporting for hostwatch.After, and one when it reports again (internal/hostwatch).
+	// runs stops reporting for hostwatch.After, and one when it reports again (internal/hostwatch),
+	// and one when an answer-expected run of PDWAccount's fails (workflow.Engine.Notify).
 	// Every account's silent hosts show as a red banner either way. NotifyLocation is the zone
 	// the notifications give times in.
 	HostAlerts     hostwatch.Notifier
