@@ -29,8 +29,9 @@ type Engine struct {
 	Now func() time.Time
 	// Limits are when a host is too busy to start another run: a new run queues (queue.go).
 	Limits Limits
-	// Notify, when set, gets at most one host-level phone notification when runs on a host of
-	// NotifyAccount's wait on model quota past ModelQuotaAlertAfter (default 30 minutes).
+	// Notify, when set, sends phone notifications through PDW for runs belonging to NotifyAccount:
+	// when an answer-expected run fails, and at most one host-level notice when runs on a host
+	// wait on model quota past ModelQuotaAlertAfter (default 30 minutes).
 	Notify               hostwatch.Notifier
 	NotifyAccount        string
 	ModelQuotaAlertAfter time.Duration
@@ -302,8 +303,15 @@ func (e *Engine) applyWorkflowState(ctx context.Context, tx pgx.Tx, account int6
 		return "", nil, err
 	}
 	def, _ := json.Marshal(s.Definition)
-	_, err = tx.Exec(ctx, "INSERT INTO workflow_versions(workflow_id,version,account_id,definition,created_at) VALUES($1,$2,$3,$4,$5)", id, s.Version, account, def, at)
-	return id, &s, err
+	if _, err = tx.Exec(ctx, "INSERT INTO workflow_versions(workflow_id,version,account_id,definition,created_at) VALUES($1,$2,$3,$4,$5)", id, s.Version, account, def, at); err != nil {
+		return "", nil, err
+	}
+	if current != nil {
+		if err := e.retryFailedRunsForWorkflow(ctx, tx, account, id, s.Version, s.Definition.Host); err != nil {
+			return "", nil, err
+		}
+	}
+	return id, &s, nil
 }
 
 // uniqueEmailTrigger refuses an email trigger that another of account's workflows (not id) has
@@ -389,6 +397,7 @@ type run struct {
 	EstimatedMemory                              int64
 	ProjectSelected                              bool
 	StartedByHand                                bool // Start now: it bypasses its host's queue until it has started
+	AnswerExpected                               bool
 	Name                                         string
 	Priority                                     string // the effective priority snapshotted at creation: normal or immediate
 	Def                                          Definition
@@ -402,14 +411,14 @@ func (r run) vars() Vars { return Vars{Run: r.ID, Input: r.Input, Repo: r.Repo, 
 
 const runSelect = `SELECT r.id::text, r.host, r.title, r.input, r.status, r.repo, r.branch, r.account_id, r.step, r.workspace_id,
 	r.project_agent_id, r.orchestrator_id, r.project_command::text, w.name, v.definition, r.start_retry_at, r.start_retries,
-	r.estimated_memory_bytes, r.project_selected, r.started_by_hand, r.priority, r.workflow_id::text, coalesce(r.continued_run_id::text,'')
+	r.estimated_memory_bytes, r.project_selected, r.started_by_hand, r.answer_expected, r.priority, r.workflow_id::text, coalesce(r.continued_run_id::text,'')
 	FROM workflow_runs r JOIN workflow_versions v USING (workflow_id, version) JOIN workflows w ON w.id = r.workflow_id `
 
 func scanRun(row pgx.Row) (run, error) {
 	var r run
 	var def []byte
 	err := row.Scan(&r.ID, &r.Host, &r.Title, &r.Input, &r.Status, &r.Repo, &r.Branch, &r.Account, &r.Step, &r.WorkspaceID,
-		&r.ProjectAgent, &r.Orchestrator, &r.ProjectCommand, &r.Name, &def, &r.StartRetryAt, &r.StartRetries, &r.EstimatedMemory, &r.ProjectSelected, &r.StartedByHand, &r.Priority, &r.WorkflowID, &r.ContinuedRun)
+		&r.ProjectAgent, &r.Orchestrator, &r.ProjectCommand, &r.Name, &def, &r.StartRetryAt, &r.StartRetries, &r.EstimatedMemory, &r.ProjectSelected, &r.StartedByHand, &r.AnswerExpected, &r.Priority, &r.WorkflowID, &r.ContinuedRun)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, ErrNotFound
 	}
@@ -436,6 +445,9 @@ func (e *Engine) StartRun(ctx context.Context, account int64, workflowID, input 
 		id, err = e.StartRunTx(ctx, tx, account, workflowID, input, time.Time{})
 		return err
 	})
+	if err == nil {
+		e.sendFailureAlertsBestEffort(ctx)
+	}
 	return id, err
 }
 
@@ -693,7 +705,7 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 	if len(c.Result) > 0 {
 		_ = json.Unmarshal(c.Result, &res)
 	}
-	return pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+	err = pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
 		// Queue admission and retry eligibility share this lock. Take it
 		// before the run row, in the same order as startNext.
 		if err := lockQueue(ctx, tx, c.Host); err != nil {
@@ -743,6 +755,9 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 			if err != nil {
 				return err
 			}
+			if err := e.recordFailureAlert(ctx, tx, r, msg); err != nil {
+				return err
+			}
 			r.WorkspaceID, r.Orchestrator = res.WorkspaceID, res.AgentID
 			return e.archiveRun(ctx, tx, r)
 		}
@@ -758,6 +773,10 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 			pending_command = NULL, error='', start_retry_at=NULL, start_retry_queued=false, updated_at = $5 WHERE id = $1`, r.ID, Running, res.WorkspaceID, res.AgentID, at)
 		return err
 	})
+	if err == nil {
+		e.sendFailureAlertsBestEffort(ctx)
+	}
+	return err
 }
 
 // Move is what `intelligence workflow` asks of a run.
@@ -822,6 +841,7 @@ func (e *Engine) MoveRun(ctx context.Context, host, runID string, m Move) (strin
 	if err != nil {
 		return "", err
 	}
+	e.sendFailureAlertsBestEffort(ctx)
 	return msg, nil
 }
 
@@ -1001,6 +1021,11 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 			return err
 		}
 
+		if status == Failed {
+			if err := e.recordFailureAlert(ctx, tx, r, errText); err != nil {
+				return err
+			}
+		}
 		if status == Succeeded {
 			return e.archiveRun(ctx, tx, r)
 		}

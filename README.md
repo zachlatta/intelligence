@@ -9,7 +9,7 @@ hosts and everything they report.
 
 ## How it fits together
 
-One binary, five commands:
+One binary, six commands:
 
 - `intelligence` (or `intelligence server`): the web app. It runs in Coolify with a Postgres
   database, reachable only on the tailnet.
@@ -25,6 +25,9 @@ One binary, five commands:
   The host client reads it over a Unix socket.
 - `intelligence workflow`: what a workflow run's agents run on their host to move the run
   (Workflows, below). It reaches the server with the host's key.
+- `intelligence pdw`: what email and voice-memo runs' agents run on their host before they wait on
+  data PDW has not synced yet. `intelligence pdw sync-health --source slack|gmail|voice-memos`
+  reads the source's sync health through the host's `pdw` CLI and says ok, behind or broken.
 - `intelligence version`: prints the commit the binary was built from.
 
 ### State and the read-only SQL contract
@@ -190,6 +193,19 @@ It starts a new recovery generation on the same idle orchestrator at the same st
 fresh online host without active or permission-blocked workers or pending commands. It returns
 204 on success, 409 when unsafe or not stalled, and 404 outside the account. Missing, closed or
 permission-blocked agents need inspection; Resume never replaces them or approves tools.
+
+**Retry** on a failed run's page calls `POST /api/workflow-runs/{id}/retry` with `{}`. It starts a
+new run of the same workflow, on its latest version, with the same input, and opens it. The new
+run's `workflow_runs.retried_from_run_id` names the failed run, both timelines record the link
+(`retried`, `retry_of`), and a failed run that expected an answer is settled as steered to the new
+run (`workflow_run_answer_resolutions`), so the new run's answer counts for it. A run can be retried
+once: the button is gone, and the route answers 409, once a retry exists; also 409 for a run that is
+not failed or whose workflow was deleted. When a workflow gets a new version (an edit, a restore or
+an approved proposal), its runs that failed to start in the last 24 hours
+(`workflow.AutoRetryWindow`: no orchestrator, an older version, not yet retried, no checked answer
+or answer resolution) are retried the same way in that transaction, the event reading
+“Automatically retried”. A retry the queue or a disabled provider refuses is logged and skipped,
+never blocking the save.
 
 ### The stream
 
@@ -534,6 +550,9 @@ against its daemon and reports `running`, then `succeeded` with a result (`{"wor
   (by creation time) has gone, then starts a turn. It waits until the command expires, so give it
   a longer `ttl`; one whose agent is archived meanwhile fails. On an agent that is not running,
   all three start a turn.
+- `switch_login`: `provider` (only `claude`), `login`, and optionally `from` and `why` for the
+  record. The host switches every Claude agent on it to that cswap login (Model groups, below);
+  the result is `{"login","slot"}`.
 - `create_schedule`: `prompt`, a cadence (`every`, a duration of at least `1m` such as `30m` or
   `1h30m`; or `cron`, five fields, with an optional `timezone`), and `agent`: `provider`, `cwd`, and
   optionally `model`, `thinking`, `mode`, `title`, `isolation` (`worktree`, a new git worktree each
@@ -916,7 +935,10 @@ lost response does not create a second workspace or agent. Because the retry reb
 (an orchestrator's lists the live runs), Paseo can refuse the reused key with
 `agent_request_key_conflict` although it made the agent the first time; the host then reports the
 live agent labelled with the original command (`intelligence.command`) and the run goes on with it.
-Only when no such agent is left does the conflict fail the start.
+When no live agent carries that label (Paseo refused the first request, so it made nothing, or the
+agent was archived), the host sends the request once more under a fresh creation key made from the
+retry command's ID. Only when the host cannot list the daemon's agents does the conflict fail the
+start.
 
 The existing durable `commands` queue handles host reconnects. `workflow_runs.start_retries`,
 `start_retry_at` and `error` expose the retry count, queued retry time and last failure through
@@ -1124,11 +1146,27 @@ a fixed reset or plan end, subtracting the percentage of the longest window stil
 remaining quota percentage. A reset one full window away gets the same pace treatment at zero
 usage and just after work begins. When two recent in-progress readings show the deadline moving
 forward before it arrives, the score uses the remaining quota percentage. Each suggestion
-subtracts 2 points from the shared pool for 60 minutes. Suggestions require fresh meters and a 5%
+charges the pool 2 points of a 5-hour window, or the same work as a share of a longer window but
+at least half a point (a weekly Claude meter moved about 0.15 points per suggestion under a busy
+fleet). The charge lasts until the pool's next meter reading, at most 60 minutes: by then the
+reading shows much of the work already spent, and the 5% reserve covers the rest. Fable counts
+from the older of its two weekly readings. Suggestions require fresh meters and a 5%
 reserve, including in shorter windows of the selected pool. Fable must clear both its own weekly
 cap and the shared Claude cap, and its ranking uses the lower of the two remaining percentages.
-Claude's recent suggestions count toward the shared weekly reserve. Inactive logins cannot be
-selected. Groups affect future suggestions, not delivered ones. Before another worker, refresh with
+Claude's recent suggestions count toward the shared weekly reserve. A login a host is not using
+is not suggested. For Claude, a login cswap holds on the host (listed in its last usage read, with
+a slot) shows `Needs login switch` (`needs_switch`) when everything else about it is eligible; any
+other inactive login shows `Inactive login`. When a group's best candidate needs a switch and no
+eligible candidate on the host's active login, in any group, is within 30 points of it, the
+suggestion queues a `switch_login` command (`{"provider","login","from","why"}`, readable in
+`commands`). The host finds the login's slot in `cswap list --json` as it runs, switches every
+Claude agent on it with `cswap switch <slot> --json` (without `--force`, so cswap backs up the
+outgoing login's live credentials first), checks cswap now lists it active and sends a fresh usage
+read before reporting success. Until that read shows the login active, suggestions say the switch
+is pending and hand out nothing for it. A host gets at most one switch request per provider every
+15 minutes, which also keeps groups preferring different logins from flapping; a login with an
+open login incident is never switched to. Groups affect future suggestions, not delivered ones.
+Before another worker, refresh with
 `intelligence workflow suggest --run <id> frontier_model` (`--exclude provider/model` skips a route).
 Queued runs allocate when they launch; startup retries rebuild the prompt with fresh suggestions.
 Direct edits and proposal approvals validate group tokens before saving a workflow.
@@ -1376,22 +1414,26 @@ All activity fields are readable through `/api/sql`; status writes use the exist
 
 ### Attachments
 
-Workflow task submission (including the Run dialog), new agent/workspace forms, and existing-session
-chat boxes share an image picker: click **＋ Attach**, drop files onto the form, or paste into the prompt. Thumbnails
-can be removed before submission. PNG, JPEG and GIF are supported, up to 8 images, 4 MiB per image,
-8 MiB total and 40 megapixels per image. Images upload when the task is submitted.
+Workflow task submission (including the Run dialog), workflow run reply and additional-input boxes,
+new agent/workspace forms, and existing-session chat boxes share a file and image picker: click
+**＋ Attach**, drop files onto the box, or paste into the prompt. Thumbnails (for images) or file
+badges (for other files) can be removed before submission. Images and arbitrary files are supported,
+up to 8 files, 4 MiB per file, 8 MiB total (and 40 megapixels for PNG, JPEG and GIF images). Files
+upload when the message or task is submitted.
 
-`POST /api/attachments` takes JSON `{"name":"screenshot.png","data":"<base64 image bytes>"}`
+`POST /api/attachments` takes JSON `{"name":"screenshot.png","data":"<base64 file bytes>"}`
 and returns 201 with `{"id","reference"}`. Append the returned `[attachment:<uuid>]` reference to
-a workflow's input, an agent's prompt, or a `send_message` command's `text`. Image bytes, media type, name and owner are stored in
+a workflow's input, a workflow run reply or additional input, an agent's prompt, or a `send_message`
+command's `text`. File bytes, media type, name and owner are stored in
 `public.attachments`; all are readable through `/api/sql`, restricted to their account by RLS.
-The command queue resolves references only for the destination host's account and carries images
-in the authenticated host stream. Before starting an agent, the host writes private delivery
-copies under `.factory-scratch/attachments/` in its working directory and replaces references in
-the prompt with those file paths. Workflows deliver copies to both the project finder and the
-orchestrator in its new workspace; the prompt tells it to pass the paths to sub-agents. Images
-are files for the agent's image-reading tools, rather than base64 in the model prompt. Host copies
-and uploaded images currently remain until their directory or account is removed.
+The command queue resolves references only for the destination host's account and carries files
+in the authenticated host stream. Before starting an agent or delivering a message, the host writes
+private delivery copies under `.factory-scratch/attachments/` in its working directory and replaces
+references in the prompt with those file paths. Workflows deliver copies to both the project finder
+and the orchestrator in its new workspace, and to the orchestrator's working directory on replies
+and additional input; the prompt tells it to pass the paths to sub-agents. Files are written to disk
+for the agent's file- and image-reading tools, rather than base64 in the model prompt. Host copies
+and uploaded files currently remain until their directory or account is removed.
 
 Session chat supports images with Steer, Interrupt, and Queue, including images without text.
 After the server accepts the message, its previews clear; a failed submission keeps them for retry.
@@ -1681,6 +1723,19 @@ gets `recovered_at`.
   under the top bar for each, with whether the phone notification went out. It goes when the host
   reports again. It shows for every account's own hosts, phone or not.
 
+### Failed run alerts
+
+When a run that expects an answer (an email or voice memo run) fails, by any path (its start
+retries run out, the queue refuses it, a disabled provider, a `fail` move), the same transaction
+adds one row to `workflow_run_failure_alerts` (the run, its title and error), so the alert is never
+repeated across retries or restarts. Task runs get none. With `PDW_NOTIFY_KEY` set, an alert on a run
+of `PDW_INTELLIGENCE_ACCOUNT`'s (`notify`) goes out as soon as the failure commits, through PDW's
+`notify` tool (time-sensitive, thread `intelligence-workflow-failures`): the workflow, the error in
+plain words and that fixing the workflow re-runs it (Retry, above). One server instance sends at a
+time (a Postgres advisory lock). A send that fails keeps its error (`alert_error`) and is retried by
+the start retry worker every 5 seconds, up to 10 times; the text sent is kept (`alert_text`,
+`alert_sent_at`).
+
 ### Self-update
 
 Every response carries `X-Intelligence-Version`, the server's commit. The image builds the host
@@ -1845,10 +1900,11 @@ origin (another site's request is refused with 403), and those with a body must 
 - `GET /dictation.js`: the dictation engine shared by the chat box, the new agent and workspace forms,
   the new and edit schedule forms, the new task box, the workflow run dialog, the reply to a
   waiting run and workflow proposal questions.
-- `POST /api/attachments` with `{"name", "data"}` (base64 PNG, JPEG or GIF): stores one image in
-  `attachments` and answers 201 with `{"id", "reference"}` (see Attachments, above).
-- `GET /attachments.js`: the image picker shared by the chat box, the new agent and workspace forms,
-  the workflows task box and the workflow run dialog.
+- `POST /api/attachments` with `{"name", "data"}` (base64 file bytes, up to 4 MiB): stores one file
+  in `attachments` and answers 201 with `{"id", "reference"}` (see Attachments, above).
+- `GET /attachments.js`: the file and image picker shared by the chat box, the new agent and
+  workspace forms, the workflows task box, the workflow run dialog and the workflow run reply and
+  additional-input boxes.
 - `GET /submitkeys.js`: loaded by every page with its stylesheet. Cmd/Ctrl+Enter in any text box
   sends it: the default button of its form, or, for a box outside a form, the button named by the
   nearest `data-submit` ancestor. A disabled button sends nothing; plain Enter is unchanged.
@@ -1925,6 +1981,9 @@ origin (another site's request is refused with 403), and those with a body must 
   whatever its host's load, or sends a run's queued start retry the same way (it still counts as
   a retry) (204; 409 for a run that is not queued, or a retry still in its backoff, past its
   deadline or whose host is not ready).
+- `POST /api/workflow-runs/{id}/retry` with `{}`: starts a new run of a failed run's workflow (latest
+  version) with the same input (201 `{"id"}`, with its `Location`; 409 for a run that is not failed,
+  already retried, or whose workflow was deleted). Requires a same-origin browser session.
 - `POST /api/workflow-runs/{id}/input` with `{"text"}`: records a follow-up and queues delivery
   to the orchestrator of a running or stalled run (204; 409 if the run is waiting for a reply or
   has no active orchestrator). Requires a same-origin browser session.
@@ -2081,8 +2140,9 @@ Unset all three to disable polling. Removing configuration preserves cursors and
 
 `PDW_NOTIFY_KEY` is optional: a PDW access token whose scope reaches its tools API (an agent
 token), for the phone notification when a host of `PDW_INTELLIGENCE_ACCOUNT`'s with active runs
-stops reporting (Silent hosts, above). It needs `PDW_URL` and `PDW_INTELLIGENCE_ACCOUNT`. Unset,
-silent hosts show only as a banner. `NOTIFY_TIME_ZONE` (default `America/New_York`) is the zone the
+stops reporting (Silent hosts, above), and when one of its email or voice memo runs fails (Failed
+run alerts, above). It needs `PDW_URL` and `PDW_INTELLIGENCE_ACCOUNT`. Unset, silent hosts show
+only as a banner and failed runs only on their pages. `NOTIFY_TIME_ZONE` (default `America/New_York`) is the zone the
 notification gives times in.
 
 `VOICE_MEMO_POLL_INTERVAL` is optional: a Go duration, default `1s`, minimum `1s`.

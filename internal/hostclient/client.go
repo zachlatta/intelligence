@@ -27,6 +27,9 @@ type Client struct {
 	// Resources samples the host and its agents' processes and sends each minute up the stream (Run
 	// sets its Send, and its Reader's PaseoPID from the Watcher); nil sends none.
 	Resources *resources.Collector
+	// SwitchLogin makes login the one the host's provider tool uses (switch_login) and returns its
+	// slot; nil refuses the command.
+	SwitchLogin func(ctx context.Context, provider, login string) (int, error)
 
 	ReportEvery time.Duration // periodic full snapshot; default 30s
 	StatusEvery time.Duration // re-read the daemon's status (a change is reported); default 15s
@@ -266,6 +269,9 @@ func (b *Client) syncDiffs(ctx context.Context, reported *latest) {
 // runCommands runs the server's commands against the daemon.
 func (b *Client) runCommands(ctx context.Context) {
 	exec := func(ctx context.Context, cmd Command) (CommandResult, error) {
+		if cmd.Kind == SwitchLoginKind {
+			return b.switchLogin(ctx, cmd)
+		}
 		res, err := b.Watcher.Execute(ctx, cmd)
 		if IsScheduleKind(cmd.Kind) {
 			b.syncSchedules(ctx) // so the server has the change before the command's result
@@ -283,6 +289,31 @@ func (b *Client) runCommands(ctx context.Context) {
 			runner.Handle(ctx, cmd)
 		}
 	}
+}
+
+// switchLogin runs switch_login, then sends a fresh usage read before the result, so the server
+// knows the new active login by the time it hears the switch succeeded.
+func (b *Client) switchLogin(ctx context.Context, cmd Command) (CommandResult, error) {
+	parsed, err := ParseCommand(cmd.Kind, cmd.Args)
+	if err != nil {
+		return CommandResult{}, err
+	}
+	a := parsed.(SwitchLoginArgs)
+	if b.SwitchLogin == nil {
+		return CommandResult{}, errors.New("this host cannot switch logins")
+	}
+	slot, err := b.SwitchLogin(ctx, a.Provider, a.Login)
+	if err != nil {
+		return CommandResult{Slot: slot}, err
+	}
+	if b.Usage != nil && b.Usage.Read != nil && b.Usage.Send != nil {
+		sendCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		if err := b.Usage.Send(sendCtx, b.Usage.Read(sendCtx)); err != nil {
+			b.Logf("usage after switching login: %v", err)
+		}
+		cancel()
+	}
+	return CommandResult{Login: a.Login, Slot: slot}, nil
 }
 
 // update follows the server's version.

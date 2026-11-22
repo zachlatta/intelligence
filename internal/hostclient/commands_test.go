@@ -119,6 +119,7 @@ func TestParseCommandChecksEachKind(t *testing.T) {
 		SendMessageKind + " steer":     `{"agentId":"a1","text":"hi","behavior":"steer"}`,
 		SendMessageKind + " interrupt": `{"agentId":"a1","text":"hi","behavior":"interrupt"}`,
 		SendMessageKind + " queue":     `{"agentId":"a1","text":"hi","behavior":"queue"}`,
+		SwitchLoginKind:                `{"provider":"claude","login":"two@example.com","from":"one@example.com","why":"one is out of quota"}`,
 	}
 	for name, args := range good {
 		kind, _, _ := strings.Cut(name, " ")
@@ -144,6 +145,9 @@ func TestParseCommandChecksEachKind(t *testing.T) {
 		CancelAgentKind + " behavior":              `{"agentId":"a1","behavior":"queue"}`,
 		"delete_everything x":                      `{}`,
 		CreateWorkspaceKind + " not an object":     `[1]`,
+		SwitchLoginKind + " no login":              `{"provider":"claude"}`,
+		SwitchLoginKind + " codex":                 `{"provider":"codex","login":"two"}`,
+		SwitchLoginKind + " slot":                  `{"provider":"claude","login":"two","slot":2}`,
 	}
 	for name, args := range bad {
 		kind, _, _ := strings.Cut(name, " ")
@@ -292,7 +296,41 @@ func TestRetryKeyConflictAttachesToTheAgentAlreadyMade(t *testing.T) {
 	}
 }
 
-func TestRetryKeyConflictWithNoAgentLeftStillFails(t *testing.T) {
+func TestRetryKeyConflictWithRefusedFirstCreateRetriesWithFreshKey(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	for _, kind := range []string{CreateWorkspaceKind, CreateAgentKind} {
+		refuse := true
+		d.RefuseCreateAgent(func(map[string]any) string {
+			if refuse {
+				return "Antigravity effort is selected through the model ID"
+			}
+			return ""
+		})
+		args := func(prompt string) json.RawMessage {
+			if kind == CreateWorkspaceKind {
+				return json.RawMessage(`{"cwd":"/w/app","worktree":true,"branch":"refused-` + kind + `","agent":{"provider":"claude","prompt":"` + prompt + `"}}`)
+			}
+			return json.RawMessage(`{"cwd":"/w/app","provider":"claude","prompt":"` + prompt + `"}`)
+		}
+		if _, err := w.Execute(t.Context(), Command{ID: "refused-" + kind, Kind: kind, Args: args("live runs: none")}); err == nil || !strings.Contains(err.Error(), "Antigravity effort") {
+			t.Fatalf("%s: first create err = %v, want daemon refusal", kind, err)
+		}
+		refuse = false
+		got, err := w.Execute(t.Context(), Command{ID: "retry-" + kind, IdempotencyKey: "refused-" + kind, Kind: kind, Args: args("live runs: one")})
+		if err != nil || got.AgentID == "" {
+			t.Fatalf("%s: retry after refused create = %+v, %v; want fresh-key retry to succeed", kind, got, err)
+		}
+		// A later retry with the same creation key must attach to the agent that the fresh-key retry made.
+		again, err := w.Execute(t.Context(), Command{ID: "retry2-" + kind, IdempotencyKey: "refused-" + kind, Kind: kind, Args: args("live runs: two")})
+		if err != nil || again != got {
+			t.Fatalf("%s: second retry = %+v, %v; want %+v", kind, again, err, got)
+		}
+	}
+}
+
+func TestRetryKeyConflictWithNoAgentLeftRetriesWithFreshKey(t *testing.T) {
 	d := daemon(t)
 	w := watcher(t, d)
 	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
@@ -303,9 +341,24 @@ func TestRetryKeyConflictWithNoAgentLeftStillFails(t *testing.T) {
 	if _, err := execute(t, w, ArchiveAgentKind, `{"agentId":"`+first.AgentID+`"}`); err != nil {
 		t.Fatal(err)
 	}
-	_, err = w.Execute(t.Context(), Command{ID: "retry", IdempotencyKey: "gone", Kind: CreateAgentKind, Args: json.RawMessage(`{"cwd":"/w/app","provider":"claude","prompt":"b"}`)})
+	again, err := w.Execute(t.Context(), Command{ID: "retry", IdempotencyKey: "gone", Kind: CreateAgentKind, Args: json.RawMessage(`{"cwd":"/w/app","provider":"claude","prompt":"b"}`)})
+	if err != nil || again.AgentID == "" || again.AgentID == first.AgentID {
+		t.Errorf("retry = %+v, %v; want a new agent when no live agent carries the key", again, err)
+	}
+}
+
+func TestRetryKeyConflictWhenAgentListFailsStillFails(t *testing.T) {
+	d := daemon(t)
+	w := watcher(t, d)
+	eventually(t, w, "connected", func(s PaseoStatus) bool { return s.Connected })
+	if _, err := w.Execute(t.Context(), Command{ID: "listfail", Kind: CreateAgentKind, Args: json.RawMessage(`{"cwd":"/w/app","provider":"claude","prompt":"a"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	d.FailRequest("fetch_agents_request", "daemon busy")
+	defer d.FailRequest("fetch_agents_request", "")
+	_, err := w.Execute(t.Context(), Command{ID: "retry-listfail", IdempotencyKey: "listfail", Kind: CreateAgentKind, Args: json.RawMessage(`{"cwd":"/w/app","provider":"claude","prompt":"b"}`)})
 	if err == nil || !strings.Contains(err.Error(), "agent_request_key_conflict") {
-		t.Errorf("err = %v, want the conflict when no agent carries the key", err)
+		t.Errorf("err = %v, want conflict when agent listing fails", err)
 	}
 }
 

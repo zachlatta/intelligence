@@ -63,7 +63,19 @@ const (
 	SendMessageKind      = "send_message"
 	CancelAgentKind      = "cancel_agent"
 	ContinueEmailKind    = "continue_email"
+	SwitchLoginKind      = "switch_login"
 )
+
+// SwitchLoginArgs: make Login the login the host's Provider tool uses, for every agent of that
+// provider on the host. Only Claude, through cswap, can switch. The host finds the login's cswap
+// slot when it runs the command, since slots can change. From and Why say what the server saw
+// when it asked, for the record.
+type SwitchLoginArgs struct {
+	Provider string `json:"provider"`
+	Login    string `json:"login"`
+	From     string `json:"from,omitempty"`
+	Why      string `json:"why,omitempty"`
+}
 
 // ContinueEmailArgs restores a finished task's agent before sending the new run's prompt.
 // AfterCommand serializes restoration after the earlier workspace cleanup on the server.
@@ -150,6 +162,8 @@ type CommandResult struct {
 	RunID                string `json:"runId,omitempty"`          // run_schedule: the run it started
 	ArchivedAgents       int    `json:"archivedAgents,omitempty"` // archive_workspace: how many agents went with it
 	WorktreeBaseFallback bool   `json:"worktreeBaseFallback,omitempty"`
+	Login                string `json:"login,omitempty"` // switch_login: the login now active
+	Slot                 int    `json:"slot,omitempty"`  // switch_login: its cswap slot when switched
 }
 
 // ParseCommand decodes args for kind strictly (no unknown fields) and checks what it needs. The
@@ -251,6 +265,15 @@ func ParseCommand(kind string, args json.RawMessage) (any, error) {
 			return nil, fmt.Errorf("%s takes no behavior", kind)
 		case kind != RenameAgentKind && a.Title != "", kind != SendMessageKind && a.Text != "":
 			return nil, fmt.Errorf("%s takes only agentId", kind)
+		}
+		return a, nil
+	case SwitchLoginKind:
+		var a SwitchLoginArgs
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		if a.Provider != "claude" || strings.TrimSpace(a.Login) == "" {
+			return nil, errors.New("switch_login needs provider claude and a login")
 		}
 		return a, nil
 	case CreateScheduleKind, UpdateScheduleKind, PauseScheduleKind, ResumeScheduleKind, DeleteScheduleKind, RunScheduleKind:
@@ -385,7 +408,7 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 		ag := *a.Agent
 		ag.WorkspaceID, ag.Cwd = ws.ID, ws.Directory
 		// its own idempotency key: a repeat returns the same agent, never the workspace
-		res, err := createAgent(ctx, c, ag, key, key+":agent")
+		res, err := createAgent(ctx, c, ag, key, key+":agent", key+":agent:retry:"+cmd.ID)
 		res.WorkspaceID = ws.ID
 		res.WorktreeBaseFallback = fallback
 		if err != nil {
@@ -402,7 +425,7 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 				return CommandResult{}, fmt.Errorf("no workspace %s on this host", a.WorkspaceID)
 			}
 		}
-		return createAgent(ctx, c, a, key, key)
+		return createAgent(ctx, c, a, key, key, key+":retry:"+cmd.ID)
 	case WorkspaceArgs:
 		if cmd.Kind == ArchiveWorkspaceKind {
 			return w.archiveWorkspace(ctx, c, a.WorkspaceID)
@@ -517,7 +540,7 @@ func expandHome(path, home string) string {
 }
 
 // createAgent starts a in a.Cwd, labelled with the command that asked for it.
-func createAgent(ctx context.Context, c *paseo.Client, a CreateAgentArgs, cmdID, key string) (CommandResult, error) {
+func createAgent(ctx context.Context, c *paseo.Client, a CreateAgentArgs, cmdID, key, freshKey string) (CommandResult, error) {
 	if err := materializeImages(a.Cwd, a.Attachments); err != nil {
 		return CommandResult{}, err
 	}
@@ -525,14 +548,21 @@ func createAgent(ctx context.Context, c *paseo.Client, a CreateAgentArgs, cmdID,
 	for k, v := range a.Labels {
 		labels[k] = v
 	}
-	ag, err := c.CreateAgent(ctx, paseo.CreateAgent{WorkspaceID: a.WorkspaceID, Cwd: a.Cwd, Provider: a.Provider, Model: a.Model,
-		Thinking: a.Thinking, Mode: a.Mode, ServiceTier: a.ServiceTier, Title: a.Title, Prompt: a.Prompt, Labels: labels, IdempotencyKey: key})
+	req := paseo.CreateAgent{WorkspaceID: a.WorkspaceID, Cwd: a.Cwd, Provider: a.Provider, Model: a.Model,
+		Thinking: a.Thinking, Mode: a.Mode, ServiceTier: a.ServiceTier, Title: a.Title, Prompt: a.Prompt, Labels: labels, IdempotencyKey: key}
+	ag, err := c.CreateAgent(ctx, req)
 	if err != nil && strings.Contains(err.Error(), keyConflict) {
 		// A start retry after a lost connection rebuilds its request (an orchestrator's prompt lists
-		// the live runs), and Paseo refuses a different request under the key it already made an
-		// agent for. That agent is the one this command asked for: attach to it.
-		if made, ok := agentMadeBy(ctx, c, cmdID, a.WorkspaceID); ok {
+		// the live runs), and Paseo refuses a different request under the key it already saw. If that
+		// earlier request made an agent, attach to it; if Paseo refused the earlier request and no
+		// agent carries this command's label, retry with a fresh idempotency key.
+		made, ok, listErr := agentMadeBy(ctx, c, cmdID, a.WorkspaceID)
+		if ok {
 			return CommandResult{AgentID: made.ID, WorkspaceID: made.WorkspaceID}, nil
+		}
+		if listErr == nil && freshKey != "" && freshKey != key {
+			req.IdempotencyKey = freshKey
+			ag, err = c.CreateAgent(ctx, req)
 		}
 	}
 	return CommandResult{AgentID: ag.ID, WorkspaceID: ag.WorkspaceID}, err
@@ -542,18 +572,18 @@ func createAgent(ctx context.Context, c *paseo.Client, a CreateAgentArgs, cmdID,
 const keyConflict = "agent_request_key_conflict"
 
 // agentMadeBy finds the live agent a command made, by the label createAgent gives it, in workspace
-// (any, if ""). Without one (the agent was archived, or the listing failed), the conflict stands.
-func agentMadeBy(ctx context.Context, c *paseo.Client, cmdID, workspace string) (paseo.Agent, bool) {
+// (any, if ""). Returns a non-nil error if the daemon could not list agents.
+func agentMadeBy(ctx context.Context, c *paseo.Client, cmdID, workspace string) (paseo.Agent, bool, error) {
 	agents, err := c.Agents(ctx)
 	if err != nil {
-		return paseo.Agent{}, false
+		return paseo.Agent{}, false, err
 	}
 	for _, ag := range agents {
 		if ag.Labels["intelligence.command"] == cmdID && (workspace == "" || ag.WorkspaceID == workspace) {
-			return ag, true
+			return ag, true, nil
 		}
 	}
-	return paseo.Agent{}, false
+	return paseo.Agent{}, false, nil
 }
 
 // Runner runs the commands a host receives, each once: a command delivered again while it runs is

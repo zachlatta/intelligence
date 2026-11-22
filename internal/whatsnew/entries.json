@@ -8,6 +8,30 @@
     "mediaAlt": "A workflow run page showing Running status, Current activity waiting on model quota, and What happened recording no eligible model for the group."
   },
   {
+    "id": "workflow-run-retry",
+    "released": "2026-11-22",
+    "title": "Retry failed runs and auto-rerun after workflow fixes",
+    "summary": "Failed workflow runs now have a one-click Retry button on the run page that starts a new run on the workflow's latest version with the same input. When an email or voice memo run fails, Intelligence pushes a phone notification right away with the error in plain words, and saving a new version of its workflow automatically re-runs recent failed-to-start runs.",
+    "media": "workflow-run-retry.png",
+    "mediaAlt": "A failed voice memo run in a local demo showing the Retry button in the page header and the start error banner below."
+  },
+  {
+    "id": "reply-file-attachments",
+    "released": "2026-11-22",
+    "title": "Attach images and files to workflow replies",
+    "summary": "The reply and Additional input boxes on a workflow run page now support attaching images and arbitrary files by clicking + Attach, dragging and dropping, or pasting from the clipboard. Attached files appear as removable previews and are saved under .factory-scratch/attachments/ for the orchestrator to open. The shared file picker also accepts arbitrary files across task, agent and chat forms.",
+    "media": "reply-file-attachments.gif",
+    "mediaAlt": "A workflow run reply box attaching a screenshot and a PDF file, showing removable preview chips before sending them to the orchestrator."
+  },
+  {
+    "id": "claude-login-switch",
+    "released": "2026-11-22",
+    "title": "Workflows switch a host to a Claude login with quota",
+    "summary": "When a host's active Claude login cannot serve a model group, and another login cswap holds on that host is the best choice, the next suggestion asks the host to switch every Claude agent on it to that login. The worker gets that login once the host reports the switch. Plans → Model groups shows such a group as After a login switch, and the login as Needs login switch. Hosts switch at most once every 15 minutes.",
+    "media": "claude-login-switch.png",
+    "mediaAlt": "Plans → Model groups in a local instance: Claude Opus 5.5 shows After a login switch, with one login marked Needs login switch and the active login at its quota reserve."
+  },
+  {
     "id": "workflow-codex-speed",
     "released": "2026-11-22",
     "title": "Run a workflow's Codex agents at Fast or Ultrafast speed",

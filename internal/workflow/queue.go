@@ -567,10 +567,15 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 	if err := e.event(ctx, tx, r, "error", nil, nil, refusal.Error()); err != nil {
 		return false, err
 	}
-	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET status=$2,error=$3,pending_command=NULL,
+	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET status=$2,error=$3,pending_command=NULL,
 		start_retry_at=NULL,start_retry_queued=false,queue_reason='',updated_at=$4,finished_at=$4 WHERE id=$1`,
-		r.ID, Failed, refusal.Error(), e.Now())
-	return err == nil, err // progressed: continue with the next queued run
+		r.ID, Failed, refusal.Error(), e.Now()); err != nil {
+		return false, err
+	}
+	if err := e.recordFailureAlert(ctx, tx, r, refusal.Error()); err != nil {
+		return false, err
+	}
+	return true, nil // progressed: continue with the next queued run
 }
 
 // dequeue starts queued run r, saying why it starts now.
@@ -596,6 +601,9 @@ func (e *Engine) startAttempt(ctx context.Context, tx pgx.Tx, r run, attempt fun
 	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET status=$2, error=$3, pending_command=NULL,
 		start_retry_at=NULL, start_retry_queued=false, queue_reason='', updated_at=$4, finished_at=$4
 		WHERE id=$1`, r.ID, Failed, disabled.Error(), e.Now()); err != nil {
+		return false, err
+	}
+	if err := e.recordFailureAlert(ctx, tx, r, disabled.Error()); err != nil {
 		return false, err
 	}
 	return true, e.archiveRun(ctx, tx, r)

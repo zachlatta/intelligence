@@ -30,7 +30,8 @@ type Config struct {
 	// PDWURL, PDWKey and PDWAccount turn voice memo triggers on for the account named PDWAccount.
 	PDWURL, PDWKey, PDWAccount string
 	// HostAlerts, when set, gets one phone notification when a host of PDWAccount's with active
-	// runs stops reporting for hostwatch.After, and one when it reports again (internal/hostwatch).
+	// runs stops reporting for hostwatch.After, and one when it reports again (internal/hostwatch),
+	// and one when an answer-expected run of PDWAccount's fails (workflow.Engine.Notify).
 	// Every account's silent hosts show as a red banner either way. NotifyLocation is the zone
 	// the notifications give times in.
 	HostAlerts     hostwatch.Notifier
@@ -262,6 +263,7 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	mux.HandleFunc("POST /api/workflow-runs/{id}/cancel", a.write(a.cancelRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/start", a.write(a.startQueuedRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/resume", a.write(a.resumeRun))
+	mux.HandleFunc("POST /api/workflow-runs/{id}/retry", a.write(a.retryRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/moves", a.moveRun)
 	mux.HandleFunc("POST /api/workflow-runs/{id}/answers", a.recordRunAnswer)
 	mux.HandleFunc("POST /api/workflow-runs/{id}/answer-resolution", a.recordRunAnswerResolution)

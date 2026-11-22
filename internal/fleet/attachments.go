@@ -44,7 +44,7 @@ func resolveImages(ctx context.Context, tx pgx.Tx, host, kind string, args json.
 		return args, nil
 	}
 	if len(*images) > 0 {
-		return nil, fmt.Errorf("upload images through /api/attachments and use their references")
+		return nil, fmt.Errorf("upload attachments through /api/attachments and use their references")
 	}
 	if !attachment.Reference.MatchString(*text) {
 		return args, nil
@@ -59,16 +59,24 @@ func resolveImages(ctx context.Context, tx pgx.Tx, host, kind string, args json.
 		seen[id] = true
 		var img attachment.Image
 		img.ID = id
-		err := tx.QueryRow(ctx, `SELECT a.media_type,a.data FROM attachments a JOIN host_keys h ON h.account_id=a.account_id WHERE a.id=$1 AND h.host=$2`, id, host).Scan(&img.MediaType, &img.Data)
+		err := tx.QueryRow(ctx, `SELECT a.name,a.media_type,a.data FROM attachments a JOIN host_keys h ON h.account_id=a.account_id WHERE a.id=$1 AND h.host=$2`, id, host).Scan(&img.Name, &img.MediaType, &img.Data)
 		if err != nil {
-			return nil, fmt.Errorf("image attachment is unavailable for this account")
+			return nil, fmt.Errorf("attachment is unavailable for this account")
 		}
 		total += len(img.Data)
 		if len(seen) > attachment.MaxCount || total > attachment.MaxTotal {
-			return nil, fmt.Errorf("attach at most 8 images, 8 MiB total")
+			return nil, fmt.Errorf("attach at most 8 files, 8 MiB total")
 		}
 		*images = append(*images, img)
-		*text = strings.ReplaceAll(*text, m[0], "Image (open this file; pass its path to any sub-agents): "+img.Path())
+		label := "Image (open this file; pass its path to any sub-agents): " + img.Path()
+		if !attachment.IsImage(img.MediaType) {
+			if name := attachment.SafeDisplayName(img.Name); name != "" {
+				label = "File (" + name + "; open this file; pass its path to any sub-agents): " + img.Path()
+			} else {
+				label = "File (open this file; pass its path to any sub-agents): " + img.Path()
+			}
+		}
+		*text = strings.ReplaceAll(*text, m[0], label)
 	}
 	return json.Marshal(parsed)
 }

@@ -778,9 +778,11 @@ render();
       <span><b>{{.Run.Workflow}}</b> v{{.Run.Version}}{{if .Run.WorkflowDeleted}} (deleted){{end}}</span><span>on <b class="mono">{{.Run.Host}}</b></span>
       {{if .Run.Repo}}<span><b class="mono">{{.Run.Repo}}</b>{{if .Run.Branch}} @ <span class="mono">{{.Run.Branch}}</span>{{end}}</span>{{end}}
       {{if .Run.WorkspaceTitle}}<span>workspace <b>{{.Run.WorkspaceTitle}}</b></span>{{end}}
+      {{if .Run.RetriedFrom}}<span>retry of <a href="/workflow-runs/{{.Run.RetriedFrom}}">run {{runPrefix .Run.RetriedFrom}}</a></span>{{end}}
       <span>{{plural (len .Agents) "agent"}}</span><span>{{if eq .Run.Status "queued"}}queued{{else}}started{{end}} {{ago .Now .Run.CreatedAt}}</span></div></div>
-  <div class="actions">{{if eq .Run.Status "stalled"}}<button class="btn sm" id="resume">Resume</button>{{end}}{{if eq .Run.Status "queued"}}<button class="btn sm primary" id="start-now">Start now</button>{{else if .Run.RetryInQueue}}<button class="btn sm primary" id="start-now" title="Send this retry now, ahead of the queue, whatever the host's load">Start retry now</button>{{end}}{{if .Run.Live}}<button class="btn sm" id="cancel">Cancel run</button>{{end}}</div>
+  <div class="actions">{{if eq .Run.Status "stalled"}}<button class="btn sm" id="resume">Resume</button>{{end}}{{if and (eq .Run.Status "failed") (not .Run.WorkflowDeleted) (not .Run.RetriedTo)}}<button class="btn sm primary" id="retry">Retry</button>{{end}}{{if eq .Run.Status "queued"}}<button class="btn sm primary" id="start-now">Start now</button>{{else if .Run.RetryInQueue}}<button class="btn sm primary" id="start-now" title="Send this retry now, ahead of the queue, whatever the host's load">Start retry now</button>{{end}}{{if .Run.Live}}<button class="btn sm" id="cancel">Cancel run</button>{{end}}</div>
 </div>
+{{if .Run.RetriedTo}}<p class="banner note">Retried as <a href="/workflow-runs/{{.Run.RetriedTo}}">run {{runPrefix .Run.RetriedTo}}</a>.</p>{{end}}
 {{if .Run.CurrentActivity}}<section class="card card-body run-activity" aria-label="Current activity">{{template "activity" .}}</section>{{end}}
 <p class="banner {{if not .Run.MissingAnswer}}note{{end}}">{{.Run.AnswerTiming}}{{with .Run.UncheckedTiming}} · {{.}}{{end}} · Asked {{at .Run.RequestedAt "minute"}}</p>
 {{if .Run.Answers}}<section class="card"><div class="card-head"><h2>Answers sent</h2></div><div class="card-body"><ul class="events">{{range .Run.Answers}}<li><b>{{.Channel}}</b> · message <code>{{.MessageID}}</code> · thread <code>{{.ThreadID}}</code> · {{at .SentAt "full"}} · {{if .Checked}}checked{{else}}unchecked{{end}}</li>{{end}}</ul></div></section>{{end}}
@@ -810,6 +812,7 @@ render();
   <div class="card-body"><div class="md" id="note">{{markdown .Run.Note}}</div>
     <div class="reply-host" data-submit="#send"{{if $.Dictation}} data-dictation="{{$.Dictation}}"{{end}}><textarea id="reply" placeholder="Reply in your own words. The orchestrator reads it and decides what to do."></textarea>
       <div class="side"><button class="btn primary sm" id="send" data-run-action="reply" title="⌘/Ctrl Enter">Send</button>{{if $.Dictation}}{{template "dictationbutton"}}{{end}}</div></div>
+    <div id="reply-attachments"></div>
   </div></section>
 {{else if and (eq .Run.Status "running" "stalled") .Run.Orchestrator}}
 <section class="card">
@@ -817,6 +820,7 @@ render();
   <div class="card-body">
     <div class="reply-host" data-submit="#send"{{if .Dictation}} data-dictation="{{.Dictation}}"{{end}}><textarea id="additional-input" aria-labelledby="additional-input-heading" placeholder="Send a follow-up to the orchestrator."></textarea>
       <div class="side"><button class="btn primary sm" id="send" data-run-action="input" title="⌘/Ctrl Enter">Send</button>{{if .Dictation}}{{template "dictationbutton"}}{{end}}</div></div>
+    <div id="reply-attachments"></div>
   </div>
 </section>{{end}}</div>
 <p class="meta" id="input-saved" role="status" hidden>Note saved. See <a href="#run-history">What happened</a> for delivery status.</p>
@@ -849,7 +853,7 @@ render();
 const run = {{json .Run.ID}};
 const $ = (s) => document.querySelector(s);
 const err = (m) => { const e = $("#error"); e.hidden = !m; e.textContent = m || ""; };
-let sending = false, refreshVersion = 0;
+let sending = false, refreshVersion = 0, replyAttachments = null;
 const drafts = new Map();
 async function post(path, body) {
   const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -863,6 +867,18 @@ function bind() {
     try { await post(`/api/workflow-runs/${run}/resume`, {}); await refresh(true); }
     catch (e) { err(e.message); button.disabled = false; }
   };
+  if ($("#retry")) $("#retry").onclick = async (event) => {
+    const button = event.currentTarget;
+    if (button.disabled) return;
+    button.disabled = true;
+    err("");
+    try {
+      const res = await fetch(`/api/workflow-runs/${run}/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      location.href = "/workflow-runs/" + data.id;
+    } catch (e) { err(e.message); button.disabled = false; }
+  };
 
   if ($("#start-now")) $("#start-now").onclick = async (ev) => {
     ev.target.disabled = true;
@@ -873,7 +889,11 @@ function bind() {
     try { await post(`/api/workflow-runs/${run}/cancel`, {}); refresh(true); } catch (e) { err(e.message); }
   };
   const reply = $("#ask textarea"), send = $("#send");
-  if (!reply || !send) return;
+  if (!reply || !send) { replyAttachments = null; return; }
+  if (window.imageAttachments && !reply.dataset.attachments) {
+    reply.dataset.attachments = "on";
+    replyAttachments = imageAttachments(reply, reply.closest("section") || reply.parentElement, { panel: $("#reply-attachments") });
+  }
   reply.onkeydown = (e) => {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.isComposing) {
       e.preventDefault();
@@ -882,21 +902,26 @@ function bind() {
   };
   send.onclick = async () => {
     if (sending) return;
-    const text = reply.value.trim();
-    if (!text) return reply.focus();
+    const raw = reply.value.trim();
+    const hasFiles = Boolean(replyAttachments?.hasFiles());
+    if (!raw && !hasFiles) return reply.focus();
     const action = send.dataset.runAction;
     err("");
     $("#input-saved").hidden = true;
     sending = send.disabled = reply.readOnly = true;
+    replyAttachments?.setDisabled(true);
     try {
+      const text = replyAttachments ? await replyAttachments.prompt(raw) : raw;
       await post(`/api/workflow-runs/${run}/${action}`, { text });
       reply.value = "";
+      replyAttachments?.clear();
       if (action === "input") $("#input-saved").hidden = false;
       await refresh(true);
     } catch (e) {
       err(e.message);
     } finally {
       sending = send.disabled = reply.readOnly = false;
+      replyAttachments?.setDisabled(false);
     }
   };
   // dictation into the reply, once for each reply box (a refresh can bring a new one); a replaced
@@ -921,14 +946,20 @@ async function refresh(all) {
     document.title = next.title;
     const reply = $("#ask textarea"), nextReply = next.getElementById("ask")?.querySelector("textarea");
     const listening = reply && reply.classList.contains("listening");
-    const writing = reply && (reply.value || document.activeElement === reply);
-    const keep = listening || (reply?.id === nextReply?.id && writing && !all);
+    const hasFiles = Boolean(replyAttachments?.hasFiles());
+    const writing = reply && (reply.value || hasFiles || document.activeElement === reply);
+    const sameAsk = reply && nextReply && reply.id === nextReply.id &&
+      ($("#note")?.innerHTML ?? "") === (next.getElementById("note")?.innerHTML ?? "") &&
+      ($("#ask .card-head")?.innerHTML ?? "") === (next.querySelector("#ask .card-head")?.innerHTML ?? "");
+    const keep = listening || (sameAsk && !all) || (reply?.id === nextReply?.id && writing && !all);
     for (const id of ["live", "steps"].concat(keep ? [] : ["ask"])) {
       const n = next.getElementById(id), cur = document.getElementById(id);
       if (n && cur && n.innerHTML !== cur.innerHTML) {
         if (id === "ask") {
           if (reply) drafts.set(reply.id, reply.value);
           if (nextReply) nextReply.value = drafts.get(nextReply.id) || "";
+          replyAttachments?.clear();
+          replyAttachments = null;
         }
         cur.replaceWith(n);
       }
