@@ -602,7 +602,7 @@ func projectStartArgs(ctx context.Context, tx pgx.Tx, r run) (json.RawMessage, e
 	}
 	p := r.Def.Project
 	return json.Marshal(hostclient.CreateAgentArgs{Cwd: "~", Provider: p.Provider, Model: p.Model, Thinking: p.Thinking,
-		Mode: agentMode(p.Provider), Title: agentTitle("Find the project", r.Name, r.Title), Prompt: prompt,
+		ServiceTier: p.ServiceTier, Mode: agentMode(p.Provider), Title: agentTitle("Find the project", r.Name, r.Title), Prompt: prompt,
 		Labels: map[string]string{"intelligence.run": r.ID, "intelligence.role": "project"}})
 }
 
@@ -625,7 +625,7 @@ func (e *Engine) orchestratorStartArgs(ctx context.Context, tx pgx.Tx, r run) (j
 		return nil, credentialRefusal(err)
 	}
 	o := r.Def.Orchestrator
-	agent := &hostclient.CreateAgentArgs{Provider: o.Provider, Model: o.Model, Thinking: o.Thinking, Mode: agentMode(o.Provider),
+	agent := &hostclient.CreateAgentArgs{Provider: o.Provider, Model: o.Model, Thinking: o.Thinking, ServiceTier: o.ServiceTier, Mode: agentMode(o.Provider),
 		Title: agentTitle("Orchestrator", r.Name, r.Title), Prompt: prompt,
 		Labels: map[string]string{"intelligence.run": r.ID, "intelligence.role": "orchestrator"}}
 	ws := hostclient.CreateWorkspaceArgs{Cwd: "~", Title: wsTitle, Agent: agent}

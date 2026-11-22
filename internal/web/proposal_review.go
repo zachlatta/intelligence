@@ -68,10 +68,12 @@ func proposalChanges(a, b *workflow.WorkflowState) []proposalChange {
 	add("Project provider", x.Project.Provider, y.Project.Provider)
 	add("Project model", x.Project.Model, y.Project.Model)
 	add("Project thinking", x.Project.Thinking, y.Project.Thinking)
+	add("Project service tier", x.Project.ServiceTier, y.Project.ServiceTier)
 	add("Project instructions", x.Project.Instructions, y.Project.Instructions)
 	add("Orchestrator provider", x.Orchestrator.Provider, y.Orchestrator.Provider)
 	add("Orchestrator model", x.Orchestrator.Model, y.Orchestrator.Model)
 	add("Orchestrator thinking", x.Orchestrator.Thinking, y.Orchestrator.Thinking)
+	add("Orchestrator service tier", x.Orchestrator.ServiceTier, y.Orchestrator.ServiceTier)
 	add("Orchestrator instructions", x.Orchestrator.Instructions, y.Orchestrator.Instructions)
 	old := map[string]workflow.Step{}
 	oldIndex := map[string]int{}

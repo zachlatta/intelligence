@@ -403,6 +403,10 @@ const KIND = { step: "Step", gate: "Gate", signoff: "Sign-off" };
 const KIND_DESC = { step: "Instructions to the orchestrator. It moves on when it decides the step is done.",
   gate: "Instructions for deciding whether to move on or send the work back.", signoff: "The orchestrator may write Zach a note and wait for his reply." };
 const THINKING = ["", "low", "medium", "high", "xhigh", "max"];
+// codex speeds: Paseo's service_tier feature, set when the agent is made and kept for every turn
+const TIERS = [["", "Normal"], ["priority", "Fast"], ["ultrafast", "Ultrafast"]];
+const isCodex = (o) => (o.provider || "").trim() === "codex";
+const tierSelect = (o) => isCodex(o) ? opts(TIERS, o.serviceTier || "") : `<option value="">codex only</option>`;
 const err = (m) => { const e = $("#error"); e.hidden = !m; e.textContent = m || ""; };
 const opts = (list, cur) => list.map(([v, l]) => `<option value="${esc(v)}"${v === cur ? " selected" : ""}>${esc(l)}</option>`).join("");
 const def = () => wf.definition;
@@ -432,7 +436,7 @@ function fixedCards() {
     card("__project", "Before the orchestrator", "Find the project", p.mode === "fixed" ? `Always ${esc(allRepos.find((r) => r.directory === p.directory)?.project || "")} <span class="mono">${esc(p.directory)}</span>.` :
       `An agent (${esc(p.provider)}${p.model ? " · " + esc(p.model) : ""}) picks one of the host's repositories, or none. Then the worktree is made.`) +
     `<div class="link"></div>` +
-    card("__orch", "In the worktree", "Orchestrator", `${esc(o.provider)}${o.model ? " · " + esc(o.model) : ""}${o.thinking ? " · " + esc(o.thinking) : ""}. ` +
+    card("__orch", "In the worktree", "Orchestrator", `${esc(o.provider)}${o.model ? " · " + esc(o.model) : ""}${o.thinking ? " · " + esc(o.thinking) : ""}${o.serviceTier ? " · " + esc(o.serviceTier) : ""}. ` +
       "Does no work itself: it gets the steps one at a time, starts sub-agents, and decides when to move on.") +
     `<div class="link"><button class="add" data-insert="0" title="Add a step here">+</button></div>`;
 }
@@ -544,11 +548,15 @@ function emailPanel(f) {
 function inspector() {
   const d = def();
   const chips = `<div class="vars">${["input", "repo", "branch", "run"].map(V).map((v) => `<button type="button" data-var="${v}">${v}</button>`).join("")}</div>`;
-  const agentFields = (o, pre) => `<div class="fields">
+  const agentFields = (o, pre) => {
+      const ag = (o.provider || "").trim() === "antigravity";
+      return `<div class="fields">
       <div><label>Provider</label><input data-${pre}="provider" value="${esc(o.provider)}" list="providers"></div>
       <div><label>Model</label><input data-${pre}="model" value="${esc(o.model)}" placeholder="provider default"></div>
-      <div><label>Thinking</label><select data-${pre}="thinking">${opts(THINKING.map((t) => [t, t || "default"]), o.thinking || "")}</select></div></div>
+      <div><label>Thinking</label><select data-${pre}="thinking"${ag ? " disabled" : ""}>${ag ? `<option value="">in model ID</option>` : opts(THINKING.map((t) => [t, t || "default"]), o.thinking || "")}</select></div>
+      <div><label>Speed</label><select data-${pre}="serviceTier"${isCodex(o) ? "" : " disabled"} title="Codex service tier. Faster tiers use more of the plan.">${tierSelect(o)}</select></div></div>
       <datalist id="providers">${providers.map((p) => `<option>${esc(p)}</option>`).join("")}</datalist>`;
+  };
   const panel = (ttl, sub, body) => `<div class="card-head"><h2>${ttl}</h2>${sub ? `<span class="meta grow">${sub}</span>` : ""}</div><div class="card-body">${body}</div>`;
   if (sel === "__trigger") {
     const hostOpts = hosts.map((h) => [h, h]);
@@ -643,6 +651,22 @@ function bind() {
     const structural = el.tagName === "SELECT";
     el.addEventListener(structural ? "change" : "input", () => {
       target()[el.dataset[attr]] = el.value;
+      if (el.dataset[attr] === "serviceTier" && !el.value) delete target().serviceTier;
+      if (el.dataset[attr] === "provider") {
+        const tierEl = $(`#inspector [data-${attr}="serviceTier"]`);
+        if (tierEl) {
+          if (!isCodex(target())) delete target().serviceTier;
+          tierEl.disabled = !isCodex(target());
+          tierEl.innerHTML = tierSelect(target());
+        }
+        const thinkingEl = $(`#inspector [data-${attr}="thinking"]`);
+        if (thinkingEl) {
+          const ag = el.value.trim() === "antigravity";
+          if (ag) target().thinking = "";
+          thinkingEl.disabled = ag;
+          thinkingEl.innerHTML = ag ? `<option value="">in model ID</option>` : opts(THINKING.map((t) => [t, t || "default"]), target().thinking || "");
+        }
+      }
       if (structural) return markDirty(true);
       markDirty(false);
       const s = def().steps.find((x) => x.id === sel), card = s && $(`#pipe .node[data-id="${CSS.escape(s.id)}"]`);

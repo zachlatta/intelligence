@@ -133,13 +133,29 @@ func openIncident(ctx context.Context, tx pgx.Tx, host, provider, login string, 
 // noteLoginHealth follows a login's meter read on host: a read that says the sign-in is gone opens
 // (or extends) its incident; a working read taken after an incident opened closes it, and closes
 // the host's unknown-login incident too when the login is the one the host uses.
-func noteLoginHealth(ctx context.Context, tx pgx.Tx, host, provider, login, readErr string, active bool, observed time.Time) error {
+// For claude_cli (local `claude auth status`, no live API meter), a routine ok check does not close
+// a transcript incident; only a newer loginExpiresAt (proving a fresh sign-in) or clearing a
+// meter-opened incident resolves it.
+func noteLoginHealth(ctx context.Context, tx pgx.Tx, host, provider, login, authSource, readErr string, active bool, observed time.Time, prevExpires *time.Time, newExpires time.Time) error {
 	if readErr != "" {
 		reason, broken := interrupt.MeterStatus(provider, readErr)
 		if !broken {
 			return nil
 		}
 		_, err := openIncident(ctx, tx, host, provider, login, reason, "meter", observed)
+		return err
+	}
+	if authSource == "claude_cli" {
+		renewed := !newExpires.IsZero() && (prevExpires == nil || newExpires.After(*prevExpires))
+		if renewed {
+			_, err := tx.Exec(ctx, `UPDATE login_incidents SET resolved_at = $5, resolved_by = 'reading'
+				WHERE host = $1 AND provider = $2 AND (login = $3 OR ($4::boolean AND login = '')) AND resolved_at IS NULL AND opened_at < $5`,
+				host, provider, login, active, observed)
+			return err
+		}
+		_, err := tx.Exec(ctx, `UPDATE login_incidents SET resolved_at = $5, resolved_by = 'reading'
+			WHERE host = $1 AND provider = $2 AND (login = $3 OR ($4::boolean AND login = '')) AND resolved_at IS NULL AND source = 'meter' AND opened_at < $5`,
+			host, provider, login, active, observed)
 		return err
 	}
 	_, err := tx.Exec(ctx, `UPDATE login_incidents SET resolved_at = $5, resolved_by = 'reading'

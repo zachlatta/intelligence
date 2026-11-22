@@ -42,6 +42,7 @@ type Project struct {
 	Provider     string `json:"provider,omitempty"`  // match: the finder agent
 	Model        string `json:"model,omitempty"`
 	Thinking     string `json:"thinking,omitempty"`
+	ServiceTier  string `json:"serviceTier,omitempty"` // codex speed, as for the orchestrator
 	Instructions string `json:"instructions,omitempty"`
 }
 
@@ -50,7 +51,28 @@ type Orchestrator struct {
 	Provider     string `json:"provider"`
 	Model        string `json:"model,omitempty"`
 	Thinking     string `json:"thinking,omitempty"`
+	ServiceTier  string `json:"serviceTier,omitempty"` // codex speed: "" (Paseo's default), priority (Fast) or ultrafast
 	Instructions string `json:"instructions"`
+}
+
+// ServiceTiers are the codex speeds an agent can be started at, beside the default (""). Paseo
+// passes the one chosen to Codex as the service_tier feature value on every turn.
+var ServiceTiers = []string{"priority", "ultrafast"}
+
+// checkServiceTier says why provider cannot run at tier, if it cannot.
+func checkServiceTier(who, provider, tier string) error {
+	if tier == "" {
+		return nil
+	}
+	if strings.TrimSpace(provider) != "codex" {
+		return fmt.Errorf("%s: only codex takes a service tier; leave it empty for %s", who, strings.TrimSpace(provider))
+	}
+	for _, t := range ServiceTiers {
+		if tier == t {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s: service tier %q: want %s, or empty for the default", who, tier, strings.Join(ServiceTiers, " or "))
 }
 
 // Step is instructions to the orchestrator. Its kind changes only how it reads: a step does work,
@@ -135,16 +157,28 @@ func (d Definition) Validate() error {
 		return errors.New("a fixed project needs the absolute directory of its repository on the host")
 	case d.Project.Mode == ProjectMatch && blank(d.Project.Provider):
 		return errors.New("the project finder needs a provider")
+	case d.Project.Mode == ProjectMatch && strings.TrimSpace(d.Project.Provider) == "antigravity" && !blank(d.Project.Thinking):
+		return errors.New("project finder: antigravity selects thinking level through the model ID; leave thinking empty")
 	case d.Project.Mode == ProjectMatch && blank(d.Project.Instructions):
 		return errors.New("the project finder needs instructions")
 	case d.Project.Mode != ProjectMatch && d.Project.Mode != ProjectFixed:
 		return fmt.Errorf("project mode %q: want %s or %s", d.Project.Mode, ProjectMatch, ProjectFixed)
 	case blank(d.Orchestrator.Provider):
 		return errors.New("the orchestrator needs a provider")
+	case strings.TrimSpace(d.Orchestrator.Provider) == "antigravity" && !blank(d.Orchestrator.Thinking):
+		return errors.New("orchestrator: antigravity selects thinking level through the model ID; leave thinking empty")
 	case blank(d.Orchestrator.Instructions):
 		return errors.New("the orchestrator needs instructions")
 	case len(d.Steps) == 0:
 		return errors.New("a workflow needs at least one step")
+	}
+	if d.Project.Mode == ProjectMatch {
+		if err := checkServiceTier("project finder", d.Project.Provider, d.Project.ServiceTier); err != nil {
+			return err
+		}
+	}
+	if err := checkServiceTier("orchestrator", d.Orchestrator.Provider, d.Orchestrator.ServiceTier); err != nil {
+		return err
 	}
 	if d.Email != nil {
 		if err := d.Email.Normalize(); err != nil {

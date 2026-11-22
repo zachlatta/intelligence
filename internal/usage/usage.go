@@ -35,6 +35,15 @@ const (
 	Antigravity = "antigravity"
 )
 
+// Auth sources: how the host reads and manages a login.
+const (
+	AuthCswap       = "cswap"
+	AuthClaudeCLI   = "claude_cli"
+	AuthCodex       = "codex_auth"
+	AuthMuse        = "muse_cli"
+	AuthAntigravity = "agy_cli"
+)
+
 // Window lengths, in seconds.
 const (
 	Week      = 7 * 24 * 3600
@@ -57,14 +66,15 @@ type Source struct {
 
 // Account is one login's plan and how much of each of its quota windows is used.
 type Account struct {
-	ID         string    `json:"id"`              // stable within the provider: the login's email, or "default"
-	Label      string    `json:"label"`           // what to show for it
-	Plan       string    `json:"plan,omitempty"`  // the plan or tier, where the provider says
-	Slot       int       `json:"slot,omitempty"`  // cswap's account number on this host; it can change
-	Active     bool      `json:"active"`          // the login this host's tool uses now
-	ObservedAt time.Time `json:"observedAt"`      // when the provider was read (cswap caches, so not now)
-	Note       string    `json:"note,omitempty"`  // a caveat on the reading
-	Error      string    `json:"error,omitempty"` // this login's read failed; Windows is empty
+	ID         string    `json:"id"`                   // stable within the provider: the login's email, or "default"
+	Label      string    `json:"label"`                // what to show for it
+	Plan       string    `json:"plan,omitempty"`       // the plan or tier, where the provider says
+	Slot       int       `json:"slot,omitempty"`       // cswap's account number on this host; it can change
+	Active     bool      `json:"active"`               // the login this host's tool uses now
+	AuthSource string    `json:"authSource,omitempty"` // how this host reads/manages the login (cswap, claude_cli, ...)
+	ObservedAt time.Time `json:"observedAt"`           // when the provider was read (cswap caches, so not now)
+	Note       string    `json:"note,omitempty"`       // a caveat on the reading
+	Error      string    `json:"error,omitempty"`      // this login's read failed; Windows is empty
 	Windows    []Window  `json:"windows,omitempty"`
 	// LoginExpiresAt is when the login's sign-in ends for good, where the tool says (cswap: the
 	// refresh token's hard limit, about 30 days for Claude). Past it the provider refuses every turn.
@@ -165,7 +175,78 @@ func (r *Reader) readTool(ctx context.Context, provider string, parse func([]byt
 }
 
 func (r *Reader) readClaude(ctx context.Context) Source {
-	return r.readTool(ctx, Claude, parseClaude, "cswap", "list", "--json")
+	s := r.readTool(ctx, Claude, parseClaude, "cswap", "list", "--json")
+	if !s.Missing {
+		return s
+	}
+	// `claude auth status` prints JSON and exits 1 when signed out, so parse valid JSON stdout
+	// even on a non-zero exit before treating the exit status as a read failure.
+	out, err := r.run(ctx, "claude", "auth", "status")
+	if errors.Is(err, ErrMissing) {
+		return Source{Provider: Claude, Missing: true}
+	}
+	if len(bytes.TrimSpace(out)) > 0 {
+		if parsed, ok := parseClaudeAuthStatus(out, r.now()); ok {
+			return parsed
+		}
+	}
+	if err != nil {
+		return Source{Provider: Claude, Error: fmt.Sprintf("claude: %v", err)}
+	}
+	return Source{Provider: Claude, Error: "claude auth status: unreadable output"}
+}
+
+func parseClaudeAuthStatus(raw []byte, now time.Time) (Source, bool) {
+	var payload struct {
+		LoggedIn            bool   `json:"loggedIn"`
+		AuthMethod          string `json:"authMethod"`
+		Email               string `json:"email"`
+		SubscriptionType    string `json:"subscriptionType"`
+		PlanTier            string `json:"planTier"`
+		LoginExpiresAt      string `json:"loginExpiresAt"`
+		StoredClaudeAiLogin bool   `json:"storedClaudeAiLogin"`
+	}
+	s := Source{Provider: Claude}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return s, false
+	}
+	email := strings.ToLower(strings.TrimSpace(payload.Email))
+	if !payload.LoggedIn {
+		if !payload.StoredClaudeAiLogin {
+			s.Missing = true
+			return s, true
+		}
+		if email != "" {
+			s.Accounts = []Account{{
+				ID:         email,
+				Label:      email,
+				Active:     true,
+				AuthSource: AuthClaudeCLI,
+				ObservedAt: now,
+				Error:      "claude auth status: not logged in",
+			}}
+			return s, true
+		}
+		s.Error = "claude auth status: not logged in"
+		return s, true
+	}
+	if email == "" {
+		s.Missing = true
+		return s, true
+	}
+	acct := Account{
+		ID:         email,
+		Label:      email,
+		Plan:       or(payload.SubscriptionType, payload.PlanTier),
+		Active:     true,
+		AuthSource: AuthClaudeCLI,
+		ObservedAt: now,
+	}
+	if t, ok := parseTime(payload.LoginExpiresAt); ok {
+		acct.LoginExpiresAt = t.UTC()
+	}
+	s.Accounts = []Account{acct}
+	return s, true
 }
 
 func (r *Reader) readMuse(ctx context.Context) Source {
@@ -214,7 +295,7 @@ func parseClaude(raw []byte, now time.Time) Source {
 	}
 	for _, a := range payload.Accounts {
 		email := strings.ToLower(strings.TrimSpace(a.Email))
-		acct := Account{ID: email, Label: email, Slot: a.Number, Active: a.Active, ObservedAt: now}
+		acct := Account{ID: email, Label: email, Slot: a.Number, Active: a.Active, AuthSource: AuthCswap, ObservedAt: now}
 		switch {
 		case email == "":
 			acct.ID, acct.Label = fmt.Sprintf("slot-%d", a.Number), fmt.Sprintf("Claude #%d", a.Number)
@@ -282,7 +363,7 @@ func (r *Reader) readCodex(ctx context.Context) Source {
 		return s
 	}
 	email, plan := idTokenClaims(auth.Tokens.IDToken)
-	local.ID, local.Label, local.Plan = codexID(email, auth.Tokens.Account), or(email, "Codex"), or(plan, local.Plan)
+	local.ID, local.Label, local.Plan, local.AuthSource = codexID(email, auth.Tokens.Account), or(email, "Codex"), or(plan, local.Plan), AuthCodex
 	local.Note = "live meter unavailable (" + err.Error() + "); last local session reading"
 	s.Accounts = []Account{local}
 	return s
@@ -339,7 +420,7 @@ func parseCodexMeter(body []byte, now time.Time) (Account, error) {
 		return Account{}, fmt.Errorf("unreadable meter: %w", err)
 	}
 	email := strings.ToLower(strings.TrimSpace(d.Email))
-	a := Account{ID: codexID(email, d.AccountID), Label: or(email, "Codex"), Plan: d.Plan, Active: true, ObservedAt: now}
+	a := Account{ID: codexID(email, d.AccountID), Label: or(email, "Codex"), Plan: d.Plan, Active: true, AuthSource: AuthCodex, ObservedAt: now}
 	for _, w := range []*win{d.Rate.Primary, d.Rate.Secondary} {
 		if w == nil || w.Used == nil {
 			continue
@@ -467,7 +548,7 @@ func parseMuse(raw []byte, now time.Time) Source {
 		s.Error = "muse usage: unreadable output: " + err.Error()
 		return s
 	}
-	acct := Account{ID: "default", Label: "Muse", Active: true, ObservedAt: now}
+	acct := Account{ID: "default", Label: "Muse", Active: true, AuthSource: AuthMuse, ObservedAt: now}
 	if payload.Allowance == nil {
 		// Before the first use in a new window an active subscription reports no usage at all.
 		// That is not a reading: nothing is stored as used or left.
@@ -527,7 +608,7 @@ func parseAntigravity(raw []byte, now time.Time) Source {
 		s.Error = "agy /usage: status " + or(payload.Status, "missing")
 		return s
 	}
-	acct := Account{ID: "default", Label: "Antigravity", Active: true, ObservedAt: now}
+	acct := Account{ID: "default", Label: "Antigravity", Active: true, AuthSource: AuthAntigravity, ObservedAt: now}
 	for _, g := range payload.Command.Data.Groups {
 		pool := slug(strings.TrimSuffix(strings.ToLower(g.Name), " models"))
 		for _, b := range g.Buckets {
