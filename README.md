@@ -1129,7 +1129,8 @@ outgoing login's live credentials first), checks cswap now lists it active and s
 read before reporting success. Until that read shows the login active, suggestions say the switch
 is pending and hand out nothing for it. A host gets at most one switch request per provider every
 15 minutes, which also keeps groups preferring different logins from flapping; a login with an
-open login incident is never switched to. Groups affect future suggestions, not delivered ones. Before another worker, refresh with
+open login incident is never switched to. Groups affect future suggestions, not delivered ones.
+Before another worker, refresh with
 `intelligence workflow suggest --run <id> frontier_model` (`--exclude provider/model` skips a route).
 Queued runs allocate when they launch; startup retries rebuild the prompt with fresh suggestions.
 Direct edits and proposal approvals validate group tokens before saving a workflow.
