@@ -29,6 +29,10 @@ func newInstallHost(t *testing.T, system string) *installHost {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
+	// the script finds the repo with git rev-parse
+	if err := exec.Command("git", "rev-parse", "--show-toplevel").Run(); err != nil {
+		t.Skip("no git checkout here (the image build): CI and make test run these tests")
+	}
 	h := &installHost{t: t, home: t.TempDir(), stubs: t.TempDir()}
 	h.calls = filepath.Join(h.stubs, "calls")
 	log := `printf '%s\n' "$(basename "$0") $*" >> "` + h.calls + `"` + "\n"

@@ -14,8 +14,9 @@ One binary, five commands:
 - `intelligence` (or `intelligence server`): the web app. It runs in Coolify with a Postgres
   database, reachable only on the tailnet.
 - `intelligence host`: runs on each host as a systemd user service (Linux) or a launchd user agent
-  (macOS). It keeps one connection to the local Paseo daemon over the daemon's own WebSocket protocol (`internal/paseo`), reads its
-  status, workspaces and agents, then follows the updates the daemon pushes. It holds one
+  (macOS). It keeps one connection to the local Paseo daemon over the daemon's own WebSocket
+  protocol (`internal/paseo`), reads its status, workspaces and agents, then follows the updates
+  the daemon pushes. It holds one
   WebSocket stream to the server (below) for its reports, its agents' transcripts, its plans' usage
   and the server's commands, each handled on its own (`hostclient.Client`), so a slow transcript upload
   holds up no report. The host dials out, so it needs no inbound port, and the server never dials a host.
