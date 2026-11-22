@@ -182,7 +182,6 @@ func TestModelQuotaOutageSendsAtMostOneHostNotice(t *testing.T) {
 	notifier := &fakeQuotaNotifier{}
 	e.Notify = notifier
 	e.NotifyAccount = h.acct.Username
-	e.NotifyLocation = time.UTC
 
 	var runs []string
 	for i, title := range []string{"First task", "Second task", "Third task"} {
@@ -342,7 +341,6 @@ func TestModelQuotaHonorsExcludeAndResumesOnAllowedModel(t *testing.T) {
 	notifier := &fakeQuotaNotifier{}
 	e.Notify = notifier
 	e.NotifyAccount = h.acct.Username
-	e.NotifyLocation = time.UTC
 
 	rep := wfReport()
 	rep.Paseo.Providers = []hostclient.Provider{

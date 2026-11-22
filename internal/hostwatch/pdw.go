@@ -50,7 +50,7 @@ func (p *PDW) Notify(ctx context.Context, n Notice) error {
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("PDW notify HTTP %d: %s", resp.StatusCode, clip(strings.TrimSpace(string(raw)), 200))
+		return fmt.Errorf("PDW notify HTTP %d: %s", resp.StatusCode, Clip(strings.TrimSpace(string(raw)), 200))
 	}
 	var out struct {
 		Data struct {
@@ -65,7 +65,7 @@ func (p *PDW) Notify(ctx context.Context, n Notice) error {
 		return fmt.Errorf("decode PDW notify response: %w", err)
 	}
 	if out.Data.Error != "" {
-		return fmt.Errorf("PDW notify: %s", clip(out.Data.Error, 200))
+		return fmt.Errorf("PDW notify: %s", Clip(out.Data.Error, 200))
 	}
 	// PDW answers without an error when no device is registered or every device failed
 	if out.Data.Report.Sent == 0 {

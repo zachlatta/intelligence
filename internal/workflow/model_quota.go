@@ -64,6 +64,8 @@ func (e *Engine) openModelWait(ctx context.Context, tx pgx.Tx, r run, step int, 
 		r.Account, r.ID, r.Host, step, groupID, token, exclude, now); err != nil {
 		return err
 	}
+	// Set from the stored status, not r: callers such as fillModels at run start hold a run
+	// whose status is not yet running, which refreshActivity would treat as not live.
 	fallback := "Waiting for an eligible model in " + token
 	_, err := tx.Exec(ctx, `UPDATE workflow_runs
 		SET activity_waiting_on = CASE WHEN status = 'waiting' THEN activity_waiting_on ELSE $2 END,
@@ -410,7 +412,7 @@ type quotaAlert struct {
 
 func (e *Engine) sendModelQuotaAlerts(ctx context.Context, tx pgx.Tx, now time.Time) error {
 	rows, err := tx.Query(ctx, `SELECT id, host, since, tokens, blocked_runs,
-		coalesce((SELECT array_agg(u::text) FROM unnest(run_ids) WITH ORDINALITY AS t(u, ord)), '{}')
+		run_ids::text[]
 		FROM model_quota_alerts
 		WHERE notify AND recovered_at IS NULL AND alert_sent_at IS NULL AND alert_attempts < $1
 		ORDER BY id`, modelQuotaAlertMaxTries)
@@ -436,7 +438,7 @@ func (e *Engine) sendModelQuotaAlerts(ctx context.Context, tx pgx.Tx, now time.T
 		}
 		msg, sent := "", any(now)
 		if sendErr != nil {
-			msg, sent = clipQuotaText(sendErr.Error(), 500), nil
+			msg, sent = hostwatch.Clip(sendErr.Error(), 500), nil
 		}
 		text := n.Title + "\n" + n.Body
 		if _, err := tx.Exec(ctx, `UPDATE model_quota_alerts
@@ -468,7 +470,7 @@ func (e *Engine) quotaAlertNotice(ctx context.Context, tx pgx.Tx, a quotaAlert, 
 			short = short[:8]
 		}
 		if label != "" {
-			labels = append(labels, fmt.Sprintf("%s (%s)", short, clipQuotaText(label, 40)))
+			labels = append(labels, fmt.Sprintf("%s (%s)", short, hostwatch.Clip(label, 40)))
 		} else {
 			labels = append(labels, short)
 		}
@@ -482,31 +484,13 @@ func (e *Engine) quotaAlertNotice(ctx context.Context, tx pgx.Tx, a quotaAlert, 
 		runsWord = "1 run"
 	}
 	body := fmt.Sprintf("No eligible model in %s for %s. %s waiting: %s. Runs will resume automatically when quota returns.",
-		strings.Join(a.tokens, ", "), quotaSpan(now.Sub(a.since)), runsWord, runList)
+		strings.Join(a.tokens, ", "), hostwatch.Span(now.Sub(a.since)), runsWord, runList)
 	return hostwatch.Notice{
-		Title:    clipQuotaText("Model quota unavailable on "+a.host, 60),
+		Title:    hostwatch.Clip("Model quota unavailable on "+a.host, 60),
 		Body:     body,
 		ThreadID: "intelligence-model-quota",
 		Level:    "active",
 	}, nil
-}
-
-func quotaSpan(d time.Duration) string {
-	m := int(d / time.Minute)
-	if m < 60 {
-		return fmt.Sprintf("%d min", m)
-	}
-	if m%60 == 0 {
-		return fmt.Sprintf("%d h", m/60)
-	}
-	return fmt.Sprintf("%d h %d min", m/60, m%60)
-}
-
-func clipQuotaText(s string, n int) string {
-	if r := []rune(s); len(r) > n {
-		return string(r[:n-1]) + "…"
-	}
-	return s
 }
 
 // RunModelQuotaWatcher checks every minute until ctx ends. More than one instance may safely run it.

@@ -176,7 +176,7 @@ func (w *Watcher) send(ctx context.Context, tx pgx.Tx, now time.Time) error {
 		}
 		msg, sent := "", any(now)
 		if sendErr != nil {
-			msg, sent = clip(sendErr.Error(), 500), nil
+			msg, sent = Clip(sendErr.Error(), 500), nil
 		}
 		text := n.Title + "\n" + n.Body
 		q := `UPDATE host_silence_alerts SET alert_text = $2, alert_sent_at = $3, alert_error = $4, alert_attempts = alert_attempts + 1 WHERE id = $1`
@@ -199,7 +199,7 @@ func (w *Watcher) clock(t time.Time) string {
 
 func (w *Watcher) alertNotice(a alert, now time.Time) Notice {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Silent %s (last heard %s). %s affected:", span(now.Sub(a.lastSeen)), w.clock(a.lastSeen), plural(a.active, "run", "runs"))
+	fmt.Fprintf(&b, "Silent %s (last heard %s). %s affected:", Span(now.Sub(a.lastSeen)), w.clock(a.lastSeen), plural(a.active, "run", "runs"))
 	var parts []string
 	for _, p := range []struct {
 		n    int
@@ -218,22 +218,22 @@ func (w *Watcher) alertNotice(a alert, now time.Time) Notice {
 		}
 		fmt.Fprintf(&b, " Last recorded: %s up to %s", plural(a.oom, "OOM kill", "OOM kills"), at)
 		if a.comms != "" {
-			b.WriteString(" (" + clip(a.comms, 120) + ")")
+			b.WriteString(" (" + Clip(a.comms, 120) + ")")
 		}
 		b.WriteString(".")
 	default:
 		b.WriteString(" No OOM kills recorded.")
 	}
-	return Notice{Title: clip(a.host+" stopped reporting", 60), Body: b.String(), ThreadID: "intelligence-hosts", Level: "time-sensitive"}
+	return Notice{Title: Clip(a.host+" stopped reporting", 60), Body: b.String(), ThreadID: "intelligence-hosts", Level: "time-sensitive"}
 }
 
 func (w *Watcher) recoveryNotice(a alert) Notice {
-	body := fmt.Sprintf("Back at %s after %s silent. Its runs can move again.", w.clock(*a.recovered), span(a.recovered.Sub(a.lastSeen)))
-	return Notice{Title: clip(a.host+" is reporting again", 60), Body: body, ThreadID: "intelligence-hosts", Level: "active"}
+	body := fmt.Sprintf("Back at %s after %s silent. Its runs can move again.", w.clock(*a.recovered), Span(a.recovered.Sub(a.lastSeen)))
+	return Notice{Title: Clip(a.host+" is reporting again", 60), Body: body, ThreadID: "intelligence-hosts", Level: "active"}
 }
 
-// span is a duration in whole minutes: "10 min", "3 h 5 min".
-func span(d time.Duration) string {
+// Span is a duration in whole minutes: "10 min", "3 h 5 min".
+func Span(d time.Duration) string {
 	m := int(d / time.Minute)
 	if m < 60 {
 		return fmt.Sprintf("%d min", m)
@@ -251,7 +251,8 @@ func plural(n int, one, many string) string {
 	return fmt.Sprintf("%d %s", n, many)
 }
 
-func clip(s string, n int) string {
+// Clip shortens s to at most n runes, ending in an ellipsis when cut.
+func Clip(s string, n int) string {
 	if r := []rune(s); len(r) > n {
 		return string(r[:n-1]) + "…"
 	}

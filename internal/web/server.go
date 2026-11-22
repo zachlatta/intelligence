@@ -119,7 +119,6 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	a := &app{cfg: cfg, routes: http.NewServeMux(), store: store, reg: reg, changes: changes, wf: workflow.NewEngine(cfg.DB, cfg.Now)}
 	a.wf.Notify = cfg.HostAlerts
 	a.wf.NotifyAccount = cfg.PDWAccount
-	a.wf.NotifyLocation = cfg.NotifyLocation
 	if cfg.QueueLimits != nil {
 		a.wf.Limits = *cfg.QueueLimits
 	}

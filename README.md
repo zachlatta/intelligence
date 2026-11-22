@@ -1148,10 +1148,13 @@ rankings and history through SQL (`model_groups`, `model_group_members`, `model_
 When no member of a requested model group is eligible, the run enters a model-quota wait state
 (`workflow_model_waits`, `activity_waiting_on = 'model quota'`) instead of asking the account owner
 or stalling. Intelligence checks every minute and resumes the orchestrator automatically with a
-fresh suggestion once an eligible model returns; runs already parked on a model-only ask resume the
+fresh suggestion once an eligible model returns. A wait (like each suggestion, in
+`workflow_model_suggestions.exclude`) keeps the routes the step excluded, so an excluded model
+never ends it. Runs already parked on a model-only ask resume the
 same way with their ask resolved. If a host stays blocked on model quota for 30 minutes,
 Intelligence opens at most one host-level alert (`model_quota_alerts`, deduplicated per account and
-host) and sends one phone notification listing the waiting runs when `PDW_NOTIFY_KEY` is configured.
+host) and sends one phone notification listing the waiting runs, through the same PDW notifier as silent hosts (`PDW_NOTIFY_KEY`, for
+`PDW_INTELLIGENCE_ACCOUNT`'s hosts).
 
 The starting workflow spreads frontier work across the subscribed Claude Opus 5.5 and Codex plans.
 Paseo discovers Antigravity models from the host's `agy models` output and forwards the selected

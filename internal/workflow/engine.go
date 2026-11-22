@@ -33,7 +33,6 @@ type Engine struct {
 	// NotifyAccount's wait on model quota past ModelQuotaAlertAfter (default 30 minutes).
 	Notify               hostwatch.Notifier
 	NotifyAccount        string
-	NotifyLocation       *time.Location
 	ModelQuotaAlertAfter time.Duration
 }
 
