@@ -29,15 +29,39 @@ const (
 	modelQuotaAlertLockKey  = 0x6d6f64656c71756f // "modelquo"
 )
 
-// openModelWait records that r is waiting for an eligible model in group/token and marks its
-// activity as waiting on "model quota". Repeated polls keep the original since timestamp.
-func (e *Engine) openModelWait(ctx context.Context, tx pgx.Tx, r run, step int, groupID, token string) error {
+// cleanExclude trims, drops blanks, and deduplicates excluded provider/model routes.
+func cleanExclude(exclude []string) []string {
+	out := make([]string, 0, len(exclude))
+	seen := make(map[string]bool, len(exclude))
+	for _, s := range exclude {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
+}
+
+func suggestPollCommand(runID, token string, exclude []string) string {
+	cmd := "intelligence workflow suggest --run " + runID + " " + token
+	if len(exclude) > 0 {
+		cmd += " --exclude " + strings.Join(exclude, ",")
+	}
+	return cmd
+}
+
+// openModelWait records that r is waiting for an eligible model in group/token (honoring exclude)
+// and marks its activity as waiting on "model quota". Repeated polls keep the original since timestamp.
+func (e *Engine) openModelWait(ctx context.Context, tx pgx.Tx, r run, step int, groupID, token string, exclude []string) error {
 	now := e.Now()
-	if _, err := tx.Exec(ctx, `INSERT INTO workflow_model_waits (account_id, run_id, host, step, group_id, token, since, last_checked_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+	exclude = cleanExclude(exclude)
+	if _, err := tx.Exec(ctx, `INSERT INTO workflow_model_waits (account_id, run_id, host, step, group_id, token, exclude, since, last_checked_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
 		ON CONFLICT (run_id) WHERE resolved_at IS NULL
-		DO UPDATE SET step = EXCLUDED.step, group_id = EXCLUDED.group_id, token = EXCLUDED.token, last_checked_at = EXCLUDED.last_checked_at`,
-		r.Account, r.ID, r.Host, step, groupID, token, now); err != nil {
+		DO UPDATE SET step = EXCLUDED.step, group_id = EXCLUDED.group_id, token = EXCLUDED.token, exclude = EXCLUDED.exclude, last_checked_at = EXCLUDED.last_checked_at`,
+		r.Account, r.ID, r.Host, step, groupID, token, exclude, now); err != nil {
 		return err
 	}
 	fallback := "Waiting for an eligible model in " + token
@@ -68,18 +92,21 @@ func hasOpenModelWait(ctx context.Context, tx pgx.Tx, runID string) (bool, error
 	return open, err
 }
 
-// blockedModelToken returns the group ID and token for r's current step if r has an active
-// model-availability block (an open workflow_model_waits row, or a failed model suggestion on the
-// current step with no subsequent successful suggestion for that token).
-func blockedModelToken(ctx context.Context, tx pgx.Tx, r run) (groupID, token string, ok bool, err error) {
-	err = tx.QueryRow(ctx, `SELECT group_id::text, token FROM workflow_model_waits WHERE run_id = $1 AND resolved_at IS NULL`, r.ID).Scan(&groupID, &token)
+// blockedModelToken returns the group ID, token, and excluded routes for r's current step if r has
+// an active model-availability block (an open workflow_model_waits row, or a failed model suggestion
+// on the current step with no subsequent successful suggestion for that token).
+func blockedModelToken(ctx context.Context, tx pgx.Tx, r run) (groupID, token string, exclude []string, ok bool, err error) {
+	err = tx.QueryRow(ctx, `SELECT group_id::text, token, exclude FROM workflow_model_waits WHERE run_id = $1 AND resolved_at IS NULL`, r.ID).Scan(&groupID, &token, &exclude)
 	if err == nil {
-		return groupID, token, true, nil
+		return groupID, token, cleanExclude(exclude), true, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		return "", "", false, err
+		return "", "", nil, false, err
 	}
-	err = tx.QueryRow(ctx, `SELECT s.group_id::text, s.token
+	err = tx.QueryRow(ctx, `SELECT s.group_id::text, s.token,
+		       CASE WHEN cardinality(s.exclude) > 0 THEN s.exclude
+		            WHEN jsonb_typeof(s.snapshot->'excluded') = 'array' THEN ARRAY(SELECT jsonb_array_elements_text(s.snapshot->'excluded'))
+		            ELSE '{}'::text[] END
 		FROM workflow_model_suggestions s
 		WHERE s.run_id = $1 AND s.step = $2 AND s.provider IS NULL
 		  AND NOT EXISTS (
@@ -87,14 +114,14 @@ func blockedModelToken(ctx context.Context, tx pgx.Tx, r run) (groupID, token st
 		      WHERE ok.run_id = s.run_id AND ok.step = s.step AND ok.token = s.token
 		        AND ok.provider IS NOT NULL AND ok.created_at >= s.created_at
 		  )
-		ORDER BY s.created_at DESC LIMIT 1`, r.ID, r.Step).Scan(&groupID, &token)
+		ORDER BY s.created_at DESC LIMIT 1`, r.ID, r.Step).Scan(&groupID, &token, &exclude)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", "", false, nil
+		return "", "", nil, false, nil
 	}
 	if err != nil {
-		return "", "", false, err
+		return "", "", nil, false, err
 	}
-	return groupID, token, true, nil
+	return groupID, token, cleanExclude(exclude), true, nil
 }
 
 // looksLikeModelAsk reports whether an ask note is only about model-group availability/quota
@@ -119,13 +146,15 @@ func looksLikeModelAsk(note, token string) bool {
 	return false
 }
 
-// hasEligibleCandidate reports whether groupID currently has at least one eligible candidate on host.
-func hasEligibleCandidate(ctx context.Context, tx pgx.Tx, account int64, groupID, host string) (bool, error) {
+// hasEligibleCandidate reports whether groupID currently has at least one eligible candidate on
+// host that is not in exclude.
+func hasEligibleCandidate(ctx context.Context, tx pgx.Tx, account int64, groupID, host string, exclude []string) (bool, error) {
 	var ok bool
 	err := tx.QueryRow(ctx, `SELECT EXISTS(
 		SELECT 1 FROM model_group_candidates
 		WHERE account_id = $1 AND group_id = $2 AND host = $3 AND eligible
-	)`, account, groupID, host).Scan(&ok)
+		  AND NOT ((provider || '/' || model) = ANY($4::text[]))
+	)`, account, groupID, host, cleanExclude(exclude)).Scan(&ok)
 	return ok, err
 }
 
@@ -163,6 +192,7 @@ func (e *Engine) resumeModelWaits(ctx context.Context) error {
 		  AND EXISTS (
 		      SELECT 1 FROM model_group_candidates c
 		      WHERE c.account_id = w.account_id AND c.group_id = w.group_id AND c.host = w.host AND c.eligible
+		        AND NOT ((c.provider || '/' || c.model) = ANY(w.exclude))
 		  )
 		ORDER BY w.since, w.run_id
 		LIMIT 100`)
@@ -184,7 +214,8 @@ func (e *Engine) resumeModelWaits(ctx context.Context) error {
 				return err
 			}
 			var groupID, token string
-			err = tx.QueryRow(ctx, `SELECT group_id::text, token FROM workflow_model_waits WHERE run_id = $1 AND resolved_at IS NULL`, r.ID).Scan(&groupID, &token)
+			var exclude []string
+			err = tx.QueryRow(ctx, `SELECT group_id::text, token, exclude FROM workflow_model_waits WHERE run_id = $1 AND resolved_at IS NULL`, r.ID).Scan(&groupID, &token, &exclude)
 			if errors.Is(err, pgx.ErrNoRows) {
 				return nil
 			}
@@ -194,11 +225,11 @@ func (e *Engine) resumeModelWaits(ctx context.Context) error {
 			if err := lockModels(ctx, tx, r.Account); err != nil {
 				return err
 			}
-			eligible, err := hasEligibleCandidate(ctx, tx, r.Account, groupID, r.Host)
+			eligible, err := hasEligibleCandidate(ctx, tx, r.Account, groupID, r.Host, exclude)
 			if err != nil || !eligible {
 				return err
 			}
-			sug, err := e.suggestModel(ctx, tx, r, r.Step, token, nil)
+			sug, err := e.suggestModel(ctx, tx, r, r.Step, token, exclude)
 			if err != nil || !sug.Eligible {
 				return err
 			}
@@ -268,18 +299,18 @@ func (e *Engine) resumeParkedModelAsks(ctx context.Context) error {
 			if err := tx.QueryRow(ctx, `SELECT note FROM workflow_runs WHERE id = $1`, r.ID).Scan(&note); err != nil {
 				return err
 			}
-			groupID, token, blocked, err := blockedModelToken(ctx, tx, r)
+			groupID, token, exclude, blocked, err := blockedModelToken(ctx, tx, r)
 			if err != nil || !blocked || !looksLikeModelAsk(note, token) {
 				return err
 			}
 			if err := lockModels(ctx, tx, r.Account); err != nil {
 				return err
 			}
-			eligible, err := hasEligibleCandidate(ctx, tx, r.Account, groupID, r.Host)
+			eligible, err := hasEligibleCandidate(ctx, tx, r.Account, groupID, r.Host, exclude)
 			if err != nil || !eligible {
 				return err
 			}
-			sug, err := e.suggestModel(ctx, tx, r, r.Step, token, nil)
+			sug, err := e.suggestModel(ctx, tx, r, r.Step, token, exclude)
 			if err != nil || !sug.Eligible {
 				return err
 			}

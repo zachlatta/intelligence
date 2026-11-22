@@ -12,6 +12,7 @@ CREATE TABLE workflow_model_waits (
     step integer NOT NULL,
     group_id uuid NOT NULL REFERENCES model_groups,
     token text NOT NULL,
+    exclude text[] NOT NULL DEFAULT '{}',
     since timestamptz NOT NULL,
     last_checked_at timestamptz NOT NULL,
     resolved_at timestamptz,
@@ -20,6 +21,8 @@ CREATE TABLE workflow_model_waits (
 );
 CREATE UNIQUE INDEX workflow_model_waits_open ON workflow_model_waits (run_id) WHERE resolved_at IS NULL;
 CREATE INDEX workflow_model_waits_host_open ON workflow_model_waits (account_id, host) WHERE resolved_at IS NULL;
+
+ALTER TABLE workflow_model_suggestions ADD COLUMN exclude text[] NOT NULL DEFAULT '{}';
 
 CREATE TABLE model_quota_alerts (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

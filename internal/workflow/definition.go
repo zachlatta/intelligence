@@ -442,7 +442,7 @@ var Starting = Definition{
 // ModelQuotaWaitRule is included for every orchestrator (including saved workflows like Factory
 // Task) so a model-group outage puts runs into a wait state instead of asking Zach per run.
 const ModelQuotaWaitRule = "Model quota waits: if the model suggester returns \"No eligible model in <group>\", do NOT ask Zach and do NOT launch a worker without an eligible suggestion. " +
-	"A model-availability block is a wait state (waiting on model quota), not an ask: poll `intelligence workflow suggest --run <id> <group>` every minute until an eligible model appears, or pause your turn and let Intelligence resume the run automatically when quota returns. " +
+	"A model-availability block is a wait state (waiting on model quota), not an ask: poll `intelligence workflow suggest --run <id> <group> [--exclude <provider/model,...>]` (preserving any `--exclude` the step requires) every minute until an eligible model appears, or pause your turn and let Intelligence resume the run automatically when quota returns. " +
 	"Intelligence sends Zach at most one host-level notice if the outage persists."
 
 // UnattendedShellRule is included for saved workflows too, not only Starting.

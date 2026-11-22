@@ -1082,15 +1082,15 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 			return answeredAskMessage + redelivery(lost), e.carried(ctx, tx, r, lost, "ask", nil)
 		}
 		if r.Step >= 0 && r.Step < len(r.Def.Steps) && r.Def.Steps[r.Step].Kind != KindSignoff {
-			groupID, token, blocked, err := blockedModelToken(ctx, tx, r)
+			groupID, token, exclude, blocked, err := blockedModelToken(ctx, tx, r)
 			if err != nil {
 				return "", err
 			}
 			if blocked && looksLikeModelAsk(m.Note, token) {
-				if err := e.openModelWait(ctx, tx, r, r.Step, groupID, token); err != nil {
+				if err := e.openModelWait(ctx, tx, r, r.Step, groupID, token, exclude); err != nil {
 					return "", err
 				}
-				return fmt.Sprintf("Not asked: this run is waiting on model quota for %s. Do not ask Zach and do not launch a worker without an eligible suggestion. Poll intelligence workflow suggest --run %s %s every minute, or end your turn and Intelligence will resume this run automatically when an eligible model returns.", token, r.ID, token), nil
+				return fmt.Sprintf("Not asked: this run is waiting on model quota for %s. Do not ask Zach and do not launch a worker without an eligible suggestion. Poll %s every minute, or end your turn and Intelligence will resume this run automatically when an eligible model returns.", token, suggestPollCommand(r.ID, token, exclude)), nil
 			}
 		}
 		if err := e.event(ctx, tx, r, "ask", ptr(r.Step), nil, m.Note); err != nil {

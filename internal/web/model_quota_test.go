@@ -333,3 +333,132 @@ func TestParkedModelOnlyAskResumesAutomatically(t *testing.T) {
 		t.Fatalf("genuine human ask was disturbed: %+v", r)
 	}
 }
+
+func TestModelQuotaHonorsExcludeAndResumesOnAllowedModel(t *testing.T) {
+	d := dbtest.New(t)
+	clock := &fakeClock{t: time.Date(2026, 11, 22, 7, 0, 0, 0, time.UTC)}
+	h := newStallServer(t, d, d.Owner, "v", func(c *Config) { c.Now = clock.Now })
+	e := workflow.NewEngine(d.Owner, clock.Now)
+	notifier := &fakeQuotaNotifier{}
+	e.Notify = notifier
+	e.NotifyAccount = h.acct.Username
+	e.NotifyLocation = time.UTC
+
+	rep := wfReport()
+	rep.Paseo.Providers = []hostclient.Provider{
+		{Name: "claude", Available: true, Models: []hostclient.Model{{ID: "claude-opus-5-5", Label: "Claude Opus 5.5", Thinking: []string{"high"}}}},
+		{Name: "antigravity", Available: true, Models: []hostclient.Model{{ID: "claude-opus-5-5-medium", Label: "Claude Opus 5.5 Medium"}}},
+	}
+	keyOf(t, h, "host-1")
+	b := stallReport(t, h, rep)
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := d.Owner.Exec(t.Context(), q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Allowed member (claude) is exhausted; excluded member (antigravity) is eligible.
+	exec(`INSERT INTO usage_accounts(provider,account,first_seen,last_seen) VALUES('claude','one',now(),now()),('antigravity','ag',now(),now())`)
+	exec(`INSERT INTO usage_sources(host,provider,account,ok,received_at) VALUES('host-1','claude','one',true,now()),('host-1','antigravity','ag',true,now())`)
+	exec(`INSERT INTO usage_readings(provider,account,window_id,window_seconds,used_pct,resets_at,first_observed,last_observed)
+		VALUES('claude','one','7d',604800,100,now()+interval '1 day',now(),now()),
+		      ('antigravity','ag','7d',604800,10,now()+interval '1 day',now(),now())`)
+	exec(`INSERT INTO usage_active(host,provider,account,since,until) VALUES('host-1','claude','one',now(),now()),('host-1','antigravity','ag',now(),now())`)
+
+	body, _ := json.Marshal(map[string]any{
+		"name": "Claude Opus 5.5",
+		"members": []any{
+			map[string]any{"provider": "claude", "model": "claude-opus-5-5", "thinking": "high", "login": "one", "longWindow": "7d", "enabled": true},
+			map[string]any{"provider": "antigravity", "model": "claude-opus-5-5-medium", "thinking": "", "login": "ag", "longWindow": "7d", "enabled": true},
+		},
+	})
+	rec := call(t, h, "POST", "/api/model-groups", string(body), sameOriginFetch)
+	if rec.Code != 201 {
+		t.Fatalf("create model group: %d %s", rec.Code, rec.Body)
+	}
+	var g workflow.ModelGroup
+	if err := json.Unmarshal(rec.Body.Bytes(), &g); err != nil {
+		t.Fatal(err)
+	}
+	def := workflow.Starting
+	def.Steps = append([]workflow.Step(nil), def.Steps...)
+	def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+	def.Steps[0].Instructions = "Check with {{" + g.Token + "}}."
+	wfID := createWorkflow(t, h, def)
+
+	run := startRun(t, h, wfID, "Verify change")
+	succeed(t, b, b.command(), `{"workspaceId":"w-1","agentId":"orch-1"}`)
+
+	// Second run: already parked on a model-only ask with the same exclusion in snapshot->'excluded'.
+	parked := startRun(t, h, wfID, "Verify parked change")
+	succeed(t, b, b.command(), `{"workspaceId":"w-2","agentId":"orch-2"}`)
+	key := keyOf(t, h, "host-1")
+	rec = call(t, anon(h), "POST", "/api/workflow-runs/"+parked+"/suggestions", `{"token":"`+g.Token+`","exclude":["antigravity/claude-opus-5-5-medium"]}`, map[string]string{"Authorization": "Bearer " + key})
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "No eligible model") {
+		t.Fatalf("parked suggest: %d %s", rec.Code, rec.Body)
+	}
+	exec(`DELETE FROM workflow_model_waits WHERE run_id=$1`, parked)
+	askNote := "With Antigravity excluded, " + g.Token + " returns no eligible model. May I launch claude/claude-opus-5-5 directly?"
+	exec(`UPDATE workflow_runs SET status='waiting', note=$2, activity_waiting_on='Zach' WHERE id=$1`, parked, askNote)
+	exec(`INSERT INTO workflow_run_events(run_id,account_id,at,kind,step,text) SELECT id,account_id,$2,'ask',step,$3 FROM workflow_runs WHERE id=$1`, parked, clock.Now(), askNote)
+
+	// Orchestrator polls suggest with --exclude antigravity/claude-opus-5-5-medium for 35 minutes.
+	for i := 0; i < 35; i++ {
+		if i > 0 {
+			clock.Add(time.Minute)
+		}
+		rec = call(t, anon(h), "POST", "/api/workflow-runs/"+run+"/suggestions", `{"token":"`+g.Token+`","exclude":["antigravity/claude-opus-5-5-medium"]}`, map[string]string{"Authorization": "Bearer " + key})
+		if rec.Code != 200 || !strings.Contains(rec.Body.String(), "No eligible model") {
+			t.Fatalf("minute %d suggest: %d %s", i, rec.Code, rec.Body)
+		}
+		if i == 0 && !strings.Contains(rec.Body.String(), "--exclude antigravity/claude-opus-5-5-medium") {
+			t.Fatalf("poll hint should carry --exclude: %s", rec.Body.String())
+		}
+		if err := e.ReconcileModelWaits(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Must have ZERO resumes for both runs, 1 stable wait row, and EXACTLY ONE notice after 30 min.
+	code, r := sqlPost(t, h, q("SELECT count(*) FROM workflow_run_events WHERE run_id IN ('"+run+"','"+parked+"') AND kind='resume'"))
+	if code != 200 || r.Rows[0][0] != float64(0) {
+		t.Fatalf("excluded model must not trigger resume, got %+v", r)
+	}
+	code, r = sqlPost(t, h, q("SELECT count(*) FROM workflow_model_waits WHERE run_id='"+run+"'"))
+	if code != 200 || r.Rows[0][0] != float64(1) {
+		t.Fatalf("expected 1 stable wait row across re-suggests, got %+v", r)
+	}
+	code, r = sqlPost(t, h, q("SELECT status FROM workflow_runs WHERE id='"+parked+"'"))
+	if code != 200 || r.Rows[0][0] != "waiting" {
+		t.Fatalf("parked ask must stay waiting while only excluded model is eligible: %+v", r)
+	}
+	if len(notifier.notices) != 1 {
+		t.Fatalf("expected exactly 1 host notice after 30m, got %d: %+v", len(notifier.notices), notifier.notices)
+	}
+
+	// Allowed model (claude) recovers -> both runs resume on claude/claude-opus-5-5 (never antigravity).
+	exec(`UPDATE usage_readings SET used_pct=10, last_observed=now() WHERE provider='claude' AND account='one'`)
+	clock.Add(time.Minute)
+	if err := e.ReconcileModelWaits(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for range 2 {
+		cmd := b.command()
+		var args hostclient.AgentArgs
+		if err := json.Unmarshal(cmd.Args, &args); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(args.Text, "--provider claude/claude-opus-5-5") || strings.Contains(args.Text, "--provider antigravity/") {
+			t.Fatalf("expected resume on allowed claude model, got %+v", args)
+		}
+		seen[args.AgentID] = true
+		succeed(t, b, cmd, `{}`)
+	}
+	if !seen["orch-1"] || !seen["orch-2"] {
+		t.Fatalf("expected both runs to resume, got %+v", seen)
+	}
+	if len(notifier.notices) != 1 {
+		t.Fatalf("expected still at most 1 notice after recovery, got %d", len(notifier.notices))
+	}
+}

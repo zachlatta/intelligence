@@ -289,6 +289,7 @@ type modelSuggestion struct {
 }
 
 func (e *Engine) suggestModel(ctx context.Context, tx pgx.Tx, r run, step int, token string, exclude []string) (modelSuggestion, error) {
+	exclude = cleanExclude(exclude)
 	if err := lockModels(ctx, tx, r.Account); err != nil {
 		return modelSuggestion{}, err
 	}
@@ -330,7 +331,7 @@ func (e *Engine) suggestModel(ctx context.Context, tx pgx.Tx, r run, step int, t
 			break
 		}
 	}
-	msg := "No eligible model in " + token + ". Do not ask Zach. Wait for model quota: poll intelligence workflow suggest --run " + r.ID + " " + token + " every minute until an eligible model appears, or pause and Intelligence will resume this run when quota returns. Do not launch a worker on this suggestion."
+	msg := "No eligible model in " + token + ". Do not ask Zach. Wait for model quota: poll " + suggestPollCommand(r.ID, token, exclude) + " every minute until an eligible model appears, or pause and Intelligence will resume this run when quota returns. Do not launch a worker on this suggestion."
 	inline := "no eligible model in " + token
 	var provider, login, window any
 	if chosen != nil {
@@ -361,8 +362,8 @@ func (e *Engine) suggestModel(ctx context.Context, tx pgx.Tx, r run, step int, t
 	}
 	snapshot, _ := json.Marshal(map[string]any{"candidates": candidates, "selected": chosen, "excluded": exclude})
 	var id string
-	if err := tx.QueryRow(ctx, `INSERT INTO workflow_model_suggestions(account_id,run_id,step,group_id,token,revision,provider,login,long_window,snapshot,message)
-   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id::text`, r.Account, r.ID, step, group, token, revision, provider, login, window, snapshot, msg).Scan(&id); err != nil {
+	if err := tx.QueryRow(ctx, `INSERT INTO workflow_model_suggestions(account_id,run_id,step,group_id,token,revision,provider,login,long_window,snapshot,message,exclude)
+   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id::text`, r.Account, r.ID, step, group, token, revision, provider, login, window, snapshot, msg, exclude).Scan(&id); err != nil {
 		return modelSuggestion{}, err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO workflow_run_events (run_id, account_id, at, kind, step, text, suggestion_id)
@@ -370,7 +371,7 @@ func (e *Engine) suggestModel(ctx context.Context, tx pgx.Tx, r run, step int, t
 		return modelSuggestion{}, err
 	}
 	if chosen == nil && len(candidates) > 0 {
-		if err := e.openModelWait(ctx, tx, r, step, group, token); err != nil {
+		if err := e.openModelWait(ctx, tx, r, step, group, token, exclude); err != nil {
 			return modelSuggestion{}, err
 		}
 	} else if chosen != nil {
