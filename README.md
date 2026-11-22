@@ -1107,7 +1107,8 @@ a fixed reset or plan end, subtracting the percentage of the longest window stil
 remaining quota percentage. A reset one full window away gets the same pace treatment at zero
 usage and just after work begins. When two recent in-progress readings show the deadline moving
 forward before it arrives, the score uses the remaining quota percentage. Each suggestion
-subtracts 2 points from the shared pool for 60 minutes. Suggestions require fresh meters and a 5%
+subtracts 2 points from the shared pool until a meter reading after it (at most 60 minutes), since
+that reading already shows its spend. Suggestions require fresh meters and a 5%
 reserve, including in shorter windows of the selected pool. Fable must clear both its own weekly
 cap and the shared Claude cap, and its ranking uses the lower of the two remaining percentages.
 Claude's recent suggestions count toward the shared weekly reserve. Inactive logins cannot be

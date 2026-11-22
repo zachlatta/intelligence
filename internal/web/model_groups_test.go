@@ -641,6 +641,73 @@ func TestModelGroupSkipsABrokenLogin(t *testing.T) {
 	candidate("", true)
 }
 
+// A suggestion holds back quota only until a meter reading can show its spend. Counting it for
+// the whole hour after a fresh reading counts the same work twice: a busy fleet made a weekly
+// plan with 63% left look empty while the meter had moved only a few points.
+func TestModelGroupPenaltyCountsOnlySuggestionsAfterTheReading(t *testing.T) {
+	h, d := dbServer(t)
+	rep := wfReport()
+	rep.Paseo.Providers = []hostclient.Provider{{Name: "claude", Available: true, Models: []hostclient.Model{{ID: "opus", Thinking: []string{"medium"}}}}}
+	sendReport(t, h, rep)
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := d.Owner.Exec(t.Context(), q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`INSERT INTO usage_accounts(provider,account,first_seen,last_seen) VALUES('claude','one',now(),now())`)
+	exec(`INSERT INTO usage_sources(host,provider,account,ok,received_at) VALUES('host-1','claude','one',true,now())`)
+	exec(`INSERT INTO usage_readings(provider,account,window_id,window_seconds,used_pct,resets_at,first_observed,last_observed) VALUES
+		('claude','one','7d',604800,37,now()+interval '5 days',now(),now()),
+		('claude','one','fable/7d',604800,0,now()+interval '5 days',now(),now())`)
+	exec(`INSERT INTO usage_active(host,provider,account,since,until) VALUES('host-1','claude','one',now(),now())`)
+	body, _ := json.Marshal(map[string]any{"name": "Opus", "members": []any{map[string]any{"provider": "claude", "model": "opus", "thinking": "medium", "login": "one", "longWindow": "7d", "enabled": true}}})
+	if rec := call(t, h, "POST", "/api/model-groups", string(body), sameOriginFetch); rec.Code != 201 {
+		t.Fatalf("create %d %s", rec.Code, rec.Body)
+	}
+	def := workflow.Starting
+	def.Steps = append([]workflow.Step(nil), def.Steps...)
+	def.Project = workflow.Project{Mode: "fixed", Directory: "/w/app"}
+	def.Steps[0].Instructions = "Use {{opus_model}}."
+	wf := createWorkflow(t, h, def)
+	stream := openStream(t, h, "host-1")
+	run := startRun(t, h, wf, "Check the build")
+	succeed(t, stream, stream.command(), `{"workspaceId":"work","agentId":"orch"}`)
+	key := keyOf(t, h, "host-1")
+	for i := 0; i < 29; i++ {
+		rec := call(t, anon(h), "POST", "/api/workflow-runs/"+run+"/suggestions", `{"token":"opus_model"}`, map[string]string{"Authorization": "Bearer " + key})
+		if rec.Code != 200 {
+			t.Fatalf("suggest %d: %d %s", i, rec.Code, rec.Body)
+		}
+	}
+	candidate := func(want string, eligible bool) {
+		t.Helper()
+		code, r := sqlPost(t, h, q(`SELECT eligible,reason FROM model_group_candidates`))
+		if code != 200 || len(r.Rows) != 1 || r.Rows[0][0] != eligible || r.Rows[0][1] != want {
+			t.Fatalf("want %q %v: %d %+v", want, eligible, code, r)
+		}
+	}
+	// Thirty suggestions since the last reading still hold back the pool between readings.
+	candidate("Quota reserved for recent suggestions", false)
+
+	// A fresh reading after those suggestions shows their spend: 63% is left, so the plan is eligible.
+	exec(`UPDATE workflow_model_suggestions SET created_at=created_at-interval '20 minutes'`)
+	exec(`UPDATE usage_readings SET last_observed=now()-interval '1 minute'`)
+	candidate("", true)
+
+	// A suggestion after that reading counts again until the next one.
+	exec(`UPDATE workflow_model_suggestions SET created_at=now() WHERE id=(SELECT id FROM workflow_model_suggestions LIMIT 1)`)
+	code, r := sqlPost(t, h, q(`SELECT round(score::numeric,1)::text FROM model_group_candidates`))
+	if code != 200 || len(r.Rows) != 1 {
+		t.Fatalf("score: %d %+v", code, r)
+	}
+	exec(`UPDATE workflow_model_suggestions SET created_at=now()-interval '20 minutes'`)
+	_, r2 := sqlPost(t, h, q(`SELECT round(score::numeric,1)::text FROM model_group_candidates`))
+	if r.Rows[0][0] == r2.Rows[0][0] {
+		t.Fatalf("a suggestion after the reading should lower the score: %+v %+v", r, r2)
+	}
+}
+
 // model-groups.js is served like the other embedded scripts: revalidated by an ETag of its content.
 func TestModelGroupsScriptIsServed(t *testing.T) {
 	rec := get(t, dictationServer(t, "", ""), "/model-groups.js", nil)
