@@ -777,6 +777,10 @@ version it started with. A run:
    never asks for permission (the one its paseo catalog marks unattended): `bypassPermissions`
    for Claude, `full-access` for Codex, `allowAll` for Muse, `full-access` for Antigravity. The
    editor offers these providers (`workflow.Providers`); one typed in by hand keeps its default.
+   Antigravity takes its thinking level from the model ID (`gemini-4-neon-medium`), so a finder or
+   orchestrator on Antigravity has no thinking level: saving one is refused, the editor disables
+   the selector, and migration `20261122T0719_clear_antigravity_workflow_thinking` removed it from
+   active workflows as a new version.
    The server starts the finder and the orchestrator in it; `paseo run` would start a sub-agent in
    the provider's default mode, which may ask, so the orchestrator's first message tells it to pass
    `--mode` (in the prompt, not the saved instructions, so every version gets it). A step is only
