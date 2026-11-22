@@ -25,8 +25,9 @@ One binary, six commands:
   The host client reads it over a Unix socket.
 - `intelligence workflow`: what a workflow run's agents run on their host to move the run
   (Workflows, below). It reaches the server with the host's key.
-- `intelligence pdw`: read-only PDW sync-health helper (`intelligence pdw sync-health --source slack|gmail|voice-memos`)
-  used by email and voice-memo orchestrators before waiting on missing PDW data.
+- `intelligence pdw`: what email and voice-memo runs' agents run on their host before they wait on
+  data PDW has not synced yet. `intelligence pdw sync-health --source slack|gmail|voice-memos`
+  reads the source's sync health through the host's `pdw` CLI and says ok, behind or broken.
 - `intelligence version`: prints the commit the binary was built from.
 
 ### State and the read-only SQL contract
