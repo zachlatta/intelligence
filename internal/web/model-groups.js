@@ -103,7 +103,7 @@ function modelGroupPools(windows, provider, login) {
         "SELECT a.provider,a.account,a.label,c.window_id,c.window_seconds FROM usage_accounts a LEFT JOIN usage_current c ON c.provider=a.provider AND c.account=a.account WHERE NOT EXISTS (SELECT 1 FROM provider_plan_settings ps WHERE ps.provider=a.provider AND NOT ps.enabled) ORDER BY a.provider,a.account,c.window_id",
       ),
       sql(
-        "SELECT group_id,host,provider,model,thinking,login,eligible,reason,score,last_observed,position FROM model_group_candidates ORDER BY eligible DESC,score DESC NULLS LAST,position",
+        "SELECT group_id,host,provider,model,thinking,login,eligible,needs_switch,reason,score,last_observed,position FROM model_group_candidates ORDER BY eligible DESC,score DESC NULLS LAST,position",
       ),
     ]);
     // A group's revision and editable members must come from the same SQL snapshot.
@@ -179,6 +179,9 @@ function modelGroupPools(windows, provider, login) {
       const card = clone("model-group-card"),
         cs = candidates.filter((c) => c.group_id === g.id && c.host === host),
         best = cs.find((c) => c.eligible),
+        // a login the host holds but is not using: a suggestion asks the host to switch to it
+        held = best ? null : cs.find((c) => c.needs_switch),
+        shown = best || held,
         empty = !g.members.length;
       text(card, "name", g.name);
       text(card, "token", token(g));
@@ -187,37 +190,49 @@ function modelGroupPools(windows, provider, login) {
         ? "Empty group"
         : best
           ? "Suggested now"
-          : "No eligible model";
+          : held
+            ? "After a login switch"
+            : "No eligible model";
       status.classList.add(empty ? "orange" : best ? "blue" : "orange");
       text(
         card,
         "choice",
         empty
           ? "Add a model before using this token."
-          : best
-            ? best.provider +
+          : shown
+            ? shown.provider +
               "/" +
-              best.model +
-              (best.thinking ? " · " + best.thinking : "")
+              shown.model +
+              (shown.thinking ? " · " + shown.thinking : "")
             : "Check logins, meters and quota.",
       );
       text(
         card,
         "meter",
-        best
+        shown
           ? " · " +
-              loginLabel(best.provider, best.login) +
+              loginLabel(shown.provider, shown.login) +
               " · meter " +
               Math.max(
                 0,
                 Math.floor(
-                  (Date.now() - Date.parse(best.last_observed)) / 60000,
+                  (Date.now() - Date.parse(shown.last_observed)) / 60000,
                 ),
               ) +
               " min old"
           : "",
       );
-      text(card, "reason", best ? "Ranked by available quota and time to reset." : "");
+      text(
+        card,
+        "reason",
+        best
+          ? "Ranked by available quota and time to reset."
+          : held
+            ? "The host's active login cannot serve. The next suggestion asks the host to switch every " +
+              held.provider +
+              " agent on it to this login, and hands it out once the host reports the switch."
+            : "",
+      );
       text(
         card,
         "members",

@@ -1,5 +1,13 @@
 [
   {
+    "id": "claude-login-switch",
+    "released": "2026-11-22",
+    "title": "Workflows switch a host to a Claude login with quota",
+    "summary": "When a host's active Claude login cannot serve a model group, and another login cswap holds on that host is the best choice, the next suggestion asks the host to switch every Claude agent on it to that login. The worker gets that login once the host reports the switch. Plans → Model groups shows such a group as After a login switch, and the login as Needs login switch. Hosts switch at most once every 15 minutes.",
+    "media": "claude-login-switch.png",
+    "mediaAlt": "Plans → Model groups in a local instance: Claude Opus 5.5 shows After a login switch, with one login marked Needs login switch and the active login at its quota reserve."
+  },
+  {
     "id": "antigravity-neon-medium",
     "released": "2026-11-20",
     "title": "Antigravity is back with Gemini 4 Neon Medium",

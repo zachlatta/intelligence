@@ -1,5 +1,5 @@
--- Count a suggestion against its pool only until a meter reading can show
--- its spend. Counting it for a full hour after a fresh reading counted the
+-- Count a suggestion against its pool only until the next meter reading, which
+-- shows much of its spend. Counting it for a full hour after fresh readings counted the
 -- same work twice: a busy fleet made a weekly plan with 63% left look empty.
 -- Fable reads both weekly meters, so the older of the two bounds what they show.
 CREATE OR REPLACE VIEW model_group_candidates WITH (security_invoker = true) AS
@@ -12,7 +12,7 @@ WITH pooled AS (
                          (m.provider='claude' AND m.long_window IN ('7d','fable/7d')
                           AND s.long_window IN ('7d','fable/7d')))
                     AND s.created_at > now() - interval '60 minutes'
-                    -- A fresh reading already shows the spend of earlier suggestions.
+                    -- A later reading shows much of the spend of earlier suggestions.
                     AND s.created_at > coalesce((SELECT min(u.last_observed) FROM usage_current u
                         WHERE u.provider=m.provider AND u.account=m.login
                           AND (u.window_id=m.long_window OR

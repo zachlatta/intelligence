@@ -641,13 +641,14 @@ func TestModelGroupSkipsABrokenLogin(t *testing.T) {
 	candidate("", true)
 }
 
-// A suggestion holds back quota only until a meter reading can show its spend. Counting it for
-// the whole hour after a fresh reading counts the same work twice: a busy fleet made a weekly
-// plan with 63% left look empty while the meter had moved only a few points.
-func TestModelGroupPenaltyCountsOnlySuggestionsAfterTheReading(t *testing.T) {
+// A suggestion holds back quota only until a meter reading can show its spend, and only its likely
+// share of the window: 2 points of a 5-hour window, at least half a point of a weekly one. Two
+// points of a weekly allowance for an hour each made a busy fleet's weekly Claude plan with 63%
+// left look empty while its meter moved about 0.15 points per suggestion.
+func TestModelGroupPenaltyIsAShareOfTheWindowUntilTheNextReading(t *testing.T) {
 	h, d := dbServer(t)
 	rep := wfReport()
-	rep.Paseo.Providers = []hostclient.Provider{{Name: "claude", Available: true, Models: []hostclient.Model{{ID: "opus", Thinking: []string{"medium"}}}}}
+	rep.Paseo.Providers = []hostclient.Provider{{Name: "claude", Available: true, Models: []hostclient.Model{{ID: "opus", Thinking: []string{"medium"}}, {ID: "claude-fable-5-2"}}}}
 	sendReport(t, h, rep)
 	exec := func(q string, args ...any) {
 		t.Helper()
@@ -658,7 +659,7 @@ func TestModelGroupPenaltyCountsOnlySuggestionsAfterTheReading(t *testing.T) {
 	exec(`INSERT INTO usage_accounts(provider,account,first_seen,last_seen) VALUES('claude','one',now(),now())`)
 	exec(`INSERT INTO usage_sources(host,provider,account,ok,received_at) VALUES('host-1','claude','one',true,now())`)
 	exec(`INSERT INTO usage_readings(provider,account,window_id,window_seconds,used_pct,resets_at,first_observed,last_observed) VALUES
-		('claude','one','7d',604800,37,now()+interval '5 days',now(),now()),
+		('claude','one','7d',604800,50,now()+interval '5 days',now(),now()),
 		('claude','one','fable/7d',604800,0,now()+interval '5 days',now(),now())`)
 	exec(`INSERT INTO usage_active(host,provider,account,since,until) VALUES('host-1','claude','one',now(),now())`)
 	body, _ := json.Marshal(map[string]any{"name": "Opus", "members": []any{map[string]any{"provider": "claude", "model": "opus", "thinking": "medium", "login": "one", "longWindow": "7d", "enabled": true}}})
@@ -674,37 +675,153 @@ func TestModelGroupPenaltyCountsOnlySuggestionsAfterTheReading(t *testing.T) {
 	run := startRun(t, h, wf, "Check the build")
 	succeed(t, stream, stream.command(), `{"workspaceId":"work","agentId":"orch"}`)
 	key := keyOf(t, h, "host-1")
-	for i := 0; i < 29; i++ {
+	for i := 0; i < 29; i++ { // with the run's first, 30 suggestions
 		rec := call(t, anon(h), "POST", "/api/workflow-runs/"+run+"/suggestions", `{"token":"opus_model"}`, map[string]string{"Authorization": "Bearer " + key})
 		if rec.Code != 200 {
 			t.Fatalf("suggest %d: %d %s", i, rec.Code, rec.Body)
 		}
 	}
-	candidate := func(want string, eligible bool) {
+	candidate := func(want string, eligible bool, penalty string) {
 		t.Helper()
-		code, r := sqlPost(t, h, q(`SELECT eligible,reason FROM model_group_candidates`))
-		if code != 200 || len(r.Rows) != 1 || r.Rows[0][0] != eligible || r.Rows[0][1] != want {
-			t.Fatalf("want %q %v: %d %+v", want, eligible, code, r)
+		code, r := sqlPost(t, h, q(`SELECT eligible,reason,round(penalty,1)::text FROM model_group_candidates`))
+		if code != 200 || len(r.Rows) != 1 || r.Rows[0][0] != eligible || r.Rows[0][1] != want || r.Rows[0][2] != penalty {
+			t.Fatalf("want %q %v penalty %s: %d %+v", want, eligible, penalty, code, r)
 		}
 	}
-	// Thirty suggestions since the last reading still hold back the pool between readings.
-	candidate("Quota reserved for recent suggestions", false)
+	// Thirty suggestions since the last reading charge 15 points of a weekly plan with half left.
+	candidate("", true, "15.0")
+	// Near the reserve, the same burst holds the plan back until a reading shows its spend.
+	exec(`UPDATE usage_readings SET used_pct=93 WHERE window_id='7d'`)
+	candidate("Quota reserved for recent suggestions", false, "15.0")
 
-	// A fresh reading after those suggestions shows their spend: 63% is left, so the plan is eligible.
-	exec(`UPDATE workflow_model_suggestions SET created_at=created_at-interval '20 minutes'`)
+	// A reading after the suggestions shows their spend, so they no longer count.
+	exec(`UPDATE workflow_model_suggestions SET created_at=now()-interval '5 minutes'`)
 	exec(`UPDATE usage_readings SET last_observed=now()-interval '1 minute'`)
-	candidate("", true)
+	candidate("", true, "0.0")
 
-	// A suggestion after that reading counts again until the next one.
-	exec(`UPDATE workflow_model_suggestions SET created_at=now() WHERE id=(SELECT id FROM workflow_model_suggestions LIMIT 1)`)
-	code, r := sqlPost(t, h, q(`SELECT round(score::numeric,1)::text FROM model_group_candidates`))
-	if code != 200 || len(r.Rows) != 1 {
-		t.Fatalf("score: %d %+v", code, r)
+	// Fable reads both weekly meters: the older reading bounds what they show.
+	exec(`UPDATE model_group_members SET model='claude-fable-5-2', thinking=''`)
+	exec(`UPDATE usage_readings SET used_pct=50 WHERE window_id='7d'`)
+	exec(`UPDATE usage_readings SET last_observed=now()-interval '10 minutes' WHERE window_id='fable/7d'`)
+	candidate("", true, "15.0")
+	exec(`UPDATE usage_readings SET last_observed=now()-interval '1 minute' WHERE window_id='fable/7d'`)
+	candidate("", true, "0.0")
+
+	// A 5-hour pool charges 2 points per suggestion.
+	exec(`INSERT INTO usage_readings(provider,account,window_id,window_seconds,used_pct,resets_at,first_observed,last_observed)
+		VALUES('claude','one','5h',18000,10,now()+interval '3 hours',now()-interval '10 minutes',now()-interval '10 minutes')`)
+	exec(`UPDATE model_group_members SET model='opus', thinking='medium', long_window='5h'`)
+	exec(`UPDATE workflow_model_suggestions SET long_window='5h'`)
+	candidate("", true, "60.0")
+}
+
+// A Claude login cswap holds on the host but is not using needs a switch, not a wait. When the
+// active login cannot serve and the held one is the best choice, a suggestion asks the host to
+// switch (a switch_login command, readable in SQL) and hands it out only once the host's usage
+// report shows it active. One request at a time per host, and none while the active login is close.
+func TestModelGroupSwitchesToAHeldLogin(t *testing.T) {
+	h, d := dbServer(t)
+	rep := wfReport()
+	rep.Paseo.Providers = []hostclient.Provider{{Name: "claude", Available: true, Models: []hostclient.Model{{ID: "opus", Label: "Claude Opus 5.5", Thinking: []string{"medium"}}}}}
+	sendReport(t, h, rep)
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := d.Owner.Exec(t.Context(), q, args...); err != nil {
+			t.Fatal(err)
+		}
 	}
-	exec(`UPDATE workflow_model_suggestions SET created_at=now()-interval '20 minutes'`)
-	_, r2 := sqlPost(t, h, q(`SELECT round(score::numeric,1)::text FROM model_group_candidates`))
-	if r.Rows[0][0] == r2.Rows[0][0] {
-		t.Fatalf("a suggestion after the reading should lower the score: %+v %+v", r, r2)
+	for slot, login := range []string{"one", "two"} {
+		exec(`INSERT INTO usage_accounts(provider,account,slot,first_seen,last_seen) VALUES('claude',$1,$2,now(),now())`, login, slot+1)
+		exec(`INSERT INTO usage_sources(host,provider,account,ok,received_at) VALUES('host-1','claude',$1,true,now())`, login)
+		exec(`INSERT INTO usage_readings(provider,account,window_id,window_seconds,used_pct,resets_at,first_observed,last_observed) VALUES('claude',$1,'7d',604800,30,now()+interval '5 days',now(),now())`, login)
+	}
+	exec(`INSERT INTO usage_active(host,provider,account,since,until) VALUES('host-1','claude','one',now(),now())`)
+	member := func(login string) map[string]any {
+		return map[string]any{"provider": "claude", "model": "opus", "thinking": "medium", "login": login, "longWindow": "7d", "enabled": true}
+	}
+	body, _ := json.Marshal(map[string]any{"name": "Opus", "members": []any{member("one"), member("two")}})
+	if rec := call(t, h, "POST", "/api/model-groups", string(body), sameOriginFetch); rec.Code != 201 {
+		t.Fatalf("create %d %s", rec.Code, rec.Body)
+	}
+	candidate := func(login, reason string, needsSwitch bool) {
+		t.Helper()
+		code, r := sqlPost(t, h, q(`SELECT reason,needs_switch FROM model_group_candidates WHERE login='`+login+`'`))
+		if code != 200 || len(r.Rows) != 1 || r.Rows[0][0] != reason || r.Rows[0][1] != needsSwitch {
+			t.Fatalf("%s: want %q %v: %d %+v", login, reason, needsSwitch, code, r)
+		}
+	}
+	candidate("one", "", false)
+	candidate("two", "Needs login switch", true)
+	// A login the host's last read did not list cannot be switched to.
+	exec(`UPDATE usage_sources SET received_at=now()-interval '20 minutes' WHERE account='two'`)
+	candidate("two", "Inactive login", false)
+	exec(`UPDATE usage_sources SET received_at=now() WHERE account='two'`)
+	// Nor can a login with a broken sign-in.
+	exec(`INSERT INTO login_incidents(host,provider,login,reason,source,opened_at,last_seen_at) VALUES('host-1','claude','two','login_expired','meter',now(),now())`)
+	candidate("two", "Login broken", false)
+	exec(`UPDATE login_incidents SET resolved_at=now(), resolved_by='manual'`)
+
+	def := workflow.Starting
+	def.Steps = append([]workflow.Step(nil), def.Steps...)
+	def.Project = workflow.Project{Mode: "fixed", Directory: "/w/app"}
+	def.Steps[0].Instructions = "Use {{opus_model}}."
+	wf := createWorkflow(t, h, def)
+	stream := openStream(t, h, "host-1")
+	run := startRun(t, h, wf, "Check the build")
+	succeed(t, stream, stream.command(), `{"workspaceId":"work","agentId":"orch"}`)
+	key := keyOf(t, h, "host-1")
+	suggest := func() string {
+		t.Helper()
+		rec := call(t, anon(h), "POST", "/api/workflow-runs/"+run+"/suggestions", `{"token":"opus_model"}`, map[string]string{"Authorization": "Bearer " + key})
+		if rec.Code != 200 {
+			t.Fatalf("suggest: %d %s", rec.Code, rec.Body)
+		}
+		return rec.Body.String()
+	}
+	switches := func() float64 {
+		t.Helper()
+		_, r := sqlPost(t, h, q(`SELECT count(*) FROM commands WHERE kind='switch_login'`))
+		return r.Rows[0][0].(float64)
+	}
+	// Both usable and close: the active login serves, and nothing switches.
+	if msg := suggest(); !strings.Contains(msg, "on one") || switches() != 0 {
+		t.Fatalf("close logins: %s, %v switches", msg, switches())
+	}
+
+	// The active login runs out: ask the host to switch, and do not hand out the held login yet.
+	exec(`UPDATE usage_readings SET used_pct=97 WHERE account='one'`)
+	msg := suggest()
+	if !strings.Contains(msg, "No eligible model in opus_model") || !strings.Contains(msg, "switch host-1's claude login to two") || strings.Contains(msg, "--provider claude/opus") {
+		t.Fatalf("switch suggestion: %s", msg)
+	}
+	cmd := stream.command()
+	var args hostclient.SwitchLoginArgs
+	if err := json.Unmarshal(cmd.Args, &args); err != nil || cmd.Kind != hostclient.SwitchLoginKind || args.Provider != "claude" || args.Login != "two" || args.From != "one" || args.Why == "" {
+		t.Fatalf("command: %s %s", cmd.Kind, cmd.Args)
+	}
+	// While it is pending, another suggestion asks for nothing more.
+	if msg := suggest(); !strings.Contains(msg, "switch host-1's claude login to two") || switches() != 1 {
+		t.Fatalf("pending switch: %s, %v switches", msg, switches())
+	}
+	// The host switches and its usage report shows the new login: now it is handed out.
+	succeed(t, stream, cmd, `{"login":"two","slot":2}`)
+	exec(`UPDATE usage_active SET until=now()-interval '1 second'`)
+	exec(`INSERT INTO usage_active(host,provider,account,since,until) VALUES('host-1','claude','two',now(),now())`)
+	if msg := suggest(); !strings.Contains(msg, "--provider claude/opus") || !strings.Contains(msg, "on two") {
+		t.Fatalf("after the switch: %s", msg)
+	}
+	candidate("one", "Quota reserve", false)
+
+	// Within the cooldown no switch goes back, even when the other login would be far ahead.
+	exec(`UPDATE usage_readings SET used_pct=97 WHERE account='two'; UPDATE usage_readings SET used_pct=0 WHERE account='one'`)
+	if msg := suggest(); !strings.Contains(msg, "No eligible model") || switches() != 1 {
+		t.Fatalf("cooldown: %s, %v switches", msg, switches())
+	}
+	// After it, a login far ahead of the active one is switched to even while the active one still serves.
+	exec(`UPDATE commands SET created_at=created_at-interval '16 minutes' WHERE kind='switch_login'`)
+	exec(`UPDATE usage_readings SET used_pct=60 WHERE account='two'`)
+	if msg := suggest(); !strings.Contains(msg, "on two") || switches() != 2 {
+		t.Fatalf("far ahead: %s, %v switches", msg, switches())
 	}
 }
 

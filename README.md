@@ -533,6 +533,9 @@ against its daemon and reports `running`, then `succeeded` with a result (`{"wor
   (by creation time) has gone, then starts a turn. It waits until the command expires, so give it
   a longer `ttl`; one whose agent is archived meanwhile fails. On an agent that is not running,
   all three start a turn.
+- `switch_login`: `provider` (only `claude`), `login`, and optionally `from` and `why` for the
+  record. The host switches every Claude agent on it to that cswap login (Model groups, below);
+  the result is `{"login","slot"}`.
 - `create_schedule`: `prompt`, a cadence (`every`, a duration of at least `1m` such as `30m` or
   `1h30m`; or `cron`, five fields, with an optional `timezone`), and `agent`: `provider`, `cwd`, and
   optionally `model`, `thinking`, `mode`, `title`, `isolation` (`worktree`, a new git worktree each
@@ -1107,12 +1110,26 @@ a fixed reset or plan end, subtracting the percentage of the longest window stil
 remaining quota percentage. A reset one full window away gets the same pace treatment at zero
 usage and just after work begins. When two recent in-progress readings show the deadline moving
 forward before it arrives, the score uses the remaining quota percentage. Each suggestion
-subtracts 2 points from the shared pool until a meter reading after it (at most 60 minutes), since
-that reading already shows its spend. Suggestions require fresh meters and a 5%
+charges the pool 2 points of a 5-hour window, or the same work as a share of a longer window but
+at least half a point (a weekly Claude meter moved about 0.15 points per suggestion under a busy
+fleet). The charge lasts until the pool's next meter reading, at most 60 minutes: by then the
+reading shows much of the work already spent, and the 5% reserve covers the rest. Fable counts
+from the older of its two weekly readings. Suggestions require fresh meters and a 5%
 reserve, including in shorter windows of the selected pool. Fable must clear both its own weekly
 cap and the shared Claude cap, and its ranking uses the lower of the two remaining percentages.
-Claude's recent suggestions count toward the shared weekly reserve. Inactive logins cannot be
-selected. Groups affect future suggestions, not delivered ones. Before another worker, refresh with
+Claude's recent suggestions count toward the shared weekly reserve. A login a host is not using
+is not suggested. For Claude, a login cswap holds on the host (listed in its last usage read, with
+a slot) shows `Needs login switch` (`needs_switch`) when everything else about it is eligible; any
+other inactive login shows `Inactive login`. When a group's best candidate needs a switch and no
+eligible candidate on the host's active login, in any group, is within 30 points of it, the
+suggestion queues a `switch_login` command (`{"provider","login","from","why"}`, readable in
+`commands`). The host finds the login's slot in `cswap list --json` as it runs, switches every
+Claude agent on it with `cswap switch <slot> --json` (without `--force`, so cswap backs up the
+outgoing login's live credentials first), checks cswap now lists it active and sends a fresh usage
+read before reporting success. Until that read shows the login active, suggestions say the switch
+is pending and hand out nothing for it. A host gets at most one switch request per provider every
+15 minutes, which also keeps groups preferring different logins from flapping; a login with an
+open login incident is never switched to. Groups affect future suggestions, not delivered ones. Before another worker, refresh with
 `intelligence workflow suggest --run <id> frontier_model` (`--exclude provider/model` skips a route).
 Queued runs allocate when they launch; startup retries rebuild the prompt with fresh suggestions.
 Direct edits and proposal approvals validate group tokens before saving a workflow.

@@ -63,7 +63,19 @@ const (
 	SendMessageKind      = "send_message"
 	CancelAgentKind      = "cancel_agent"
 	ContinueEmailKind    = "continue_email"
+	SwitchLoginKind      = "switch_login"
 )
+
+// SwitchLoginArgs: make Login the login the host's Provider tool uses, for every agent of that
+// provider on the host. Only Claude, through cswap, can switch. The host finds the login's cswap
+// slot when it runs the command, since slots can change. From and Why say what the server saw
+// when it asked, for the record.
+type SwitchLoginArgs struct {
+	Provider string `json:"provider"`
+	Login    string `json:"login"`
+	From     string `json:"from,omitempty"`
+	Why      string `json:"why,omitempty"`
+}
 
 // ContinueEmailArgs restores a finished task's agent before sending the new run's prompt.
 // AfterCommand serializes restoration after the earlier workspace cleanup on the server.
@@ -149,6 +161,8 @@ type CommandResult struct {
 	RunID                string `json:"runId,omitempty"`          // run_schedule: the run it started
 	ArchivedAgents       int    `json:"archivedAgents,omitempty"` // archive_workspace: how many agents went with it
 	WorktreeBaseFallback bool   `json:"worktreeBaseFallback,omitempty"`
+	Login                string `json:"login,omitempty"` // switch_login: the login now active
+	Slot                 int    `json:"slot,omitempty"`  // switch_login: its cswap slot when switched
 }
 
 // ParseCommand decodes args for kind strictly (no unknown fields) and checks what it needs. The
@@ -250,6 +264,15 @@ func ParseCommand(kind string, args json.RawMessage) (any, error) {
 			return nil, fmt.Errorf("%s takes no behavior", kind)
 		case kind != RenameAgentKind && a.Title != "", kind != SendMessageKind && a.Text != "":
 			return nil, fmt.Errorf("%s takes only agentId", kind)
+		}
+		return a, nil
+	case SwitchLoginKind:
+		var a SwitchLoginArgs
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		if a.Provider != "claude" || strings.TrimSpace(a.Login) == "" {
+			return nil, errors.New("switch_login needs provider claude and a login")
 		}
 		return a, nil
 	case CreateScheduleKind, UpdateScheduleKind, PauseScheduleKind, ResumeScheduleKind, DeleteScheduleKind, RunScheduleKind:
