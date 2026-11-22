@@ -124,6 +124,9 @@ type Google struct {
 	AuthURL, TokenURL      string
 	APIURL                 string // Gmail's API; a fake in tests
 	HTTP                   *http.Client
+
+	clientOnce  sync.Once
+	defaultHTTP *http.Client
 }
 
 // Scope is all a mailbox grants: reading mail.
@@ -184,11 +187,42 @@ func (g *Google) SignInURL(state, challenge, redirect string) string {
 	return g.AuthURL + "?" + q.Encode()
 }
 
+const (
+	defaultHTTPTimeout   = 30 * time.Second
+	defaultHTTP2SendPing = 10 * time.Second
+	defaultHTTP2PingWait = 5 * time.Second
+)
+
+func newGoogleTransport(base *http.Transport, sendPing, pingWait time.Duration) *http.Transport {
+	tr := base.Clone()
+	// Probe stalled HTTP/2 connections with PING before Client.Timeout so a
+	// half-open TCP socket to Gmail is torn down in seconds rather than hanging
+	// polls until Linux TCP retransmission timeout (~15 minutes).
+	tr.HTTP2 = &http.HTTP2Config{
+		SendPingTimeout: sendPing,
+		PingTimeout:     pingWait,
+	}
+	return tr
+}
+
 func (g *Google) client() *http.Client {
 	if g.HTTP != nil {
 		return g.HTTP
 	}
-	return &http.Client{Timeout: 30 * time.Second}
+	g.clientOnce.Do(func() {
+		tr := newGoogleTransport(http.DefaultTransport.(*http.Transport), defaultHTTP2SendPing, defaultHTTP2PingWait)
+		g.defaultHTTP = &http.Client{Timeout: defaultHTTPTimeout, Transport: tr}
+	})
+	return g.defaultHTTP
+}
+
+func (g *Google) do(req *http.Request) (*http.Response, error) {
+	c := g.client()
+	res, err := c.Do(req)
+	if err != nil {
+		c.CloseIdleConnections()
+	}
+	return res, err
 }
 
 type tokenResponse struct {
@@ -207,7 +241,7 @@ func (g *Google) token(ctx context.Context, form url.Values) (tokenResponse, err
 		return tokenResponse{}, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	res, err := g.client().Do(req)
+	res, err := g.do(req)
 	if err != nil {
 		return tokenResponse{}, err
 	}
@@ -292,7 +326,7 @@ func (m *Mailbox) get(ctx context.Context, path string, q url.Values, out any) e
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+tok)
-	res, err := m.g.client().Do(req)
+	res, err := m.g.do(req)
 	if err != nil {
 		return err
 	}
