@@ -4,7 +4,6 @@
 //	intelligence host       run on a host: stream its Paseo daemon and its plans' usage to the server, run the server's commands, and stay on its version
 //	intelligence probe      run as root on a Linux host: the eBPF probe that charges each agent's CPU and OOM kills
 //	intelligence workflow   move a workflow run, from its agents on a host (intelligence workflow -h)
-//	intelligence pdw        check PDW source sync health (intelligence pdw -h)
 //	intelligence version    print this binary's version
 package main
 
@@ -36,7 +35,6 @@ import (
 	"github.com/zachlatta/intelligence/internal/hostclient"
 	"github.com/zachlatta/intelligence/internal/hostwatch"
 	"github.com/zachlatta/intelligence/internal/paseo"
-	"github.com/zachlatta/intelligence/internal/pdwsync"
 	"github.com/zachlatta/intelligence/internal/probe"
 	"github.com/zachlatta/intelligence/internal/resources"
 	"github.com/zachlatta/intelligence/internal/usage"
@@ -68,12 +66,10 @@ func main() {
 		err = runProbe(ctx)
 	case "workflow":
 		os.Exit(workflow.CLI(ctx, os.Args[2:], os.Getenv, os.Stdin, os.Stdout, os.Stderr, http.DefaultClient))
-	case "pdw":
-		os.Exit(pdwsync.CLI(ctx, os.Args[2:], os.Stdout, os.Stderr, pdwsync.ExecQuery))
 	case "version":
 		fmt.Println(version(os.Getenv))
 	default:
-		err = fmt.Errorf("unknown command %q: want server, host, probe, workflow, pdw or version", cmd)
+		err = fmt.Errorf("unknown command %q: want server, host, probe, workflow or version", cmd)
 	}
 	if err != nil {
 		log.Fatal(err)
