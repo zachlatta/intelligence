@@ -302,6 +302,9 @@ func OrchestratorPrompt(name string, d Definition, v Vars) (string, error) {
 	if d.Trigger == TriggerEmail {
 		b.WriteString(EmailReplyRule + "\n\n")
 	}
+	if d.Trigger == TriggerEmail || d.Trigger == TriggerVoiceMemo {
+		b.WriteString(v.fill(PDWSyncRule) + "\n\n")
+	}
 	fmt.Fprintf(&b, "%s\n\n%s\n\nThis is run %s of the workflow “%s”. You are its orchestrator", strings.TrimSpace(d.Orchestrator.Instructions), subAgentModes(), v.Run, name)
 	if v.Repo != "" {
 		fmt.Fprintf(&b, ", in a worktree of %s on branch %s", v.Repo, v.Branch)
@@ -453,3 +456,24 @@ const RunAnswerRule = "Record every answer sent to the requester, including requ
 	"the other run's checked answer sent after the handover then counts for this one, so tell that run to answer with the request folded in. " +
 	"If no answer is due because the input is not a request (a recorded meeting or conversation, a retracted or duplicate request, a notification), record intelligence workflow answer --run {{run}} --not-needed \"<why no answer is due>\" instead of sending one. " +
 	"A request that was acted on still gets an answer; not-needed is not for work done but not reported. Pass this rule to every worker."
+
+// PDWSyncRule reaches saved email and voice-memo workflows too, so an orchestrator waiting on
+// missing PDW data checks source sync health first, tells Zach plainly whether sync is behind
+// or broken in its first message (only when the requester is Zach), and polls in short
+// foreground steps until the record arrives instead of asking him to reply "check now".
+const PDWSyncRule = "When a task depends on data that has not yet synced into PDW (for example a linked Slack message, a fresh email or a voice memo): " +
+	"before waiting or messaging anyone, run `intelligence pdw sync-health --source <slack|gmail|voice-memos>` to check that source's last successful sync, age and verdict (ok, behind or broken). " +
+	"If the verdict is ok, poll PDW briefly in the foreground (up to a few minutes) for normal sync lag before sending any update, then re-check sync-health if the record is still missing. " +
+	"Only the orchestrator of a run whose requester is Zach sends the status-and-paste message below. For a voice-memo run, the requester is Zach. " +
+	"Send the status-and-paste message only to Zach (never into a thread other people can see). " +
+	"If the requester is not Zach, do not send an early status or paste-offer message and do not bypass review or send gates: check sync health, poll silently in the foreground (up to 24 hours), and let the step authorized to send mention any delay if needed. " +
+	"When the requester is Zach and the source is behind or broken (or the record is still missing after the brief wait), the orchestrator sends Zach one concise first message (reply in the email thread for an email run, or email him for a voice-memo run) that: " +
+	"(1) states plainly whether the source's PDW sync is broken or behind, including its last successful sync time, age and any error reported by the helper; " +
+	"(2) offers the quickest unblock: he can reply with the pasted text if he wants it handled right away; and " +
+	"(3) tells him he does not need to reply \"check now\" because this run will keep checking PDW automatically and continue as soon as the record lands. " +
+	"Do not call `intelligence workflow ask` or end your turn while waiting for PDW data — calling `ask` puts the run in waiting status and prevents self-resumption. " +
+	"Instead, update activity with `intelligence workflow status --run {{run}} --now \"Waiting for <source> data to sync into PDW\" --waiting-on \"PDW <source> sync\"` and keep polling PDW in a bounded foreground loop (every 2–5 minutes, up to 24 hours; refresh status periodically). " +
+	"Keep each poll command short (a few minutes, well under 10 minutes — never a single shell loop spanning hours) so steered replies from Zach arrive between tool calls. " +
+	"If Zach replies with the pasted text, his message arrives in this running turn and unblocks you immediately; otherwise, as soon as the record appears in PDW, finish the task and reply without needing a \"check now\" reply. " +
+	"Only if 24 hours pass and the record still has not appeared, stop polling and notify Zach (or ask how to proceed). " +
+	"Do not pass message-sending instructions to workers; workers may only check sync health and report back to the orchestrator."
