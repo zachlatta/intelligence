@@ -184,7 +184,7 @@ Quoted proposal context (JSON):
 	if agentMode(o.Provider) == "" {
 		return bad("the workflow provider %q has no unattended mode for answering questions", o.Provider)
 	}
-	args, _ := json.Marshal(hostclient.CreateAgentArgs{Cwd: location.Cwd, Provider: o.Provider, Model: o.Model, Thinking: o.Thinking, Mode: agentMode(o.Provider), Title: agentTitle("Answer proposal", state.Name, taskName(target.Text)), Prompt: prompt,
+	args, _ := json.Marshal(hostclient.CreateAgentArgs{Cwd: location.Cwd, Provider: o.Provider, Model: o.Model, Thinking: o.Thinking, ServiceTier: o.ServiceTier, Mode: agentMode(o.Provider), Title: agentTitle("Answer proposal", state.Name, taskName(target.Text)), Prompt: prompt,
 		Labels: map[string]string{"intelligence.proposal": p.ID, "intelligence.question": fmt.Sprint(question), "intelligence.answer_location": location.Name}})
 	if len(args) > 8<<20 {
 		return bad("proposal discussion context is too large to dispatch")

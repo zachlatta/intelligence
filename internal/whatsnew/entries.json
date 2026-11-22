@@ -1,5 +1,13 @@
 [
   {
+    "id": "workflow-codex-speed",
+    "released": "2026-11-22",
+    "title": "Run a workflow's Codex agents at Fast or Ultrafast speed",
+    "summary": "In a workflow's editor, a Codex orchestrator or project finder now has a Speed setting: Normal, Fast or Ultrafast. The agent starts at that speed and keeps it for every turn. Faster speeds use more of the plan. Other providers have no speed setting.",
+    "media": "workflow-codex-speed.png",
+    "mediaAlt": "The workflow editor's Orchestrator panel with provider codex, model gpt-6.2-sol, thinking high and Speed set to Ultrafast."
+  },
+  {
     "id": "antigravity-neon-medium",
     "released": "2026-11-20",
     "title": "Antigravity is back with Gemini 4 Neon Medium",

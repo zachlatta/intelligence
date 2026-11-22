@@ -122,6 +122,51 @@ func commandsByKind(t *testing.T, b *rawHost, n int) map[string]hostclient.Comma
 	return out
 }
 
+func TestAWorkflowStartsItsCodexAgentsAtTheirServiceTier(t *testing.T) {
+	h, _ := dbServer(t)
+	sendReport(t, h, wfReport())
+	key := keyOf(t, h, "host-1")
+	b := openStream(t, h, "host-1")
+
+	bad := workflow.Starting
+	bad.Orchestrator.ServiceTier = "ultrafast" // claude has no service tier
+	if rec := call(t, h, http.MethodPost, "/api/workflows", wfBody(t, "Fast", bad), sameOriginFetch); rec.Code != http.StatusBadRequest ||
+		!strings.Contains(rec.Body.String(), "service tier") {
+		t.Fatalf("a service tier on claude: %d %s", rec.Code, rec.Body)
+	}
+
+	d := workflow.Starting
+	d.Project.Provider, d.Project.Model, d.Project.ServiceTier = "codex", "gpt-6.2-sol", "priority"
+	d.Orchestrator.Provider, d.Orchestrator.Model, d.Orchestrator.Thinking, d.Orchestrator.ServiceTier = "codex", "gpt-6.2-sol", "high", "ultrafast"
+	wf := createWorkflow(t, h, d)
+	run := startRun(t, h, wf, "Go fast")
+	finder := b.command()
+	var fa hostclient.CreateAgentArgs
+	json.Unmarshal(finder.Args, &fa)
+	if fa.Provider != "codex" || fa.ServiceTier != "priority" {
+		t.Fatalf("project finder = %+v", fa)
+	}
+	succeed(t, b, finder, `{"agentId":"finder-1"}`)
+	if code, msg := move(t, h, key, run, map[string]string{"move": "project", "directory": "/w/app"}); code != http.StatusOK {
+		t.Fatalf("project: %d %s", code, msg)
+	}
+	var wa hostclient.CreateWorkspaceArgs
+	json.Unmarshal(commandsByKind(t, b, 2)[hostclient.CreateWorkspaceKind].Args, &wa)
+	if wa.Agent == nil || wa.Agent.Provider != "codex" || wa.Agent.Model != "gpt-6.2-sol" || wa.Agent.Thinking != "high" ||
+		wa.Agent.ServiceTier != "ultrafast" || wa.Agent.Mode != "full-access" {
+		t.Fatalf("orchestrator = %+v", wa.Agent)
+	}
+}
+
+func TestServiceTierChangeAppearsInProposalReview(t *testing.T) {
+	a := &workflow.WorkflowState{Definition: workflow.Definition{Orchestrator: workflow.Orchestrator{Provider: "codex"}}}
+	b := &workflow.WorkflowState{Definition: workflow.Definition{Orchestrator: workflow.Orchestrator{Provider: "codex", ServiceTier: "ultrafast"}}}
+	changes := proposalChanges(a, b)
+	if len(changes) != 1 || changes[0].Label != "Orchestrator service tier" || changes[0].After != "ultrafast" {
+		t.Fatalf("service tier review: %+v", changes)
+	}
+}
+
 func TestWorkflowFindsAProjectWithoutAWorkspace(t *testing.T) {
 	h, _ := dbServer(t)
 	rep := wfReport()

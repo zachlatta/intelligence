@@ -781,6 +781,12 @@ version it started with. A run:
    orchestrator on Antigravity has no thinking level: saving one is refused, the editor disables
    the selector, and migration `20261122T0719_clear_antigravity_workflow_thinking` removed it from
    active workflows as a new version.
+   A Codex finder or orchestrator can also take a speed, `serviceTier` in the definition (Speed in
+   the editor): empty for Paseo's default, `priority` (Fast) or `ultrafast`. The server passes it to
+   Paseo when it makes the agent, as the `service_tier` feature value in the agent's config, which
+   Paseo keeps and sends to Codex on every turn (a per-message setting would reset each turn).
+   Saving a tier for any other provider, or an unknown tier, is refused. A host client older than
+   this change refuses a create command that carries a tier, so update hosts before using one.
    The server starts the finder and the orchestrator in it; `paseo run` would start a sub-agent in
    the provider's default mode, which may ask, so the orchestrator's first message tells it to pass
    `--mode` (in the prompt, not the saved instructions, so every version gets it). A step is only

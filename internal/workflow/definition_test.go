@@ -107,6 +107,16 @@ func TestParseRefusesWhatCannotRun(t *testing.T) {
 			d.Orchestrator.Model = "gemini-4-neon-medium"
 			d.Orchestrator.Thinking = "medium"
 		}, "model ID"},
+		"tier on claude": {func(d *Definition) {
+			d.Orchestrator.ServiceTier = "ultrafast"
+		}, "service tier"},
+		"unknown tier": {func(d *Definition) {
+			d.Orchestrator.Provider = "codex"
+			d.Orchestrator.ServiceTier = "ludicrous"
+		}, "service tier"},
+		"finder tier on claude": {func(d *Definition) {
+			d.Project.ServiceTier = "priority"
+		}, "service tier"},
 		"antigravity proj thinking": {func(d *Definition) {
 			d.Project.Provider = "antigravity"
 			d.Project.Model = "gemini-4-neon-medium"
@@ -131,6 +141,22 @@ func TestParseRefusesWhatCannotRun(t *testing.T) {
 	b, _ := json.Marshal(fixed)
 	if _, err := Parse(b); err != nil {
 		t.Errorf("a fixed project needs no agent and antigravity without thinking is valid: %v", err)
+	}
+}
+
+func TestCodexAgentsTakeAServiceTier(t *testing.T) {
+	for _, tier := range []string{"", "priority", "ultrafast"} {
+		d := onHost(clone(Starting))
+		d.Orchestrator = Orchestrator{Provider: "codex", Model: "gpt-6.2-sol", Thinking: "high", ServiceTier: tier, Instructions: "x"}
+		d.Project.Provider, d.Project.ServiceTier = "codex", tier
+		b, _ := json.Marshal(d)
+		got, err := Parse(b)
+		if err != nil || got.Orchestrator.ServiceTier != tier || got.Project.ServiceTier != tier {
+			t.Errorf("tier %q: %+v, %v", tier, got.Orchestrator, err)
+		}
+		if tier == "" && strings.Contains(string(b), "serviceTier") {
+			t.Errorf("no tier should leave the saved definition unchanged: %s", b)
+		}
 	}
 }
 
