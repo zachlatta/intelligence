@@ -12,6 +12,7 @@ import (
 
 	"github.com/zachlatta/intelligence/internal/paseo"
 	"github.com/zachlatta/intelligence/internal/paseo/paseotest"
+	"github.com/zachlatta/intelligence/internal/usage"
 )
 
 // fakeSchedules is a daemon's schedules for a ScheduleSync, and the reports it sent.
@@ -379,4 +380,63 @@ func (s *streamServer) ordered() []Frame {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]Frame(nil), s.got...)
+}
+
+// switch_login switches the host's Claude login, then sends a fresh usage read before its result,
+// so the server sees the new active login as soon as the switch is reported.
+func TestClientSwitchesLoginAndSendsUsageBeforeTheResult(t *testing.T) {
+	s, d := newStreamServer(t), daemon(t)
+	var mu sync.Mutex
+	active, switched := "one", ""
+	hostRig(t, s, d, func(b *Client) {
+		b.Usage = &UsageSync{Every: time.Hour, RetryEvery: 20 * time.Millisecond, Read: func(context.Context) usage.Report {
+			mu.Lock()
+			defer mu.Unlock()
+			return usage.Report{CollectedAt: time.Now(), Sources: []usage.Source{{Provider: usage.Claude, Accounts: []usage.Account{{ID: active, Active: true}}}}}
+		}}
+		b.SwitchLogin = func(_ context.Context, provider, login string) (int, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			if provider != usage.Claude {
+				return 0, errors.New("unexpected provider")
+			}
+			active, switched = login, login
+			return 4, nil
+		}
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	for len(s.frames(UsageFrame)) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("never connected")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	s.push(Frame{Type: CommandFrame, Command: &Command{ID: "cmd-switch", Kind: SwitchLoginKind, Args: json.RawMessage(`{"provider":"claude","login":"two","from":"one","why":"one is out of quota"}`)}})
+	for {
+		sawUsage := false
+		for _, f := range s.ordered() {
+			switch {
+			case f.Type == UsageFrame && len(f.Usage.Sources) == 1 && f.Usage.Sources[0].Accounts[0].ID == "two":
+				sawUsage = true
+			case f.Type == CommandUpdateFrame && f.Update.ID == "cmd-switch" && f.Update.Status == CommandSucceeded:
+				if !sawUsage {
+					t.Fatal("the switch succeeded before the host sent usage showing the new login")
+				}
+				var res CommandResult
+				if err := json.Unmarshal(f.Update.Result, &res); err != nil || res.Login != "two" || res.Slot != 4 {
+					t.Fatalf("result = %s", f.Update.Result)
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				if switched != "two" {
+					t.Fatalf("switched = %q", switched)
+				}
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the switch never finished")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }

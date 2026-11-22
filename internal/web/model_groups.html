@@ -10,7 +10,7 @@
     <label>Name<input name="name" maxlength="100" required></label>
     <p class="meta">Token: <code data-token-preview></code> <button type="button" class="btn sm" data-copy-token>Copy</button><br>Generated on creation. Kept on rename so existing workflows still work.</p>
     <div data-rows></div><button type="button" class="btn sm" data-add>+ Add model</button>
-    <p class="meta">Each login is a separate plan. Models sharing a quota pool share its allocation penalty. Inactive logins stay visible but are not suggested.</p>
+    <p class="meta">Each login is a separate plan. Models sharing a quota pool share its allocation penalty. Logins a host is not using stay visible and are not suggested. When the active Claude login cannot serve, a suggestion asks the host to switch to the best login cswap holds there.</p>
     <p class="banner" data-error hidden></p><p class="meta" data-used-by></p>
     <div class="form-actions"><button class="btn primary" type="submit">Save group</button><button class="btn" type="button" data-cancel>Cancel</button><button class="btn danger" type="button" data-delete hidden>Delete group</button></div>
   </form>
