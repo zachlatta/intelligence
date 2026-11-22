@@ -172,6 +172,9 @@ func (e *Engine) emailContinued(ctx context.Context, tx pgx.Tx, r run, c fleet.C
 	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET status='failed',error=$2,pending_command=NULL,finished_at=$3,updated_at=$3 WHERE id=$1`, r.ID, c.Error, e.Now()); err != nil {
 		return err
 	}
+	if err := e.recordFailureAlert(ctx, tx, r, c.Error); err != nil {
+		return err
+	}
 	r.Status = Failed
 	return e.refreshActivity(ctx, tx, r)
 }

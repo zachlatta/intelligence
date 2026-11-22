@@ -1,5 +1,13 @@
 [
   {
+    "id": "workflow-run-retry",
+    "released": "2026-11-22",
+    "title": "Retry failed runs and auto-rerun after workflow fixes",
+    "summary": "Failed workflow runs now have a one-click Retry button on the run page that starts a new run on the workflow's latest version with the same input. When an email or voice memo run fails, Intelligence pushes a phone notification right away with the error in plain words, and saving a new version of its workflow automatically re-runs recent failed-to-start runs.",
+    "media": "workflow-run-retry.png",
+    "mediaAlt": "A failed voice memo run in a local demo showing the Retry button in the page header and the start error banner below."
+  },
+  {
     "id": "workflow-codex-speed",
     "released": "2026-11-22",
     "title": "Run a workflow's Codex agents at Fast or Ultrafast speed",

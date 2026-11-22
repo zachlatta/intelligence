@@ -117,6 +117,8 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	context.AfterFunc(cfg.Context, roles.Close)
 	store := accounts.New(cfg.DB, roles)
 	a := &app{cfg: cfg, routes: http.NewServeMux(), store: store, reg: reg, changes: changes, wf: workflow.NewEngine(cfg.DB, cfg.Now)}
+	a.wf.Notify = cfg.HostAlerts
+	a.wf.NotifyAccount = cfg.PDWAccount
 	if cfg.QueueLimits != nil {
 		a.wf.Limits = *cfg.QueueLimits
 	}
@@ -259,6 +261,7 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	mux.HandleFunc("POST /api/workflow-runs/{id}/cancel", a.write(a.cancelRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/start", a.write(a.startQueuedRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/resume", a.write(a.resumeRun))
+	mux.HandleFunc("POST /api/workflow-runs/{id}/retry", a.write(a.retryRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/moves", a.moveRun)
 	mux.HandleFunc("POST /api/workflow-runs/{id}/answers", a.recordRunAnswer)
 	mux.HandleFunc("POST /api/workflow-runs/{id}/answer-resolution", a.recordRunAnswerResolution)

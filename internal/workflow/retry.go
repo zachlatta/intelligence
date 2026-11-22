@@ -221,6 +221,9 @@ func (e *Engine) RetryStarts(ctx context.Context) error {
 		// Use the same admission path as resource updates and the queue worker.
 		failures = append(failures, e.StartQueued(ctx))
 	}
+	if err := e.SendFailureAlerts(ctx); err != nil {
+		failures = append(failures, fmt.Errorf("failure alerts: %w", err))
+	}
 	// The worker logs the aggregate, including every bad command's ID, after all
 	// other runs have been reconciled. One corrupt run cannot starve the queue.
 	return errors.Join(failures...)

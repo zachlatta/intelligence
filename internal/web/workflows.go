@@ -35,7 +35,7 @@ var workflowsTmpl = template.Must(template.New("workflows").Funcs(localFuncs).Fu
 			Now time.Time
 		}{r, now}
 	},
-	"short": short, "ago": ago, "markdown": markdown, "plural": plural, "emailSummary": emailSummary, "voiceMemoSummary": voiceMemoSummary,
+	"short": short, "runPrefix": runPrefix, "ago": ago, "markdown": markdown, "plural": plural, "emailSummary": emailSummary, "voiceMemoSummary": voiceMemoSummary,
 	"memoryGiB": func(b int64) string { return fmt.Sprintf("%.1f", float64(b)/(1<<30)) },
 	"json": func(v any) (template.JS, error) {
 		b, err := json.Marshal(v)
@@ -378,6 +378,7 @@ type runRow struct {
 	StartRetries                                                         int
 	StartRetryAt                                                         *time.Time
 	HostOnline, DaemonConnected, RetryKeys                               bool
+	RetriedFrom, RetriedTo                                               string
 }
 
 const runRowSelect = `SELECT r.id::text, coalesce(nullif(r.task_summary, ''), r.title), r.input, r.status, r.host, r.repo, r.branch, w.name, r.workflow_id::text, r.workspace_id, r.workspace_title,
@@ -389,7 +390,9 @@ const runRowSelect = `SELECT r.id::text, coalesce(nullif(r.task_summary, ''), r.
 	r.project_selected, r.queued_at_creation, r.requested_at, r.answer_expected,
  st.answered_at, coalesce(st.answered_via::text, ''), coalesce(st.resolution, ''), coalesce(st.steered_to::text, ''), coalesce(st.reason, ''), coalesce(st.steer_live, false),
  (SELECT min(sent_at) FROM workflow_run_answers WHERE run_id=r.id AND NOT checked),
- (SELECT coalesce(jsonb_agg(jsonb_build_object('Channel',channel,'MessageID',message_id,'ThreadID',thread_id,'SentAt',sent_at,'Checked',checked) ORDER BY sent_at,id),'[]'::jsonb) FROM workflow_run_answers WHERE run_id=r.id), r.current_activity, r.activity_updated_at, activity.activity_eta, activity.activity_eta_estimated, activity.activity_waiting_on
+ (SELECT coalesce(jsonb_agg(jsonb_build_object('Channel',channel,'MessageID',message_id,'ThreadID',thread_id,'SentAt',sent_at,'Checked',checked) ORDER BY sent_at,id),'[]'::jsonb) FROM workflow_run_answers WHERE run_id=r.id), r.current_activity, r.activity_updated_at, activity.activity_eta, activity.activity_eta_estimated, activity.activity_waiting_on,
+ coalesce(r.retried_from_run_id::text, ''),
+ coalesce((SELECT r2.id::text FROM workflow_runs r2 WHERE r2.retried_from_run_id = r.id ORDER BY r2.created_at DESC LIMIT 1), '')
 	FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id JOIN workflow_versions v ON v.workflow_id = r.workflow_id AND v.version = r.version
  JOIN workflow_run_activity activity ON activity.run_id=r.id
 	LEFT JOIN workflow_run_queue q ON q.run_id = r.id LEFT JOIN workflow_run_answer_status st ON st.id = r.id `
@@ -399,7 +402,7 @@ func scanRunRow(row pgx.CollectableRow) (runRow, error) {
 	var steps, answers []byte
 	err := row.Scan(&r.ID, &r.Title, &r.Input, &r.Status, &r.Host, &r.Repo, &r.Branch, &r.Workflow, &r.WorkflowID, &r.WorkspaceID, &r.WorkspaceTitle,
 		&r.Orchestrator, &r.ProjectAgent, &r.Note, &r.Error, &r.Step, &r.Version, &steps, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt, &r.WorkflowDeleted,
-		&r.StartRetries, &r.StartRetryAt, &r.HostOnline, &r.DaemonConnected, &r.RetryKeys, &r.QueueReason, &r.Position, &r.EstimatedMemory, &r.ProjectSelected, &r.QueuedAtCreation, &r.RequestedAt, &r.AnswerExpected, &r.AnsweredAt, &r.AnsweredVia, &r.Resolution, &r.SteeredTo, &r.ResolutionReason, &r.SteerLive, &r.FirstUncheckedAt, &answers, &r.CurrentActivity, &r.ActivityUpdatedAt, &r.ActivityETA, &r.ActivityETAEstimated, &r.ActivityWaitingOn)
+		&r.StartRetries, &r.StartRetryAt, &r.HostOnline, &r.DaemonConnected, &r.RetryKeys, &r.QueueReason, &r.Position, &r.EstimatedMemory, &r.ProjectSelected, &r.QueuedAtCreation, &r.RequestedAt, &r.AnswerExpected, &r.AnsweredAt, &r.AnsweredVia, &r.Resolution, &r.SteeredTo, &r.ResolutionReason, &r.SteerLive, &r.FirstUncheckedAt, &answers, &r.CurrentActivity, &r.ActivityUpdatedAt, &r.ActivityETA, &r.ActivityETAEstimated, &r.ActivityWaitingOn, &r.RetriedFrom, &r.RetriedTo)
 	if err == nil {
 		r.CurrentActivity = workflow.CleanActivity(r.CurrentActivity)
 		err = json.Unmarshal(steps, &r.Steps)
@@ -1129,7 +1132,7 @@ func (e runEvent) Line() string {
 		return "Canceled"
 	case "claim":
 		return "Claimed " + e.Text
-	case "steer", "steer_unanswered", "email_continuation_requested", "email_continued", "email_cold_start":
+	case "steer", "steer_unanswered", "email_continuation_requested", "email_continued", "email_cold_start", "retried", "retry_of":
 		return linkRuns(e.Text)
 	case "error", "stalled", "continuation", "resume", "interrupted", "login_recovery", "worktree_base_fallback":
 		return e.Text
@@ -1229,6 +1232,26 @@ func (a *app) resumeRun(v viewer) http.HandlerFunc {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// retryRun: POST /api/workflow-runs/{id}/retry {}: starts a new run of the failed run's workflow
+// (on its latest version) with the same input.
+func (a *app) retryRun(v viewer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct{}
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+		id, err := a.wf.RetryRun(r.Context(), v.acct.ID, r.PathValue("id"))
+		if err != nil {
+			workflowError(w, err)
+			return
+		}
+		w.Header().Set("Location", "/workflow-runs/"+id)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{"id": id})
 	}
 }
 

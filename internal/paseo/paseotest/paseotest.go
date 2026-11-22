@@ -44,6 +44,7 @@ type Daemon struct {
 	timelines          map[string]timeline
 	created            map[string]map[string]any // what each creation idempotency key made
 	createdRequest     map[string]string         // each creation key's request, to refuse a different one
+	refuseCreateAgent  func(msg map[string]any) string
 	nextID             int
 
 	schedules   []map[string]any  // schedules.go
@@ -54,6 +55,14 @@ type Daemon struct {
 	catalogSet bool
 
 	diffs map[string]diff // diff.go, by checkout directory
+}
+
+// RefuseCreateAgent makes agent.create.request return the non-empty error string fn returns,
+// still reserving the request's idempotency key as Paseo does. Passing nil clears it.
+func (f *Daemon) RefuseCreateAgent(fn func(msg map[string]any) string) {
+	f.mu.Lock()
+	f.refuseCreateAgent = fn
+	f.mu.Unlock()
 }
 
 // FailProjects makes project.list answer rpc_error with msg ("" answers normally).
@@ -348,14 +357,28 @@ func (f *Daemon) change(c *websocket.Conn, id string, msg map[string]any) bool {
 		f.pushLocked("workspace_update", map[string]any{"kind": "upsert", "workspace": w})
 		f.write(c, session("workspace.create.response", map[string]any{"requestId": id, "workspace": w, "setupTerminalId": nil, "error": nil}))
 	case "agent.create.request":
-		if a, ok := f.created[key]; ok && key != "" {
-			if f.createdRequest[key] != creationRequest(msg) {
+		if prev, ok := f.createdRequest[key]; ok && key != "" {
+			if prev != creationRequest(msg) {
 				// Paseo keys a creation to its request: a different one under the same key is refused
 				f.write(c, session("agent.create.response", map[string]any{"requestId": id, "agent": nil, "error": "agent_request_key_conflict"}))
 				return true
 			}
-			f.write(c, session("agent.create.response", map[string]any{"requestId": id, "agent": a, "error": nil}))
-			return true
+			if a, made := f.created[key]; made {
+				f.write(c, session("agent.create.response", map[string]any{"requestId": id, "agent": a, "error": nil}))
+				return true
+			}
+		}
+		if f.refuseCreateAgent != nil {
+			if refusal := f.refuseCreateAgent(msg); refusal != "" {
+				if key != "" {
+					if f.createdRequest == nil {
+						f.createdRequest = map[string]string{}
+					}
+					f.createdRequest[key] = creationRequest(msg)
+				}
+				f.write(c, session("agent.create.response", map[string]any{"requestId": id, "agent": nil, "error": refusal}))
+				return true
+			}
 		}
 		cfg, _ := msg["config"].(map[string]any)
 		provider, _ := cfg["provider"].(string)
