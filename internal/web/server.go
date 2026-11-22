@@ -117,6 +117,9 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	context.AfterFunc(cfg.Context, roles.Close)
 	store := accounts.New(cfg.DB, roles)
 	a := &app{cfg: cfg, routes: http.NewServeMux(), store: store, reg: reg, changes: changes, wf: workflow.NewEngine(cfg.DB, cfg.Now)}
+	a.wf.Notify = cfg.HostAlerts
+	a.wf.NotifyAccount = cfg.PDWAccount
+	a.wf.NotifyLocation = cfg.NotifyLocation
 	if cfg.QueueLimits != nil {
 		a.wf.Limits = *cfg.QueueLimits
 	}
@@ -128,6 +131,7 @@ func newHandler(cfg Config, workers bool) http.Handler {
 		go a.wf.RunStartRetries(cfg.Context)
 		go a.wf.RunStallWatchdog(cfg.Context)
 		go a.wf.RunInterruptionRecovery(cfg.Context)
+		go a.wf.RunModelQuotaWatcher(cfg.Context)
 		watch := &hostwatch.Watcher{DB: cfg.DB, Notify: cfg.HostAlerts, Account: cfg.PDWAccount, Location: cfg.NotifyLocation,
 			Started: cfg.Now(), Now: cfg.Now}
 		go watch.Run(cfg.Context)

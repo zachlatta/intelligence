@@ -1145,6 +1145,14 @@ Group writes use `POST /api/model-groups`, `PUT /api/model-groups/{id}` (with `r
 rankings and history through SQL (`model_groups`, `model_group_members`, `model_group_candidates`,
 `workflow_model_suggestions`). Detailed audit data stays in SQL; the run page shows a short summary.
 
+When no member of a requested model group is eligible, the run enters a model-quota wait state
+(`workflow_model_waits`, `activity_waiting_on = 'model quota'`) instead of asking the account owner
+or stalling. Intelligence checks every minute and resumes the orchestrator automatically with a
+fresh suggestion once an eligible model returns; runs already parked on a model-only ask resume the
+same way with their ask resolved. If a host stays blocked on model quota for 30 minutes,
+Intelligence opens at most one host-level alert (`model_quota_alerts`, deduplicated per account and
+host) and sends one phone notification listing the waiting runs when `PDW_NOTIFY_KEY` is configured.
+
 The starting workflow spreads frontier work across the subscribed Claude Opus 5.5 and Codex plans.
 Paseo discovers Antigravity models from the host's `agy models` output and forwards the selected
 ID to `agy --model`. Gemini 4 Neon and Hydrogen expose `-low`, `-medium`, `-high` and `-xhigh` IDs.

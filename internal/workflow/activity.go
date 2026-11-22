@@ -117,6 +117,14 @@ func (e *Engine) refreshActivity(ctx context.Context, tx pgx.Tx, r run) error {
 	waiting := ""
 	if live && (r.Status == Waiting || (r.Step >= 0 && r.Step < len(r.Def.Steps) && r.Def.Steps[r.Step].Kind == KindSignoff)) {
 		waiting = "Zach"
+	} else if live {
+		modelWait, err := hasOpenModelWait(ctx, tx, r.ID)
+		if err != nil {
+			return err
+		}
+		if modelWait {
+			waiting = ModelQuotaWaitingOn
+		}
 	}
 	if waiting != "" || !live {
 		if estimated {

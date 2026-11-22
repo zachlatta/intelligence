@@ -17,6 +17,7 @@ import (
 	"github.com/zachlatta/intelligence/internal/agenttext"
 	"github.com/zachlatta/intelligence/internal/fleet"
 	"github.com/zachlatta/intelligence/internal/hostclient"
+	"github.com/zachlatta/intelligence/internal/hostwatch"
 )
 
 // Engine keeps workflows and their runs in Postgres, and moves runs: it queues the commands that
@@ -28,6 +29,12 @@ type Engine struct {
 	Now func() time.Time
 	// Limits are when a host is too busy to start another run: a new run queues (queue.go).
 	Limits Limits
+	// Notify, when set, gets at most one host-level phone notification when runs on a host of
+	// NotifyAccount's wait on model quota past ModelQuotaAlertAfter (default 30 minutes).
+	Notify               hostwatch.Notifier
+	NotifyAccount        string
+	NotifyLocation       *time.Location
+	ModelQuotaAlertAfter time.Duration
 }
 
 // NewEngine keeps workflows in p's database.
@@ -851,6 +858,14 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		waiting := strings.TrimSpace(m.WaitingOn)
 		if r.Status == Waiting || (r.Step >= 0 && r.Step < len(r.Def.Steps) && r.Def.Steps[r.Step].Kind == KindSignoff) {
 			waiting = "Zach"
+		} else if waiting == "" {
+			modelWait, err := hasOpenModelWait(ctx, tx, r.ID)
+			if err != nil {
+				return "", err
+			}
+			if modelWait {
+				waiting = ModelQuotaWaitingOn
+			}
 		}
 		estimated := false
 		if waiting != "" {
@@ -966,6 +981,9 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 			errText = m.Why
 		}
 		if finished != nil {
+			if _, err := e.resolveModelWait(ctx, tx, r.ID, "finished", nil); err != nil {
+				return err
+			}
 			if err := fleet.CaptureWorkflowAgents(ctx, tx, r.Host, r.ID, e.Now()); err != nil {
 				return err
 			}
@@ -1016,6 +1034,9 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		if err := e.event(ctx, tx, r, m.Move, ptr(r.Step), ptr(r.Step+1), text); err != nil {
 			return "", err
 		}
+		if _, err := e.resolveModelWait(ctx, tx, r.ID, "moved", nil); err != nil {
+			return "", err
+		}
 		d, err := e.fillModels(ctx, tx, r, r.Step+1)
 		if err != nil {
 			return "", err
@@ -1034,6 +1055,9 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 			return "", bad("say why with --why: the step it goes back to needs to know what is missing.")
 		}
 		if err := e.event(ctx, tx, r, "back", ptr(r.Step), ptr(to), m.Why); err != nil {
+			return "", err
+		}
+		if _, err := e.resolveModelWait(ctx, tx, r.ID, "moved", nil); err != nil {
 			return "", err
 		}
 		d, err := e.fillModels(ctx, tx, r, to)
@@ -1056,6 +1080,18 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		if answeredAsk(lost) {
 			// The reply never reached this orchestrator: the ask it is repeating is answered.
 			return answeredAskMessage + redelivery(lost), e.carried(ctx, tx, r, lost, "ask", nil)
+		}
+		if r.Step >= 0 && r.Step < len(r.Def.Steps) && r.Def.Steps[r.Step].Kind != KindSignoff {
+			groupID, token, blocked, err := blockedModelToken(ctx, tx, r)
+			if err != nil {
+				return "", err
+			}
+			if blocked && looksLikeModelAsk(m.Note, token) {
+				if err := e.openModelWait(ctx, tx, r, r.Step, groupID, token); err != nil {
+					return "", err
+				}
+				return fmt.Sprintf("Not asked: this run is waiting on model quota for %s. Do not ask Zach and do not launch a worker without an eligible suggestion. Poll intelligence workflow suggest --run %s %s every minute, or end your turn and Intelligence will resume this run automatically when an eligible model returns.", token, r.ID, token), nil
+			}
 		}
 		if err := e.event(ctx, tx, r, "ask", ptr(r.Step), nil, m.Note); err != nil {
 			return "", err
@@ -1295,6 +1331,9 @@ func (e *Engine) Cancel(ctx context.Context, account int64, runID string) error 
 				}
 				break
 			}
+		}
+		if _, err := e.resolveModelWait(ctx, tx, r.ID, "canceled", nil); err != nil {
+			return err
 		}
 		if err := fleet.CaptureWorkflowAgents(ctx, tx, r.Host, r.ID, e.Now()); err != nil {
 			return err

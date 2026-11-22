@@ -96,6 +96,13 @@ func (e *Engine) reconcileStall(ctx context.Context, tx pgx.Tx, r run) error {
 	if pending {
 		return nil
 	}
+	modelWait, err := hasOpenModelWait(ctx, tx, r.ID)
+	if err != nil {
+		return err
+	}
+	if modelWait {
+		return nil
+	}
 	// Legacy or seeded runs may have no lifecycle history. Without an epoch
 	// there is no durable key for a continuation; keep the check timestamp but
 	// clear any idle window until a real transition supplies one.

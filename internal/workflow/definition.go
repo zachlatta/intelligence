@@ -340,6 +340,7 @@ func OrchestratorPrompt(name string, d Definition, v Vars) (string, error) {
 		"After a successful ask, end your turn and wait for the reply message; do not poll or create a wakeup.\n\n" +
 		PublicRepoRule + "\n\n")
 	b.WriteString("Lifecycle: after next, skip or back, keep working in the same turn using the returned instructions. Wait for sub-agents in the foreground. End your turn only after a successful ask or after the run is finished, done or failed.\n\n")
+	b.WriteString(ModelQuotaWaitRule + "\n\n")
 	step, err := StepMessage(d, 0, v)
 	if err != nil {
 		return "", err
@@ -437,6 +438,12 @@ var Starting = Definition{
 			"Then move on, which finishes the run."},
 	},
 }
+
+// ModelQuotaWaitRule is included for every orchestrator (including saved workflows like Factory
+// Task) so a model-group outage puts runs into a wait state instead of asking Zach per run.
+const ModelQuotaWaitRule = "Model quota waits: if the model suggester returns \"No eligible model in <group>\", do NOT ask Zach and do NOT launch a worker without an eligible suggestion. " +
+	"A model-availability block is a wait state (waiting on model quota), not an ask: poll `intelligence workflow suggest --run <id> <group>` every minute until an eligible model appears, or pause your turn and let Intelligence resume the run automatically when quota returns. " +
+	"Intelligence sends Zach at most one host-level notice if the outage persists."
 
 // UnattendedShellRule is included for saved workflows too, not only Starting.
 const UnattendedShellRule = "Agents run unattended. Pass this shell guidance to each sub-agent. " +

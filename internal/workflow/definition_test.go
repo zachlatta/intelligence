@@ -534,9 +534,9 @@ func TestPublicRepositoryChecksReadEveryOutgoingCommit(t *testing.T) {
 func TestOrchestratorLifecycleForEveryDefinition(t *testing.T) {
 	for _, d := range []Definition{Starting, {Orchestrator: Orchestrator{Instructions: "Custom"}, Steps: []Step{{ID: "one", Title: "One"}}}} {
 		p := mustOrchestratorPrompt(t, "Saved", d, Vars{})
-		for _, want := range []string{"after next, skip or back", "same turn", "foreground", "only after a successful ask"} {
+		for _, want := range []string{"after next, skip or back", "same turn", "foreground", "only after a successful ask", "waiting on model quota", "do NOT ask Zach"} {
 			if !strings.Contains(p, want) {
-				t.Errorf("missing lifecycle rule %q", want)
+				t.Errorf("missing lifecycle/quota rule %q", want)
 			}
 		}
 	}

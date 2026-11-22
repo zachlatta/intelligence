@@ -1,5 +1,13 @@
 [
   {
+    "id": "model-quota-waits",
+    "released": "2026-11-22",
+    "title": "Runs wait on model quota instead of asking you",
+    "summary": "When a model group has no eligible model, blocked workflow runs now show waiting on model quota and resume automatically with a fresh suggestion once quota returns, instead of asking you one by one or stalling. Runs already parked on a model-availability ask also resume on their own with the ask resolved. If a host stays blocked for 30 minutes, Intelligence sends at most one host-level phone notification listing the waiting runs.",
+    "media": "model-quota-wait.png",
+    "mediaAlt": "A workflow run page showing Running status, Current activity waiting on model quota, and What happened recording no eligible model for the group."
+  },
+  {
     "id": "workflow-codex-speed",
     "released": "2026-11-22",
     "title": "Run a workflow's Codex agents at Fast or Ultrafast speed",

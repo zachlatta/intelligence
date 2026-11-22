@@ -285,6 +285,7 @@ func (e *Engine) fillModels(ctx context.Context, tx pgx.Tx, r run, step int) (De
 // modelSuggestion is one allocation: Inline replaces the token; Note goes under Model suggestions.
 type modelSuggestion struct {
 	Inline, Note string
+	Eligible     bool
 }
 
 func (e *Engine) suggestModel(ctx context.Context, tx pgx.Tx, r run, step int, token string, exclude []string) (modelSuggestion, error) {
@@ -329,7 +330,7 @@ func (e *Engine) suggestModel(ctx context.Context, tx pgx.Tx, r run, step int, t
 			break
 		}
 	}
-	msg := "No eligible model in " + token + ". Wait for a fresh meter or reset, or ask for an explicit model. Do not launch a worker on this suggestion."
+	msg := "No eligible model in " + token + ". Do not ask Zach. Wait for model quota: poll intelligence workflow suggest --run " + r.ID + " " + token + " every minute until an eligible model appears, or pause and Intelligence will resume this run when quota returns. Do not launch a worker on this suggestion."
 	inline := "no eligible model in " + token
 	var provider, login, window any
 	if chosen != nil {
@@ -368,7 +369,22 @@ func (e *Engine) suggestModel(ctx context.Context, tx pgx.Tx, r run, step int, t
 		VALUES ($1, $2, $3, 'model_suggestion', $4, $5, $6)`, r.ID, r.Account, e.Now(), step, msg, id); err != nil {
 		return modelSuggestion{}, err
 	}
-	return modelSuggestion{Inline: inline, Note: msg + " Suggestion " + id + ". Before another worker, refresh with intelligence workflow suggest --run " + r.ID + " " + token + "."}, nil
+	if chosen == nil && len(candidates) > 0 {
+		if err := e.openModelWait(ctx, tx, r, step, group, token); err != nil {
+			return modelSuggestion{}, err
+		}
+	} else if chosen != nil {
+		resolved, err := e.resolveModelWait(ctx, tx, r.ID, "suggested", nil)
+		if err != nil {
+			return modelSuggestion{}, err
+		}
+		if resolved {
+			if err := e.refreshActivity(ctx, tx, r); err != nil {
+				return modelSuggestion{}, err
+			}
+		}
+	}
+	return modelSuggestion{Inline: inline, Note: msg + " Suggestion " + id + ". Before another worker, refresh with intelligence workflow suggest --run " + r.ID + " " + token + ".", Eligible: chosen != nil}, nil
 }
 
 // SuggestModel records a new allocation without advancing the step.
