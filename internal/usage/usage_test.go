@@ -317,13 +317,14 @@ func TestReadClaudeFallsBackToClaudeAuthStatusWhenCswapMissing(t *testing.T) {
 }
 
 func TestReadClaudeFallbackReportsLoggedOutStoredLogin(t *testing.T) {
+	// Real `claude auth status` exits 1 while still printing JSON when signed out.
 	r := &Reader{Home: t.TempDir(), Now: func() time.Time { return now },
 		Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			if name == "cswap" {
 				return nil, ErrMissing
 			}
 			if name == "claude" {
-				return []byte(`{"loggedIn":false,"authMethod":"none","email":"ada@example.com","storedClaudeAiLogin":true}`), nil
+				return []byte(`{"loggedIn":false,"authMethod":"none","email":"ada@example.com","storedClaudeAiLogin":true}`), errors.New("exit status 1")
 			}
 			return nil, ErrMissing
 		}}
@@ -337,18 +338,36 @@ func TestReadClaudeFallbackReportsLoggedOutStoredLogin(t *testing.T) {
 }
 
 func TestReadClaudeFallbackMissingWhenNotSignedIn(t *testing.T) {
+	// Real `claude auth status` exits 1 with loggedIn:false when never signed in.
 	r := &Reader{Home: t.TempDir(), Now: func() time.Time { return now },
 		Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			if name == "cswap" {
 				return nil, ErrMissing
 			}
 			if name == "claude" {
-				return []byte(`{"loggedIn":false,"authMethod":"none","storedClaudeAiLogin":false}`), nil
+				return []byte(`{"loggedIn":false,"authMethod":"none","storedClaudeAiLogin":false}`), errors.New("exit status 1")
 			}
 			return nil, ErrMissing
 		}}
 	s := r.readClaude(context.Background())
 	if !s.Missing || s.Error != "" || len(s.Accounts) != 0 {
+		t.Errorf("source = %+v", s)
+	}
+}
+
+func TestReadClaudeFallbackReturnsErrorOnNonJSONFailure(t *testing.T) {
+	r := &Reader{Home: t.TempDir(), Now: func() time.Time { return now },
+		Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			if name == "cswap" {
+				return nil, ErrMissing
+			}
+			if name == "claude" {
+				return []byte("boom"), errors.New("exit status 1")
+			}
+			return nil, ErrMissing
+		}}
+	s := r.readClaude(context.Background())
+	if s.Missing || !strings.Contains(s.Error, "exit status 1") {
 		t.Errorf("source = %+v", s)
 	}
 }

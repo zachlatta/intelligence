@@ -179,10 +179,24 @@ func (r *Reader) readClaude(ctx context.Context) Source {
 	if !s.Missing {
 		return s
 	}
-	return r.readTool(ctx, Claude, parseClaudeAuthStatus, "claude", "auth", "status")
+	// `claude auth status` prints JSON and exits 1 when signed out, so parse valid JSON stdout
+	// even on a non-zero exit before treating the exit status as a read failure.
+	out, err := r.run(ctx, "claude", "auth", "status")
+	if errors.Is(err, ErrMissing) {
+		return Source{Provider: Claude, Missing: true}
+	}
+	if len(bytes.TrimSpace(out)) > 0 {
+		if parsed, ok := parseClaudeAuthStatus(out, r.now()); ok {
+			return parsed
+		}
+	}
+	if err != nil {
+		return Source{Provider: Claude, Error: fmt.Sprintf("claude: %v", err)}
+	}
+	return Source{Provider: Claude, Error: "claude auth status: unreadable output"}
 }
 
-func parseClaudeAuthStatus(raw []byte, now time.Time) Source {
+func parseClaudeAuthStatus(raw []byte, now time.Time) (Source, bool) {
 	var payload struct {
 		LoggedIn            bool   `json:"loggedIn"`
 		AuthMethod          string `json:"authMethod"`
@@ -194,14 +208,13 @@ func parseClaudeAuthStatus(raw []byte, now time.Time) Source {
 	}
 	s := Source{Provider: Claude}
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		s.Error = "claude auth status: unreadable output: " + err.Error()
-		return s
+		return s, false
 	}
 	email := strings.ToLower(strings.TrimSpace(payload.Email))
 	if !payload.LoggedIn {
 		if !payload.StoredClaudeAiLogin {
 			s.Missing = true
-			return s
+			return s, true
 		}
 		if email != "" {
 			s.Accounts = []Account{{
@@ -212,14 +225,14 @@ func parseClaudeAuthStatus(raw []byte, now time.Time) Source {
 				ObservedAt: now,
 				Error:      "claude auth status: not logged in",
 			}}
-			return s
+			return s, true
 		}
 		s.Error = "claude auth status: not logged in"
-		return s
+		return s, true
 	}
 	if email == "" {
 		s.Missing = true
-		return s
+		return s, true
 	}
 	acct := Account{
 		ID:         email,
@@ -233,7 +246,7 @@ func parseClaudeAuthStatus(raw []byte, now time.Time) Source {
 		acct.LoginExpiresAt = t.UTC()
 	}
 	s.Accounts = []Account{acct}
-	return s
+	return s, true
 }
 
 func (r *Reader) readMuse(ctx context.Context) Source {
