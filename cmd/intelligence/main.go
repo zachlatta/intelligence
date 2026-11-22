@@ -397,7 +397,15 @@ func runHost(ctx context.Context) error {
 	}
 	// every 5 minutes: each plan's usage, per login, from each provider's own meter
 	home, _ := os.UserHomeDir()
-	b.Usage = &hostclient.UsageSync{Read: (&usage.Reader{Home: home}).Read}
+	meters := &usage.Reader{Home: home}
+	b.Usage = &hostclient.UsageSync{Read: meters.Read}
+	// on the server's switch_login: the Claude login every Claude agent on this host uses
+	b.SwitchLogin = func(ctx context.Context, provider, login string) (int, error) {
+		if provider != usage.Claude {
+			return 0, fmt.Errorf("cannot switch %s logins", provider)
+		}
+		return meters.SwitchClaude(ctx, login)
+	}
 	// every minute: the host, each agent's processes, and the eBPF probe's CPU and OOM kills
 	probeSocket := c.ProbeSocket
 	if runtime.GOOS != "linux" {

@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/zachlatta/intelligence/internal/fleet"
+	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
 // ModelGroup is a shared allowlist. Token is immutable, including after a rename.
@@ -329,7 +331,14 @@ func (e *Engine) suggestModel(ctx context.Context, tx pgx.Tx, r run, step int, t
 			break
 		}
 	}
+	switching, err := e.switchLogin(ctx, tx, r, candidates, exclude)
+	if err != nil {
+		return modelSuggestion{}, err
+	}
 	msg := "No eligible model in " + token + ". Wait for a fresh meter or reset, or ask for an explicit model. Do not launch a worker on this suggestion."
+	if switching != "" {
+		msg = "No eligible model in " + token + " yet: " + switching + " Refresh this suggestion in a minute. Do not launch a worker on this suggestion."
+	}
 	inline := "no eligible model in " + token
 	var provider, login, window any
 	if chosen != nil {
@@ -390,4 +399,78 @@ func (e *Engine) SuggestModel(ctx context.Context, host, id, token string, exclu
 		return err
 	})
 	return msg, err
+}
+
+// Login switches. cswap switches a host's Claude login for every Claude agent on it, so the
+// server asks only when it clearly helps: the best candidate in the group needs a switch, and the
+// host's active login has no eligible candidate within switchMargin points of it in any group.
+// One request per host and provider per switchCooldown, which also stops two groups that prefer
+// different logins from flapping. A switched-to login is handed out only once the host's usage
+// report shows it active (the host sends one as soon as it switches).
+const (
+	switchMargin   = 30.0
+	switchCooldown = "15 minutes"
+	switchTTL      = 5 * time.Minute
+)
+
+// switchLogin requests a switch when it helps, and says what is pending for the group's best
+// held login, or "" when nothing is.
+func (e *Engine) switchLogin(ctx context.Context, tx pgx.Tx, r run, candidates []json.RawMessage, exclude []string) (string, error) {
+	var target map[string]any
+	best := 0.0
+	for _, raw := range candidates {
+		var c map[string]any
+		if err := json.Unmarshal(raw, &c); err != nil {
+			return "", err
+		}
+		score, ok := c["score"].(float64)
+		if !ok || (c["eligible"] != true && c["needs_switch"] != true) || slices.Contains(exclude, c["provider"].(string)+"/"+c["model"].(string)) {
+			continue
+		}
+		if target == nil || score > best {
+			target, best = c, score
+		}
+	}
+	if target == nil || target["needs_switch"] != true {
+		return "", nil
+	}
+	provider, login := target["provider"].(string), target["login"].(string)
+	pending := func(id string) string {
+		return fmt.Sprintf("Intelligence asked to switch %s's %s login to %s (command %s); a worker can use it once the host reports the switch.", r.Host, provider, login, id)
+	}
+	var recent, recentLogin, status, failure string
+	err := tx.QueryRow(ctx, `SELECT id::text, args->>'login', status, error FROM commands WHERE host=$1 AND kind='switch_login' AND args->>'provider'=$2
+        AND created_at > now() - interval '`+switchCooldown+`' ORDER BY created_at DESC LIMIT 1`, r.Host, provider).Scan(&recent, &recentLogin, &status, &failure)
+	switch {
+	case err == nil && recentLogin == login && (status == hostclient.CommandFailed || status == hostclient.CommandExpired):
+		return fmt.Sprintf("Switching %s's %s login to %s failed (command %s: %s); Intelligence retries after %s.", r.Host, provider, login, recent, failure, switchCooldown), nil
+	case err == nil && recentLogin == login:
+		return pending(recent), nil
+	case err == nil:
+		return "", nil // cooling down after a switch to another login
+	case !errors.Is(err, pgx.ErrNoRows):
+		return "", err
+	}
+	var active string
+	var activeBest *float64
+	if err := tx.QueryRow(ctx, `SELECT coalesce((SELECT account FROM usage_active WHERE host=$2 AND provider=$3 ORDER BY since DESC LIMIT 1),''),
+        (SELECT max(score) FROM model_group_candidates WHERE account_id=$1 AND host=$2 AND provider=$3 AND eligible)`,
+		r.Account, r.Host, provider).Scan(&active, &activeBest); err != nil {
+		return "", err
+	}
+	if activeBest != nil && *activeBest > best-switchMargin {
+		return "", nil
+	}
+	why := fmt.Sprintf("%s is the best choice for %s (score %.1f)", login, target["token"], best)
+	if activeBest == nil {
+		why += fmt.Sprintf("; the active login %s has no eligible model group entry", active)
+	} else {
+		why += fmt.Sprintf("; the active login %s scores at most %.1f", active, *activeBest)
+	}
+	args, _ := json.Marshal(hostclient.SwitchLoginArgs{Provider: provider, Login: login, From: active, Why: why})
+	c, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.SwitchLoginKind, args, switchTTL, e.Now())
+	if err != nil {
+		return "", err
+	}
+	return pending(c.ID), nil
 }
