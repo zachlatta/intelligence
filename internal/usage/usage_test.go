@@ -44,15 +44,15 @@ func TestParseClaudeListsEveryLogin(t *testing.T) {
 		t.Fatalf("source = %+v", s)
 	}
 	want := []Account{
-		{ID: "grace@example.com", Label: "grace@example.com", Slot: 1, ObservedAt: at("2026-11-08T19:20:00Z"), Windows: []Window{
+		{ID: "grace@example.com", Label: "grace@example.com", Slot: 1, AuthSource: AuthCswap, ObservedAt: at("2026-11-08T19:20:00Z"), Windows: []Window{
 			{ID: "7d", Seconds: Week, UsedPct: 0, ResetsAt: at("2026-11-14T12:00:00Z")},
 		}},
-		{ID: "ada@example.com", Label: "ada@example.com", Slot: 2, Active: true, ObservedAt: at("2026-11-08T19:29:00Z"), Windows: []Window{
+		{ID: "ada@example.com", Label: "ada@example.com", Slot: 2, Active: true, AuthSource: AuthCswap, ObservedAt: at("2026-11-08T19:29:00Z"), Windows: []Window{
 			{ID: "7d", Seconds: Week, UsedPct: 17, ResetsAt: at("2026-11-13T11:00:00Z")},
 			{ID: "5h", Seconds: FiveHours, UsedPct: 42.5, ResetsAt: at("2026-11-08T21:00:00Z")},
 			{ID: "fable/7d", Seconds: Week, UsedPct: 3, ResetsAt: at("2026-11-13T11:00:00Z")},
 		}},
-		{ID: "linus@example.com", Label: "linus@example.com", Slot: 3, ObservedAt: now, Error: "cswap usage status: expired"},
+		{ID: "linus@example.com", Label: "linus@example.com", Slot: 3, AuthSource: AuthCswap, ObservedAt: now, Error: "cswap usage status: expired"},
 	}
 	if !reflect.DeepEqual(s.Accounts, want) {
 		t.Errorf("accounts =\n%+v\nwant\n%+v", s.Accounts, want)
@@ -97,7 +97,7 @@ func TestParseCodexMeter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Account{ID: "ada@example.com", Label: "ada@example.com", Plan: "pro", Active: true, ObservedAt: now, Windows: []Window{
+	want := Account{ID: "ada@example.com", Label: "ada@example.com", Plan: "pro", Active: true, AuthSource: AuthCodex, ObservedAt: now, Windows: []Window{
 		{ID: "7d", Seconds: Week, UsedPct: 24, ResetsAt: time.Unix(1794379726, 0).UTC().Round(time.Minute)},
 		{ID: "5h", Seconds: FiveHours, UsedPct: 7.5, ResetsAt: time.Unix(1794175246, 0).UTC().Round(time.Minute)},
 	}}
@@ -166,7 +166,7 @@ func TestReadCodexFallsBackToTheNewestSessionReading(t *testing.T) {
 		t.Fatalf("source = %+v", s)
 	}
 	a := s.Accounts[0]
-	want := Account{ID: "ada@example.com", Label: "ada@example.com", Plan: "pro", Active: true, ObservedAt: at("2026-11-08T17:00:37.749Z"),
+	want := Account{ID: "ada@example.com", Label: "ada@example.com", Plan: "pro", Active: true, AuthSource: AuthCodex, ObservedAt: at("2026-11-08T17:00:37.749Z"),
 		Note: "live meter unavailable (401 Unauthorized); last local session reading", Windows: []Window{
 			{ID: "7d", Seconds: Week, UsedPct: 23, ResetsAt: time.Unix(1794379726, 0).UTC().Round(time.Minute)},
 		}}
@@ -186,7 +186,7 @@ func TestParseMuse(t *testing.T) {
 	s := parseMuse([]byte(`{"allowance":{"asOfMs":1794166595360,"source":"mint","tier":"Muse Code Power Usage",
 		"weekly":{"resetsAtMs":1794182400000,"usedPercent":25},"window":{"resetsAtMs":1794175246000,"usedPercent":0}},
 		"hint":null,"reason":null,"schemaVersion":1}`), now)
-	want := Source{Provider: Muse, Accounts: []Account{{ID: "default", Label: "Muse", Plan: "Muse Code Power Usage", Active: true,
+	want := Source{Provider: Muse, Accounts: []Account{{ID: "default", Label: "Muse", Plan: "Muse Code Power Usage", Active: true, AuthSource: AuthMuse,
 		ObservedAt: time.UnixMilli(1794166595360).UTC(), Windows: []Window{
 			{ID: "7d", Seconds: Week, UsedPct: 25, ResetsAt: time.UnixMilli(1794182400000).UTC().Round(time.Minute)},
 			{ID: "5h", Seconds: FiveHours, UsedPct: 0, ResetsAt: time.UnixMilli(1794175246000).UTC().Round(time.Minute)},
@@ -222,7 +222,7 @@ func TestParseAntigravityKeepsEachPool(t *testing.T) {
 		t.Fatalf("source = %+v", s)
 	}
 	got := s.Accounts[0]
-	want := Account{ID: "default", Label: "Antigravity", Active: true, ObservedAt: now, Windows: []Window{
+	want := Account{ID: "default", Label: "Antigravity", Active: true, AuthSource: AuthAntigravity, ObservedAt: now, Windows: []Window{
 		{ID: "gemini/7d", Seconds: Week, UsedPct: 25, ResetsAt: at("2026-11-14T00:01:00Z")},
 		{ID: "gemini/5h", Seconds: FiveHours, UsedPct: 2, ResetsAt: at("2026-11-08T21:10:00Z")},
 		{ID: "claude-gpt/7d", Seconds: Week, UsedPct: 0, ResetsAt: at("2026-11-15T19:37:00Z")},
@@ -284,5 +284,71 @@ func TestRunFindsToolsInLocalBin(t *testing.T) {
 	}
 	if _, err := (&Reader{Home: home}).run(context.Background(), "no-such-usage-tool"); !errors.Is(err, ErrMissing) {
 		t.Errorf("missing tool: %v", err)
+	}
+}
+
+func TestReadClaudeFallsBackToClaudeAuthStatusWhenCswapMissing(t *testing.T) {
+	r := &Reader{Home: t.TempDir(), Now: func() time.Time { return now },
+		Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			if name == "cswap" {
+				return nil, ErrMissing
+			}
+			if name == "claude" && strings.Join(args, " ") == "auth status" {
+				return []byte(`{"loggedIn":true,"authMethod":"claude.ai","email":"Ada@Example.com","orgId":"org-1","subscriptionType":"max","planTier":"default_claude_max_20x","loginExpiresAt":"2026-12-18T18:16:24Z","storedClaudeAiLogin":true}`), nil
+			}
+			return nil, ErrMissing
+		}}
+	s := r.readClaude(context.Background())
+	if s.Missing || s.Error != "" || len(s.Accounts) != 1 {
+		t.Fatalf("source = %+v", s)
+	}
+	want := Account{
+		ID:             "ada@example.com",
+		Label:          "ada@example.com",
+		Plan:           "max",
+		Active:         true,
+		AuthSource:     AuthClaudeCLI,
+		ObservedAt:     now,
+		LoginExpiresAt: time.Date(2026, 12, 18, 18, 16, 24, 0, time.UTC),
+	}
+	if !reflect.DeepEqual(s.Accounts[0], want) {
+		t.Errorf("account =\n%+v\nwant\n%+v", s.Accounts[0], want)
+	}
+}
+
+func TestReadClaudeFallbackReportsLoggedOutStoredLogin(t *testing.T) {
+	r := &Reader{Home: t.TempDir(), Now: func() time.Time { return now },
+		Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			if name == "cswap" {
+				return nil, ErrMissing
+			}
+			if name == "claude" {
+				return []byte(`{"loggedIn":false,"authMethod":"none","email":"ada@example.com","storedClaudeAiLogin":true}`), nil
+			}
+			return nil, ErrMissing
+		}}
+	s := r.readClaude(context.Background())
+	if s.Missing || s.Error != "" || len(s.Accounts) != 1 {
+		t.Fatalf("source = %+v", s)
+	}
+	if s.Accounts[0].ID != "ada@example.com" || s.Accounts[0].AuthSource != AuthClaudeCLI || s.Accounts[0].Error != "claude auth status: not logged in" {
+		t.Errorf("account = %+v", s.Accounts[0])
+	}
+}
+
+func TestReadClaudeFallbackMissingWhenNotSignedIn(t *testing.T) {
+	r := &Reader{Home: t.TempDir(), Now: func() time.Time { return now },
+		Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			if name == "cswap" {
+				return nil, ErrMissing
+			}
+			if name == "claude" {
+				return []byte(`{"loggedIn":false,"authMethod":"none","storedClaudeAiLogin":false}`), nil
+			}
+			return nil, ErrMissing
+		}}
+	s := r.readClaude(context.Background())
+	if !s.Missing || s.Error != "" || len(s.Accounts) != 0 {
+		t.Errorf("source = %+v", s)
 	}
 }

@@ -26,17 +26,20 @@ type datedPlan struct {
 }
 
 var usageFuncs = template.FuncMap{
-	"ago":       ago,
-	"until":     until,
-	"pct":       pct,
-	"left":      left,
-	"paceText":  paceText,
-	"paceClass": paceClass,
-	"join":      strings.Join,
-	"bar":       bar,
-	"short":     short,
-	"planAt":    func(now time.Time, p fleet.Plan) datedPlan { return datedPlan{Login: p, Now: now} },
-	"list":      func(xs ...int) []int { return xs },
+	"ago":           ago,
+	"until":         until,
+	"pct":           pct,
+	"left":          left,
+	"paceText":      paceText,
+	"paceClass":     paceClass,
+	"join":          strings.Join,
+	"bar":           bar,
+	"short":         short,
+	"planAt":        func(now time.Time, p fleet.Plan) datedPlan { return datedPlan{Login: p, Now: now} },
+	"list":          func(xs ...int) []int { return xs },
+	"hostAuthClass": hostAuthClass,
+	"hostAuthLabel": hostAuthLabel,
+	"hostAuthTitle": hostAuthTitle,
 }
 
 var usageTmpl = template.Must(template.Must(template.New("usage").Funcs(localFuncs).Funcs(usageFuncs).Parse(usageHTML)).Parse(planHTML + layoutHTML + modelGroupsHTML))
@@ -235,4 +238,72 @@ func paceClass(w fleet.PlanWindow) string {
 		return "low"
 	}
 	return "ok"
+}
+
+func hostAuthClass(h fleet.PlanHost) string {
+	switch h.Status {
+	case "broken":
+		return "red"
+	case "expiring", "error":
+		return "orange"
+	case "active":
+		return "green"
+	}
+	return ""
+}
+
+func hostAuthLabel(now time.Time, h fleet.PlanHost) string {
+	name := h.Host
+	if h.Slot > 0 {
+		name += fmt.Sprintf(" #%d", h.Slot)
+	}
+	switch h.Status {
+	case "broken":
+		return name + " · login broken"
+	case "expiring":
+		if !h.LoginExpiresAt.IsZero() {
+			return name + " · ends " + until(now, h.LoginExpiresAt)
+		}
+		return name + " · expiring"
+	case "error":
+		return name + " · read error"
+	case "stale":
+		return name + " · stale"
+	case "active":
+		return name + " · active"
+	default:
+		return name + " · standby"
+	}
+}
+
+func hostAuthTitle(now time.Time, h fleet.PlanHost) string {
+	var parts []string
+	if h.AuthSource != "" {
+		switch h.AuthSource {
+		case "cswap":
+			parts = append(parts, "via cswap")
+		case "claude_cli":
+			parts = append(parts, "via claude CLI (no local meter)")
+		case "codex_auth":
+			parts = append(parts, "via Codex auth")
+		case "agy_cli":
+			parts = append(parts, "via Antigravity CLI")
+		case "muse_cli":
+			parts = append(parts, "via Muse CLI")
+		default:
+			parts = append(parts, "via "+h.AuthSource)
+		}
+	}
+	if !h.LoginExpiresAt.IsZero() {
+		parts = append(parts, "sign-in ends "+until(now, h.LoginExpiresAt))
+	}
+	if !h.ReceivedAt.IsZero() {
+		parts = append(parts, "reported "+ago(now, h.ReceivedAt))
+	}
+	if h.IncidentMessage != "" {
+		parts = append(parts, h.IncidentMessage)
+	} else if h.Error != "" {
+		parts = append(parts, h.Error)
+	}
+	return strings.Join(parts, " · ")
 }

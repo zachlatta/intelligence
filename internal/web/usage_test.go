@@ -108,6 +108,44 @@ func TestUsageAPI(t *testing.T) {
 	if len(v.Plans) != 2 || v.Plans[0].Account != "ada@example.com" || len(v.Plans[0].Windows) != 2 {
 		t.Errorf("plans = %+v", v.Plans)
 	}
+	if len(v.Plans[0].Hosts) != 1 || v.Plans[0].Hosts[0].Host != "host-1" {
+		t.Errorf("plan hosts = %+v", v.Plans[0].Hosts)
+	}
+}
+
+func TestIndexAndUsageShowPerHostPlanAuth(t *testing.T) {
+	h, d := dbServer(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	f := fixtureFor(t, d)
+	f.keyFor(t, "host-1")
+	f.keyFor(t, "host-2")
+	reg := fleet.New(d.Owner)
+	if _, err := d.Owner.Exec(t.Context(), `INSERT INTO hosts (name, connected, last_seen, stream_id)
+		VALUES ('host-1', true, $1, gen_random_uuid()), ('host-2', true, $1, gen_random_uuid())
+		ON CONFLICT (name) DO UPDATE SET connected = true, last_seen = $1, stream_id = gen_random_uuid()`, now); err != nil {
+		t.Fatal(err)
+	}
+	rep1 := usage.Report{CollectedAt: now, Sources: []usage.Source{{Provider: usage.Claude, Accounts: []usage.Account{
+		{ID: "ada@example.com", Label: "ada@example.com", Slot: 1, Active: true, AuthSource: usage.AuthCswap, ObservedAt: now,
+			Windows: []usage.Window{{ID: "7d", Seconds: usage.Week, UsedPct: 30, ResetsAt: now.Add(84 * time.Hour)}}},
+	}}}}
+	rep2 := usage.Report{CollectedAt: now, Sources: []usage.Source{{Provider: usage.Claude, Accounts: []usage.Account{
+		{ID: "ada@example.com", Label: "ada@example.com", Active: true, AuthSource: usage.AuthClaudeCLI, ObservedAt: now},
+	}}}}
+	if err := reg.RecordUsage(t.Context(), "host-1", rep1, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.RecordUsage(t.Context(), "host-2", rep2, now); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/", "/usage"} {
+		body := get(t, h, path, nil).Body.String()
+		for _, want := range []string{"plan-hosts", "host-1 #1", "host-2", "active"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s misses %q", path, want)
+			}
+		}
+	}
 }
 
 func TestChartScalesUsedPercentOverTime(t *testing.T) {

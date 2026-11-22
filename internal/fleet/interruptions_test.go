@@ -7,6 +7,7 @@ import (
 
 	"github.com/zachlatta/intelligence/internal/dbtest"
 	"github.com/zachlatta/intelligence/internal/hostclient"
+	"github.com/zachlatta/intelligence/internal/usage"
 )
 
 const expiredLogin = `{"type": "assistant_message", "text": "Failed to authenticate: this login reached its time limit and cannot be renewed. Run ` + "`claude auth login`" + ` to sign in again, or use ` + "`claude setup-token`" + ` and set CLAUDE_CODE_OAUTH_TOKEN for unattended jobs"}`
@@ -305,5 +306,50 @@ func TestAnUnknownLoginsCommandIsAFirstStep(t *testing.T) {
 	}
 	if !first || command != "claude auth login --claudeai" || !strings.HasPrefix(fix, "First step:") || !strings.Contains(fix, "CLAUDE_CONFIG_DIR") {
 		t.Fatalf("fix %q command %q first %v", fix, command, first)
+	}
+}
+
+func TestClaudeCLILoginFixDoesNotAssumeCswapAndRequiresNewSignIn(t *testing.T) {
+	d := dbtest.New(t)
+	r := New(d.Owner)
+	record(t, r, full(), t1)
+	now := time.Now().UTC().Truncate(time.Second)
+	exp1 := now.Add(2 * 24 * time.Hour)
+	cliAcct := usage.Account{
+		ID:             "ada@example.com",
+		Label:          "ada@example.com",
+		Active:         true,
+		AuthSource:     usage.AuthClaudeCLI,
+		ObservedAt:     now,
+		LoginExpiresAt: exp1,
+	}
+	recordUsage(t, r, "host-1", claudeRead(now, cliAcct))
+	// Expiring alert on a claude_cli host should give plain claude auth login --email, not cswap.
+	var fix, command string
+	var first bool
+	if err := dbtest.Reader(t, d, "host-1").QueryRow(ctx, `SELECT fix, command, first_step FROM login_alerts WHERE login = 'ada@example.com'`).
+		Scan(&fix, &command, &first); err != nil {
+		t.Fatal(err)
+	}
+	if first || strings.Contains(command, "cswap") || command != "claude auth login --claudeai --email 'ada@example.com'" {
+		t.Fatalf("claude_cli alert: first=%v command=%q fix=%q", first, command, fix)
+	}
+	// Transcript 401 opens an incident; a routine claude auth status with the same loginExpiresAt must NOT close it.
+	fail := now.Add(time.Minute)
+	if err := r.StoreTranscript(ctx, hostclient.TranscriptBatch{Host: "host-1", AgentID: "a3", Epoch: "e", Replace: true,
+		Entries: []hostclient.TranscriptEntry{entryAt(2, fail, expiredLogin)}}, fail); err != nil {
+		t.Fatal(err)
+	}
+	cliAcct.ObservedAt = fail.Add(5 * time.Minute)
+	recordUsage(t, r, "host-1", claudeRead(fail.Add(5*time.Minute), cliAcct))
+	if inc := incidents(t, r); len(inc) != 1 || inc[0].Resolved != nil {
+		t.Fatalf("routine claude_cli check falsely closed incident: %+v", inc)
+	}
+	// A fresh sign-in advances loginExpiresAt and DOES close the incident.
+	cliAcct.ObservedAt = fail.Add(10 * time.Minute)
+	cliAcct.LoginExpiresAt = now.Add(30 * 24 * time.Hour)
+	recordUsage(t, r, "host-1", claudeRead(fail.Add(10*time.Minute), cliAcct))
+	if inc := incidents(t, r); len(inc) != 1 || inc[0].Resolved == nil || inc[0].By != "reading" {
+		t.Fatalf("fresh claude_cli sign-in did not close incident: %+v", inc)
 	}
 }
