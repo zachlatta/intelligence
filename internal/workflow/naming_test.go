@@ -291,3 +291,68 @@ func TestAgentTitlesNameTheRoleWorkflowAndTask(t *testing.T) {
 		t.Errorf("agentTitle without a workflow name = %q", got)
 	}
 }
+
+func checkTitlePreservesWords(extract func(string) []string) []string {
+	cases := []struct {
+		input string
+		want  []string
+	}{
+		{"Fix the login page", []string{"Fix", "the", "login", "page"}},
+		{"Add a new button and an icon", []string{"Add", "a", "new", "button", "and", "an", "icon"}},
+		{"Do not remove the never-ask guard", []string{"Do", "not", "remove", "the", "never-ask", "guard"}},
+		{"Replace `+` with `-`", []string{"Replace", "`+`", "with", "`-`"}},
+		{"Change && to ||", []string{"Change", "&&", "to", "||"}},
+		{"Hi! Hope you're well. Fix the mobile table", []string{"Fix", "the", "mobile", "table"}},
+	}
+	var errs []string
+	for _, tc := range cases {
+		got := extract(tc.input)
+		joined := strings.Join(got, " ")
+		for _, w := range tc.want {
+			found := false
+			for _, g := range got {
+				if strings.EqualFold(g, w) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				errs = append(errs, "input "+tc.input+" dropped word "+w+" (got "+joined+")")
+			}
+		}
+	}
+	return errs
+}
+
+func TestRunTitlePreservesEveryContentWord(t *testing.T) {
+	for _, msg := range checkTitlePreservesWords(taskWords) {
+		t.Error(msg)
+	}
+	// Replay pre-f29d19a article-dropping bug and pre-ac3ff07 operator-dropping bug.
+	dropArticles := func(in string) []string {
+		var out []string
+		for _, w := range taskWords(in) {
+			if l := strings.ToLower(w); l == "a" || l == "an" || l == "the" {
+				continue
+			}
+			out = append(out, w)
+		}
+		return out
+	}
+	if got := checkTitlePreservesWords(dropArticles); len(got) == 0 {
+		t.Fatal("replay f29d19a: expected article-dropping bug to be caught")
+	}
+	dropOperators := func(in string) []string {
+		var out []string
+		for _, w := range taskWords(in) {
+			if w == "&&" || w == "||" || w == "`-`" {
+				continue
+			}
+			out = append(out, w)
+		}
+		return out
+	}
+	if got := checkTitlePreservesWords(dropOperators); len(got) == 0 {
+		t.Fatal("replay ac3ff07: expected operator-dropping bug to be caught")
+	}
+}

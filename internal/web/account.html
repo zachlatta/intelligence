@@ -41,12 +41,12 @@ for (const [id, path] of [["login", "/api/session"], ["signup", "/api/accounts"]
   <div class="actions"><button class="btn sm" id="sign-out">Sign out</button></div></div>
 
 <h2 class="section-title" id="hosts">Hosts</h2>
-{{if .Hosts}}<div class="card"><table class="table">
+{{if .Hosts}}<div class="card"><div class="table-wrap"><table class="table">
   <thead><tr><th>Host</th><th>Status</th><th>Joined</th><th>Key last used</th><th></th></tr></thead>
   <tbody>{{range .Hosts}}<tr><td><b>{{.Host}}</b></td><td><span class="dot-label"><span class="dot {{if .Online}}online{{else}}offline{{end}}"></span>{{if .Online}}online{{else}}<span class="meta">offline</span>{{end}}</span></td>
     <td class="meta">{{ago $.Now .Joined}}</td><td class="meta">{{with .Used}}{{ago $.Now .}}{{else}}never{{end}}</td>
     <td><button class="btn ghost sm remove" data-host="{{.Host}}">Remove</button></td></tr>{{end}}</tbody>
-</table></div>
+</table></div></div>
 {{else}}<p class="empty-state">No hosts yet.</p>{{end}}
 
 <h2 class="section-title" id="add">Add a host</h2>
@@ -74,14 +74,14 @@ for (const [id, path] of [["login", "/api/session"], ["signup", "/api/accounts"]
     <button type="button" class="btn sm" id="mcp-dismiss">Done — hide token</button>
   </div>
 </div>
-<div class="card"><table class="table">
+<div class="card"><div class="table-wrap"><table class="table">
   <thead><tr><th>Token ID</th><th>Created</th><th>Expires</th><th>Status</th><th></th></tr></thead>
   <tbody id="mcp-tokens">{{range .MCPTokens}}<tr data-token-id="{{.ID}}">
     <td><code>{{.ID}}</code></td><td class="meta">{{at .Created "minute"}}</td>
     <td class="meta">{{at .Expires "minute"}}</td><td>{{if .Active}}active{{else}}expired{{end}}</td>
     <td><button type="button" class="btn ghost sm mcp-revoke" data-token-id="{{.ID}}">Revoke</button></td>
   </tr>{{else}}<tr><td colspan="5" class="meta">No MCP tokens yet.</td></tr>{{end}}</tbody>
-</table></div>
+</table></div></div>
 
 <h2 class="section-title">Password</h2>
 <form id="password" class="card form">
