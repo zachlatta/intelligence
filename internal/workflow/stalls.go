@@ -75,6 +75,35 @@ const idleSnapshot = `WITH RECURSIVE tree AS (
  OR EXISTS(SELECT 1 FROM agent_interruptions i JOIN tree t ON i.host=t.host AND i.agent_id=t.id WHERE i.status='waiting'),
  coalesce((SELECT jsonb_agg(jsonb_build_array(id,status,attention_reason='permission',updated_at,last_user_message_at) ORDER BY id)::text FROM tree),'')`
 
+type stallAction uint8
+
+const (
+	stallClearIdle stallAction = iota
+	stallWait
+	stallContinue
+	stallMarkStalled
+)
+
+func decideStallAction(hasEpoch, eligible bool, count int, elapsed time.Duration) (stallAction, int) {
+	if !hasEpoch || !eligible {
+		return stallClearIdle, 0
+	}
+	delay := 2 * time.Minute
+	if count == 1 {
+		delay = 10 * time.Minute
+	}
+	if count >= 2 {
+		delay = 12 * time.Minute
+	}
+	if elapsed < delay {
+		return stallWait, 0
+	}
+	if count >= 2 {
+		return stallMarkStalled, 0
+	}
+	return stallContinue, count + 1
+}
+
 func (e *Engine) reconcileStall(ctx context.Context, tx pgx.Tx, r run) error {
 	now := e.Now()
 	if _, err := tx.Exec(ctx, "UPDATE workflow_runs SET stall_checked_at=$2 WHERE id=$1", r.ID, now); err != nil {
@@ -103,10 +132,8 @@ func (e *Engine) reconcileStall(ctx context.Context, tx pgx.Tx, r run) error {
 	if modelWait {
 		return nil
 	}
-	// Legacy or seeded runs may have no lifecycle history. Without an epoch
-	// there is no durable key for a continuation; keep the check timestamp but
-	// clear any idle window until a real transition supplies one.
-	if event == nil || !fresh || !idle || blocked || starting {
+	eligible := fresh && idle && !blocked && !starting
+	if event == nil || !eligible {
 		_, err := tx.Exec(ctx, "UPDATE workflow_runs SET idle_since=NULL,idle_observation='' WHERE id=$1", r.ID)
 		return err
 	}
@@ -119,25 +146,21 @@ func (e *Engine) reconcileStall(ctx context.Context, tx pgx.Tx, r run) error {
 	if err := tx.QueryRow(ctx, "SELECT count(*) FROM workflow_run_continuations WHERE run_id=$1 AND event_id=$2", r.ID, *event).Scan(&count); err != nil {
 		return err
 	}
-	delay := 2 * time.Minute
-	if count == 1 {
-		delay = 10 * time.Minute
-	}
-	if count >= 2 {
-		delay = 12 * time.Minute
-	}
-	if now.Sub(*since) < delay {
+	action, attempt := decideStallAction(true, true, count, now.Sub(*since))
+	switch action {
+	case stallWait, stallClearIdle:
 		return nil
-	}
-	if count >= 2 {
+	case stallMarkStalled:
 		reason := "Stalled: orchestrator remained idle without progress after two continuation attempts. Inspect worker outcomes before continuing."
 		if err := e.event(ctx, tx, r, "stalled", ptr(r.Step), nil, reason); err != nil {
 			return err
 		}
 		_, err := tx.Exec(ctx, `UPDATE workflow_runs SET status='stalled',error=$2,updated_at=$3 WHERE id=$1`, r.ID, reason, now)
 		return err
+	case stallContinue:
+		return e.continueRun(ctx, tx, r, *event, attempt)
 	}
-	return e.continueRun(ctx, tx, r, *event, count+1)
+	return nil
 }
 
 func (e *Engine) continueRun(ctx context.Context, tx pgx.Tx, r run, event int64, attempt int) error {
