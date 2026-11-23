@@ -375,7 +375,6 @@ func TestClientSendsSchedulesAndReportsThemBeforeACommandsResult(t *testing.T) {
 	}
 }
 
-// ordered is every host frame the server has received, in order.
 func (s *streamServer) ordered() []Frame {
 	s.mu.Lock()
 	defer s.mu.Unlock()

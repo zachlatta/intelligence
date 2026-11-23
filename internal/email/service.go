@@ -34,7 +34,6 @@ type Service struct {
 	mailboxes map[int64]*Mailbox // each account's, so its access token is reused
 }
 
-// Interval is how often each mailbox is read.
 const Interval = time.Second
 
 // backfill is what is read in when a mailbox is connected, for the trigger editor's preview.
@@ -43,7 +42,6 @@ const (
 	backfillMax   = 200
 )
 
-// Refusal is a request the caller can fix.
 type Refusal struct{ Msg string }
 
 func (r *Refusal) Error() string { return r.Msg }
@@ -355,7 +353,6 @@ func (s *Service) read(ctx context.Context, account int64, owners []string, toke
 	return nil
 }
 
-// decision is what an email did.
 type decision struct {
 	Decision, Reason, Workflow, Run string
 }

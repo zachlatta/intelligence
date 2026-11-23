@@ -28,7 +28,6 @@ import (
 	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
-// Account is someone who can sign in.
 type Account struct {
 	ID       int64  `json:"id"`
 	Username string `json:"username"`
@@ -62,7 +61,6 @@ const (
 
 var usernameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 
-// Store keeps accounts in the app's database.
 type Store struct {
 	p     *pgxpool.Pool
 	roles *db.AccountRoles
@@ -91,7 +89,6 @@ func checkPassword(pw string) error {
 	return nil
 }
 
-// Create makes an account, and its role.
 func (s *Store) Create(ctx context.Context, username, password string) (Account, error) {
 	username = normalize(username)
 	if !usernameRE.MatchString(username) {
@@ -185,7 +182,6 @@ func sha(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// SessionMetadata describes the request that created a session.
 type SessionMetadata struct {
 	UserAgent       string
 	CreatedFromPath string
@@ -202,14 +198,12 @@ func (s *Store) StartSession(ctx context.Context, a Account, meta SessionMetadat
 	return token, expires, err
 }
 
-// BrowserSession is an authenticated session with its original expiry.
 type BrowserSession struct {
 	Account
 	ExpiresAt       time.Time
 	CreatedFromPath string
 }
 
-// Session is the browser session signed in with token, or ErrNoSession.
 func (s *Store) Session(ctx context.Context, token string) (BrowserSession, error) {
 	if token == "" {
 		return BrowserSession{}, ErrNoSession
@@ -228,7 +222,6 @@ func (s *Store) Session(ctx context.Context, token string) (BrowserSession, erro
 	return session, err
 }
 
-// EndSession signs token's browser out.
 func (s *Store) EndSession(ctx context.Context, token string) error {
 	_, err := s.p.Exec(ctx, "DELETE FROM sessions WHERE token_hash = $1 OR expires_at < $2", sha(token), s.Now())
 	return err
@@ -276,7 +269,6 @@ func normalizeCode(code string) string {
 	return code[:4] + "-" + code[4:]
 }
 
-// Enroll starts host asking to join an account.
 func (s *Store) Enroll(ctx context.Context, host string) (Enrollment, error) {
 	if !hostclient.ValidName(host) {
 		return Enrollment{}, &BadInputError{"bad host name: use lowercase letters, digits, '.', '_' and '-'"}

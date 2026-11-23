@@ -82,7 +82,6 @@ func connectGmail(t *testing.T, h http.Handler, fake *gmailfake.Server) {
 	}
 }
 
-// eventually waits up to 5 seconds for f.
 func eventually(t *testing.T, what string, f func() bool) {
 	t.Helper()
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
@@ -93,7 +92,6 @@ func eventually(t *testing.T, what string, f func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
-// emailDecision is what the emails table says message id did.
 func emailDecision(t *testing.T, h http.Handler, id string) map[string]any {
 	t.Helper()
 	_, r := sqlPost(t, h, q(`SELECT decision, reason, coalesce(run_id::text, '') AS run_id, verified FROM emails WHERE gmail_id = '`+id+`'`))
@@ -107,7 +105,6 @@ func emailDecision(t *testing.T, h http.Handler, id string) map[string]any {
 	return out
 }
 
-// decided waits for message id's decision.
 func decided(t *testing.T, h http.Handler, id string) map[string]any {
 	t.Helper()
 	var row map[string]any

@@ -34,7 +34,6 @@ type Part struct {
 	Parts    []Part   `json:"parts,omitempty"`
 }
 
-// Header is one header, in the order the message has them.
 type Header struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
@@ -47,10 +46,8 @@ type Body struct {
 	Data         string `json:"data,omitempty"`
 }
 
-// maxText is how much of an email's text is kept.
 const maxText = 64 << 10
 
-// headers are the message's values of the header name, in order.
 func (g GmailMessage) headers(name string) []string {
 	var out []string
 	for _, h := range g.Payload.Headers {
@@ -97,7 +94,6 @@ func (g GmailMessage) Received() time.Time {
 	return time.UnixMilli(ms)
 }
 
-// from is the message's one From address, lowercase, and its name.
 func (g GmailMessage) from() (name, addr string, ok bool) {
 	v := g.headers("From")
 	if len(v) != 1 {
@@ -138,7 +134,6 @@ func (g GmailMessage) Verify() (bool, string) {
 	return true, "DMARC passed for " + domain
 }
 
-// Mail is the message as a filter reads it.
 func (g GmailMessage) Mail() workflow.Mail {
 	name, addr, _ := g.from()
 	ok, _ := g.Verify()

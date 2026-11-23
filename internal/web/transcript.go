@@ -41,7 +41,6 @@ var transcriptTmpl = template.Must(template.New("transcript").Funcs(localFuncs).
 	"working":  working,
 }).Parse(transcriptHTML + blocksHTML + resourcesHTML + layoutHTML))
 
-// blocksTmpl renders blocks alone, for live updates.
 var blocksTmpl = transcriptTmpl
 
 // agentContext finds an agent on host, its workspace and the other agents in that workspace.

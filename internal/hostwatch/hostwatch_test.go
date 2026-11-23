@@ -16,7 +16,6 @@ import (
 	"github.com/zachlatta/intelligence/internal/hostwatch"
 )
 
-// recorder keeps every notice the watcher sends.
 type recorder struct {
 	mu   sync.Mutex
 	sent []hostwatch.Notice

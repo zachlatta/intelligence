@@ -266,7 +266,6 @@ func (b *Client) syncDiffs(ctx context.Context, reported *latest) {
 	}
 }
 
-// runCommands runs the server's commands against the daemon.
 func (b *Client) runCommands(ctx context.Context) {
 	exec := func(ctx context.Context, cmd Command) (CommandResult, error) {
 		if cmd.Kind == SwitchLoginKind {

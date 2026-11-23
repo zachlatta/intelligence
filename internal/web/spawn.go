@@ -39,7 +39,6 @@ func render(w http.ResponseWriter, name string, data map[string]any) {
 	}
 }
 
-// hostNamed is the host called name, or false.
 func hostNamed(reg *fleet.Registry, r *http.Request, name string) (fleet.Host, bool, error) {
 	list, err := reg.List(r.Context())
 	for _, b := range list {
@@ -80,7 +79,6 @@ func spawnData(cfg Config, b fleet.Host) map[string]any {
 		"Dictation": dictationPath(cfg)}
 }
 
-// newAgentPage is the form that starts an agent in a workspace.
 func newAgentPage(cfg Config, reg *fleet.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b, ok, err := hostNamed(reg, r, r.PathValue("host"))
@@ -104,7 +102,6 @@ func newAgentPage(cfg Config, reg *fleet.Registry) http.HandlerFunc {
 	}
 }
 
-// repository is a repository a new workspace can be made from.
 type repository struct{ Root, Project string }
 
 // newWorkspacePage is the form that makes a workspace, a new worktree of one of the host's

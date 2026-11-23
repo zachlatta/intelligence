@@ -103,7 +103,6 @@ type cutText struct {
 	MoreBytes int
 }
 
-// Cut reports whether anything was left out.
 func (c cutText) Cut() bool { return c.MoreLines > 0 || c.MoreBytes > 0 }
 
 const (
@@ -111,7 +110,6 @@ const (
 	cutBytes = 6000
 )
 
-// cut keeps the first cutLines lines and cutBytes bytes of s.
 func cut(s string) cutText {
 	s = strings.TrimRight(s, "\n")
 	var c cutText
@@ -383,7 +381,6 @@ func (rawHTMLAsText) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
 	})
 }
 
-// blocksData is what the blocks template needs.
 type blocksData struct {
 	Base   string // the agent's page, for entry links
 	Blocks []block
@@ -403,9 +400,7 @@ func nodeText(n ast.Node, src []byte) []byte {
 	return b.Bytes()
 }
 
-// toolLabels names a tool call's kind for people.
 var toolLabels = map[string]string{"shell": "shell", "read": "read", "write": "write", "edit": "edit", "search": "search",
 	"fetch": "web", "sub_agent": "agent", "plain_text": "note", "plan": "plan", "worktree_setup": "setup"}
 
-// Kind is the tool call's kind in a word.
 func (t toolView) Kind() string { return cmpOr(toolLabels[t.Type], "tool") }

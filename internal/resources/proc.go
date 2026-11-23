@@ -61,7 +61,6 @@ func (r *Reader) wholeDisk(name string) bool {
 	return err == nil
 }
 
-// linuxFilesystems is each local filesystem's space.
 func (r *Reader) linuxFilesystems() []Filesystem {
 	text, ok := readString(r.proc("self", "mounts"))
 	if !ok {
@@ -225,7 +224,6 @@ type procTicks struct{ start, ticks uint64 }
 
 var agentVar = []byte("PASEO_AGENT_ID=")
 
-// Walk returns every agent with a process now.
 func (w *AgentWalker) Walk() map[string]AgentProcs {
 	root := w.Proc
 	if root == "" {

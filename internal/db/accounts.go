@@ -37,7 +37,6 @@ func NewAccountRoles(owner, readonly *pgxpool.Pool) *AccountRoles {
 	return &AccountRoles{owner: owner, readonly: readonly, pools: map[string]*pgxpool.Pool{}}
 }
 
-// RoleName is account id's role.
 func (a *AccountRoles) RoleName(id int64) (string, error) {
 	name := a.readonly.Config().ConnConfig.User + "_a" + strconv.FormatInt(id, 10)
 	if len(name) > 63 {
@@ -52,7 +51,6 @@ func (a *AccountRoles) password(role string) string {
 	return hex.EncodeToString(m.Sum(nil))
 }
 
-// Querier is a pool, a connection or a transaction.
 type Querier interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -114,7 +112,6 @@ func (a *AccountRoles) Pool(ctx context.Context, role string) (*pgxpool.Pool, er
 	return p, nil
 }
 
-// Close closes every account's pool.
 func (a *AccountRoles) Close() {
 	a.mu.Lock()
 	defer a.mu.Unlock()

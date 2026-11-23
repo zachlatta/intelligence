@@ -210,7 +210,6 @@ func left(w fleet.PlanWindow) string {
 	return pct(*w.RemainingPct) + " left"
 }
 
-// bar is the width of a window's remaining-% bar.
 func bar(w fleet.PlanWindow) string {
 	if w.RemainingPct == nil {
 		return "0"

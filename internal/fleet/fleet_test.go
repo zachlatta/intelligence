@@ -216,7 +216,6 @@ func TestHostsListByNameAndAreOnlineWhileStreaming(t *testing.T) {
 	}
 }
 
-// attach gives host a stream, seen at at.
 func attach(t *testing.T, r *Registry, host string, at time.Time) {
 	t.Helper()
 	if err := r.Attach(ctx, host, "99999999-9999-4999-8999-999999999999", at); err != nil {

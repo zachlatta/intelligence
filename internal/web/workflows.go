@@ -207,7 +207,6 @@ func (a *app) replyToRun(v viewer) http.HandlerFunc {
 	}
 }
 
-// addRunInput records additional input for the run's orchestrator.
 func (a *app) addRunInput(v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -351,7 +350,6 @@ type runAnswerRow struct {
 	Checked   bool
 }
 
-// runRow is a run as the pages show it.
 type runRow struct {
 	ActivityETAEstimated                                                 bool
 	ActivityWaitingOn                                                    string
@@ -572,7 +570,6 @@ func (s stepView) SpentLabel() string {
 	return humanDuration(s.Spent)
 }
 
-// SpentDetail is the time on each visit, for the label's tooltip.
 func (s stepView) SpentDetail() string {
 	if len(s.Visits) < 2 {
 		if s.OnIt {
@@ -1083,7 +1080,6 @@ func linkRuns(text string) string {
 	return runID.ReplaceAllString(text, "[$0](/workflow-runs/$0)")
 }
 
-// Line is how one event reads on the run page.
 func (e runEvent) Line() string {
 	switch e.Kind {
 	case "status":

@@ -26,7 +26,6 @@ func watcher(t *testing.T, d *paseotest.Daemon) *Watcher {
 	return w
 }
 
-// eventually waits for cond on the watcher's snapshot.
 func eventually(t *testing.T, w *Watcher, what string, cond func(PaseoStatus) bool) PaseoStatus {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

@@ -58,7 +58,6 @@ var (
 	}
 )
 
-// Scan returns the findings in one file's contents.
 func Scan(path string, data []byte) []Finding {
 	var out []Finding
 	for i, line := range strings.Split(string(data), "\n") {

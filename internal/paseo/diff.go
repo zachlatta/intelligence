@@ -19,7 +19,6 @@ type DiffFile struct {
 	Hunks     []DiffHunk `json:"hunks"`
 }
 
-// DiffHunk is one hunk of a file's diff.
 type DiffHunk struct {
 	OldStart int        `json:"oldStart"`
 	OldCount int        `json:"oldCount"`

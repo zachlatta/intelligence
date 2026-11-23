@@ -51,7 +51,6 @@ func (f *fakeDiffs) set(cwd string, files ...paseo.DiffFile) {
 	f.diffs[cwd] = paseo.CheckoutDiff{Files: files}
 }
 
-// take returns what was read and sent since the last take.
 func (f *fakeDiffs) take() (reads []string, sent []WorkspaceDiff) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

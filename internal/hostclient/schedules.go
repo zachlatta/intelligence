@@ -209,7 +209,6 @@ func cutAt(s string, n int) string {
 	return s[:i] + cutMark
 }
 
-// Schedules lists the daemon's schedules on the current connection.
 func (w *Watcher) Schedules(ctx context.Context) ([]paseo.Schedule, error) {
 	c := w.current()
 	if c == nil {
@@ -218,7 +217,6 @@ func (w *Watcher) Schedules(ctx context.Context) ([]paseo.Schedule, error) {
 	return c.Schedules(ctx)
 }
 
-// InspectSchedule reads one schedule, with its runs, on the current connection.
 func (w *Watcher) InspectSchedule(ctx context.Context, id string) (paseo.Schedule, error) {
 	c := w.current()
 	if c == nil {
@@ -243,7 +241,6 @@ const (
 	RunScheduleKind    = "run_schedule"
 )
 
-// IsScheduleKind reports whether kind changes a schedule.
 func IsScheduleKind(kind string) bool {
 	switch kind {
 	case CreateScheduleKind, UpdateScheduleKind, PauseScheduleKind, ResumeScheduleKind, DeleteScheduleKind, RunScheduleKind:
@@ -252,7 +249,6 @@ func IsScheduleKind(kind string) bool {
 	return false
 }
 
-// MinScheduleEvery is the shortest every-cadence a schedule can have.
 const MinScheduleEvery = time.Minute
 
 // ScheduleArgs: create_schedule (a prompt, a cadence and an agent; runNow runs it once now too)
@@ -290,7 +286,6 @@ type ScheduleIDArgs struct {
 	ScheduleID string `json:"scheduleId"`
 }
 
-// parseSchedule checks a schedule command's args, decoded strictly by decode.
 func parseSchedule(kind string, decode func(any) error) (any, error) {
 	if kind != CreateScheduleKind && kind != UpdateScheduleKind {
 		var a ScheduleIDArgs
@@ -387,7 +382,6 @@ func (a ScheduleArgs) expiry() *time.Time {
 	return &t
 }
 
-// executeSchedule runs a schedule command on c.
 func executeSchedule(ctx context.Context, c *paseo.Client, cmd Command, parsed any) (CommandResult, error) {
 	switch a := parsed.(type) {
 	case ScheduleArgs:

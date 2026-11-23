@@ -6,7 +6,6 @@ import (
 	"strings"
 )
 
-// Filesystem is one local filesystem's space.
 type Filesystem struct {
 	Mount     string `json:"mount"`
 	Device    string `json:"device,omitempty"`
@@ -15,7 +14,6 @@ type Filesystem struct {
 	Available uint64 `json:"available"` // to an ordinary user (less the root reserve)
 }
 
-// diskStat is a disk's counters since boot.
 type diskStat struct {
 	readBytes, writeBytes uint64
 	ops                   uint64 // reads and writes done
@@ -23,7 +21,6 @@ type diskStat struct {
 	hasBusy               bool
 }
 
-// diskCounters is each disk's counters, by name.
 type diskCounters map[string]diskStat
 
 // parseDiskstats reads /proc/diskstats, keeping the disks whole says are whole physical disks, so

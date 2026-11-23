@@ -20,7 +20,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Entry is one release note.
 type Entry struct {
 	ID       string `json:"id"`       // a lowercase slug, never changed once released: seen state keys on it
 	Released string `json:"released"` // YYYY-MM-DD
@@ -38,10 +37,8 @@ var entriesJSON []byte
 //go:embed media
 var Media embed.FS
 
-// MediaURL is where the server serves the demo called name.
 const MediaURL = "/whats-new/media/"
 
-// Entries are the built-in release notes, newest first.
 func Entries() ([]Entry, error) {
 	var es []Entry
 	dec := json.NewDecoder(strings.NewReader(string(entriesJSON)))

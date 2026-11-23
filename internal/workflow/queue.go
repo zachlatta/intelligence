@@ -52,7 +52,6 @@ func lockQueue(ctx context.Context, tx pgx.Tx, host string) error {
 	return err
 }
 
-// minute is a host's newest minute of resources.
 type minute struct {
 	At               time.Time
 	CPUs             int

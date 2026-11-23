@@ -135,7 +135,6 @@ func scanSchedule(row pgx.Row) (ScheduleView, error) {
 	return s, err
 }
 
-// Schedules returns every schedule, by host and then name.
 func (r *Registry) Schedules(ctx context.Context) ([]ScheduleView, error) {
 	rows, err := r.p.Query(ctx, `SELECT `+scheduleColumns+` FROM schedule_status ORDER BY host, name = '', lower(name), id`)
 	if err != nil {

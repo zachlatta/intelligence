@@ -26,7 +26,6 @@ func cmdServer(t *testing.T) (http.Handler, dbtest.DB) {
 	return h, d
 }
 
-// instance is one server instance on d's database, through p.
 func instance(t *testing.T, d dbtest.DB, p *pgxpool.Pool) http.Handler {
 	return newServer(t, d, p, "v")
 }

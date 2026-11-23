@@ -101,7 +101,6 @@ func maxTime(a, b time.Time) time.Time {
 	return b
 }
 
-// Poll reads the feed now, whenever it was due.
 func (s *Service) Poll(ctx context.Context) error { return s.check(ctx, false) }
 
 // PollIfDue reads the feed if its next read (voice_memo_polling.next_poll_at) is due.

@@ -351,7 +351,6 @@ func windowRank(id string) string {
 	return "2" + id
 }
 
-// Point is a window's used % at a time.
 type Point struct {
 	At   time.Time `json:"at"`
 	Used float64   `json:"used"`
@@ -366,7 +365,6 @@ type Series struct {
 	Points   []Point `json:"points"`
 }
 
-// UsageHistory is every window seen since since, by login and window.
 func (r *Registry) UsageHistory(ctx context.Context, since time.Time) ([]Series, error) {
 	rows, err := r.p.Query(ctx, `SELECT provider, account, window_id, used_pct, first_observed, last_observed
 		FROM usage_readings WHERE last_observed >= $1 ORDER BY provider, account, window_id, first_observed`, since)

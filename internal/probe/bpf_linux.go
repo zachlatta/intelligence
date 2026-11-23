@@ -35,7 +35,6 @@ const (
 	oomKeep   = 1000 // OOM kills kept for the client
 )
 
-// Probe is the loaded probe.
 type Probe struct {
 	Version string
 	proc    string

@@ -48,7 +48,6 @@ type ScheduleTarget struct {
 	Config  *ScheduleAgent `json:"config"`
 }
 
-// ScheduleAgent is a new-agent schedule's agent.
 type ScheduleAgent struct {
 	Provider         string `json:"provider"`
 	Cwd              string `json:"cwd"`
@@ -60,7 +59,6 @@ type ScheduleAgent struct {
 	Title            string `json:"title,omitempty"`
 }
 
-// ScheduleRun is one run of a schedule.
 type ScheduleRun struct {
 	ID           string    `json:"id"`
 	ScheduledFor time.Time `json:"scheduledFor"`
@@ -84,7 +82,6 @@ func (c *Client) Schedules(ctx context.Context) ([]Schedule, error) {
 	return p.Schedules, nil
 }
 
-// InspectSchedule reads one schedule with its runs.
 func (c *Client) InspectSchedule(ctx context.Context, id string) (Schedule, error) {
 	return c.scheduleCommand(ctx, map[string]any{"type": "schedule/inspect", "scheduleId": id})
 }

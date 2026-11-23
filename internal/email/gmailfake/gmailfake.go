@@ -17,7 +17,6 @@ import (
 	"github.com/zachlatta/intelligence/internal/email"
 )
 
-// Server is one mailbox, Address.
 type Server struct {
 	*httptest.Server
 	Address string
@@ -49,7 +48,6 @@ func New(t testing.TB, address string) *Server {
 	return s
 }
 
-// Google is a web client of the fake.
 func (s *Server) Google() *email.Google {
 	return &email.Google{ClientID: "fake-client", ClientSecret: "fake-secret", AuthURL: s.URL + "/auth", TokenURL: s.URL + "/token",
 		APIURL: s.URL, HTTP: s.Client()}

@@ -31,7 +31,6 @@ type queuedMessage struct {
 // busy: the agent is in a turn (or starting).
 func busy(status string) bool { return status == "running" || status == "initializing" }
 
-// wakeLocked wakes every queued message to look again. w.mu is held.
 func (w *Watcher) wakeLocked() {
 	if w.wake != nil {
 		close(w.wake)

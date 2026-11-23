@@ -113,7 +113,6 @@ func accountPage(cfg Config, v viewer) http.HandlerFunc {
 	}
 }
 
-// serverURL is this server's base URL as the browser reached it.
 func serverURL(r *http.Request) string {
 	scheme := "http"
 	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {

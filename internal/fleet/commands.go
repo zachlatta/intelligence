@@ -52,7 +52,6 @@ func (c Command) Finished() bool {
 	return c.Status == hostclient.CommandSucceeded || c.Status == hostclient.CommandFailed || c.Status == hostclient.CommandExpired
 }
 
-// Wire is the command as a host receives it.
 func (c Command) Wire() hostclient.Command {
 	return hostclient.Command{ID: c.ID, Kind: c.Kind, Args: c.Args, CreatedAt: c.CreatedAt, ExpiresAt: c.ExpiresAt, IdempotencyKey: c.IdempotencyKey}
 }

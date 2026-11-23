@@ -283,32 +283,26 @@ func (l *Link) Transcript(ctx context.Context, b TranscriptBatch) error {
 	return l.call(ctx, Frame{Type: TranscriptFrame, Transcript: &b})
 }
 
-// Update sends a command's progress.
 func (l *Link) Update(ctx context.Context, u CommandUpdate) error {
 	return l.call(ctx, Frame{Type: CommandUpdateFrame, Update: &u})
 }
 
-// Usage sends a read of the host's plans' usage.
 func (l *Link) Usage(ctx context.Context, r usage.Report) error {
 	return l.call(ctx, Frame{Type: UsageFrame, Usage: &r})
 }
 
-// Resources sends the host's finished minutes of host and agent resources.
 func (l *Link) Resources(ctx context.Context, r resources.Report) error {
 	return l.call(ctx, Frame{Type: HostFrame, Host: &r})
 }
 
-// Schedules sends the daemon's schedules.
 func (l *Link) Schedules(ctx context.Context, r ScheduleReport) error {
 	return l.call(ctx, Frame{Type: SchedulesFrame, Schedules: &r})
 }
 
-// Diff sends one workspace's diff.
 func (l *Link) Diff(ctx context.Context, d WorkspaceDiff) error {
 	return l.call(ctx, Frame{Type: DiffFrame, Diff: &d})
 }
 
-// TranscriptCursors are the server's transcript cursors from the current stream's hello.
 func (l *Link) TranscriptCursors(context.Context) (map[string]TranscriptCursor, error) {
 	h, ok := l.Hello()
 	if !ok {

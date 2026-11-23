@@ -19,13 +19,11 @@ import (
 	"github.com/coder/websocket"
 )
 
-// ProtocolVersion is the wire protocol this package speaks.
 const ProtocolVersion = 1
 
 // ErrRejected is returned when the daemon refuses the hello (bad credential, incompatible protocol).
 var ErrRejected = errors.New("paseo daemon rejected the connection")
 
-// Target is where and as whom to connect.
 type Target struct {
 	URL      string // ws://host:port/ws
 	Token    string // the daemon's local credential
@@ -40,7 +38,6 @@ type ServerInfo struct {
 	ProtocolVersion int    `json:"protocolVersion"`
 }
 
-// DaemonStatus is daemon.get_status.
 type DaemonStatus struct {
 	Version   string     `json:"version"`
 	Listen    string     `json:"listen"`
@@ -63,7 +60,6 @@ type Permission struct {
 	Name string `json:"name"`
 }
 
-// Agent is the part of an agent snapshot Intelligence reads.
 type Agent struct {
 	CurrentModeID      string                 `json:"currentModeId"`
 	PendingPermissions []Permission           `json:"pendingPermissions"`
@@ -94,7 +90,6 @@ func (a Agent) ModelName() string {
 	return a.Model
 }
 
-// Thinking is the agent's effective thinking level.
 func (a Agent) Thinking() string {
 	if a.EffectiveThinking != "" {
 		return a.EffectiveThinking
@@ -102,7 +97,6 @@ func (a Agent) Thinking() string {
 	return a.ThinkingOptionID
 }
 
-// ParentAgentID is the agent that started this one, for sub-agents.
 func (a Agent) ParentAgentID() string { return a.Labels["paseo.parent-agent-id"] }
 
 // Workspace is the part of a workspace descriptor Intelligence reads. A workspace is a directory, a
@@ -139,7 +133,6 @@ func (w Workspace) Branch() string {
 	return w.GitRuntime.CurrentBranch
 }
 
-// Dirty reports uncommitted changes.
 func (w Workspace) Dirty() bool { return w.GitRuntime != nil && w.GitRuntime.IsDirty }
 
 // Additions and Deletions are the workspace's diff against its base.
@@ -239,7 +232,6 @@ func Dial(ctx context.Context, t Target) (*Client, error) {
 	return c, nil
 }
 
-// Info is the daemon's server info from the hello.
 func (c *Client) Info() ServerInfo { return c.info }
 
 // Events delivers pushed updates for the agents and workspaces this client fetched. It is buffered;
@@ -262,14 +254,12 @@ func (c *Client) Close() error {
 	return c.conn.Close(websocket.StatusNormalClosure, "")
 }
 
-// DaemonStatus reads the daemon's status and providers.
 func (c *Client) DaemonStatus(ctx context.Context) (DaemonStatus, error) {
 	var s DaemonStatus
 	err := c.request(ctx, map[string]any{"type": "daemon.get_status.request"}, &s)
 	return s, err
 }
 
-// pageLimit is how many entries each fetch page asks for.
 const pageLimit = 200
 
 type pageInfo struct {
@@ -277,7 +267,6 @@ type pageInfo struct {
 	NextCursor string `json:"nextCursor"`
 }
 
-// Agents reads every unarchived agent and subscribes to their updates.
 func (c *Client) Agents(ctx context.Context) ([]Agent, error) {
 	var out []Agent
 	err := c.fetchAll(ctx, "fetch_agents_request", "created_at", func(raw json.RawMessage) (pageInfo, error) {
@@ -306,7 +295,6 @@ type Project struct {
 	Directory string `json:"projectRootPath"`
 }
 
-// Projects reads the full registered project catalog, independent of workspaces.
 func (c *Client) Projects(ctx context.Context) ([]Project, error) {
 	var out struct {
 		Projects []Project `json:"projects"`
@@ -315,7 +303,6 @@ func (c *Client) Projects(ctx context.Context) ([]Project, error) {
 	return out.Projects, err
 }
 
-// Workspaces reads every workspace and subscribes to their updates.
 func (c *Client) Workspaces(ctx context.Context) ([]Workspace, error) {
 	var out []Workspace
 	err := c.fetchAll(ctx, "fetch_workspaces_request", "name", func(raw json.RawMessage) (pageInfo, error) {

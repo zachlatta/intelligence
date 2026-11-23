@@ -87,7 +87,6 @@ func (f *Daemon) UnrecoverableWorkspace(id, reason string) {
 	f.unrecoverable[id] = reason
 }
 
-// SetProjects sets the project catalog project.list answers with.
 func (f *Daemon) SetProjects(projects ...map[string]any) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -115,10 +114,8 @@ func Entry(start, end int, item map[string]any) map[string]any {
 		"seqStart": start, "seqEnd": end, "sourceSeqRanges": []any{}, "collapsed": []any{}}
 }
 
-// Message is a user_message, assistant_message or reasoning item.
 func Message(kind, text string) map[string]any { return map[string]any{"type": kind, "text": text} }
 
-// ToolCall is a tool_call item.
 func ToolCall(name, status string) map[string]any {
 	return map[string]any{"type": "tool_call", "callId": "call-" + name, "name": name, "status": status,
 		"detail": map[string]any{"input": map[string]any{"command": "ls"}}, "error": nil}
@@ -147,14 +144,12 @@ func (f *Daemon) FailStatus(msg string) { f.mu.Lock(); f.statusErr = msg; f.mu.U
 // Silence makes the daemon read requests and never answer them.
 func (f *Daemon) Silence() { f.mu.Lock(); f.silent = true; f.mu.Unlock() }
 
-// Hellos are the hello messages received.
 func (f *Daemon) Hellos() []map[string]any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]map[string]any(nil), f.hellos...)
 }
 
-// Connections is how many connections the daemon has accepted.
 func (f *Daemon) Connections() int { f.mu.Lock(); defer f.mu.Unlock(); return f.accepted }
 
 func New(t *testing.T, token string) *Daemon {
@@ -573,7 +568,6 @@ func (f *Daemon) Push(typ string, payload map[string]any) {
 	}
 }
 
-// DropAll closes every connection, as a daemon restart does.
 func (f *Daemon) DropAll() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -583,7 +577,6 @@ func (f *Daemon) DropAll() {
 	f.conns = nil
 }
 
-// Requests are the session requests of one type received, in order.
 func (f *Daemon) Requests(typ string) []map[string]any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -612,7 +605,6 @@ func Agent(id, workspace, status string) map[string]any {
 		"persistence": map[string]any{"metadata": map[string]any{"daemonAppendSystemPrompt": "never copied"}}}
 }
 
-// Workspace is a workspace descriptor as the daemon sends it.
 func Workspace(id, kind, status string) map[string]any {
 	return map[string]any{"id": id, "name": "ws " + id, "title": nil, "workspaceKind": kind, "status": status,
 		"workspaceDirectory": "/w/" + id, "projectDisplayName": "example/app", "projectRootPath": "/w/app",

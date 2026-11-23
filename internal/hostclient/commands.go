@@ -151,7 +151,6 @@ func (c Command) waitsForTurn() bool {
 	return json.Unmarshal(c.Args, &a) == nil && a.Behavior == Queue
 }
 
-// CommandResult is what a command made or changed.
 type CommandResult struct {
 	NotDelivered         bool   `json:"notDelivered,omitempty"` // failure before calling SendMessage
 	FailureStage         string `json:"failureStage,omitempty"`
@@ -305,7 +304,6 @@ func checkCommandText(v any) error {
 	return nil
 }
 
-// Execute runs cmd against the daemon on the watcher's connection.
 func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, error) {
 	parsed, err := ParseCommand(cmd.Kind, cmd.Args)
 	if err != nil {

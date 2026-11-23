@@ -20,19 +20,16 @@ import (
 // After is how long a host with active runs may be silent before it alerts.
 const After = 10 * time.Minute
 
-// Every is how often the watcher checks.
 const Every = time.Minute
 
 // maxAttempts bounds sends of one notice that PDW refused.
 const maxAttempts = 10
 
-// activeStatuses are the run statuses a silent host holds up.
 const activeStatuses = `('queued','finding_project','starting','running','waiting','stalled')`
 
 // lockKey serializes Check across server instances (pg_advisory_xact_lock).
 const lockKey = 0x686f737477617463 // "hostwatc"
 
-// Notice is one phone notification.
 type Notice struct {
 	Title, Body string
 	ThreadID    string // groups the alerts in Notification Center

@@ -50,13 +50,11 @@ const (
 	FiveHours = 5 * 3600
 )
 
-// Report is one read of every provider on a host.
 type Report struct {
 	CollectedAt time.Time `json:"collectedAt"`
 	Sources     []Source  `json:"sources"`
 }
 
-// Source is one provider's read.
 type Source struct {
 	Provider string    `json:"provider"`
 	Missing  bool      `json:"missing,omitempty"` // the host has no such tool or login: nothing to read
@@ -92,7 +90,6 @@ type Window struct {
 // ErrMissing: the tool is not installed on this host.
 var ErrMissing = errors.New("not installed")
 
-// Reader reads every provider on this host.
 type Reader struct {
 	Home     string // the user's home: Codex's login, and ~/.local/bin for the tools
 	CodexURL string // Codex's subscription meter; default the real one

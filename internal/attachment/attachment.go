@@ -119,7 +119,6 @@ func ValidateFile(name string, data []byte) (string, error) {
 	return detected, nil
 }
 
-// IsImage reports whether mediaType is a raster image type.
 func IsImage(mediaType string) bool {
 	switch mediaType {
 	case "image/png", "image/jpeg", "image/gif", "image/webp":
@@ -146,7 +145,6 @@ func (i Image) Path() string {
 	return ".factory-scratch/attachments/" + i.ID + "." + ext
 }
 
-// SafeDisplayName returns a single-line, prompt-safe basename for display in agent prompts.
 func SafeDisplayName(name string) string {
 	name = strings.TrimSpace(name)
 	if idx := strings.LastIndexAny(name, `/\`); idx >= 0 {

@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-// Report is one host's state at one moment.
 type Report struct {
 	Name           string      `json:"name"`        // the host's name, unique in the fleet (ValidName)
 	CollectedAt    time.Time   `json:"collectedAt"` // when the host read it
