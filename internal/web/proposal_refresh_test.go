@@ -7,10 +7,7 @@ import (
 )
 
 func TestProposalRepliesRefreshWithoutLosingDraft(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("no node")
-	}
+	node := requireNode(t)
 	_, src, found := strings.Cut(proposalsHTML, "<script>\n// Use the run page's")
 	if !found {
 		t.Fatal("missing thread refresh script")

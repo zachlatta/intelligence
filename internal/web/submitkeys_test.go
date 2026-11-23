@@ -161,10 +161,7 @@ console.log("ok");
 
 // The handler itself, in Node with a fake DOM. Skipped where there is no Node.
 func TestSubmitKeysBehaviour(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("no node")
-	}
+	node := requireNode(t)
 	out, err := exec.Command(node, "-e", submitKeysHarness, "submitkeys.js").CombinedOutput()
 	if err != nil || strings.TrimSpace(string(out)) != "ok" {
 		t.Fatalf("submitkeys.js: %v\n%s", err, out)

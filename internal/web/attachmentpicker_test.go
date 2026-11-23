@@ -6,10 +6,7 @@ import (
 )
 
 func TestAttachmentPickerBehaviour(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("no node")
-	}
+	node := requireNode(t)
 	out, err := exec.Command(node, "-e", attachmentPickerHarness, "attachments.js").CombinedOutput()
 	if err != nil {
 		t.Fatalf("attachment picker: %v\n%s", err, out)

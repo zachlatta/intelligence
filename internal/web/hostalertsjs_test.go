@@ -44,10 +44,7 @@ setTimeout(() => {
 `
 
 func TestHostAlertsScriptShowsARedBannerPerSilentHost(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("no node")
-	}
+	node := requireNode(t)
 	run := func(rows string) string {
 		t.Helper()
 		out, err := exec.Command(node, "-e", hostAlertsHarness, "hostalerts.js", rows).CombinedOutput()

@@ -82,10 +82,7 @@ func TestModelGroupPageMarkup(t *testing.T) {
 }
 
 func TestModelGroupInitialLoadGate(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("no node")
-	}
+	node := requireNode(t)
 	out, err := exec.Command(node, "-e", `
 const assert=require('assert'),vm=require('vm'),fs=require('fs');
 const script=fs.readFileSync(process.argv[1],'utf8');
@@ -114,10 +111,7 @@ async function scenario(sheet, fail) {
 }
 
 func TestModelGroupClientHelpers(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("no node")
-	}
+	node := requireNode(t)
 	out, err := exec.Command(node, "-e", `
 const assert=require('assert'),vm=require('vm'),fs=require('fs');
 global.document={querySelector:()=>null};

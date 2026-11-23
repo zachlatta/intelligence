@@ -157,10 +157,7 @@ console.log(JSON.stringify(els.map((e) => [e.textContent, e.title])));
 // localtime.js shows each time in the browser's own zone: the same instant reads differently in
 // New York and Tokyo, a relative time keeps its words, and a date alone is left as written.
 func TestLocalTimeScriptUsesBrowserZone(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("no node")
-	}
+	node := requireNode(t)
 	spec := `[["time",{"datetime":"2026-11-11T18:57:05Z","data-format":"time"},"18:57 UTC"],
 		["time",{"datetime":"2026-11-11T18:57:05Z","data-format":"short"},"Nov 11 18:57 UTC"],
 		["time",{"datetime":"2026-11-11T18:57:05Z"},"5m ago"],
