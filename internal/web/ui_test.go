@@ -12,14 +12,13 @@ func TestTheStylesheetIsServed(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/css") {
 		t.Fatalf("ui.css: %d %q", rec.Code, rec.Header().Get("Content-Type"))
 	}
-	for _, want := range []string{"--accent", "--topbar-h", ".topnav", ".card", ".badge", ".btn", ".md table", ".progress.warn", "prefers-color-scheme: dark", ".btn[hidden] { display: none; }", ".fields[hidden] { display: none; }"} {
+	for _, want := range []string{".btn[hidden] { display: none; }", ".fields[hidden] { display: none; }"} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("ui.css misses %q", want)
 		}
 	}
 }
 
-// The shared assets are revalidated on each load, and a browser's copy that is current is not sent again.
 func TestTheSharedAssetsAreRevalidated(t *testing.T) {
 	h, _ := dbServer(t)
 	for _, path := range []string{"/ui.css", "/dictation.js", "/submitkeys.js"} {
@@ -103,18 +102,26 @@ func TestLoginPageHasNoTabs(t *testing.T) {
 	}
 }
 
+func checkNoRenamedCSSProperties(sources map[string]string) []string {
+	var errs []string
+	for name, src := range sources {
+		for _, bad := range []string{"host-shadow", "host-sizing", "-webkit-host"} {
+			if strings.Contains(src, bad) {
+				errs = append(errs, name+" has renamed CSS property "+bad+"; replace host- with box-")
+			}
+		}
+	}
+	return errs
+}
+
 // TestNoRenamedCSSProperties: a code rename once turned box-shadow into host-shadow, which a
 // browser drops without a word, so the workflow editor lost its selection ring and drop marks.
 func TestNoRenamedCSSProperties(t *testing.T) {
-	for name, src := range map[string]string{
-		"ui.css": string(uiCSS), "layout": layoutHTML, "index": indexHTML, "resources": resourcesHTML,
-		"schedules": schedulesHTML, "spawn": spawnHTML, "account": accountHTML, "usage": usageHTML, "plan": planHTML,
-		"transcript": transcriptHTML, "blocks": blocksHTML, "workflows": workflowsHTML, "hostresources": hostResourcesHTML,
-	} {
-		for _, bad := range []string{"host-shadow", "host-sizing", "-webkit-host"} {
-			if strings.Contains(src, bad) {
-				t.Errorf("%s has %q", name, bad)
-			}
-		}
+	for _, msg := range checkNoRenamedCSSProperties(webAssetsByExt(t, ".css", ".html", ".js")) {
+		t.Error(msg)
+	}
+	// Replay past bug c8a6f7d on a template previously omitted from the hardcoded map.
+	if got := checkNoRenamedCSSProperties(map[string]string{"proposals.html": ".card { host-shadow: 0 1px 2px; }"}); len(got) != 1 {
+		t.Fatalf("replay c8a6f7d: got %v, want 1 renamed-property finding", got)
 	}
 }

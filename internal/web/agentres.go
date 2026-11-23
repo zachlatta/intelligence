@@ -35,7 +35,6 @@ type agentResources struct {
 	OOMs       []fleet.OOMKill
 }
 
-// size is bytes as 236 MB or 3.0 GB.
 func size(b int64) string {
 	if b < 1<<30 {
 		return fmt.Sprintf("%.0f MB", float64(b)/(1<<20))
@@ -109,7 +108,6 @@ func niceBytes(b int64) float64 {
 	}
 }
 
-// agentUse reads and builds an agent's resources.
 func agentUse(r *http.Request, cfg Config, reg *fleet.Registry, host, agentID string, isLive bool) (agentResources, error) {
 	u, err := reg.AgentUse(r.Context(), host, agentID)
 	if err != nil {

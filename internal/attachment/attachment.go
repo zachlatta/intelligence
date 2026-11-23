@@ -119,7 +119,6 @@ func ValidateFile(name string, data []byte) (string, error) {
 	return detected, nil
 }
 
-// IsImage reports whether mediaType is a raster image type.
 func IsImage(mediaType string) bool {
 	switch mediaType {
 	case "image/png", "image/jpeg", "image/gif", "image/webp":

@@ -100,7 +100,6 @@ func (a *app) markWhatsNewSeen(v viewer) http.HandlerFunc {
 	}
 }
 
-// whatsNewMedia serves the release notes' demos, built into the binary.
 func whatsNewMedia() http.HandlerFunc {
 	files := map[string]http.HandlerFunc{}
 	names, _ := fs.Glob(whatsnew.Media, "media/*")

@@ -39,7 +39,6 @@ type Engine struct {
 	ModelQuotaAlertAfter time.Duration
 }
 
-// NewEngine keeps workflows in p's database.
 func NewEngine(p *pgxpool.Pool, now func() time.Time) *Engine {
 	if now == nil {
 		now = time.Now
@@ -130,7 +129,6 @@ func workflowState(ctx context.Context, tx pgx.Tx, account int64, id string) (*W
 	return &s, err
 }
 
-// CreateWorkflow saves a new workflow for account, as version 1.
 func (e *Engine) CreateWorkflow(ctx context.Context, account int64, name, description string, d Definition) (string, error) {
 	var id string
 	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
@@ -344,13 +342,11 @@ func uniqueEmailTrigger(ctx context.Context, tx pgx.Tx, account int64, id string
 	return nil
 }
 
-// EmailWorkflow is a workflow whose latest version an email starts.
 type EmailWorkflow struct {
 	ID, Name string
 	Def      Definition
 }
 
-// EmailWorkflows are account's workflows whose trigger is email, oldest first.
 func EmailWorkflows(ctx context.Context, q interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 }, account int64) ([]EmailWorkflow, error) {
@@ -390,7 +386,6 @@ func ownsHost(ctx context.Context, tx pgx.Tx, account int64, host string) error 
 	return nil
 }
 
-// run is a run with its workflow's name and definition.
 type run struct {
 	ContinuedRun                                 string
 	ID, Host, Title, Input, Status, Repo, Branch string
@@ -586,7 +581,6 @@ func checkWorkflowProviders(ctx context.Context, tx pgx.Tx, d Definition) error 
 	return nil
 }
 
-// startFirst queues the command that starts run r, its pending_command.
 func (e *Engine) startFirst(ctx context.Context, tx pgx.Tx, r run) error {
 	if r.ContinuedRun != "" && r.Orchestrator != "" {
 		return e.startEmailContinuation(ctx, tx, r)
@@ -1196,7 +1190,6 @@ func (e *Engine) Reply(ctx context.Context, account int64, runID, text string) e
 	return pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error { return e.ReplyTx(ctx, tx, account, runID, text) })
 }
 
-// ReplyTx is Reply in tx.
 func (e *Engine) ReplyTx(ctx context.Context, tx pgx.Tx, account int64, runID, text string) error {
 	if err := agenttext.Validate(text); err != nil {
 		return bad("%s", err)
@@ -1343,7 +1336,6 @@ func (e *Engine) sendInput(ctx context.Context, tx pgx.Tx, r run, kind, eventTex
 	return e.recordInput(ctx, tx, r, kind, ptr(r.Step), eventText, c.ID)
 }
 
-// RunStatus is account's run's status and workflow.
 func (e *Engine) RunStatus(ctx context.Context, tx pgx.Tx, account int64, runID string) (status, workflowID string, err error) {
 	err = tx.QueryRow(ctx, "SELECT status, workflow_id::text FROM workflow_runs WHERE id = $1 AND account_id = $2", runID, account).Scan(&status, &workflowID)
 	if errors.Is(err, pgx.ErrNoRows) {

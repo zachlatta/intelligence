@@ -27,7 +27,6 @@ type Keyring struct {
 	signing, pkce []byte
 }
 
-// NewKeyring reads a base64 key of 32 bytes.
 func NewKeyring(b64 string) (*Keyring, error) {
 	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(b64))
 	if err != nil || len(key) != 32 {
@@ -77,7 +76,6 @@ func (k *Keyring) mac(key []byte, s string) string {
 	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
 
-// stateTTL is how long a Google sign-in may take.
 const stateTTL = 30 * time.Minute
 
 // State is the Google sign-in's state for account, started at now: account.unix.nonce.mac.
@@ -109,7 +107,6 @@ func (k *Keyring) CheckState(state string, now time.Time) (int64, error) {
 // Verifier is the PKCE code verifier for state: only this server can make it again.
 func (k *Keyring) Verifier(state string) string { return k.mac(k.pkce, state) }
 
-// Challenge is the S256 code challenge for verifier.
 func Challenge(verifier string) string {
 	sum := sha256.Sum256([]byte(verifier))
 	return base64.RawURLEncoding.EncodeToString(sum[:])
@@ -355,7 +352,6 @@ func (m *Mailbox) get(ctx context.Context, path string, q url.Values, out any) e
 	return json.NewDecoder(io.LimitReader(res.Body, 64<<20)).Decode(out)
 }
 
-// Profile is the mailbox's address and its latest history id.
 func (m *Mailbox) Profile(ctx context.Context) (address, historyID string, err error) {
 	var p struct {
 		EmailAddress string `json:"emailAddress"`
@@ -393,7 +389,6 @@ func (m *Mailbox) Search(ctx context.Context, q string, max int) ([]string, erro
 	return ids, nil
 }
 
-// Message is one message, in full.
 func (m *Mailbox) Message(ctx context.Context, id string) (GmailMessage, error) {
 	var g GmailMessage
 	err := m.get(ctx, "messages/"+url.PathEscape(id), url.Values{"format": {"full"}}, &g)

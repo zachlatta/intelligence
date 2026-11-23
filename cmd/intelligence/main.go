@@ -228,7 +228,6 @@ func hostAlerts(c serverSettings) hostwatch.Notifier {
 	return &hostwatch.PDW{URL: c.PDWURL, Key: c.PDWNotifyKey}
 }
 
-// queueLimits reads the workflow queue's limits over workflow.DefaultLimits.
 func queueLimits(getenv func(string) string) (workflow.Limits, error) {
 	l := workflow.DefaultLimits()
 	for _, f := range []struct {

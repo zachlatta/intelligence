@@ -40,14 +40,12 @@ func renderSchedules(w http.ResponseWriter, name string, data map[string]any) {
 	}
 }
 
-// hostSchedules is one host and its schedules, for the schedules page.
 type hostSchedules struct {
 	Host      fleet.Host
 	Problem   string // why the host could not list its schedules
 	Schedules []fleet.ScheduleView
 }
 
-// schedulesPage lists every schedule on the account's hosts.
 func schedulesPage(cfg Config, reg *fleet.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		hosts, err := reg.List(r.Context())
@@ -104,7 +102,6 @@ func schedulePage(cfg Config, reg *fleet.Registry) http.HandlerFunc {
 	}
 }
 
-// newSchedulePage is the form that makes a schedule on a host.
 func newSchedulePage(cfg Config, reg *fleet.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b, ok, err := hostNamed(reg, r, r.PathValue("host"))
@@ -188,7 +185,6 @@ func cadence(s hostclient.Schedule) string {
 	return "cron " + s.Cron
 }
 
-// everyText is a duration in milliseconds as 30m, 2h or 1h30m.
 func everyText(ms int64) string {
 	d := time.Duration(ms) * time.Millisecond
 	s := d.String()

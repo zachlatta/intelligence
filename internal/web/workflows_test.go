@@ -102,7 +102,6 @@ func readRun(t *testing.T, h http.Handler, run string) map[string]any {
 	return out
 }
 
-// succeed reports cmd succeeded with result, as the host would.
 func succeed(t *testing.T, b *rawHost, cmd hostclient.Command, result string) {
 	t.Helper()
 	if ack := b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{ID: cmd.ID, Status: hostclient.CommandSucceeded,
@@ -111,7 +110,6 @@ func succeed(t *testing.T, b *rawHost, cmd hostclient.Command, result string) {
 	}
 }
 
-// commandsByKind reads n commands off b's stream.
 func commandsByKind(t *testing.T, b *rawHost, n int) map[string]hostclient.Command {
 	t.Helper()
 	out := map[string]hostclient.Command{}
@@ -789,7 +787,6 @@ func TestDefaultWorkflowRespectsAccountAndRequestBoundaries(t *testing.T) {
 	}
 }
 
-// fakeClock is a clock a test moves by hand.
 type fakeClock struct {
 	mu sync.Mutex
 	t  time.Time

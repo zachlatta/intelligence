@@ -101,7 +101,6 @@ const (
 
 var stepID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 
-// Parse decodes a definition strictly and validates it.
 func Parse(b []byte) (Definition, error) {
 	var d Definition
 	dec := json.NewDecoder(bytes.NewReader(b))
@@ -205,7 +204,6 @@ func (d Definition) Validate() error {
 	return nil
 }
 
-// Index is the position of the step with id, or -1.
 func (d Definition) Index(id string) int {
 	for i, s := range d.Steps {
 		if s.ID == id {
@@ -385,7 +383,6 @@ Sharing-policy review must never redact, trim, rewrite, rebuild, swap maps or me
 
 Never send local paths as deliverables. Pass this file-delivery rule to every worker. If the current step explicitly forbids uploads, preserve the files and pass their paths and this rule to an authorized step. If upload or access verification fails, report the failure and keep the files for retry; do not claim they were delivered.`
 
-// OrchestratorInstructions are the starting workflow's standing instructions to its orchestrator.
 const OrchestratorInstructions = `You run a workflow. You never do the work yourself: for each step, start sub-agents to do it, read what they report, and decide when the step is done.
 
 Start a sub-agent in this workspace with the paseo CLI, for example:

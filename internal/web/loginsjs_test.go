@@ -60,10 +60,7 @@ setTimeout(async () => {
 `
 
 func TestLoginsScriptWarnsAndFixes(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("no node")
-	}
+	node := requireNode(t)
 	cmd := `T=$(mktemp -d) && mkdir -p \"$T/cfg\" \"$T/data\" && CLAUDE_CONFIG_DIR=\"$T/cfg\" claude auth login --claudeai --email 'ada@example.com' && cswap import \"$T/export.json\" --force`
 	broken := `["broken", 7, "host-1", "claude", "ada@example.com", "ada@example.com", "login_expired", "Failed to authenticate: this login reached its time limit", "Paste Copy command into a terminal on the host.", "` + cmd + `", false, "transcript", "2026-11-19T04:38:05Z", null, 4, 1, 3, 0]`
 	expiring := `["expiring", null, "host-1", "claude", "grace@example.com", "grace@example.com", "login_expiring", "The sign-in ends 2026-11-20 21:26 UTC", "Renew it before then. Paste Copy command into a terminal on the host.", "` + strings.ReplaceAll(cmd, "ada@", "grace@") + `", false, "meter", "2026-11-19T04:00:00Z", "2026-11-20T21:26:50Z", 0, 0, 0, 0]`

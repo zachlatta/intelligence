@@ -37,10 +37,8 @@ var hostFuncs = template.FuncMap{
 
 var hostResourcesTmpl = template.Must(template.New("hostresources").Funcs(localFuncs).Funcs(hostFuncs).Parse(hostResourcesHTML + layoutHTML))
 
-// gb is bytes in GB, one decimal.
 func gb(b int64) string { return fmt.Sprintf("%.1f GB", float64(b)/(1<<30)) }
 
-// dur is CPU seconds as 3h 2m, 3m 0s or 4.2s.
 func dur(secs float64) string {
 	if secs < 60 {
 		return fmt.Sprintf("%.1fs", secs)

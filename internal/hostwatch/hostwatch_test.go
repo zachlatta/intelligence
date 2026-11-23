@@ -17,7 +17,6 @@ import (
 	"github.com/zachlatta/intelligence/internal/webpush"
 )
 
-// recorder keeps every notice the watcher sends.
 type recorder struct {
 	mu   sync.Mutex
 	sent []hostwatch.Notice

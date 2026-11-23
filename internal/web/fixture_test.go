@@ -120,7 +120,6 @@ func signedIn(h http.Handler, req *http.Request) {
 	}
 }
 
-// keyOf is host's key on test server h.
 func keyOf(t *testing.T, h http.Handler, host string) string {
 	t.Helper()
 	ts, ok := h.(*testServer)

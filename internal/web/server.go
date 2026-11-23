@@ -67,7 +67,6 @@ type Config struct {
 	PushHTTP *http.Client
 }
 
-// app is the server's shared parts.
 type app struct {
 	cfg     Config
 	routes  *http.ServeMux
@@ -178,7 +177,6 @@ func newHandler(cfg Config, workers bool) http.Handler {
 		}
 		writeJSON(w, map[string]string{"status": "ok", "version": cfg.Version, "database": "ok"})
 	})
-	// accounts
 	mux.HandleFunc("POST /api/accounts", a.signUp)
 	mux.HandleFunc("POST /api/session", a.signIn)
 	mux.HandleFunc("DELETE /api/session", a.signOut)
@@ -368,7 +366,6 @@ func short(v string) string {
 	return v
 }
 
-// humanDuration reads as 42s, 5m 0s or 1h 4m.
 func humanDuration(d time.Duration) string {
 	d = max(0, d).Truncate(time.Second)
 	switch {
@@ -380,7 +377,6 @@ func humanDuration(d time.Duration) string {
 	return fmt.Sprintf("%ds", int(d.Seconds()))
 }
 
-// ago says how long before now t was, in whole seconds, minutes, hours or days.
 func ago(now, t time.Time) string {
 	if t.IsZero() {
 		return "never"
@@ -426,7 +422,6 @@ func agentSummary(agents []fleet.AgentView) string {
 	return strings.Join(parts, ", ")
 }
 
-// plural is "1 workspace", "3 workspaces", "2 entries".
 func plural(n int, word string) string {
 	if n == 1 {
 		return "1 " + word
@@ -442,7 +437,6 @@ func plural(n int, word string) string {
 	return fmt.Sprintf("%d %ss", n, word)
 }
 
-// allAgents is every agent on host b, across its workspaces.
 func allAgents(b fleet.Host) []fleet.AgentView {
 	var out []fleet.AgentView
 	for _, w := range b.Workspaces {
@@ -451,7 +445,6 @@ func allAgents(b fleet.Host) []fleet.AgentView {
 	return out
 }
 
-// idleWorkspaces are b's workspaces with no agents.
 func idleWorkspaces(b fleet.Host) []fleet.WorkspaceAgents {
 	var out []fleet.WorkspaceAgents
 	for _, w := range b.Workspaces {
@@ -462,7 +455,6 @@ func idleWorkspaces(b fleet.Host) []fleet.WorkspaceAgents {
 	return out
 }
 
-// openWorkspace says whether w starts open on the home page: it has an agent running or needing attention.
 // runningAgents counts the agents working on a turn, which archiving would stop.
 func runningAgents(agents []fleet.AgentView) int {
 	n := 0
@@ -477,6 +469,7 @@ func runningAgents(agents []fleet.AgentView) int {
 // losesChanges: archiving the workspace would remove a worktree holding uncommitted changes.
 func losesChanges(w fleet.WorkspaceAgents) bool { return w.Kind == "worktree" && w.Dirty }
 
+// openWorkspace says whether w starts open on the home page: it has an agent running or needing attention.
 func openWorkspace(w fleet.WorkspaceAgents) bool {
 	for _, a := range w.Agents {
 		if a.Status == "running" || a.RequiresAttention {

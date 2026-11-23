@@ -253,7 +253,6 @@ func sendCommands(ctx context.Context, cfg Config, reg *fleet.Registry, changes 
 // maxCommand bounds a command request (a prompt can be long).
 const maxCommand = 1 << 20
 
-// maxCommandTTL is the longest a command may wait for its host.
 const maxCommandTTL = 24 * time.Hour
 
 // enqueueCommand queues a command for one of v's hosts: {"kind", "args", "ttl"}.

@@ -14,7 +14,6 @@ type Cursor struct {
 	Seq   int    `json:"seq"`
 }
 
-// Timeline is part or all of an agent's projected timeline.
 type Timeline struct {
 	Epoch   string
 	Reset   bool // the cursor was from another epoch or stale: Entries is the whole timeline

@@ -34,13 +34,11 @@ type Snapshot struct {
 	Tracked int                 `json:"tracked"`        // processes and threads with an agent, recently exited ones included
 }
 
-// Counters are one agent's totals since the epoch began.
 type Counters struct {
 	CPUNanos uint64 `json:"cpuNanos"` // CPU time of all its processes, finished ones included
 	Execs    uint64 `json:"execs"`    // programs its processes started
 }
 
-// OOM is a process the kernel chose to kill for memory.
 type OOM struct {
 	Seq      uint64    `json:"seq"`
 	At       time.Time `json:"at"`
@@ -52,7 +50,6 @@ type OOM struct {
 	ShmemRSS uint64    `json:"shmemRss"`
 }
 
-// Source is what the socket serves.
 type Source interface{ Snapshot(after uint64) Snapshot }
 
 // ErrUnsupported: this system cannot run the probe.

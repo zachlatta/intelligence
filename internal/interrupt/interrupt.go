@@ -46,7 +46,6 @@ var patterns = []pattern{
 	{"claude", regexp.MustCompile(`^API Error: 401\b`), nil, AuthRejected},
 	{"claude", regexp.MustCompile(`^OAuth token has expired\b`), nil, LoginExpired},
 	{"claude", regexp.MustCompile(`^(Invalid API key|Not logged in|OAuth token revoked)\b`), regexp.MustCompile(`/login`), LoggedOut},
-	// Codex.
 	{"codex", regexp.MustCompile(`^Your access token could not be refreshed\b`), nil, LoginExpired},
 	{"codex", regexp.MustCompile(`^(stream error: )?unexpected status 401\b`), regexp.MustCompile(`(?i)token is expired|expired`), LoginExpired},
 	{"codex", regexp.MustCompile(`^(stream error: )?unexpected status 401\b`), regexp.MustCompile(`(?i)sign(ing)? in again|log ?in again|authentication token`), AuthRejected},

@@ -10,10 +10,7 @@ import (
 )
 
 func TestResumeButtonWorksAfterRunsTableRefresh(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("no node")
-	}
+	node := requireNode(t)
 	_, script, ok := strings.Cut(workflowsHTML, "// Resume controls")
 	if !ok {
 		t.Fatal("no Resume controls")
@@ -48,10 +45,7 @@ vm.runInNewContext(process.argv[1], {document, api: async (...args) => calls.pus
 
 // Execute the actual run template script, rather than an editor or list fragment.
 func TestRunPageResumeIsWiredAfterRefresh(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("no node")
-	}
+	node := requireNode(t)
 	rec := httptest.NewRecorder()
 	if err := workflowsTmpl.ExecuteTemplate(rec, "run", map[string]any{"Version": "test", "Run": runRow{ID: "run-1", Title: "Sample", Status: workflow.Stalled, Steps: []workflow.Step{{Title: "Build"}}}, "Now": t0, "Agents": []agentRow{}, "Steps": []stepView{}, "Events": []runEvent{}}); err != nil {
 		t.Fatal(err)

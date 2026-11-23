@@ -16,7 +16,6 @@ import (
 
 const gib = int64(1 << 30)
 
-// namedWorkflow makes a workflow called name, fixed on repo.
 func namedWorkflow(t *testing.T, h http.Handler, name, repo string) string {
 	t.Helper()
 	def := workflow.Starting

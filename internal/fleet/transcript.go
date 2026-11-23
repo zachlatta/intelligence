@@ -21,7 +21,6 @@ var (
 	ErrUnknownAgent = errors.New("agent not reported by this host")
 )
 
-// Transcript is one agent's synced transcript.
 type Transcript struct {
 	Epoch    string
 	SyncedAt time.Time
@@ -34,7 +33,6 @@ type Entry struct {
 	Kind, Tool, Status, Text string
 }
 
-// StoreTranscript stores a batch received at at.
 func (r *Registry) StoreTranscript(ctx context.Context, b hostclient.TranscriptBatch, at time.Time) error {
 	return pgx.BeginFunc(ctx, r.p, func(tx pgx.Tx) error {
 		var known bool
@@ -80,7 +78,6 @@ func (r *Registry) StoreTranscript(ctx context.Context, b hostclient.TranscriptB
 	})
 }
 
-// TranscriptCursors are where host's transcripts end, by agent.
 func (r *Registry) TranscriptCursors(ctx context.Context, host string) (map[string]hostclient.TranscriptCursor, error) {
 	rows, err := r.p.Query(ctx, `SELECT t.agent_id, t.epoch, coalesce(max(e.seq_start), 0), coalesce(max(e.seq_end), 0)
 		FROM transcripts t LEFT JOIN transcript_entries e ON e.host = t.host AND e.agent_id = t.agent_id

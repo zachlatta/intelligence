@@ -16,17 +16,17 @@ RUN set -eu; ldflags="-s -w -X main.buildCommit=${SOURCE_COMMIT}"; \
 # Every test passes, the read-only SQL contract with them, against a throwaway Postgres 18,
 # before an image exists: a failure fails the build, so Coolify never deploys it.
 FROM postgres:18-alpine AS test
-# git: the workflow naming tests check every branch name with git check-ref-format
-RUN apk add --no-cache git
+# git: workflow naming tests check branch names; nodejs: browser JS behaviour tests run in the test stage
+RUN apk add --no-cache git nodejs
 COPY --from=build /usr/local/go /usr/local/go
 COPY --from=build /go/pkg/mod /go/pkg/mod
-ENV PATH=/usr/local/go/bin:$PATH GOPATH=/go GOTOOLCHAIN=local GOFLAGS=-mod=mod CGO_ENABLED=0
+ENV PATH=/usr/local/go/bin:$PATH GOPATH=/go GOTOOLCHAIN=local GOFLAGS=-mod=mod CGO_ENABLED=0 INTELLIGENCE_REQUIRE_NODE=1
 COPY --from=build /src /src
 WORKDIR /src
 RUN set -eu; \
     mkdir -p /run/pgtest && chown postgres /run/pgtest; \
     su postgres -c "initdb -D /run/pgtest/data -U postgres --auth=trust >/dev/null"; \
-    su postgres -c "pg_ctl -D /run/pgtest/data -o '-k /run/pgtest -c listen_addresses=127.0.0.1' -w start >/dev/null"; \
+    su postgres -c "pg_ctl -D /run/pgtest/data -o '-k /run/pgtest -c listen_addresses=127.0.0.1 -c max_connections=500' -w start >/dev/null"; \
     TEST_DATABASE_URL="postgres://postgres@127.0.0.1:5432/postgres?sslmode=disable" go test -count=1 ./...; \
     su postgres -c "pg_ctl -D /run/pgtest/data -m fast stop >/dev/null"; \
     touch /tests-passed

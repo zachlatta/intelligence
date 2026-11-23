@@ -22,7 +22,6 @@ type Host struct {
 	Workspaces []WorkspaceAgents `json:"workspaces"`
 }
 
-// WorkspaceAgents is a workspace and the agents in it.
 type WorkspaceAgents struct {
 	hostclient.Workspace
 	Listed bool        `json:"listed"` // false: Paseo did not list it, but an agent is in it
@@ -38,7 +37,6 @@ type AgentView struct {
 	Archived          bool `json:"archived"`
 }
 
-// Registry is the hosts, workspaces and agents tables.
 type Registry struct{ p *pgxpool.Pool }
 
 // New returns the registry on p, which must be migrated (db.Migrate).

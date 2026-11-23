@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -105,19 +107,84 @@ func TestChatBoxOffersDictationOnlyWithAKey(t *testing.T) {
 	}
 }
 
+const dictationInsertOnlyHarness = `
+const assert = require("assert"), fs = require("fs");
+function makeEl() {
+  const listeners = {};
+  const el = {
+    value: "", selectionStart: 0, selectionEnd: 0, hidden: false, readOnly: false, textContent: "", title: "",
+    classList: { toggle() {}, remove() {}, contains: () => false },
+    firstChild: { textContent: "" },
+    children: {},
+    after() {},
+    focus() {},
+    setSelectionRange() {},
+    dispatchEvent() {},
+    addEventListener(k, fn) { (listeners[k] ||= []).push(fn); },
+    fire(k, ev) { return Promise.all((listeners[k] || []).map((fn) => fn(ev || {}))); },
+    querySelector(sel) { return el.children[sel] || (el.children[sel] = makeEl()); },
+  };
+  return el;
+}
+globalThis.window = globalThis;
+globalThis.document = {
+  createElement: () => makeEl(),
+  addEventListener() {},
+};
+globalThis.fetch = () => new Promise(() => {});
+globalThis.navigator = { mediaDevices: { getUserMedia: () => new Promise(() => {}) } };
+eval(fs.readFileSync(process.argv[1], "utf8"));
+
+async function runCase(insertOnly) {
+  let sent = 0;
+  const text = makeEl(), mic = makeEl(), row = makeEl();
+  let bar;
+  row.after = (el) => { bar = el; };
+  window.dictation({
+    text, tokenPath: "/api/dictation/token", mic, row,
+    label: () => "Save", send: () => { sent++; }, warn: () => {}, insertOnly,
+  });
+  mic.fire("click");
+  const sendBtn = bar.querySelector("[data-act=send]");
+  const editBtn = bar.querySelector("[data-act=edit]");
+  return { sendLabel: sendBtn.firstChild.textContent, editHidden: editBtn.hidden, sent };
+}
+(async () => {
+  const ins = await runCase(true);
+  assert.strictEqual(ins.sendLabel, "Done", "insertOnly on empty box must use append mode (Done), not Save");
+  assert.strictEqual(ins.editHidden, true, "insertOnly must hide Edit button");
+  assert.strictEqual(ins.sent, 0, "insertOnly must never call send");
+  const normal = await runCase(false);
+  assert.strictEqual(normal.sendLabel, "Save", "default dictation on empty box uses send mode");
+  assert.strictEqual(normal.editHidden, false, "default dictation shows Edit button");
+  console.log("ok");
+})().catch((e) => { console.error(e); process.exit(1); });
+`
+
+func requireNode(t *testing.T) string {
+	t.Helper()
+	node, err := exec.LookPath("node")
+	if err != nil {
+		if os.Getenv("CI") != "" || os.Getenv("INTELLIGENCE_REQUIRE_NODE") != "" {
+			t.Fatalf("node is required in CI/Docker test environments: %v", err)
+		}
+		t.Skip("no node")
+	}
+	return node
+}
+
 // TestDictationCanOnlyInsert: with insertOnly, an empty box does not choose sending: dictation
 // always appends at the cursor, and stopping it never calls send.
 func TestDictationCanOnlyInsert(t *testing.T) {
-	js := string(dictationJS)
-	for _, want := range []string{`insertOnly = false`, `const mode = insertOnly || text.value.trim() ? 'append' : 'send';`} {
-		if !strings.Contains(js, want) {
-			t.Errorf("dictation.js misses %s", want)
-		}
+	node := requireNode(t)
+	out, err := exec.Command(node, "-e", dictationInsertOnlyHarness, "dictation.js").CombinedOutput()
+	if err != nil || strings.TrimSpace(string(out)) != "ok" {
+		t.Fatalf("dictation.js insertOnly behaviour: %v\n%s", err, out)
 	}
 }
 
-// TestDictationBarWrapsOnNarrowScreens: on a phone the bar keeps its status readable and its
-// buttons on the screen: the buttons are one group that wraps under the status when it must.
+// TestDictationBarWrapsOnNarrowScreens guards cce6417: on a phone the dictation bar keeps its
+// status readable and wraps its grouped buttons onto the next row when needed.
 func TestDictationBarWrapsOnNarrowScreens(t *testing.T) {
 	if !strings.Contains(string(dictationJS), `<span class="dactions">`) {
 		t.Error("dictation.js does not group the bar's buttons")

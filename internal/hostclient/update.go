@@ -23,7 +23,6 @@ const (
 // BinaryPath is where the server serves the host binary for one platform.
 func BinaryPath(goos, goarch string) string { return "/api/host/binary/" + goos + "/" + goarch }
 
-// UpdateEvery is the most often a host tries to update.
 const UpdateEvery = time.Minute
 
 // maxBinary bounds a downloaded binary.

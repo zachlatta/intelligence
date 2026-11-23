@@ -24,7 +24,6 @@ type CreateWorkspace struct {
 // ErrWorkspaceCreationKeyConflict means the daemon already has a different request for this key.
 var ErrWorkspaceCreationKeyConflict = errors.New("workspace_request_key_conflict")
 
-// CreateWorkspace creates a workspace and returns it.
 func (c *Client) CreateWorkspace(ctx context.Context, w CreateWorkspace) (Workspace, error) {
 	if w.Cwd == "" {
 		return Workspace{}, errors.New("create workspace: no directory")
@@ -61,7 +60,6 @@ func (c *Client) CreateWorkspace(ctx context.Context, w CreateWorkspace) (Worksp
 	return *p.Workspace, nil
 }
 
-// WorkspaceCreation reads the completed workspace for a creation's idempotency key.
 func (c *Client) WorkspaceCreation(ctx context.Context, key string) (Workspace, error) {
 	var p struct {
 		Snapshot *struct {
@@ -95,7 +93,6 @@ type CreateAgent struct {
 	IdempotencyKey string
 }
 
-// CreateAgent starts an agent and returns it.
 func (c *Client) CreateAgent(ctx context.Context, a CreateAgent) (Agent, error) {
 	if a.Cwd == "" || a.Provider == "" {
 		return Agent{}, errors.New("create agent: a directory and a provider are needed")
@@ -141,7 +138,6 @@ func (c *Client) ArchiveWorkspace(ctx context.Context, id string) error {
 	return c.command(ctx, map[string]any{"type": "archive_workspace_request", "workspaceId": id}, nil)
 }
 
-// ArchiveAgent stops and archives an agent.
 func (c *Client) ArchiveAgent(ctx context.Context, id string) error {
 	return c.command(ctx, map[string]any{"type": "archive_agent_request", "agentId": id}, nil)
 }
@@ -191,7 +187,6 @@ func (c *Client) SetWorkspaceTitle(ctx context.Context, id, title string) error 
 	return c.command(ctx, map[string]any{"type": "workspace.title.set.request", "workspaceId": id, "title": t}, nil)
 }
 
-// RenameAgent sets an agent's title.
 func (c *Client) RenameAgent(ctx context.Context, id, title string) error {
 	return c.command(ctx, map[string]any{"type": "update_agent_request", "agentId": id, "name": title}, nil)
 }
@@ -221,7 +216,6 @@ func (c *Client) SendMessage(ctx context.Context, agentID, text, messageID, turn
 	return c.command(ctx, req, nil)
 }
 
-// CancelAgent stops an agent's current turn.
 func (c *Client) CancelAgent(ctx context.Context, id string) error {
 	return c.command(ctx, map[string]any{"type": "cancel_agent_request", "agentId": id}, nil)
 }

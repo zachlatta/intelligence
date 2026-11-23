@@ -98,7 +98,6 @@ func (r *Registry) PruneHosts(ctx context.Context, before time.Time) error {
 	return err
 }
 
-// HostMinute is a stored minute.
 type HostMinute struct {
 	Minute           time.Time `json:"minute"`
 	CPUs             int       `json:"cpus"`
@@ -165,7 +164,6 @@ func f64(p *float32) *float64 {
 	return &v
 }
 
-// HostNow is a host's newest minute, its probe, and each agent's memory now.
 type HostNow struct {
 	Minute       *HostMinute
 	MemUsedFrac  float64
@@ -176,7 +174,6 @@ type HostNow struct {
 	Filesystems  []FilesystemRow  // its local filesystems, as last read, by mount
 }
 
-// FilesystemRow is one of a host's filesystems, as last read.
 type FilesystemRow struct {
 	Mount     string    `json:"mount"`
 	Device    string    `json:"device"`
@@ -187,7 +184,6 @@ type FilesystemRow struct {
 	Minute    time.Time `json:"minute"`
 }
 
-// ProbeRow is a host's probe, as last reported.
 type ProbeRow struct {
 	Running    bool      `json:"running"`
 	Version    string    `json:"version"`
@@ -196,7 +192,6 @@ type ProbeRow struct {
 	ReceivedAt time.Time `json:"receivedAt"`
 }
 
-// HostResources is every host's HostNow.
 func (r *Registry) HostResources(ctx context.Context) (map[string]*HostNow, error) {
 	out := map[string]*HostNow{}
 	get := func(host string) *HostNow {
@@ -283,7 +278,6 @@ func (r *Registry) HostResources(ctx context.Context) (map[string]*HostNow, erro
 	return out, rows.Err()
 }
 
-// HostHistory is a host's minutes since since, oldest first.
 func (r *Registry) HostHistory(ctx context.Context, host string, since time.Time) ([]HostMinute, error) {
 	rows, err := r.p.Query(ctx, `SELECT `+hostMinuteCols+` FROM host_minutes WHERE host = $1 AND minute >= $2 ORDER BY minute`, host, since)
 	if err != nil {
@@ -292,7 +286,6 @@ func (r *Registry) HostHistory(ctx context.Context, host string, since time.Time
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (HostMinute, error) { return scanHostMinute(row) })
 }
 
-// AgentTotal is one agent's use of a host over a period.
 type AgentTotal struct {
 	AgentID    string    `json:"agentId"`
 	Title      string    `json:"title"` // from agents, while Paseo lists it
@@ -323,7 +316,6 @@ func (r *Registry) TopAgents(ctx context.Context, host string, since time.Time) 
 	})
 }
 
-// OOMKill is a stored kill.
 type OOMKill struct {
 	Host    string    `json:"host"`
 	At      time.Time `json:"at"`
@@ -334,7 +326,6 @@ type OOMKill struct {
 	AnonRSS int64     `json:"anonRss"`
 }
 
-// OOMKills is every kill since since, newest first.
 func (r *Registry) OOMKills(ctx context.Context, since time.Time) ([]OOMKill, error) {
 	rows, err := r.p.Query(ctx, `SELECT k.host, k.at, k.pid, k.comm, k.agent_id, coalesce(a.title, ''), k.anon_rss
 		FROM oom_kills k LEFT JOIN agents a ON a.host = k.host AND a.id = k.agent_id
@@ -349,7 +340,6 @@ func (r *Registry) OOMKills(ctx context.Context, since time.Time) ([]OOMKill, er
 	})
 }
 
-// AgentMinute is one of an agent's stored minutes.
 type AgentMinute struct {
 	Minute       time.Time `json:"minute"`
 	CPUSeconds   *float64  `json:"cpuSeconds"`
@@ -367,7 +357,6 @@ type AgentUse struct {
 	CPUs    int
 }
 
-// AgentUse reads an agent's minutes and kills on host.
 func (r *Registry) AgentUse(ctx context.Context, host, agentID string) (AgentUse, error) {
 	var u AgentUse
 	rows, err := r.p.Query(ctx, `SELECT minute, cpu_seconds, cpu_source, mem_max, processes_max, execs

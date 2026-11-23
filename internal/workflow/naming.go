@@ -66,7 +66,6 @@ func taskName(input string) string {
 	return task
 }
 
-// firstLine is input's first line, cut to 80 characters.
 func firstLine(input string) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(input), "\n")
 	line = strings.TrimSpace(line)
@@ -368,7 +367,6 @@ func pleasantryAt(s []string) int {
 	return best
 }
 
-// socialPrefix reports whether s opens with phrase, compared as socialWords.
 func socialPrefix(s, phrase []string) bool {
 	return len(s) >= len(phrase) && slices.EqualFunc(phrase, s[:len(phrase)], func(p, w string) bool { return p == socialWord(w) })
 }

@@ -25,10 +25,7 @@ func TestTaskComposerAccessibleControls(t *testing.T) {
 
 // Exercise the actual task submission script, including an upload in flight and a failed API call.
 func TestTaskComposerSubmission(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("no node")
-	}
+	node := requireNode(t)
 	src, err := os.ReadFile("workflows.html")
 	if err != nil {
 		t.Fatal(err)

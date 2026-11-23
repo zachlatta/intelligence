@@ -41,12 +41,12 @@ for (const [id, path] of [["login", "/api/session"], ["signup", "/api/accounts"]
   <div class="actions"><button class="btn sm" id="sign-out">Sign out</button></div></div>
 
 <h2 class="section-title" id="hosts">Hosts</h2>
-{{if .Hosts}}<div class="card"><table class="table">
+{{if .Hosts}}<div class="card"><div class="table-wrap"><table class="table">
   <thead><tr><th>Host</th><th>Status</th><th>Joined</th><th>Key last used</th><th></th></tr></thead>
   <tbody>{{range .Hosts}}<tr><td><b>{{.Host}}</b></td><td><span class="dot-label"><span class="dot {{if .Online}}online{{else}}offline{{end}}"></span>{{if .Online}}online{{else}}<span class="meta">offline</span>{{end}}</span></td>
     <td class="meta">{{ago $.Now .Joined}}</td><td class="meta">{{with .Used}}{{ago $.Now .}}{{else}}never{{end}}</td>
     <td><button class="btn ghost sm remove" data-host="{{.Host}}">Remove</button></td></tr>{{end}}</tbody>
-</table></div>
+</table></div></div>
 {{else}}<p class="empty-state">No hosts yet.</p>{{end}}
 
 <h2 class="section-title" id="add">Add a host</h2>
@@ -77,7 +77,7 @@ for (const [id, path] of [["login", "/api/session"], ["signup", "/api/accounts"]
   {{end}}
 </div>
 {{if .VAPIDPublicKey}}
-<div class="card"><table class="table">
+<div class="card"><div class="table-wrap"><table class="table">
   <thead><tr><th>Device</th><th>Push service</th><th>Added</th><th>Last sent</th><th></th></tr></thead>
   <tbody id="push-subs">{{range .PushSubs}}<tr data-sub-id="{{.ID}}">
     <td>{{if .UserAgent}}{{.UserAgent}}{{else}}<span class="meta">Unknown device</span>{{end}}{{if .LastError}}<div class="meta">{{.LastError}}</div>{{end}}</td>
@@ -86,7 +86,7 @@ for (const [id, path] of [["login", "/api/session"], ["signup", "/api/accounts"]
     <td class="meta">{{with .LastSent}}{{at . "minute"}}{{else}}never{{end}}</td>
     <td><button type="button" class="btn ghost sm push-remove" data-sub-id="{{.ID}}">Remove</button></td>
   </tr>{{else}}<tr><td colspan="5" class="meta">No devices subscribed yet.</td></tr>{{end}}</tbody>
-</table></div>
+</table></div></div>
 {{end}}
 
 <h2 class="section-title" id="mcp">MCP connections</h2>
@@ -103,14 +103,14 @@ for (const [id, path] of [["login", "/api/session"], ["signup", "/api/accounts"]
     <button type="button" class="btn sm" id="mcp-dismiss">Done — hide token</button>
   </div>
 </div>
-<div class="card"><table class="table">
+<div class="card"><div class="table-wrap"><table class="table">
   <thead><tr><th>Token ID</th><th>Created</th><th>Expires</th><th>Status</th><th></th></tr></thead>
   <tbody id="mcp-tokens">{{range .MCPTokens}}<tr data-token-id="{{.ID}}">
     <td><code>{{.ID}}</code></td><td class="meta">{{at .Created "minute"}}</td>
     <td class="meta">{{at .Expires "minute"}}</td><td>{{if .Active}}active{{else}}expired{{end}}</td>
     <td><button type="button" class="btn ghost sm mcp-revoke" data-token-id="{{.ID}}">Revoke</button></td>
   </tr>{{else}}<tr><td colspan="5" class="meta">No MCP tokens yet.</td></tr>{{end}}</tbody>
-</table></div>
+</table></div></div>
 
 <h2 class="section-title">Password</h2>
 <form id="password" class="card form">

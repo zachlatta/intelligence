@@ -38,7 +38,6 @@ func isBotMailbox(address string) bool {
 	return ok && strings.EqualFold(local, botAccount)
 }
 
-// Mail is one email, as a filter reads it.
 type Mail struct {
 	Mailbox             string   // receiving Gmail connection's address, not a recipient alias
 	MessageID, ThreadID string   // Gmail's
@@ -140,7 +139,6 @@ func (f EmailFilter) Match(m Mail) (bool, string) {
 	return true, ""
 }
 
-// fields counts f's filled fields.
 func (f EmailFilter) fields() int {
 	n := 0
 	for _, filled := range []bool{len(f.From) > 0, f.To != "", f.Subject != "", f.Words != "", f.Without != "", f.Attachment} {
@@ -181,7 +179,6 @@ func (f EmailFilter) Overlaps(g EmailFilter) bool {
 	return len(f.From) == 0 || slices.ContainsFunc(f.From, func(s string) bool { return slices.Contains(g.From, s) })
 }
 
-// Shared is the senders f and g both name.
 func (f EmailFilter) Shared(g EmailFilter) []string {
 	var out []string
 	for _, s := range f.From {

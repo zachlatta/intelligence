@@ -31,7 +31,6 @@ type TranscriptEntry struct {
 	Item     json.RawMessage `json:"item"`
 }
 
-// TranscriptCursor is where the server's copy of a transcript ends.
 type TranscriptCursor struct {
 	Epoch        string `json:"epoch"`
 	LastSeqStart int    `json:"lastSeqStart"`

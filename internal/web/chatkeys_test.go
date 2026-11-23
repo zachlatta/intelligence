@@ -89,10 +89,7 @@ const tick = () => new Promise((ok) => setTimeout(ok, 0));
 
 // The chat box's keys, in Node with a fake DOM. Skipped where there is no Node.
 func TestChatKeysSendOnceAtATime(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("no node")
-	}
+	node := requireNode(t)
 	src, err := os.ReadFile("transcript.html")
 	if err != nil {
 		t.Fatal(err)

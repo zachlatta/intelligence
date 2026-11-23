@@ -181,7 +181,6 @@ func readMailbox(ctx context.Context, p *pgxpool.Pool) (mailbox, error) {
 	return m, err
 }
 
-// emailRow is an email as the pages show it.
 type emailRow struct {
 	ID, Thread                          string
 	ReceivedAt                          time.Time
@@ -241,7 +240,6 @@ func readEmails(ctx context.Context, p *pgxpool.Pool, run string, limit int) ([]
 	return out, err
 }
 
-// Label is what the email did, in a few words.
 func (e emailRow) Label() string {
 	return map[string]string{"before": "before connecting", "started": "started", "follow_up": "started again",
 		"added": "added to its run", "answered": "answered its run", "ignored": "ignored"}[e.Decision]
@@ -251,7 +249,6 @@ func (e emailRow) Badge() string {
 	return map[string]string{"started": "blue", "follow_up": "blue", "added": "purple", "answered": "purple"}[e.Decision]
 }
 
-// Who is the sender as a person reads it.
 func (e emailRow) Who() string {
 	if e.FromName != "" {
 		return e.FromName
