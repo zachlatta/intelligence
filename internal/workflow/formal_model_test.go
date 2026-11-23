@@ -72,6 +72,7 @@ func stallNextStates(s stallState) []stallTransition {
 		} else {
 			n := s
 			n.status = sWaiting
+			n.askedAgainToZach = s.reply == rFailed
 			out = append(out, stallTransition{"OrchestratorAsk(new-question)", n})
 		}
 	}
