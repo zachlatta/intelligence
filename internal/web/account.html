@@ -60,6 +60,35 @@ for (const [id, path] of [["login", "/api/session"], ["signup", "/api/accounts"]
   <p id="claim-progress" class="progress"></p>
 </form>
 
+<h2 class="section-title" id="notifications">App &amp; notifications</h2>
+<div class="card form" id="push-panel" data-vapid="{{.VAPIDPublicKey}}">
+  <p class="meta">Install Intelligence to your home screen (in Android Chrome, tap the menu &rarr; <b>Add to Home screen</b> / <b>Install app</b>) for a standalone app window and native notifications when a workflow asks for your reply, fails, or a busy host goes silent.</p>
+  {{if .VAPIDPublicKey}}
+  <div class="form-actions">
+    <button type="button" class="btn primary" id="push-toggle" disabled>Checking device…</button>
+    <button type="button" class="btn" id="push-test" hidden>Send test notification</button>
+  </div>
+  <p id="push-progress" class="progress meta" role="status"></p>
+  {{else}}
+  <div class="form-actions">
+    <button type="button" class="btn" disabled>Enable notifications</button>
+  </div>
+  <p class="progress meta">Push notifications are not configured on this server (set <code>VAPID_PUBLIC_KEY</code>, <code>VAPID_PRIVATE_KEY</code> and <code>VAPID_SUBJECT</code>).</p>
+  {{end}}
+</div>
+{{if .VAPIDPublicKey}}
+<div class="card"><table class="table">
+  <thead><tr><th>Device</th><th>Push service</th><th>Added</th><th>Last sent</th><th></th></tr></thead>
+  <tbody id="push-subs">{{range .PushSubs}}<tr data-sub-id="{{.ID}}">
+    <td>{{if .UserAgent}}{{.UserAgent}}{{else}}<span class="meta">Unknown device</span>{{end}}{{if .LastError}}<div class="meta">{{.LastError}}</div>{{end}}</td>
+    <td class="meta"><code>{{.EndpointHost}}</code></td>
+    <td class="meta">{{at .Created "minute"}}</td>
+    <td class="meta">{{with .LastSent}}{{at . "minute"}}{{else}}never{{end}}</td>
+    <td><button type="button" class="btn ghost sm push-remove" data-sub-id="{{.ID}}">Remove</button></td>
+  </tr>{{else}}<tr><td colspan="5" class="meta">No devices subscribed yet.</td></tr>{{end}}</tbody>
+</table></div>
+{{end}}
+
 <h2 class="section-title" id="mcp">MCP connections</h2>
 <div class="card form">
   <p class="meta">Connect PDW or another MCP client to read this account's data and propose workflow changes or runs. Both require approval in your signed-in browser. Tokens expire after 90 days. Changing your password revokes them all.</p>
@@ -200,5 +229,139 @@ document.getElementById("password").addEventListener("submit", (e) => {
     refreshMCPTokens().catch(mcpWarning);
   });
 });
+
+// Web Push notifications on this device (when VAPID is configured on the server).
+(() => {
+  const panel = document.getElementById("push-panel");
+  const vapidKey = panel?.dataset.vapid || "";
+  if (!vapidKey) return;
+  const toggle = document.getElementById("push-toggle"), testBtn = document.getElementById("push-test"),
+    out = document.getElementById("push-progress"), list = document.getElementById("push-subs");
+  function setMsg(text, warn) { out.className = warn ? "progress warn" : "progress meta"; out.textContent = text; }
+  function b64ToBytes(str) {
+    const pad = "=".repeat((4 - (str.length % 4)) % 4);
+    const bin = atob((str + pad).replace(/-/g, "+").replace(/_/g, "/"));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+  async function refreshPushSubs() {
+    const res = await fetch("/api/sql", { method: "POST", headers: json,
+      body: JSON.stringify({ query: {{.PushSubsSQL}}, limit: 1000 }) });
+    if (!res.ok) return;
+    const data = await res.json();
+    list.replaceChildren();
+    for (const [id, host, ua, created, lastSent, lastErr] of data.rows) {
+      const row = document.createElement("tr"); row.dataset.subId = id;
+      const dev = document.createElement("td");
+      dev.textContent = ua || "Unknown device";
+      if (lastErr) { const e = document.createElement("div"); e.className = "meta"; e.textContent = lastErr; dev.append(e); }
+      const svc = document.createElement("td"); svc.className = "meta";
+      const code = document.createElement("code"); code.textContent = host; svc.append(code);
+      const add = document.createElement("td"); add.className = "meta";
+      const t1 = document.createElement("time"); t1.dateTime = new Date(created).toISOString(); t1.dataset.format = "minute";
+      t1.textContent = t1.dateTime; add.append(t1); globalThis.localTime?.scan(t1);
+      const sent = document.createElement("td"); sent.className = "meta";
+      if (lastSent) {
+        const t2 = document.createElement("time"); t2.dateTime = new Date(lastSent).toISOString(); t2.dataset.format = "minute";
+        t2.textContent = t2.dateTime; sent.append(t2); globalThis.localTime?.scan(t2);
+      } else { sent.textContent = "never"; }
+      const act = document.createElement("td"), btn = document.createElement("button");
+      btn.type = "button"; btn.className = "btn ghost sm push-remove"; btn.dataset.subId = id; btn.textContent = "Remove";
+      act.append(btn); row.append(dev, svc, add, sent, act); list.append(row);
+    }
+    if (!data.rows.length) {
+      const row = document.createElement("tr"), cell = document.createElement("td");
+      cell.colSpan = 5; cell.className = "meta"; cell.textContent = "No devices subscribed yet.";
+      row.append(cell); list.append(row);
+    }
+  }
+  let currentSub = null;
+  function renderState() {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+      toggle.disabled = true; toggle.textContent = "Unsupported in this browser"; testBtn.hidden = true;
+      setMsg("This browser does not support Web Push notifications (HTTPS is required).", false);
+      return;
+    }
+    if (Notification.permission === "denied") {
+      toggle.disabled = true; toggle.textContent = "Notifications blocked"; testBtn.hidden = true;
+      setMsg("Notifications are blocked in your browser settings for this site.", true);
+      return;
+    }
+    toggle.disabled = false;
+    if (currentSub) {
+      toggle.className = "btn"; toggle.textContent = "Disable on this device"; testBtn.hidden = false;
+    } else {
+      toggle.className = "btn primary"; toggle.textContent = "Enable notifications on this device"; testBtn.hidden = true;
+    }
+  }
+  async function syncDevice() {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) { renderState(); return; }
+    try {
+      const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+      await navigator.serviceWorker.ready;
+      currentSub = await reg.pushManager.getSubscription();
+      renderState();
+    } catch (err) {
+      toggle.disabled = true; toggle.textContent = "Notifications unavailable";
+      setMsg("Could not initialize service worker: " + err.message, true);
+    }
+  }
+  toggle.addEventListener("click", async () => {
+    toggle.disabled = true;
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      if (currentSub) {
+        const ep = currentSub.endpoint;
+        await fetch("/api/push-subscriptions", { method: "DELETE", headers: json, body: JSON.stringify({ endpoint: ep }) });
+        await currentSub.unsubscribe();
+        currentSub = null;
+        setMsg("Notifications disabled on this device.", false);
+      } else {
+        const perm = await Notification.requestPermission();
+        if (perm !== "granted") {
+          renderState();
+          setMsg("Notification permission was not granted.", true);
+          return;
+        }
+        const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(vapidKey) });
+        const payload = sub.toJSON();
+        const res = await fetch("/api/push-subscriptions", { method: "POST", headers: json,
+          body: JSON.stringify({ endpoint: payload.endpoint, keys: payload.keys }) });
+        if (!res.ok) { await sub.unsubscribe().catch(() => {}); throw new Error(await res.text()); }
+        currentSub = sub;
+        setMsg("Notifications enabled on this device.", false);
+      }
+      renderState();
+      await refreshPushSubs();
+    } catch (err) {
+      renderState();
+      setMsg("Notification error: " + err.message, true);
+    }
+  });
+  testBtn.addEventListener("click", async () => {
+    testBtn.disabled = true; setMsg("Sending test notification…", false);
+    try {
+      const res = await fetch("/api/push-subscriptions/test", { method: "POST", headers: json, body: "{}" });
+      if (!res.ok) throw new Error(await res.text());
+      const r = await res.json();
+      setMsg("Sent test notification to " + r.sent + (r.sent === 1 ? " device." : " devices."), false);
+      await refreshPushSubs();
+    } catch (err) { setMsg("Test notification failed: " + err.message, true); }
+    finally { testBtn.disabled = false; }
+  });
+  list.addEventListener("click", async (e) => {
+    const btn = e.target.closest("button.push-remove");
+    if (!btn || btn.disabled) return;
+    btn.disabled = true;
+    try {
+      const res = await fetch("/api/push-subscriptions/" + encodeURIComponent(btn.dataset.subId), { method: "DELETE" });
+      if (!res.ok) throw new Error(await res.text());
+      setMsg("Device removed.", false);
+      await refreshPushSubs();
+    } catch (err) { setMsg(err.message, true); btn.disabled = false; }
+  });
+  syncDevice();
+})();
 </script>
 {{template "foot" .}}{{end}}

@@ -1,5 +1,13 @@
 [
   {
+    "id": "android-pwa-notifications",
+    "released": "2026-11-23",
+    "title": "Install Intelligence as a standalone app with native push notifications",
+    "summary": "Intelligence is now an installable Progressive Web App with a home-screen icon, standalone window and Web Push notifications. On Android Chrome, tap the menu and choose Add to Home screen / Install app, then open Account → App & notifications to enable notifications on that device. You get native notifications when a workflow asks for your reply, a run fails, or a busy host goes silent, and tapping one opens the relevant page.",
+    "media": "pwa-notifications.png",
+    "mediaAlt": "The Account page's App & notifications section in a local demo showing the notification controls and a subscribed Android Chrome device."
+  },
+  {
     "id": "model-quota-waits",
     "released": "2026-11-22",
     "title": "Runs wait on model quota instead of asking you",

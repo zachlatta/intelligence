@@ -2166,6 +2166,16 @@ Server:
   Retry deadlines and exponential backoff (1–64s plus jitter, or a longer `Retry-After`)
   are stored in `gmail_connections`, shared across server instances and restarts.
 - `PUBLIC_URL`: optional; the server's origin, for Google's redirect. Default each request's.
+- `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT`: optional, together; turn on native
+  Web Push notifications for the installable PWA (Android Chrome "Add to Home screen" / "Install
+  app"). The public key is a 65-byte uncompressed P-256 point in unpadded base64url, the private
+  key is its 32-byte scalar in unpadded base64url, and the subject is a `mailto:` or `https://`
+  URI. Unset, the app still installs as a standalone PWA and the notification controls on `/account`
+  degrade cleanly. Subscriptions are stored in `push_subscriptions` with their endpoint and keys
+  sealed with AES-256-GCM (derived from `VAPID_PRIVATE_KEY`), so `/api/sql` can inspect subscribed
+  devices (`id`, `endpoint_host`, `user_agent`, `created_at`, `last_sent_at`, `last_error`) without
+  exposing push endpoints or keys. Subscriptions that return 404 or 410 from the push service are
+  removed automatically.
 - `WORKFLOW_QUEUE_CPU_PCT`, `WORKFLOW_QUEUE_MEM_PCT`, `WORKFLOW_QUEUE_MEM_PEAK_PCT`,
   `WORKFLOW_QUEUE_LOAD_PER_CPU`: optional; when a host is near capacity, so a new workflow run
   queues (The run queue, above). Defaults 85, 80, 95 and 1.5; `0` or `off` turns one off.

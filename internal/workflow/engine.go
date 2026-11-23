@@ -18,6 +18,7 @@ import (
 	"github.com/zachlatta/intelligence/internal/fleet"
 	"github.com/zachlatta/intelligence/internal/hostclient"
 	"github.com/zachlatta/intelligence/internal/hostwatch"
+	"github.com/zachlatta/intelligence/internal/webpush"
 )
 
 // Engine keeps workflows and their runs in Postgres, and moves runs: it queues the commands that
@@ -34,6 +35,7 @@ type Engine struct {
 	// wait on model quota past ModelQuotaAlertAfter (default 30 minutes).
 	Notify               hostwatch.Notifier
 	NotifyAccount        string
+	Push                 webpush.Sender
 	ModelQuotaAlertAfter time.Duration
 }
 
@@ -705,6 +707,7 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 	if len(c.Result) > 0 {
 		_ = json.Unmarshal(c.Result, &res)
 	}
+	var pushes []pendingPush
 	err = pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
 		// Queue admission and retry eligibility share this lock. Take it
 		// before the run row, in the same order as startNext.
@@ -758,6 +761,7 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 			if err := e.recordFailureAlert(ctx, tx, r, msg); err != nil {
 				return err
 			}
+			pushes = append(pushes, failPush(r.Account, r.ID, runPushLabel("", r.Title), msg))
 			r.WorkspaceID, r.Orchestrator = res.WorkspaceID, res.AgentID
 			return e.archiveRun(ctx, tx, r)
 		}
@@ -775,6 +779,7 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 	})
 	if err == nil {
 		e.sendFailureAlertsBestEffort(ctx)
+		e.pushBestEffort(ctx, pushes...)
 	}
 	return err
 }
@@ -810,6 +815,7 @@ func (e *Engine) MoveRun(ctx context.Context, host, runID string, m Move) (strin
 		return "", ErrNotFound
 	}
 	var msg string
+	var pushes []pendingPush
 	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
 		if err := lockQueue(ctx, tx, host); err != nil {
 			return err
@@ -836,12 +842,25 @@ func (e *Engine) MoveRun(ctx context.Context, host, runID string, m Move) (strin
 		if err := agenttext.Validate(msg); err != nil {
 			return bad("%s", err)
 		}
+		if e.Push != nil && (m.Move == "ask" || m.Move == "fail") {
+			var newStatus, summary string
+			if err := tx.QueryRow(ctx, "SELECT status, task_summary FROM workflow_runs WHERE id = $1", r.ID).Scan(&newStatus, &summary); err == nil {
+				label := runPushLabel(summary, r.Title)
+				switch {
+				case m.Move == "ask" && newStatus == Waiting:
+					pushes = append(pushes, askPush(r.Account, r.ID, label, m.Note))
+				case m.Move == "fail" && newStatus == Failed:
+					pushes = append(pushes, failPush(r.Account, r.ID, label, m.Why))
+				}
+			}
+		}
 		return nil
 	})
 	if err != nil {
 		return "", err
 	}
 	e.sendFailureAlertsBestEffort(ctx)
+	e.pushBestEffort(ctx, pushes...)
 	return msg, nil
 }
 

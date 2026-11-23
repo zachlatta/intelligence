@@ -21,6 +21,7 @@ import (
 	"github.com/zachlatta/intelligence/internal/hostclient"
 	"github.com/zachlatta/intelligence/internal/hostwatch"
 	"github.com/zachlatta/intelligence/internal/voicememo"
+	"github.com/zachlatta/intelligence/internal/webpush"
 	"github.com/zachlatta/intelligence/internal/workflow"
 )
 
@@ -60,6 +61,10 @@ type Config struct {
 	// workflow.QueueEvery), on every host minute and whenever a run ends.
 	QueueLimits   *workflow.Limits
 	QueueInterval time.Duration
+	// VAPID enables Web Push notifications (VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT).
+	// Unset turns Web Push off cleanly. PushHTTP overrides the HTTP client used to post pushes (tests).
+	VAPID    *webpush.VAPID
+	PushHTTP *http.Client
 }
 
 // app is the server's shared parts.
@@ -71,6 +76,7 @@ type app struct {
 	changes *fleet.Changes
 	wf      *workflow.Engine // as the owner: workflows and their runs
 	mail    *email.Service   // reads connected mailboxes; nil when email triggers are off
+	push    *webpush.Store   // nil when VAPID is unset
 }
 
 //go:embed index.html
@@ -118,6 +124,14 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	context.AfterFunc(cfg.Context, roles.Close)
 	store := accounts.New(cfg.DB, roles)
 	a := &app{cfg: cfg, routes: http.NewServeMux(), store: store, reg: reg, changes: changes, wf: workflow.NewEngine(cfg.DB, cfg.Now)}
+	if cfg.VAPID != nil {
+		a.push = &webpush.Store{
+			DB:     cfg.DB,
+			Client: &webpush.Client{VAPID: cfg.VAPID, HTTP: cfg.PushHTTP, Now: cfg.Now},
+			Now:    cfg.Now,
+		}
+		a.wf.Push = a.push
+	}
 	a.wf.Notify = cfg.HostAlerts
 	a.wf.NotifyAccount = cfg.PDWAccount
 	if cfg.QueueLimits != nil {
@@ -132,7 +146,7 @@ func newHandler(cfg Config, workers bool) http.Handler {
 		go a.wf.RunStallWatchdog(cfg.Context)
 		go a.wf.RunInterruptionRecovery(cfg.Context)
 		go a.wf.RunModelQuotaWatcher(cfg.Context)
-		watch := &hostwatch.Watcher{DB: cfg.DB, Notify: cfg.HostAlerts, Account: cfg.PDWAccount, Location: cfg.NotifyLocation,
+		watch := &hostwatch.Watcher{DB: cfg.DB, Notify: cfg.HostAlerts, Push: a.wf.Push, Account: cfg.PDWAccount, Location: cfg.NotifyLocation,
 			Started: cfg.Now(), Now: cfg.Now}
 		go watch.Run(cfg.Context)
 	}
@@ -174,6 +188,20 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	mux.HandleFunc("/mcp", a.mcp)
 	mux.HandleFunc("/mcp/{$}", a.mcp)
 	mux.HandleFunc("GET /login", loginPage(cfg))
+	mux.HandleFunc("GET /manifest.webmanifest", manifestAsset)
+	mux.HandleFunc("GET /sw.js", serviceWorkerScript)
+	mux.HandleFunc("GET /pwa.js", pwaScript)
+	mux.HandleFunc("GET /icon.svg", iconSVGAsset)
+	mux.HandleFunc("GET /icon-192.png", icon192Asset)
+	mux.HandleFunc("GET /icon-512.png", icon512Asset)
+	mux.HandleFunc("GET /icon-maskable-192.png", iconMaskable192Asset)
+	mux.HandleFunc("GET /icon-maskable-512.png", iconMaskable512Asset)
+	mux.HandleFunc("GET /apple-touch-icon.png", appleTouchIconAsset)
+	mux.HandleFunc("GET /notification-badge.png", notificationBadgeAsset)
+	mux.HandleFunc("POST /api/push-subscriptions", a.write(a.savePushSubscription))
+	mux.HandleFunc("DELETE /api/push-subscriptions", a.write(a.deletePushSubscriptionByEndpoint))
+	mux.HandleFunc("DELETE /api/push-subscriptions/{id}", a.write(a.deletePushSubscriptionByID))
+	mux.HandleFunc("POST /api/push-subscriptions/test", a.write(a.testPushNotification))
 	mux.HandleFunc("GET /ui.css", stylesheet)
 	mux.HandleFunc("GET /dictation.js", dictationScript)
 	mux.HandleFunc("GET /attachments.js", attachmentsScript)

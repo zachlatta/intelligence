@@ -81,7 +81,19 @@ type accountMCPToken struct {
 const accountMCPTokensSQL = `SELECT id, created_at, expires_at, expires_at > now() AS active
 	FROM mcp_tokens ORDER BY created_at DESC, id`
 
-// accountPage shows the account's hosts, how to add one, and its password form.
+type accountPushSub struct {
+	ID           string
+	EndpointHost string
+	UserAgent    string
+	Created      time.Time
+	LastSent     *time.Time
+	LastError    string
+}
+
+const accountPushSubsSQL = `SELECT id::text, endpoint_host, user_agent, created_at, last_sent_at, last_error
+	FROM push_subscriptions ORDER BY created_at DESC, id`
+
+// accountPage shows the account's hosts, how to add one, notifications, MCP connections and password form.
 func accountPage(cfg Config, v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rows, err := v.pool.Query(r.Context(), accountHostsSQL)
@@ -107,9 +119,27 @@ func accountPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		rows, err = v.pool.Query(r.Context(), accountPushSubsSQL)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		pushSubs, err := pgx.CollectRows(rows, pgx.RowToStructByPos[accountPushSub])
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		vapidPub := ""
+		if cfg.VAPID != nil {
+			vapidPub = cfg.VAPID.PublicKey
+		}
 		w.Header().Set("Cache-Control", "no-store")
-		render(w, "account", map[string]any{"Version": cfg.Version, "Username": v.acct.Username, "Hosts": hosts, "MCPTokens": tokens, "MCPTokensSQL": accountMCPTokensSQL,
-			"Now": cfg.Now(), "Server": serverURL(r)})
+		render(w, "account", map[string]any{
+			"Version": cfg.Version, "Username": v.acct.Username, "Hosts": hosts,
+			"MCPTokens": tokens, "MCPTokensSQL": accountMCPTokensSQL,
+			"PushSubs": pushSubs, "PushSubsSQL": accountPushSubsSQL, "VAPIDPublicKey": vapidPub,
+			"Now": cfg.Now(), "Server": serverURL(r),
+		})
 	}
 }
 

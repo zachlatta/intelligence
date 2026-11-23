@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zachlatta/intelligence/internal/webpush"
 	"github.com/zachlatta/intelligence/internal/workflow"
 )
 
@@ -101,6 +102,34 @@ func TestServerConfigReadsTheReadonlyRoleFromItsURL(t *testing.T) {
 	}
 	if c.ReadonlyRole != "intelligence_ro" || c.ReadonlyPassword != "s3cr@t" || c.BinDir != "/usr/local/share/intelligence/host" {
 		t.Errorf("config = %+v", c)
+	}
+	if c.VAPID != nil {
+		t.Errorf("VAPID should be nil when unset")
+	}
+}
+
+func TestServerConfigParsesVAPID(t *testing.T) {
+	pub, priv, err := webpush.GenerateVAPIDKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := map[string]string{
+		"DATABASE_URL":          "postgres://app:p@db/app",
+		"READONLY_DATABASE_URL": "postgres://ro:p@db/app",
+		"VAPID_PUBLIC_KEY":      pub,
+		"VAPID_PRIVATE_KEY":     priv,
+		"VAPID_SUBJECT":         "mailto:alerts@example.com",
+	}
+	c, err := serverConfig(env(base))
+	if err != nil {
+		t.Fatalf("serverConfig with VAPID: %v", err)
+	}
+	if c.VAPID == nil || c.VAPID.PublicKey != pub {
+		t.Fatalf("VAPID = %+v, want pub %q", c.VAPID, pub)
+	}
+	delete(base, "VAPID_SUBJECT")
+	if _, err := serverConfig(env(base)); err == nil || !strings.Contains(err.Error(), "VAPID") {
+		t.Errorf("partial VAPID should fail, got %v", err)
 	}
 }
 

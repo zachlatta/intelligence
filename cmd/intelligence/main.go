@@ -40,6 +40,7 @@ import (
 	"github.com/zachlatta/intelligence/internal/usage"
 	"github.com/zachlatta/intelligence/internal/voicememo"
 	"github.com/zachlatta/intelligence/internal/web"
+	"github.com/zachlatta/intelligence/internal/webpush"
 	"github.com/zachlatta/intelligence/internal/whatsnew"
 	"github.com/zachlatta/intelligence/internal/workflow"
 )
@@ -129,6 +130,9 @@ type serverSettings struct {
 	// WORKFLOW_QUEUE_MEM_PEAKS (default 1): how many peaks of the runs going the host keeps room
 	// for beside a new run's own.
 	QueueLimits workflow.Limits
+	// VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT enable Web Push notifications for the PWA;
+	// unset turns Web Push off gracefully.
+	VAPID *webpush.VAPID
 }
 
 func serverConfig(getenv func(string) string) (serverSettings, error) {
@@ -196,6 +200,15 @@ func serverConfig(getenv func(string) string) (serverSettings, error) {
 			return c, err
 		}
 		if c.EmailKey, err = email.NewKeyring(getenv("CONNECTIONS_KEY")); err != nil {
+			return c, err
+		}
+	}
+	vPub, vPriv, vSub := getenv("VAPID_PUBLIC_KEY"), getenv("VAPID_PRIVATE_KEY"), getenv("VAPID_SUBJECT")
+	if vPub != "" || vPriv != "" || vSub != "" {
+		if vPub == "" || vPriv == "" || vSub == "" {
+			return c, errors.New("Web Push notifications need VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT")
+		}
+		if c.VAPID, err = webpush.ParseVAPID(vPub, vPriv, vSub); err != nil {
 			return c, err
 		}
 	}
@@ -285,7 +298,7 @@ func serve(ctx context.Context) error {
 		Handler: web.New(web.Config{Context: ctx, Version: v, DB: owner, Readonly: ro, BinDir: c.BinDir,
 			AssemblyAIKey: c.AssemblyAIKey, Google: c.Google, EmailKey: c.EmailKey, PublicURL: c.PublicURL, EmailInterval: c.EmailInterval, QueueLimits: &c.QueueLimits,
 			PDWURL: c.PDWURL, PDWKey: c.PDWKey, PDWAccount: c.PDWAccount, VoiceMemoInterval: c.VoiceMemoInterval,
-			HostAlerts: hostAlerts(c), NotifyLocation: c.NotifyLocation}),
+			HostAlerts: hostAlerts(c), NotifyLocation: c.NotifyLocation, VAPID: c.VAPID}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go pruneHosts(ctx, fleet.New(owner))
