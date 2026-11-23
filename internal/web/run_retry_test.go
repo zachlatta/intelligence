@@ -3,11 +3,14 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/zachlatta/intelligence/internal/dbtest"
 	"github.com/zachlatta/intelligence/internal/hostwatch"
@@ -281,5 +284,31 @@ func TestWorkflowRunRetryAPIAndPage(t *testing.T) {
 	}
 	if page := get(t, h, "/workflow-runs/"+out.ID, nil).Body.String(); strings.Contains(page, `id="retry"`) {
 		t.Fatal("failed run page for deleted workflow should not show Retry button")
+	}
+}
+
+func TestDatabaseRejectsDuplicateRetryForSameRun(t *testing.T) {
+	h, d := dbServer(t)
+	host := sendReport(t, h, wfReport())
+	wfID := createWorkflow(t, h, voiceMemoWorkflowDef())
+
+	failed := startRun(t, h, wfID, "Voice memo: First attempt\n")
+	_ = host.command()
+	if _, err := d.Owner.Exec(t.Context(), `UPDATE workflow_runs SET status='failed', error='boom', pending_command=NULL, finished_at=now() WHERE id=$1`, failed); err != nil {
+		t.Fatal(err)
+	}
+
+	firstRetry := startRun(t, h, wfID, "Voice memo: First attempt\n")
+	_ = host.command()
+	if _, err := d.Owner.Exec(t.Context(), `UPDATE workflow_runs SET retried_from_run_id=$2 WHERE id=$1`, firstRetry, failed); err != nil {
+		t.Fatalf("first retry link: %v", err)
+	}
+
+	secondRetry := startRun(t, h, wfID, "Voice memo: First attempt\n")
+	_ = host.command()
+	_, err := d.Owner.Exec(t.Context(), `UPDATE workflow_runs SET retried_from_run_id=$2 WHERE id=$1`, secondRetry, failed)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+		t.Fatalf("duplicate retried_from_run_id err = %v, want Postgres 23505 unique_violation", err)
 	}
 }
