@@ -1,25 +1,44 @@
 package web
 
 import (
+	"fmt"
 	"os"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
+	"text/template/parse"
 )
 
-// TestEveryCSSVariableIsDefined: a var(--name) with no definition falls back to the property's
-// initial value without a word, so a box once lost its rounded corners and shadow and a label
-// turned monospace. Every variable a page or script reads is defined in ui.css or on that page.
-func TestEveryCSSVariableIsDefined(t *testing.T) {
-	sources := map[string]string{
-		"ui.css": string(uiCSS), "layout": layoutHTML, "index": indexHTML, "resources": resourcesHTML,
-		"schedules": schedulesHTML, "spawn": spawnHTML, "account": accountHTML, "usage": usageHTML, "plan": planHTML,
-		"transcript": transcriptHTML, "blocks": blocksHTML, "workflows": workflowsHTML, "hostresources": hostResourcesHTML,
-		"email": emailHTML, "dictation.js": string(dictationJS), "submitkeys.js": string(submitKeysJS),
-		"attachments.js": string(attachmentsJS),
+func webAssetsByExt(t *testing.T, exts ...string) map[string]string {
+	t.Helper()
+	files, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
 	}
+	out := make(map[string]string)
+	for _, f := range files {
+		if f.IsDir() {
+			continue
+		}
+		name := f.Name()
+		for _, ext := range exts {
+			if strings.HasSuffix(name, ext) {
+				b, err := os.ReadFile(name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				out[name] = string(b)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func TestEveryCSSVariableIsDefined(t *testing.T) {
+	sources := webAssetsByExt(t, ".css", ".html", ".js")
 	defs := regexp.MustCompile(`(--[a-zA-Z0-9-]+)\s*:`)
 	uses := regexp.MustCompile(`var\(\s*(--[a-zA-Z0-9-]+)`)
 	setProps := regexp.MustCompile(`setProperty\(\s*['"](--[a-zA-Z0-9-]+)`)
@@ -45,7 +64,7 @@ func TestEveryCSSVariableIsDefined(t *testing.T) {
 		for _, m := range uses.FindAllStringSubmatch(src, -1) {
 			if v := m[1]; !shared[v] && !local[v] && !seen[v] {
 				seen[v] = true
-				t.Errorf("%s reads var(%s), which neither ui.css nor the page defines", name, v)
+				t.Errorf("%s reads var(%s), which neither ui.css nor the file defines; define %s in internal/web/ui.css or locally in %s", name, v, v, name)
 			}
 		}
 	}
@@ -85,24 +104,93 @@ func TestEverySharedCSSVariableIsRead(t *testing.T) {
 	}
 }
 
-// TestPagesDoNotRedefineSharedKeyframes: a page's own copy of a ui.css animation silently wins and
-// drifts from the shared one.
 func TestPagesDoNotRedefineSharedKeyframes(t *testing.T) {
 	frames := regexp.MustCompile(`@keyframes\s+([a-zA-Z0-9_-]+)`)
 	shared := map[string]bool{}
 	for _, m := range frames.FindAllStringSubmatch(string(uiCSS), -1) {
 		shared[m[1]] = true
 	}
-	for name, src := range map[string]string{
-		"layout": layoutHTML, "index": indexHTML, "resources": resourcesHTML, "schedules": schedulesHTML,
-		"spawn": spawnHTML, "account": accountHTML, "usage": usageHTML, "plan": planHTML, "transcript": transcriptHTML,
-		"blocks": blocksHTML, "workflows": workflowsHTML, "hostresources": hostResourcesHTML,
-	} {
+	for name, src := range webAssetsByExt(t, ".html") {
 		for _, m := range frames.FindAllStringSubmatch(src, -1) {
 			if shared[m[1]] {
-				t.Errorf("%s redefines @keyframes %s from ui.css", name, m[1])
+				t.Errorf("%s redefines @keyframes %s from ui.css; remove the local copy and use ui.css", name, m[1])
 			}
 		}
+	}
+}
+
+func checkNoNestedBodyTags(templates map[string]string) []string {
+	bodyOpen := regexp.MustCompile(`(?i)<body\b`)
+	names := make([]string, 0, len(templates))
+	for name := range templates {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var errs []string
+	for _, file := range names {
+		tree := parse.New(file)
+		tree.Mode = parse.SkipFuncCheck
+		trees := make(map[string]*parse.Tree)
+		if _, err := tree.Parse(templates[file], "{{", "}}", trees); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: parse template: %v", file, err))
+			continue
+		}
+		var countBodies func(node parse.Node, stack map[string]bool) int
+		countBodies = func(node parse.Node, stack map[string]bool) int {
+			if node == nil {
+				return 0
+			}
+			switch n := node.(type) {
+			case *parse.ListNode:
+				if n == nil {
+					return 0
+				}
+				total := 0
+				for _, child := range n.Nodes {
+					total += countBodies(child, stack)
+				}
+				return total
+			case *parse.TextNode:
+				return len(bodyOpen.FindAll(n.Text, -1))
+			case *parse.TemplateNode:
+				sub := trees[n.Name]
+				if sub == nil || stack[n.Name] {
+					return 0
+				}
+				stack[n.Name] = true
+				c := countBodies(sub.Root, stack)
+				delete(stack, n.Name)
+				return c
+			case *parse.IfNode:
+				return max(countBodies(n.List, stack), countBodies(n.ElseList, stack))
+			case *parse.WithNode:
+				return max(countBodies(n.List, stack), countBodies(n.ElseList, stack))
+			case *parse.RangeNode:
+				return max(countBodies(n.List, stack), countBodies(n.ElseList, stack))
+			}
+			return 0
+		}
+		tNames := make([]string, 0, len(trees))
+		for tName := range trees {
+			tNames = append(tNames, tName)
+		}
+		sort.Strings(tNames)
+		for _, tName := range tNames {
+			if n := countBodies(trees[tName].Root, map[string]bool{tName: true}); n > 1 {
+				errs = append(errs, fmt.Sprintf("%s template %q emits %d <body> tags; remove the duplicate <body> tag so the page has one document body", file, tName, n))
+			}
+		}
+	}
+	return errs
+}
+
+func TestNoNestedBodyTagsInTemplates(t *testing.T) {
+	for _, msg := range checkNoNestedBodyTags(webAssetsByExt(t, ".html")) {
+		t.Error(msg)
+	}
+	replay := `{{define "head"}}<html><body>{{end}}{{define "agent"}}{{template "head"}}<body><main></main></body>{{end}}`
+	if got := checkNoNestedBodyTags(map[string]string{"spawn.html": replay}); len(got) != 1 || !strings.Contains(got[0], `template "agent" emits 2 <body> tags`) {
+		t.Fatalf("replay ab2d216: got %v, want 1 nested-body finding on agent", got)
 	}
 }
 

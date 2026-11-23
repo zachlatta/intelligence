@@ -103,18 +103,24 @@ func TestLoginPageHasNoTabs(t *testing.T) {
 	}
 }
 
-// TestNoRenamedCSSProperties: a code rename once turned box-shadow into host-shadow, which a
-// browser drops without a word, so the workflow editor lost its selection ring and drop marks.
-func TestNoRenamedCSSProperties(t *testing.T) {
-	for name, src := range map[string]string{
-		"ui.css": string(uiCSS), "layout": layoutHTML, "index": indexHTML, "resources": resourcesHTML,
-		"schedules": schedulesHTML, "spawn": spawnHTML, "account": accountHTML, "usage": usageHTML, "plan": planHTML,
-		"transcript": transcriptHTML, "blocks": blocksHTML, "workflows": workflowsHTML, "hostresources": hostResourcesHTML,
-	} {
+func checkNoRenamedCSSProperties(sources map[string]string) []string {
+	var errs []string
+	for name, src := range sources {
 		for _, bad := range []string{"host-shadow", "host-sizing", "-webkit-host"} {
 			if strings.Contains(src, bad) {
-				t.Errorf("%s has %q", name, bad)
+				errs = append(errs, name+" has renamed CSS property "+bad+"; replace host- with box-")
 			}
 		}
+	}
+	return errs
+}
+
+func TestNoRenamedCSSProperties(t *testing.T) {
+	for _, msg := range checkNoRenamedCSSProperties(webAssetsByExt(t, ".css", ".html", ".js")) {
+		t.Error(msg)
+	}
+	// Replay past bug c8a6f7d on a template previously omitted from the hardcoded map.
+	if got := checkNoRenamedCSSProperties(map[string]string{"proposals.html": ".card { host-shadow: 0 1px 2px; }"}); len(got) != 1 {
+		t.Fatalf("replay c8a6f7d: got %v, want 1 renamed-property finding", got)
 	}
 }
