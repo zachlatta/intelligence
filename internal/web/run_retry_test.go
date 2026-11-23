@@ -287,6 +287,42 @@ func TestWorkflowRunRetryAPIAndPage(t *testing.T) {
 	}
 }
 
+func TestConcurrentRetriesOfOneFailedRunStartOneRun(t *testing.T) {
+	h, d := dbServer(t)
+	host := sendReport(t, h, wfReport())
+	wfID := createWorkflow(t, h, voiceMemoWorkflowDef())
+	failed := startRun(t, h, wfID, "Voice memo: First attempt\n")
+	_ = host.command()
+	if _, err := d.Owner.Exec(t.Context(), `UPDATE workflow_runs SET status='failed', error='boom', pending_command=NULL, finished_at=now() WHERE id=$1`, failed); err != nil {
+		t.Fatal(err)
+	}
+
+	path := "/api/workflow-runs/" + failed + "/retry"
+	codes := make([]int, 4)
+	var wg sync.WaitGroup
+	for i := range codes {
+		wg.Go(func() { codes[i] = call(t, h, http.MethodPost, path, `{}`, sameOriginFetch).Code })
+	}
+	wg.Wait()
+	created := 0
+	for _, c := range codes {
+		switch c {
+		case http.StatusCreated:
+			created++
+		case http.StatusConflict:
+		default:
+			t.Fatalf("concurrent retry codes = %v, want one 201 and the rest 409", codes)
+		}
+	}
+	var rows int
+	if err := d.Owner.QueryRow(t.Context(), `SELECT count(*) FROM workflow_runs WHERE retried_from_run_id = $1`, failed).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if created != 1 || rows != 1 {
+		t.Fatalf("concurrent retries: %d created, %d retry rows, want 1 and 1 (codes %v)", created, rows, codes)
+	}
+}
+
 func TestDatabaseRejectsDuplicateRetryForSameRun(t *testing.T) {
 	h, d := dbServer(t)
 	host := sendReport(t, h, wfReport())

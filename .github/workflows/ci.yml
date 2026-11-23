@@ -17,7 +17,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: formal state-machine models
-        run: scripts/with-test-postgres go test -race -v -run TestFormalModel ./internal/workflow
+        run: go test -race -v -run TestFormalModel ./internal/workflow
       - run: make test
   # Secrets anywhere in history, not only in the files internal/hygiene checks.
   secrets:
