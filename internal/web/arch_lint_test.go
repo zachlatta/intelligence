@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"os"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -167,7 +168,8 @@ func checkProposalHelpCoversType(help string, typ reflect.Type) []string {
 		if name == "" {
 			continue
 		}
-		if !strings.Contains(help, name) {
+		tokenRe := regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\b`)
+		if !tokenRe.MatchString(help) {
 			errs = append(errs, fmt.Sprintf("proposalHelp in internal/web/mcp_proposals.go does not document %s.%s (json %q); add %q to proposalHelp", typ.Name(), f.Name, name, name))
 		}
 	}

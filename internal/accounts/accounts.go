@@ -174,7 +174,6 @@ func (s *Store) ChangePassword(ctx context.Context, id int64, current, next stri
 	})
 }
 
-// randomToken is 32 random bytes, URL-safe.
 func randomToken() string {
 	b := make([]byte, 32)
 	_, _ = rand.Read(b)

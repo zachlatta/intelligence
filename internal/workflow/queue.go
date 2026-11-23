@@ -578,7 +578,6 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 	return true, nil // progressed: continue with the next queued run
 }
 
-// dequeue starts queued run r, saying why it starts now.
 func (e *Engine) dequeue(ctx context.Context, tx pgx.Tx, r run, why string) error {
 	if err := e.recordDequeue(ctx, tx, r, why); err != nil {
 		return err

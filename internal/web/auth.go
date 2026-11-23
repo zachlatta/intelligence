@@ -59,7 +59,6 @@ func (a *app) hostWrite(h func(accounts.Account, string) http.HandlerFunc) http.
 	}
 }
 
-// viewerOf is the account r is signed in as, or accounts.ErrNoSession.
 func (a *app) viewerOf(r *http.Request) (viewer, error) {
 	c, err := r.Cookie(sessionCookie)
 	if err != nil {
@@ -80,7 +79,6 @@ func (a *app) viewerOf(r *http.Request) (viewer, error) {
 	return v, nil
 }
 
-// page serves h to a signed-in browser, and sends any other to sign in, then back.
 func (a *app) page(h func(v viewer) http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		v, err := a.viewerOf(r)
@@ -107,7 +105,6 @@ func (a *app) page(h func(v viewer) http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// read serves h to a signed-in account, and refuses any other with 401.
 func (a *app) read(h func(v viewer) http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		v, ok := a.signedIn(w, r)
@@ -191,7 +188,6 @@ func requireJSON(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// decode reads a small JSON body into v, answering the request itself when it cannot.
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192))
 	dec.DisallowUnknownFields()
@@ -202,7 +198,6 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// accountError answers with err: a person's mistake as 4xx, anything else as 500.
 func accountError(w http.ResponseWriter, err error) {
 	var bad *accounts.BadInputError
 	switch {
