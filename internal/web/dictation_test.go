@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -160,14 +161,38 @@ async function runCase(insertOnly) {
 })().catch((e) => { console.error(e); process.exit(1); });
 `
 
-func TestDictationCanOnlyInsert(t *testing.T) {
+func requireNode(t *testing.T) string {
+	t.Helper()
 	node, err := exec.LookPath("node")
 	if err != nil {
+		if os.Getenv("CI") != "" || os.Getenv("INTELLIGENCE_REQUIRE_NODE") != "" {
+			t.Fatalf("node is required in CI/Docker test environments: %v", err)
+		}
 		t.Skip("no node")
 	}
+	return node
+}
+
+func TestDictationCanOnlyInsert(t *testing.T) {
+	node := requireNode(t)
 	out, err := exec.Command(node, "-e", dictationInsertOnlyHarness, "dictation.js").CombinedOutput()
 	if err != nil || strings.TrimSpace(string(out)) != "ok" {
 		t.Fatalf("dictation.js insertOnly behaviour: %v\n%s", err, out)
+	}
+}
+
+// TestDictationBarWrapsOnNarrowScreens guards cce6417: on a phone the dictation bar keeps its
+// status readable and wraps its grouped buttons onto the next row when needed.
+func TestDictationBarWrapsOnNarrowScreens(t *testing.T) {
+	if !strings.Contains(string(dictationJS), `<span class="dactions">`) {
+		t.Error("dictation.js does not group the bar's buttons")
+	}
+	css := string(uiCSS)
+	for _, want := range []string{`.form-actions + .dictation { margin-top: 1.4rem; }`, `.dictation { display: flex; flex-wrap: wrap;`, `.dictation .dstatus { flex: 1 1 8rem;`,
+		`.dictation .dactions { display: flex; flex-wrap: wrap; justify-content: flex-end;`} {
+		if !strings.Contains(css, want) {
+			t.Errorf("ui.css misses %s", want)
+		}
 	}
 }
 

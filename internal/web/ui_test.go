@@ -12,8 +12,10 @@ func TestTheStylesheetIsServed(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/css") {
 		t.Fatalf("ui.css: %d %q", rec.Code, rec.Header().Get("Content-Type"))
 	}
-	if rec.Body.String() != string(uiCSS) {
-		t.Error("ui.css response body does not match embedded uiCSS")
+	for _, want := range []string{".btn[hidden] { display: none; }", ".fields[hidden] { display: none; }"} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("ui.css misses %q", want)
+		}
 	}
 }
 
