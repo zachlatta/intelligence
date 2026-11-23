@@ -46,7 +46,6 @@ func undeliveredInputs(ctx context.Context, tx pgx.Tx, runID string, now time.Ti
 	})
 }
 
-// recordInput records Zach's input event and the send_message made for it.
 func (e *Engine) recordInput(ctx context.Context, tx pgx.Tx, r run, kind string, step *int, eventText, commandID string) error {
 	var event int64
 	if err := tx.QueryRow(ctx, `INSERT INTO workflow_run_events (run_id, account_id, at, kind, step, text)
@@ -56,7 +55,6 @@ func (e *Engine) recordInput(ctx context.Context, tx pgx.Tx, r run, kind string,
 	return e.carried(ctx, tx, r, []input{{Event: event}}, "original", &commandID)
 }
 
-// carried records that ins went to the orchestrator via command (nil: an ask's answer).
 func (e *Engine) carried(ctx context.Context, tx pgx.Tx, r run, ins []input, via string, command *string) error {
 	for _, in := range ins {
 		if _, err := tx.Exec(ctx, `INSERT INTO workflow_run_input_deliveries (run_id, account_id, event_id, via, command_id, created_at)
@@ -67,7 +65,6 @@ func (e *Engine) carried(ctx context.Context, tx pgx.Tx, r run, ins []input, via
 	return nil
 }
 
-// redelivery is what the orchestrator reads before anything else in a message carrying ins again.
 func redelivery(ins []input) string {
 	if len(ins) == 0 {
 		return ""
@@ -87,7 +84,6 @@ func redelivery(ins []input) string {
 	return b.String()
 }
 
-// withRedelivery puts the undelivered inputs before text.
 func withRedelivery(ins []input, text string) string {
 	if len(ins) == 0 {
 		return text
@@ -95,8 +91,6 @@ func withRedelivery(ins []input, text string) string {
 	return redelivery(ins) + "Now the message for you:\n\n" + text
 }
 
-// answeredAsk is the reply to an ask made while a reply to the run's previous ask never arrived:
-// the question is answered, so it does not go to Zach, and the orchestrator gets his answer now.
 func answeredAsk(ins []input) bool {
 	for _, in := range ins {
 		if in.Kind == "reply" {

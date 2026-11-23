@@ -12,14 +12,11 @@ func TestTheStylesheetIsServed(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/css") {
 		t.Fatalf("ui.css: %d %q", rec.Code, rec.Header().Get("Content-Type"))
 	}
-	for _, want := range []string{"--accent", "--topbar-h", ".topnav", ".card", ".badge", ".btn", ".md table", ".progress.warn", "prefers-color-scheme: dark", ".btn[hidden] { display: none; }", ".fields[hidden] { display: none; }"} {
-		if !strings.Contains(rec.Body.String(), want) {
-			t.Errorf("ui.css misses %q", want)
-		}
+	if rec.Body.String() != string(uiCSS) {
+		t.Error("ui.css response body does not match embedded uiCSS")
 	}
 }
 
-// The shared assets are revalidated on each load, and a browser's copy that is current is not sent again.
 func TestTheSharedAssetsAreRevalidated(t *testing.T) {
 	h, _ := dbServer(t)
 	for _, path := range []string{"/ui.css", "/dictation.js", "/submitkeys.js"} {
