@@ -114,6 +114,8 @@ func checkNoRenamedCSSProperties(sources map[string]string) []string {
 	return errs
 }
 
+// TestNoRenamedCSSProperties: a code rename once turned box-shadow into host-shadow, which a
+// browser drops without a word, so the workflow editor lost its selection ring and drop marks.
 func TestNoRenamedCSSProperties(t *testing.T) {
 	for _, msg := range checkNoRenamedCSSProperties(webAssetsByExt(t, ".css", ".html", ".js")) {
 		t.Error(msg)

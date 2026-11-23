@@ -173,6 +173,8 @@ func requireNode(t *testing.T) string {
 	return node
 }
 
+// TestDictationCanOnlyInsert: with insertOnly, an empty box does not choose sending: dictation
+// always appends at the cursor, and stopping it never calls send.
 func TestDictationCanOnlyInsert(t *testing.T) {
 	node := requireNode(t)
 	out, err := exec.Command(node, "-e", dictationInsertOnlyHarness, "dictation.js").CombinedOutput()

@@ -446,6 +446,7 @@ const ModelQuotaWaitRule = "Model quota waits: if the model suggester returns \"
 const UnattendedShellRule = "Agents run unattended. Pass this shell guidance to each sub-agent. " +
 	"Even bypass mode can ask for permission on shell safety checks. Intelligence denies those prompts and asks for a safer approach. Use Write/Edit tools for prompt files and other multiline content instead of shell heredocs; split compound commands and use git -C instead of cd && git. " + hostclient.RemovalRule + " Do not retry the same blocked command. A denial does not authorize broader actions. If blocked, report why."
 
+// RunAnswerRule applies to saved workflows too, including code and service tasks.
 const RunAnswerRule = "Record every answer sent to the requester, including requesters other than Zach, with intelligence workflow answer --run {{run}} --channel email --message-id <sent message id> [--thread-id <thread id>] [--sent-at <date>] [--checked]. " +
 	"The final step must do this before finishing. On an early exit (fail or skip to the end), the authorized worker that sends the answer must record it before the orchestrator ends the run. Only a step authorized to send may send. " +
 	"Use --checked only when the sent answer passed the required review. Record earlier unchecked sends too. Use the actual send time in RFC 3339 or RFC 5322 format when available; immediately after sending, omit --sent-at if the mail tool returns no timestamp, and the server defaults to now(). " +

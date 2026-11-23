@@ -145,6 +145,7 @@ func (i Image) Path() string {
 	return ".factory-scratch/attachments/" + i.ID + "." + ext
 }
 
+// SafeDisplayName returns a single-line, prompt-safe basename for display in agent prompts.
 func SafeDisplayName(name string) string {
 	name = strings.TrimSpace(name)
 	if idx := strings.LastIndexAny(name, `/\`); idx >= 0 {

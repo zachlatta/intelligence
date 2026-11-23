@@ -1144,6 +1144,7 @@ func (e *Engine) archiveRun(ctx context.Context, tx pgx.Tx, r run) error {
 	return err
 }
 
+// archiveFinder queues archiving r's project finder, once its agent is known.
 func (e *Engine) archiveFinder(ctx context.Context, tx pgx.Tx, r run) error {
 	agent := r.ProjectAgent
 	if agent == "" && r.ProjectCommand != nil {

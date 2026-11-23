@@ -330,6 +330,7 @@ func homePage(cfg Config, v viewer) http.HandlerFunc {
 	}
 }
 
+// short is a commit id cut to 12 characters for display; anything shorter is kept whole.
 func short(v string) string {
 	if len(v) > 12 {
 		return v[:12]
@@ -364,6 +365,7 @@ func ago(now, t time.Time) string {
 	return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 }
 
+// agentSummary counts agents by status, as "2 running, 8 idle": running first, then the rest by name.
 func agentSummary(agents []fleet.AgentView) string {
 	if len(agents) == 0 {
 		return "no agents"
@@ -425,6 +427,7 @@ func idleWorkspaces(b fleet.Host) []fleet.WorkspaceAgents {
 	return out
 }
 
+// runningAgents counts the agents working on a turn, which archiving would stop.
 func runningAgents(agents []fleet.AgentView) int {
 	n := 0
 	for _, a := range agents {
@@ -435,8 +438,10 @@ func runningAgents(agents []fleet.AgentView) int {
 	return n
 }
 
+// losesChanges: archiving the workspace would remove a worktree holding uncommitted changes.
 func losesChanges(w fleet.WorkspaceAgents) bool { return w.Kind == "worktree" && w.Dirty }
 
+// openWorkspace says whether w starts open on the home page: it has an agent running or needing attention.
 func openWorkspace(w fleet.WorkspaceAgents) bool {
 	for _, a := range w.Agents {
 		if a.Status == "running" || a.RequiresAttention {

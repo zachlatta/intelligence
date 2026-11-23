@@ -55,6 +55,7 @@ func (e *Engine) recordInput(ctx context.Context, tx pgx.Tx, r run, kind string,
 	return e.carried(ctx, tx, r, []input{{Event: event}}, "original", &commandID)
 }
 
+// carried records that ins went to the orchestrator via command (nil: an ask's answer).
 func (e *Engine) carried(ctx context.Context, tx pgx.Tx, r run, ins []input, via string, command *string) error {
 	for _, in := range ins {
 		if _, err := tx.Exec(ctx, `INSERT INTO workflow_run_input_deliveries (run_id, account_id, event_id, via, command_id, created_at)
@@ -65,6 +66,7 @@ func (e *Engine) carried(ctx context.Context, tx pgx.Tx, r run, ins []input, via
 	return nil
 }
 
+// redelivery is what the orchestrator reads before anything else in a message carrying ins again.
 func redelivery(ins []input) string {
 	if len(ins) == 0 {
 		return ""

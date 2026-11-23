@@ -29,6 +29,7 @@ func (s *Store) MCPAccount(ctx context.Context, token string) (Account, error) {
 	return a, err
 }
 
+// MCPIdentity authenticates and returns the durable token id for proposal ownership.
 func (s *Store) MCPIdentity(ctx context.Context, token string) (Account, string, error) {
 	var a Account
 	var id string

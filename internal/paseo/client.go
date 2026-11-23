@@ -267,6 +267,7 @@ type pageInfo struct {
 	NextCursor string `json:"nextCursor"`
 }
 
+// Agents reads every unarchived agent and subscribes to their updates.
 func (c *Client) Agents(ctx context.Context) ([]Agent, error) {
 	var out []Agent
 	err := c.fetchAll(ctx, "fetch_agents_request", "created_at", func(raw json.RawMessage) (pageInfo, error) {
@@ -295,6 +296,7 @@ type Project struct {
 	Directory string `json:"projectRootPath"`
 }
 
+// Projects reads the full registered project catalog, independent of workspaces.
 func (c *Client) Projects(ctx context.Context) ([]Project, error) {
 	var out struct {
 		Projects []Project `json:"projects"`

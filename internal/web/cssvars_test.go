@@ -37,6 +37,9 @@ func webAssetsByExt(t *testing.T, exts ...string) map[string]string {
 	return out
 }
 
+// TestEveryCSSVariableIsDefined: a var(--name) with no definition falls back to the property's
+// initial value without a word, so a box once lost its rounded corners and shadow and a label
+// turned monospace. Every variable a page or script reads is defined in ui.css or on that page.
 func TestEveryCSSVariableIsDefined(t *testing.T) {
 	sources := webAssetsByExt(t, ".css", ".html", ".js")
 	defs := regexp.MustCompile(`(--[a-zA-Z0-9-]+)\s*:`)
@@ -104,6 +107,8 @@ func TestEverySharedCSSVariableIsRead(t *testing.T) {
 	}
 }
 
+// TestPagesDoNotRedefineSharedKeyframes: a page's own copy of a ui.css animation silently wins and
+// drifts from the shared one.
 func TestPagesDoNotRedefineSharedKeyframes(t *testing.T) {
 	frames := regexp.MustCompile(`@keyframes\s+([a-zA-Z0-9_-]+)`)
 	shared := map[string]bool{}

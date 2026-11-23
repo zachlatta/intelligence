@@ -202,6 +202,7 @@ func serverConfig(getenv func(string) string) (serverSettings, error) {
 	return c, nil
 }
 
+// hostAlerts is the phone channel for silent-host alerts: PDW's notify tool, when configured.
 func hostAlerts(c serverSettings) hostwatch.Notifier {
 	if c.PDWNotifyKey == "" {
 		return nil
@@ -551,6 +552,7 @@ func newUpdater(c hostSettings, current string) (*hostclient.Updater, error) {
 	}, nil
 }
 
+// addr is the listen address: all interfaces on $PORT, default 8080.
 func addr(getenv func(string) string) string {
 	if p := getenv("PORT"); p != "" {
 		return ":" + p
