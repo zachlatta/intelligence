@@ -14,6 +14,7 @@ import (
 	"github.com/zachlatta/intelligence/internal/db"
 	"github.com/zachlatta/intelligence/internal/dbtest"
 	"github.com/zachlatta/intelligence/internal/hostwatch"
+	"github.com/zachlatta/intelligence/internal/webpush"
 )
 
 // recorder keeps every notice the watcher sends.
@@ -281,6 +282,64 @@ func TestFailedSendIsRetriedNotLost(t *testing.T) {
 	}
 	if got := rec.notices(); len(got) != 1 {
 		t.Fatalf("want the alert once after a retry, got %+v", got)
+	}
+}
+
+// pushSpy keeps every Web Push the watcher sends, with the account it went to.
+type pushSpy struct {
+	mu       sync.Mutex
+	accounts []int64
+	msgs     []webpush.Message
+}
+
+func (p *pushSpy) SendAccount(_ context.Context, account int64, msg webpush.Message) (int, int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.accounts = append(p.accounts, account)
+	p.msgs = append(p.msgs, msg)
+	return 1, 0, nil
+}
+
+func (p *pushSpy) sent() ([]int64, []webpush.Message) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]int64(nil), p.accounts...), append([]webpush.Message(nil), p.msgs...)
+}
+
+func TestSilentHostWebPushesItsOwnerOnceAndOnRecovery(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	var owner int64
+	if err := f.d.Owner.QueryRow(ctx, `SELECT account_id FROM host_keys WHERE host = 'box-busy'`).Scan(&owner); err != nil {
+		t.Fatal(err)
+	}
+	spy := &pushSpy{}
+	now := t0.Add(10*time.Minute + time.Second)
+	w := f.watcher(nil, &now)
+	w.Account = "" // Web Push goes to the host's owner, with or without the PDW phone alert
+	w.Push = spy
+	for range 2 {
+		if err := w.Check(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	accounts, msgs := spy.sent()
+	if len(msgs) != 1 || accounts[0] != owner || !strings.Contains(msgs[0].Title, "box-busy") ||
+		msgs[0].URL != "/resources" || msgs[0].Tag != "host-silent-box-busy" || !strings.Contains(msgs[0].Body, "3 runs") {
+		t.Fatalf("want one silence push to account %d, got %v %+v", owner, accounts, msgs)
+	}
+
+	back := t0.Add(time.Hour)
+	f.exec(`UPDATE hosts SET last_seen = $1 WHERE name = 'box-busy'`, back)
+	now = back.Add(30 * time.Second)
+	for range 2 {
+		if err := w.Check(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	accounts, msgs = spy.sent()
+	if len(msgs) != 2 || accounts[1] != owner || !strings.Contains(msgs[1].Title, "box-busy") || msgs[1].Tag != "host-silent-box-busy" {
+		t.Fatalf("want one recovery push, got %v %+v", accounts, msgs)
 	}
 }
 

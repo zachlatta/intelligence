@@ -112,6 +112,10 @@ The hierarchy is hosts > workspaces > agents:
   addresses, how far it is read, and its Google token, sealed with `CONNECTIONS_KEY`, so reading it
   gives nothing) and `emails` (every email it received, and what it did and why): Email triggers,
   below.
+- `push_subscriptions`: the account's devices that turned on Web Push notifications (`/account`),
+  with each one's push service host, browser, and when it was last sent to or failed. Its endpoint
+  and keys are sealed with a key derived from `VAPID_PRIVATE_KEY`, so reading it gives nothing to
+  push with (`VAPID_PUBLIC_KEY`, below).
 - `whats_new` (the release notes, synced from `internal/whatsnew/entries.json` when the server
   starts; the same for every account, as they hold no account's state), `whats_new_seen` (which
   entries the account has seen) and the view `whats_new_unseen` (those it has not): What's New, below.

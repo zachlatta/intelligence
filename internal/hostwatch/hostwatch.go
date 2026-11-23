@@ -112,106 +112,77 @@ func (w *Watcher) Check(ctx context.Context) error {
 		if err := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock($1)`, int64(lockKey)).Scan(&got); err != nil || !got {
 			return err // another instance is checking
 		}
-		// hosts heard from again
-		if w.Push != nil {
-			rrows, err := tx.Query(ctx, `UPDATE host_silence_alerts a SET recovered_at = h.last_seen
-				FROM hosts h
-				LEFT JOIN host_keys k ON k.host = h.name
-				WHERE h.name = a.host AND a.recovered_at IS NULL AND h.last_seen > a.last_seen
-				RETURNING coalesce(k.account_id, 0), a.host, a.last_seen, a.recovered_at`)
-			if err != nil {
+		// hosts heard from again, and the account each one's Web Push goes to
+		rrows, err := tx.Query(ctx, `UPDATE host_silence_alerts a SET recovered_at = h.last_seen
+			FROM hosts h
+			LEFT JOIN host_keys k ON k.host = h.name
+			WHERE h.name = a.host AND a.recovered_at IS NULL AND h.last_seen > a.last_seen
+			RETURNING coalesce(k.account_id, 0), a.host, a.last_seen, a.recovered_at`)
+		if err != nil {
+			return err
+		}
+		for rrows.Next() {
+			var acctID int64
+			var host string
+			var lastSeen, recovered time.Time
+			if err := rrows.Scan(&acctID, &host, &lastSeen, &recovered); err != nil {
+				rrows.Close()
 				return err
 			}
-			for rrows.Next() {
-				var acctID int64
-				var host string
-				var lastSeen, recovered time.Time
-				if err := rrows.Scan(&acctID, &host, &lastSeen, &recovered); err != nil {
-					rrows.Close()
-					return err
-				}
-				if acctID > 0 {
-					n := w.recoveryNotice(alert{host: host, lastSeen: lastSeen, recovered: &recovered})
-					pushes = append(pushes, pushItem{acctID, webpush.Message{
-						Title: n.Title, Body: n.Body, URL: "/resources", Tag: "host-silent-" + host,
-					}})
-				}
-			}
-			rrows.Close()
-			if err := rrows.Err(); err != nil {
-				return err
-			}
-		} else {
-			if _, err := tx.Exec(ctx, `UPDATE host_silence_alerts a SET recovered_at = h.last_seen
-				FROM hosts h WHERE h.name = a.host AND a.recovered_at IS NULL AND h.last_seen > a.last_seen`); err != nil {
-				return err
+			if w.Push != nil && acctID > 0 {
+				n := w.recoveryNotice(alert{host: host, lastSeen: lastSeen, recovered: &recovered})
+				pushes = append(pushes, pushItem{acctID, webpush.Message{
+					Title: n.Title, Body: n.Body, URL: "/resources", Tag: "host-silent-" + host,
+				}})
 			}
 		}
-		// newly silent hosts with active runs
-		if w.Push != nil {
-			arows, err := tx.Query(ctx, `WITH inserted AS (
-				INSERT INTO host_silence_alerts (host, last_seen, opened_at, active_runs, running_runs, waiting_runs,
-					queued_runs, oom_kills, last_oom_at, oom_comms, notify)
-				SELECT h.name, h.last_seen, $1::timestamptz, r.active, r.running, r.waiting, r.queued, coalesce(o.kills, 0), o.last_at, coalesce(o.comms, ''),
-				       EXISTS (SELECT 1 FROM host_keys k JOIN accounts acc ON acc.id = k.account_id WHERE k.host = h.name AND acc.username = $3::text AND $3::text <> '')
-				FROM hosts h
-				CROSS JOIN LATERAL (SELECT count(*)::int AS active,
-				         count(*) FILTER (WHERE status IN ('finding_project','starting','running','stalled'))::int AS running,
-				         count(*) FILTER (WHERE status = 'waiting')::int AS waiting,
-				         count(*) FILTER (WHERE status = 'queued')::int AS queued
-				       FROM workflow_runs WHERE host = h.name AND status IN `+activeStatuses+`) r
-				LEFT JOIN LATERAL (SELECT count(*)::int AS kills, max(at) AS last_at,
-				         string_agg(DISTINCT nullif(comm, ''), ', ') AS comms
-				       FROM oom_kills WHERE host = h.name
-				         AND at > (SELECT max(at) FROM oom_kills WHERE host = h.name) - interval '1 hour') o ON true
-				WHERE greatest(h.last_seen, $4::timestamptz) < $1::timestamptz - make_interval(secs => $2::float8) AND r.active > 0
-				  AND NOT EXISTS (SELECT 1 FROM host_silence_alerts a WHERE a.host = h.name AND a.recovered_at IS NULL)
-				ON CONFLICT DO NOTHING
-				RETURNING host, last_seen, opened_at, active_runs, running_runs, waiting_runs, queued_runs, oom_kills, last_oom_at, oom_comms
-			)
-			SELECT coalesce(k.account_id, 0), i.host, i.last_seen, i.opened_at, i.active_runs, i.running_runs, i.waiting_runs, i.queued_runs, i.oom_kills, i.last_oom_at, i.oom_comms
-			FROM inserted i LEFT JOIN host_keys k ON k.host = i.host`, now, after.Seconds(), w.Account, w.Started)
-			if err != nil {
+		rrows.Close()
+		if err := rrows.Err(); err != nil {
+			return err
+		}
+		// newly silent hosts with active runs, and the account each one's Web Push goes to
+		arows, err := tx.Query(ctx, `WITH inserted AS (
+			INSERT INTO host_silence_alerts (host, last_seen, opened_at, active_runs, running_runs, waiting_runs,
+				queued_runs, oom_kills, last_oom_at, oom_comms, notify)
+			SELECT h.name, h.last_seen, $1::timestamptz, r.active, r.running, r.waiting, r.queued, coalesce(o.kills, 0), o.last_at, coalesce(o.comms, ''),
+			       EXISTS (SELECT 1 FROM host_keys k JOIN accounts acc ON acc.id = k.account_id WHERE k.host = h.name AND acc.username = $3::text AND $3::text <> '')
+			FROM hosts h
+			CROSS JOIN LATERAL (SELECT count(*)::int AS active,
+			         count(*) FILTER (WHERE status IN ('finding_project','starting','running','stalled'))::int AS running,
+			         count(*) FILTER (WHERE status = 'waiting')::int AS waiting,
+			         count(*) FILTER (WHERE status = 'queued')::int AS queued
+			       FROM workflow_runs WHERE host = h.name AND status IN `+activeStatuses+`) r
+			LEFT JOIN LATERAL (SELECT count(*)::int AS kills, max(at) AS last_at,
+			         string_agg(DISTINCT nullif(comm, ''), ', ') AS comms
+			       FROM oom_kills WHERE host = h.name
+			         AND at > (SELECT max(at) FROM oom_kills WHERE host = h.name) - interval '1 hour') o ON true
+			WHERE greatest(h.last_seen, $4::timestamptz) < $1::timestamptz - make_interval(secs => $2::float8) AND r.active > 0
+			  AND NOT EXISTS (SELECT 1 FROM host_silence_alerts a WHERE a.host = h.name AND a.recovered_at IS NULL)
+			ON CONFLICT DO NOTHING
+			RETURNING host, last_seen, opened_at, active_runs, running_runs, waiting_runs, queued_runs, oom_kills, last_oom_at, oom_comms
+		)
+		SELECT coalesce(k.account_id, 0), i.host, i.last_seen, i.opened_at, i.active_runs, i.running_runs, i.waiting_runs, i.queued_runs, i.oom_kills, i.last_oom_at, i.oom_comms
+		FROM inserted i LEFT JOIN host_keys k ON k.host = i.host`, now, after.Seconds(), w.Account, w.Started)
+		if err != nil {
+			return err
+		}
+		for arows.Next() {
+			var acctID int64
+			var a alert
+			if err := arows.Scan(&acctID, &a.host, &a.lastSeen, &a.opened, &a.active, &a.running, &a.waiting, &a.queued, &a.oom, &a.lastOOM, &a.comms); err != nil {
+				arows.Close()
 				return err
 			}
-			for arows.Next() {
-				var acctID int64
-				var a alert
-				if err := arows.Scan(&acctID, &a.host, &a.lastSeen, &a.opened, &a.active, &a.running, &a.waiting, &a.queued, &a.oom, &a.lastOOM, &a.comms); err != nil {
-					arows.Close()
-					return err
-				}
-				if acctID > 0 {
-					n := w.alertNotice(a, now)
-					pushes = append(pushes, pushItem{acctID, webpush.Message{
-						Title: n.Title, Body: n.Body, URL: "/resources", Tag: "host-silent-" + a.host,
-					}})
-				}
+			if w.Push != nil && acctID > 0 {
+				n := w.alertNotice(a, now)
+				pushes = append(pushes, pushItem{acctID, webpush.Message{
+					Title: n.Title, Body: n.Body, URL: "/resources", Tag: "host-silent-" + a.host,
+				}})
 			}
-			arows.Close()
-			if err := arows.Err(); err != nil {
-				return err
-			}
-		} else {
-			if _, err := tx.Exec(ctx, `INSERT INTO host_silence_alerts (host, last_seen, opened_at, active_runs, running_runs, waiting_runs,
-					queued_runs, oom_kills, last_oom_at, oom_comms, notify)
-				SELECT h.name, h.last_seen, $1::timestamptz, r.active, r.running, r.waiting, r.queued, coalesce(o.kills, 0), o.last_at, coalesce(o.comms, ''),
-				       EXISTS (SELECT 1 FROM host_keys k JOIN accounts acc ON acc.id = k.account_id WHERE k.host = h.name AND acc.username = $3::text AND $3::text <> '')
-				FROM hosts h
-				CROSS JOIN LATERAL (SELECT count(*)::int AS active,
-				         count(*) FILTER (WHERE status IN ('finding_project','starting','running','stalled'))::int AS running,
-				         count(*) FILTER (WHERE status = 'waiting')::int AS waiting,
-				         count(*) FILTER (WHERE status = 'queued')::int AS queued
-				       FROM workflow_runs WHERE host = h.name AND status IN `+activeStatuses+`) r
-				LEFT JOIN LATERAL (SELECT count(*)::int AS kills, max(at) AS last_at,
-				         string_agg(DISTINCT nullif(comm, ''), ', ') AS comms
-				       FROM oom_kills WHERE host = h.name
-				         AND at > (SELECT max(at) FROM oom_kills WHERE host = h.name) - interval '1 hour') o ON true
-				WHERE greatest(h.last_seen, $4::timestamptz) < $1::timestamptz - make_interval(secs => $2::float8) AND r.active > 0
-				  AND NOT EXISTS (SELECT 1 FROM host_silence_alerts a WHERE a.host = h.name AND a.recovered_at IS NULL)
-				ON CONFLICT DO NOTHING`, now, after.Seconds(), w.Account, w.Started); err != nil {
-				return err
-			}
+		}
+		arows.Close()
+		if err := arows.Err(); err != nil {
+			return err
 		}
 		if w.Notify == nil {
 			return nil
