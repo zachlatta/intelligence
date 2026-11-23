@@ -23,6 +23,7 @@ func (e *Engine) RetryRun(ctx context.Context, account int64, runID string) (str
 	if !uuidRe.MatchString(runID) {
 		return "", ErrNotFound
 	}
+	ctx, flushPushes := e.CollectPushes(ctx)
 	var newID string
 	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
 		var workflowID string
@@ -72,6 +73,7 @@ func (e *Engine) RetryRun(ctx context.Context, account int64, runID string) (str
 	})
 	if err == nil {
 		e.sendFailureAlertsBestEffort(ctx)
+		flushPushes()
 	}
 	return newID, err
 }

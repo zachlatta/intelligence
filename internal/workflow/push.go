@@ -14,6 +14,34 @@ type pendingPush struct {
 	msg       webpush.Message
 }
 
+type pushCollector struct {
+	items []pendingPush
+}
+
+type pushCollectorKey struct{}
+
+// CollectPushes attaches a transaction-scoped push collector to ctx and returns a flush
+// function to call after the transaction commits. Calling flush sends every push recorded
+// during the transaction via e.Push; if the transaction rolls back, simply do not call flush.
+func (e *Engine) CollectPushes(ctx context.Context) (context.Context, func()) {
+	if e.Push == nil {
+		return ctx, func() {}
+	}
+	if _, ok := ctx.Value(pushCollectorKey{}).(*pushCollector); ok {
+		return ctx, func() {} // outer transaction owns the flush
+	}
+	c := &pushCollector{}
+	return context.WithValue(ctx, pushCollectorKey{}, c), func() {
+		e.pushBestEffort(ctx, c.items...)
+	}
+}
+
+func addPush(ctx context.Context, item pendingPush) {
+	if c, ok := ctx.Value(pushCollectorKey{}).(*pushCollector); ok {
+		c.items = append(c.items, item)
+	}
+}
+
 func (e *Engine) pushBestEffort(ctx context.Context, items ...pendingPush) {
 	if e.Push == nil || len(items) == 0 {
 		return

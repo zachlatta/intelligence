@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -130,6 +131,39 @@ func TestServerConfigParsesVAPID(t *testing.T) {
 	delete(base, "VAPID_SUBJECT")
 	if _, err := serverConfig(env(base)); err == nil || !strings.Contains(err.Error(), "VAPID") {
 		t.Errorf("partial VAPID should fail, got %v", err)
+	}
+}
+
+func TestRunVAPIDKeysPrintsValidEnvVars(t *testing.T) {
+	var buf bytes.Buffer
+	if err := runVAPIDKeys([]string{"-subject", "mailto:ops@example.com"}, &buf); err != nil {
+		t.Fatalf("runVAPIDKeys: %v", err)
+	}
+	vals := map[string]string{
+		"DATABASE_URL":          "postgres://app:p@db/app",
+		"READONLY_DATABASE_URL": "postgres://ro:p@db/app",
+	}
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			t.Fatalf("bad env line %q", line)
+		}
+		vals[k] = v
+	}
+	if vals["VAPID_SUBJECT"] != "mailto:ops@example.com" || vals["VAPID_PUBLIC_KEY"] == "" || vals["VAPID_PRIVATE_KEY"] == "" {
+		t.Fatalf("unexpected output:\n%s", buf.String())
+	}
+	c, err := serverConfig(env(vals))
+	if err != nil {
+		t.Fatalf("serverConfig refused generated keys: %v", err)
+	}
+	if c.VAPID == nil || c.VAPID.PublicKey != vals["VAPID_PUBLIC_KEY"] {
+		t.Fatalf("parsed VAPID mismatch: %+v", c.VAPID)
+	}
+
+	buf.Reset()
+	if err := runVAPIDKeys([]string{"-subject", "http://bad.example.com"}, &buf); err == nil {
+		t.Errorf("invalid subject should fail")
 	}
 }
 

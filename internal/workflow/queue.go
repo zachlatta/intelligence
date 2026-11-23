@@ -443,10 +443,13 @@ func (e *Engine) StartQueued(ctx context.Context) error {
 	var errs []error
 	for _, host := range hosts {
 		for {
+			txCtx, flushPushes := e.CollectPushes(ctx)
 			var started bool
-			err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) (err error) { started, err = e.startNext(ctx, tx, host); return err })
+			err := pgx.BeginFunc(txCtx, e.p, func(tx pgx.Tx) (err error) { started, err = e.startNext(txCtx, tx, host); return err })
 			if err != nil {
 				errs = append(errs, err)
+			} else {
+				flushPushes()
 			}
 			if err != nil || !started {
 				break
@@ -624,7 +627,8 @@ func (e *Engine) StartNow(ctx context.Context, account int64, runID string) erro
 	if !uuidRe.MatchString(runID) {
 		return ErrNotFound
 	}
-	return pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+	ctx, flushPushes := e.CollectPushes(ctx)
+	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
 		var host string
 		err := tx.QueryRow(ctx, "SELECT host FROM workflow_runs WHERE id = $1 AND account_id = $2", runID, account).Scan(&host)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -654,6 +658,11 @@ func (e *Engine) StartNow(ctx context.Context, account int64, runID string) erro
 		r.StartedByHand = true
 		return e.dequeue(ctx, tx, r, startedByHand)
 	})
+	if err == nil {
+		e.sendFailureAlertsBestEffort(ctx)
+		flushPushes()
+	}
+	return err
 }
 
 // retryHeld says why r's start retry cannot be sent yet, whatever its host's load ("" when it can):

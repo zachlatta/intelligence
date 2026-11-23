@@ -20,9 +20,14 @@ const failureAlertLockKey = 0x77666661696c616c // "wffailal"
 // maxFailureAlertAttempts bounds retries when PDW refuses a notification.
 const maxFailureAlertAttempts = 10
 
-// recordFailureAlert records one pending phone alert for a failed answer-expected run.
-// Runs that do not expect an answer (task runs) are ignored.
+// recordFailureAlert records one pending phone alert for a failed answer-expected run
+// and queues a Web Push notification for the owning account when Web Push is enabled.
 func (e *Engine) recordFailureAlert(ctx context.Context, tx pgx.Tx, r run, errMsg string) error {
+	if e.Push != nil {
+		var summary string
+		_ = tx.QueryRow(ctx, "SELECT task_summary FROM workflow_runs WHERE id = $1", r.ID).Scan(&summary)
+		addPush(ctx, failPush(r.Account, r.ID, runPushLabel(summary, r.Title), errMsg))
+	}
 	if !r.AnswerExpected {
 		return nil
 	}

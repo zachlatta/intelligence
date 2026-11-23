@@ -441,6 +441,7 @@ func ptr(i int) *int { return &i }
 // StartRun starts account's workflow with input, on the host its definition names, and returns
 // the run's id. A matched project starts its finder agent; a fixed one, the orchestrator.
 func (e *Engine) StartRun(ctx context.Context, account int64, workflowID, input string) (string, error) {
+	ctx, flushPushes := e.CollectPushes(ctx)
 	var id string
 	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
 		var err error
@@ -449,6 +450,7 @@ func (e *Engine) StartRun(ctx context.Context, account int64, workflowID, input 
 	})
 	if err == nil {
 		e.sendFailureAlertsBestEffort(ctx)
+		flushPushes()
 	}
 	return id, err
 }
@@ -707,7 +709,7 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 	if len(c.Result) > 0 {
 		_ = json.Unmarshal(c.Result, &res)
 	}
-	var pushes []pendingPush
+	ctx, flushPushes := e.CollectPushes(ctx)
 	err = pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
 		// Queue admission and retry eligibility share this lock. Take it
 		// before the run row, in the same order as startNext.
@@ -761,7 +763,6 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 			if err := e.recordFailureAlert(ctx, tx, r, msg); err != nil {
 				return err
 			}
-			pushes = append(pushes, failPush(r.Account, r.ID, runPushLabel("", r.Title), msg))
 			r.WorkspaceID, r.Orchestrator = res.WorkspaceID, res.AgentID
 			return e.archiveRun(ctx, tx, r)
 		}
@@ -779,7 +780,7 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 	})
 	if err == nil {
 		e.sendFailureAlertsBestEffort(ctx)
-		e.pushBestEffort(ctx, pushes...)
+		flushPushes()
 	}
 	return err
 }
@@ -814,8 +815,8 @@ func (e *Engine) MoveRun(ctx context.Context, host, runID string, m Move) (strin
 	if !uuidRe.MatchString(runID) {
 		return "", ErrNotFound
 	}
+	ctx, flushPushes := e.CollectPushes(ctx)
 	var msg string
-	var pushes []pendingPush
 	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
 		if err := lockQueue(ctx, tx, host); err != nil {
 			return err
@@ -842,16 +843,10 @@ func (e *Engine) MoveRun(ctx context.Context, host, runID string, m Move) (strin
 		if err := agenttext.Validate(msg); err != nil {
 			return bad("%s", err)
 		}
-		if e.Push != nil && (m.Move == "ask" || m.Move == "fail") {
+		if e.Push != nil && m.Move == "ask" {
 			var newStatus, summary string
-			if err := tx.QueryRow(ctx, "SELECT status, task_summary FROM workflow_runs WHERE id = $1", r.ID).Scan(&newStatus, &summary); err == nil {
-				label := runPushLabel(summary, r.Title)
-				switch {
-				case m.Move == "ask" && newStatus == Waiting:
-					pushes = append(pushes, askPush(r.Account, r.ID, label, m.Note))
-				case m.Move == "fail" && newStatus == Failed:
-					pushes = append(pushes, failPush(r.Account, r.ID, label, m.Why))
-				}
+			if err := tx.QueryRow(ctx, "SELECT status, task_summary FROM workflow_runs WHERE id = $1", r.ID).Scan(&newStatus, &summary); err == nil && newStatus == Waiting {
+				addPush(ctx, askPush(r.Account, r.ID, runPushLabel(summary, r.Title), m.Note))
 			}
 		}
 		return nil
@@ -860,7 +855,7 @@ func (e *Engine) MoveRun(ctx context.Context, host, runID string, m Move) (strin
 		return "", err
 	}
 	e.sendFailureAlertsBestEffort(ctx)
-	e.pushBestEffort(ctx, pushes...)
+	flushPushes()
 	return msg, nil
 }
 

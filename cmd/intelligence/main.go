@@ -4,13 +4,16 @@
 //	intelligence host       run on a host: stream its Paseo daemon and its plans' usage to the server, run the server's commands, and stay on its version
 //	intelligence probe      run as root on a Linux host: the eBPF probe that charges each agent's CPU and OOM kills
 //	intelligence workflow   move a workflow run, from its agents on a host (intelligence workflow -h)
+//	intelligence vapid-keys generate a VAPID key pair and print VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT
 //	intelligence version    print this binary's version
 package main
 
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -67,10 +70,12 @@ func main() {
 		err = runProbe(ctx)
 	case "workflow":
 		os.Exit(workflow.CLI(ctx, os.Args[2:], os.Getenv, os.Stdin, os.Stdout, os.Stderr, http.DefaultClient))
+	case "vapid-keys":
+		err = runVAPIDKeys(os.Args[2:], os.Stdout)
 	case "version":
 		fmt.Println(version(os.Getenv))
 	default:
-		err = fmt.Errorf("unknown command %q: want server, host, probe, workflow or version", cmd)
+		err = fmt.Errorf("unknown command %q: want server, host, probe, workflow, vapid-keys or version", cmd)
 	}
 	if err != nil {
 		log.Fatal(err)
@@ -591,4 +596,24 @@ func version(getenv func(string) string) string {
 		}
 	}
 	return "dev"
+}
+
+// runVAPIDKeys generates a P-256 VAPID key pair and prints the three server environment
+// variables needed to enable Web Push notifications.
+func runVAPIDKeys(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("vapid-keys", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	subject := fs.String("subject", "mailto:alerts@example.com", "VAPID subject URI (mailto:... or https://...)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	pub, priv, err := webpush.GenerateVAPIDKeys()
+	if err != nil {
+		return err
+	}
+	if _, err := webpush.ParseVAPID(pub, priv, *subject); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(out, "VAPID_PUBLIC_KEY=%s\nVAPID_PRIVATE_KEY=%s\nVAPID_SUBJECT=%s\n", pub, priv, *subject)
+	return err
 }

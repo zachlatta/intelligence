@@ -9,7 +9,7 @@ hosts and everything they report.
 
 ## How it fits together
 
-One binary, five commands:
+One binary, six commands:
 
 - `intelligence` (or `intelligence server`): the web app. It runs in Coolify with a Postgres
   database, reachable only on the tailnet.
@@ -25,6 +25,8 @@ One binary, five commands:
   The host client reads it over a Unix socket.
 - `intelligence workflow`: what a workflow run's agents run on their host to move the run
   (Workflows, below). It reaches the server with the host's key.
+- `intelligence vapid-keys`: generates a P-256 VAPID key pair and prints `VAPID_PUBLIC_KEY`,
+  `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` for Web Push notifications (`-subject mailto:you@example.com`).
 - `intelligence version`: prints the commit the binary was built from.
 
 ### State and the read-only SQL contract
@@ -2168,14 +2170,17 @@ Server:
 - `PUBLIC_URL`: optional; the server's origin, for Google's redirect. Default each request's.
 - `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT`: optional, together; turn on native
   Web Push notifications for the installable PWA (Android Chrome "Add to Home screen" / "Install
-  app"). The public key is a 65-byte uncompressed P-256 point in unpadded base64url, the private
-  key is its 32-byte scalar in unpadded base64url, and the subject is a `mailto:` or `https://`
-  URI. Unset, the app still installs as a standalone PWA and the notification controls on `/account`
-  degrade cleanly. Subscriptions are stored in `push_subscriptions` with their endpoint and keys
-  sealed with AES-256-GCM (derived from `VAPID_PRIVATE_KEY`), so `/api/sql` can inspect subscribed
-  devices (`id`, `endpoint_host`, `user_agent`, `created_at`, `last_sent_at`, `last_error`) without
-  exposing push endpoints or keys. Subscriptions that return 404 or 410 from the push service are
-  removed automatically.
+  app"). Generate a fresh key pair with `intelligence vapid-keys -subject mailto:you@example.com`
+  (or an `https://` URI). The public key is a 65-byte uncompressed P-256 point in unpadded
+  base64url and the private key is its 32-byte scalar in unpadded base64url. Unset, the app still
+  installs as a standalone PWA and the notification controls on `/account` degrade cleanly.
+  Subscriptions are stored in `push_subscriptions` with their endpoint and keys sealed with
+  AES-256-GCM (derived from `VAPID_PRIVATE_KEY`), so `/api/sql` can inspect subscribed devices
+  (`id`, `endpoint_host`, `user_agent`, `created_at`, `last_sent_at`, `last_error`) without
+  exposing push endpoints or keys. Changing `VAPID_PRIVATE_KEY` invalidates every stored
+  subscription (existing rows can no longer be unsealed and the push service rejects the old key),
+  so devices must re-enable notifications on `/account`. Subscriptions that return 404 or 410 from
+  the push service are removed automatically.
 - `WORKFLOW_QUEUE_CPU_PCT`, `WORKFLOW_QUEUE_MEM_PCT`, `WORKFLOW_QUEUE_MEM_PEAK_PCT`,
   `WORKFLOW_QUEUE_LOAD_PER_CPU`: optional; when a host is near capacity, so a new workflow run
   queues (The run queue, above). Defaults 85, 80, 95 and 1.5; `0` or `off` turns one off.

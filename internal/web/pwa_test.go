@@ -369,3 +369,90 @@ func TestWorkflowAskAndFailSendWebPushNotifications(t *testing.T) {
 		t.Fatalf("pushCount after fail = %d, want 2", afterFail)
 	}
 }
+
+func TestDisabledProviderFailureSendsWebPushNotification(t *testing.T) {
+	pubB64, privB64, err := webpush.GenerateVAPIDKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	vapid, err := webpush.ParseVAPID(pubB64, privB64, "mailto:alerts@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	var pushCount int
+	pushSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		pushCount++
+		mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer pushSrv.Close()
+
+	d := dbtest.New(t)
+	h := New(Config{
+		Context:  t.Context(),
+		Version:  "test",
+		DB:       d.Owner,
+		Readonly: d.Readonly,
+		VAPID:    vapid,
+		PushHTTP: pushSrv.Client(),
+	})
+	c := signUpTestAccount(t, h)
+	_ = enrollPushTestHost(t, h, c, "host-1")
+	if _, err := d.Owner.Exec(context.Background(), `INSERT INTO hosts (name, last_seen, connected) VALUES ('host-1', now(), true)`); err != nil {
+		t.Fatal(err)
+	}
+
+	uaPriv, err := ecdh.P256().GenerateKey(bytes.NewReader(bytes.Repeat([]byte{31}, 64)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	subBody, _ := json.Marshal(map[string]any{
+		"endpoint": pushSrv.URL + "/push/android",
+		"keys": map[string]string{
+			"p256dh": base64.RawURLEncoding.EncodeToString(uaPriv.PublicKey().Bytes()),
+			"auth":   base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{32}, 16)),
+		},
+	})
+	if rec := call(t, h, http.MethodPost, "/api/push-subscriptions", string(subBody),
+		map[string]string{"Content-Type": "application/json"}, c); rec.Code != http.StatusCreated {
+		t.Fatalf("subscribe: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Create a workflow with provider "muse", then disable "muse" so startAttempt fails the run.
+	wfBody := `{"name":"MuseFlow","description":"d","definition":{"host":"host-1","trigger":"task","project":{"mode":"fixed","directory":"/w/app"},"orchestrator":{"provider":"muse","model":"muse-1","thinking":"medium","instructions":"orchestrate"},"steps":[{"id":"s1","title":"Do","kind":"step","instructions":"go"}]}}`
+	wfRec := call(t, h, http.MethodPost, "/api/workflows", wfBody, map[string]string{"Content-Type": "application/json"}, c)
+	if wfRec.Code != http.StatusCreated {
+		t.Fatalf("create workflow: %d %s", wfRec.Code, wfRec.Body.String())
+	}
+	var wf struct{ ID string }
+	_ = json.Unmarshal(wfRec.Body.Bytes(), &wf)
+
+	if _, err := d.Owner.Exec(context.Background(), `UPDATE provider_plan_settings SET enabled=false WHERE provider='muse'`); err != nil {
+		t.Fatal(err)
+	}
+
+	runRec := call(t, h, http.MethodPost, "/api/workflow-runs", `{"workflowId":"`+wf.ID+`","input":"Run on disabled provider"}`,
+		map[string]string{"Content-Type": "application/json"}, c)
+	if runRec.Code != http.StatusCreated {
+		t.Fatalf("start run: %d %s", runRec.Code, runRec.Body.String())
+	}
+	var runOut struct{ ID string }
+	_ = json.Unmarshal(runRec.Body.Bytes(), &runOut)
+
+	var status string
+	if err := d.Owner.QueryRow(context.Background(), `SELECT status FROM workflow_runs WHERE id=$1`, runOut.ID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" {
+		t.Fatalf("run status = %q, want failed", status)
+	}
+	mu.Lock()
+	got := pushCount
+	mu.Unlock()
+	if got != 1 {
+		t.Fatalf("pushCount after disabled-provider failure = %d, want 1", got)
+	}
+}
