@@ -45,7 +45,9 @@ func TestProcessingOpensPixelsOnceAfterCommitWithoutWaiting(t *testing.T) {
 	}, func(netip.Addr) bool { return true })}
 	localURL := routeTestPixelClient(t, s.pixelHTTP, server)
 	g := GmailMessage{ID: "m1", Payload: Part{MimeType: "text/html", Body: Body{Data: base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`<img width=1 height=1 src="%s">`, localURL)))}}}
-	decide := func(pgx.Tx, workflow.Mail) (decision, error) { return decision{Decision: "started"}, nil }
+	decide := func(context.Context, pgx.Tx, workflow.Mail) (decision, error) {
+		return decision{Decision: "started"}, nil
+	}
 	done := make(chan error, 1)
 	go func() { done <- s.keep(ctx, 1, g, decide) }()
 	select {
@@ -76,12 +78,14 @@ func TestProcessingOpensPixelsOnceAfterCommitWithoutWaiting(t *testing.T) {
 	}
 	for i, kind := range []string{"before", "ignored", "added", "answered", "follow_up"} {
 		g.ID = fmt.Sprint("m", i+2)
-		if err := s.keep(ctx, 1, g, func(pgx.Tx, workflow.Mail) (decision, error) { return decision{Decision: kind}, nil }); err != nil {
+		if err := s.keep(ctx, 1, g, func(context.Context, pgx.Tx, workflow.Mail) (decision, error) { return decision{Decision: kind}, nil }); err != nil {
 			t.Fatal(err)
 		}
 	}
 	g.ID = "rollback"
-	if err := s.keep(ctx, 1, g, func(pgx.Tx, workflow.Mail) (decision, error) { return decision{}, errors.New("rollback") }); err == nil {
+	if err := s.keep(ctx, 1, g, func(context.Context, pgx.Tx, workflow.Mail) (decision, error) {
+		return decision{}, errors.New("rollback")
+	}); err == nil {
 		t.Fatal("expected rollback")
 	}
 	for _, labels := range [][]string{{"SENT"}, {"DRAFT"}, {"SPAM"}, {"TRASH"}} {

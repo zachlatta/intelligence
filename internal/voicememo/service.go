@@ -214,7 +214,8 @@ func (s *Service) poll(ctx context.Context, account int64, cursor *string, initi
 // keep commits the receipt and run together. Workflow refusals are final ignored receipts;
 // unexpected failures leave both retryable.
 func (s *Service) keep(ctx context.Context, account int64, m workflow.VoiceMemo, start bool) error {
-	return pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
+	txCtx, flushPushes := s.Engine.CollectPushes(ctx)
+	err := pgx.BeginFunc(txCtx, s.DB, func(tx pgx.Tx) error {
 		reason := "No workflow matched"
 		if !start {
 			reason = "Baseline backlog skipped"
@@ -265,10 +266,11 @@ func (s *Service) keep(ctx context.Context, account int64, m workflow.VoiceMemo,
 			return nil
 		}
 		var run string
-		err = pgx.BeginFunc(ctx, tx, func(sp pgx.Tx) error {
+		spCtx, commitPushes := s.Engine.CollectPushes(txCtx)
+		err = pgx.BeginFunc(spCtx, tx, func(sp pgx.Tx) error {
 			var startErr error
 			requested, _ := time.Parse(time.RFC3339Nano, m.RecordedAt)
-			run, startErr = s.Engine.StartRunTx(ctx, sp, account, best.id, m.Input(), requested)
+			run, startErr = s.Engine.StartRunTx(spCtx, sp, account, best.id, m.Input(), requested)
 			return startErr
 		})
 		if err != nil {
@@ -277,10 +279,15 @@ func (s *Service) keep(ctx context.Context, account int64, m workflow.VoiceMemo,
 				return err
 			}
 			reason := fmt.Sprintf("could not start “%s”: %v", best.name, err)
-			_, err = tx.Exec(ctx, `UPDATE voice_memos SET workflow_id=$5,reason=$6 WHERE account_id=$1 AND source=$2 AND pdw_account=$3 AND recording_id=$4`, account, m.Source, m.Account, m.ID, best.id, reason)
+			_, err = tx.Exec(txCtx, `UPDATE voice_memos SET workflow_id=$5,reason=$6 WHERE account_id=$1 AND source=$2 AND pdw_account=$3 AND recording_id=$4`, account, m.Source, m.Account, m.ID, best.id, reason)
 			return err
 		}
-		_, err = tx.Exec(ctx, `UPDATE voice_memos SET decision='started',workflow_id=$5,run_id=$6::uuid,reason='Started run ' || $6::uuid::text WHERE account_id=$1 AND source=$2 AND pdw_account=$3 AND recording_id=$4`, account, m.Source, m.Account, m.ID, best.id, run)
+		commitPushes()
+		_, err = tx.Exec(txCtx, `UPDATE voice_memos SET decision='started',workflow_id=$5,run_id=$6::uuid,reason='Started run ' || $6::uuid::text WHERE account_id=$1 AND source=$2 AND pdw_account=$3 AND recording_id=$4`, account, m.Source, m.Account, m.ID, best.id, run)
 		return err
 	})
+	if err == nil {
+		flushPushes()
+	}
+	return err
 }

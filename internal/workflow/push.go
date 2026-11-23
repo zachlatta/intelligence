@@ -20,18 +20,23 @@ type pushCollector struct {
 
 type pushCollectorKey struct{}
 
-// CollectPushes attaches a transaction-scoped push collector to ctx and returns a flush
-// function to call after the transaction commits. Calling flush sends every push recorded
-// during the transaction via e.Push; if the transaction rolls back, simply do not call flush.
+// CollectPushes attaches a transaction- or savepoint-scoped push collector to ctx and returns
+// a flush function to call only after the enclosing transaction or savepoint commits.
+// When nested inside an outer CollectPushes (a savepoint), flush merges the savepoint's pushes
+// into the outer collector; if the savepoint rolls back and flush is not called, its pushes
+// are discarded. At the top level, flush sends the collected pushes via e.Push.
 func (e *Engine) CollectPushes(ctx context.Context) (context.Context, func()) {
-	if e.Push == nil {
+	if e == nil || e.Push == nil {
 		return ctx, func() {}
 	}
-	if _, ok := ctx.Value(pushCollectorKey{}).(*pushCollector); ok {
-		return ctx, func() {} // outer transaction owns the flush
-	}
 	c := &pushCollector{}
-	return context.WithValue(ctx, pushCollectorKey{}, c), func() {
+	childCtx := context.WithValue(ctx, pushCollectorKey{}, c)
+	if outer, ok := ctx.Value(pushCollectorKey{}).(*pushCollector); ok {
+		return childCtx, func() {
+			outer.items = append(outer.items, c.items...)
+		}
+	}
+	return childCtx, func() {
 		e.pushBestEffort(ctx, c.items...)
 	}
 }

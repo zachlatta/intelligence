@@ -550,15 +550,20 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 	if err != nil {
 		return false, err
 	}
+	spCtx, commitPushes := e.CollectPushes(ctx)
 	var started bool
 	if r.StartRetryAt != nil {
-		started, err = e.dequeueRetry(ctx, sp, r, host+" has room for the retry")
+		started, err = e.dequeueRetry(spCtx, sp, r, host+" has room for the retry")
 	} else {
-		err = e.dequeue(ctx, sp, r, why)
+		err = e.dequeue(spCtx, sp, r, why)
 		started = err == nil
 	}
 	if err == nil {
-		return started, sp.Commit(ctx)
+		if err := sp.Commit(ctx); err != nil {
+			return false, err
+		}
+		commitPushes()
+		return started, nil
 	}
 	if rollbackErr := sp.Rollback(ctx); rollbackErr != nil {
 		return false, rollbackErr

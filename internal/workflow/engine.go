@@ -184,6 +184,7 @@ func (e *Engine) UpdateWorkflow(ctx context.Context, account int64, id, name, de
 	if !uuidRe.MatchString(id) {
 		return 0, ErrNotFound
 	}
+	ctx, flushPushes := e.CollectPushes(ctx)
 	var version int
 	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
 		if err := lockWorkflowAccount(ctx, tx, account); err != nil {
@@ -203,6 +204,10 @@ func (e *Engine) UpdateWorkflow(ctx context.Context, account int64, id, name, de
 		}
 		return err
 	})
+	if err == nil {
+		e.sendFailureAlertsBestEffort(ctx)
+		flushPushes()
+	}
 	return version, err
 }
 

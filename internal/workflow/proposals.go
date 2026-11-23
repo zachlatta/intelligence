@@ -182,6 +182,7 @@ func (e *Engine) Decide(ctx context.Context, account int64, id, action string) e
 	if !uuidRe.MatchString(id) {
 		return ErrNotFound
 	}
+	ctx, flushPushes := e.CollectPushes(ctx)
 	var refusal error
 	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
 		// Account lock serializes proposal creates/restores and default restoration.
@@ -290,5 +291,7 @@ func (e *Engine) Decide(ctx context.Context, account int64, id, action string) e
 	if err != nil {
 		return err
 	}
+	e.sendFailureAlertsBestEffort(ctx)
+	flushPushes()
 	return refusal
 }

@@ -317,8 +317,8 @@ func (s *Service) read(ctx context.Context, account int64, owners []string, toke
 			}
 			return err
 		}
-		if err := s.keep(ctx, account, g, func(tx pgx.Tx, m workflow.Mail) (decision, error) {
-			return s.route(ctx, tx, account, owners, g, m)
+		if err := s.keep(ctx, account, g, func(txCtx context.Context, tx pgx.Tx, m workflow.Mail) (decision, error) {
+			return s.route(txCtx, tx, account, owners, g, m)
 		}); err != nil {
 			return err
 		}
@@ -342,7 +342,7 @@ func (s *Service) read(ctx context.Context, account int64, owners []string, toke
 				return err
 			}
 			if err == nil && g.Received().Before(connected) {
-				if err := s.keep(ctx, account, g, func(pgx.Tx, workflow.Mail) (decision, error) {
+				if err := s.keep(ctx, account, g, func(context.Context, pgx.Tx, workflow.Mail) (decision, error) {
 					return decision{Decision: "before", Reason: "it came before the mailbox was connected"}, nil
 				}); err != nil {
 					return err
@@ -362,7 +362,7 @@ type decision struct {
 
 // keep stores g, if it is new, and what decide says it does, in one transaction: an email does
 // what it does once. The mailbox's own mail, spam and trash are not kept.
-func (s *Service) keep(ctx context.Context, account int64, g GmailMessage, decide func(pgx.Tx, workflow.Mail) (decision, error)) error {
+func (s *Service) keep(ctx context.Context, account int64, g GmailMessage, decide func(context.Context, pgx.Tx, workflow.Mail) (decision, error)) error {
 	if g.Ours() || g.Junk() {
 		return nil
 	}
@@ -372,11 +372,12 @@ func (s *Service) keep(ctx context.Context, account int64, g GmailMessage, decid
 	if received.IsZero() {
 		received = s.now()
 	}
+	txCtx, flushPushes := s.Engine.CollectPushes(ctx)
 	var pixelID int64
 	var pixels []string
-	err := pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(txCtx, s.DB, func(tx pgx.Tx) error {
 		var id int64
-		err := tx.QueryRow(ctx, `INSERT INTO emails (account_id, gmail_id, thread_id, received_at, from_name, from_address, to_addresses,
+		err := tx.QueryRow(txCtx, `INSERT INTO emails (account_id, gmail_id, thread_id, received_at, from_name, from_address, to_addresses,
 			subject, body, attachments, verified, auth, bulk, decision, decided_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'ignored', $14)
 			ON CONFLICT (account_id, gmail_id) DO NOTHING RETURNING id`,
@@ -388,11 +389,11 @@ func (s *Service) keep(ctx context.Context, account int64, g GmailMessage, decid
 		if err != nil {
 			return err
 		}
-		d, err := decide(tx, m)
+		d, err := decide(txCtx, tx, m)
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `UPDATE emails SET decision = $2, reason = $3, workflow_id = nullif($4, '')::uuid, run_id = nullif($5, '')::uuid
+		_, err = tx.Exec(txCtx, `UPDATE emails SET decision = $2, reason = $3, workflow_id = nullif($4, '')::uuid, run_id = nullif($5, '')::uuid
 			WHERE id = $1`, id, d.Decision, d.Reason, d.Workflow, d.Run)
 		if err != nil {
 			return err
@@ -401,14 +402,17 @@ func (s *Service) keep(ctx context.Context, account int64, g GmailMessage, decid
 		case "started", "follow_up", "added", "answered":
 			pixels = g.pixels()
 			if len(pixels) > 0 {
-				_, err = tx.Exec(ctx, `INSERT INTO email_pixel_opens(email_id,account_id,pixels) VALUES ($1,$2,$3)`, id, account, len(pixels))
+				_, err = tx.Exec(txCtx, `INSERT INTO email_pixel_opens(email_id,account_id,pixels) VALUES ($1,$2,$3)`, id, account, len(pixels))
 				pixelID = id
 			}
 		}
 		return err
 	})
-	if err == nil && pixelID != 0 {
-		s.openPixels(pixelID, pixels)
+	if err == nil {
+		flushPushes()
+		if pixelID != 0 {
+			s.openPixels(pixelID, pixels)
+		}
 	}
 	return err
 }
@@ -524,8 +528,8 @@ func (s *Service) reply(ctx context.Context, tx pgx.Tx, account int64, fromZach 
 		input += fmt.Sprintf("\n\nIt replies in the thread of an earlier run of this workflow, %s, which is over (%s).\n\n%s\n\n%s", run, status, workflow.EmailReplyRule, history)
 		requested, _ := mail.ParseDate(m.Date)
 		var continued bool
-		kind, refused, err := try(ctx, tx, "follow_up", func(sp pgx.Tx) error {
-			id, ok, err := s.Engine.ContinueEmailTx(ctx, sp, account, run, input, requested)
+		kind, refused, err := s.try(ctx, tx, "follow_up", func(spCtx context.Context, sp pgx.Tx) error {
+			id, ok, err := s.Engine.ContinueEmailTx(spCtx, sp, account, run, input, requested)
 			continued = ok
 			if id != "" {
 				d.Run = id
@@ -550,11 +554,11 @@ func (s *Service) reply(ctx context.Context, tx pgx.Tx, account int64, fromZach 
 			if text == "" {
 				text = m.Subject
 			}
-			return d.or(try(ctx, tx, "answered", func(sp pgx.Tx) error { return s.Engine.ReplyTx(ctx, sp, account, run, text) }))
+			return d.or(s.try(ctx, tx, "answered", func(spCtx context.Context, sp pgx.Tx) error { return s.Engine.ReplyTx(spCtx, sp, account, run, text) }))
 		}
 	}
-	return d.or(try(ctx, tx, "added", func(sp pgx.Tx) error {
-		return s.Engine.MessageTx(ctx, sp, account, run, "A new email in this run's thread, from "+m.Who(), input)
+	return d.or(s.try(ctx, tx, "added", func(spCtx context.Context, sp pgx.Tx) error {
+		return s.Engine.MessageTx(spCtx, sp, account, run, "A new email in this run's thread, from "+m.Who(), input)
 	}))
 }
 
@@ -562,9 +566,9 @@ func (s *Service) reply(ctx context.Context, tx pgx.Tx, account int64, fromZach 
 // recorded as ignored, with why.
 func (s *Service) start(ctx context.Context, tx pgx.Tx, account int64, wf, name, input, kind, date string) (decision, error) {
 	d := decision{Workflow: wf}
-	return d.or(try(ctx, tx, kind, func(sp pgx.Tx) error {
+	return d.or(s.try(ctx, tx, kind, func(spCtx context.Context, sp pgx.Tx) error {
 		requested, _ := mail.ParseDate(date)
-		id, err := s.Engine.StartRunTx(ctx, sp, account, wf, input, requested)
+		id, err := s.Engine.StartRunTx(spCtx, sp, account, wf, input, requested)
 		if err != nil {
 			return fmt.Errorf("could not start “%s”: %w", name, err)
 		}
@@ -584,13 +588,15 @@ func (d *decision) or(kind, refused string, err error) (decision, error) {
 }
 
 // try does f in a savepoint, and returns kind; if f is refused (a workflow refusal), the
-// savepoint is undone and refused says why.
-func try(ctx context.Context, tx pgx.Tx, kind string, f func(pgx.Tx) error) (string, string, error) {
+// savepoint is undone and refused says why. Pushes queued inside f are discarded if the
+// savepoint rolls back.
+func (s *Service) try(ctx context.Context, tx pgx.Tx, kind string, f func(context.Context, pgx.Tx) error) (string, string, error) {
 	sp, err := tx.Begin(ctx)
 	if err != nil {
 		return kind, "", err
 	}
-	if err := f(sp); err != nil {
+	spCtx, commitPushes := s.Engine.CollectPushes(ctx)
+	if err := f(spCtx, sp); err != nil {
 		_ = sp.Rollback(ctx)
 		var ref *workflow.Refusal
 		if errors.As(err, &ref) || errors.Is(err, workflow.ErrNotFound) {
@@ -598,7 +604,11 @@ func try(ctx context.Context, tx pgx.Tx, kind string, f func(pgx.Tx) error) (str
 		}
 		return kind, "", err
 	}
-	return kind, "", sp.Commit(ctx)
+	if err := sp.Commit(ctx); err != nil {
+		return kind, "", err
+	}
+	commitPushes()
+	return kind, "", nil
 }
 
 // TrimQuoted cuts a reply's quoted history: from a line "On … wrote:" (which mail apps may wrap
