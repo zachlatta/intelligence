@@ -67,7 +67,7 @@ func checkRestatingDocComments(filename, src string) []string {
 			return
 		}
 		words := strings.Fields(strings.TrimSuffix(rest, "."))
-		if len(words) <= 9 {
+		if len(words) <= 5 {
 			pos := fset.Position(doc.Pos())
 			errs = append(errs, fmt.Sprintf("%s:%d doc comment %q merely restates %s; delete it or state a non-obvious constraint/why", pos.Filename, pos.Line, text, ident))
 		}
@@ -140,9 +140,15 @@ func TestNoRestatingDocCommentsReplaysDeletedComments(t *testing.T) {
 			t.Logf("caught deleted comment: %s", got[0])
 		})
 	}
-	// Constraint/why comments must NOT be flagged.
-	keep := "package web\n// write refuses cross-origin requests because another site cannot send JSON without CORS.\nfunc write() {}\n"
-	if got := checkRestatingDocComments("auth.go", keep); len(got) != 0 {
-		t.Fatalf("false positive on constraint comment: %v", got)
+	// Constraint/why comments must NOT be flagged. The last two were deleted in e27c0f4 because
+	// a 9-word limit flagged them, though they state contracts the code does not show.
+	for _, keep := range []string{
+		"package web\n// write refuses cross-origin requests because another site cannot send JSON without CORS.\nfunc write() {}\n",
+		"package attachment\n// SafeDisplayName returns a single-line, prompt-safe basename for display in agent prompts.\nfunc SafeDisplayName() {}\n",
+		"package workflow\n// RunAnswerRule applies to saved workflows too, including code and service tasks.\nconst RunAnswerRule = \"\"\n",
+	} {
+		if got := checkRestatingDocComments("keep.go", keep); len(got) != 0 {
+			t.Fatalf("false positive on constraint comment: %v", got)
+		}
 	}
 }
