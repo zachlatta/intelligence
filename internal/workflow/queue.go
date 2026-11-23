@@ -455,6 +455,12 @@ func (e *Engine) StartQueued(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// stillInQueue says whether the queue may start a run it picked: one a cancel ended between the
+// queue's unlocked read and its row lock may not start (450cced).
+func stillInQueue(status string, startRetryQueued bool) bool {
+	return status == Queued || startRetryQueued
+}
+
 // startNext starts the first of host's queued runs that can start (room), in the queue's order,
 // and says whether it started one. A run started by hand or with immediate priority starts
 // whatever the load. Every run it passes over is told why it waits (queue_reason).
@@ -525,14 +531,22 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 	if pick == nil {
 		return false, nil
 	}
-	// The queue was read without locking its runs: lock the one picked only if it is still in the
-	// queue (Postgres checks again after waiting for its row), so a run canceled meanwhile is not
-	// started. One that left the queue is progress: the next pass reads the queue again.
-	r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id = $1 AND (r.status = $2 OR r.start_retry_queued) FOR UPDATE OF r",
-		pick.ID, Queued))
-	if errors.Is(err, ErrNotFound) {
+	// The queue was read without locking its runs, so a cancel may have ended the one picked since.
+	// After the row lock, Postgres returns the row as that cancel left it: start it only if
+	// stillInQueue. One that left the queue is progress: the next pass reads the queue again.
+	var status string
+	var retryQueued bool
+	err = tx.QueryRow(ctx, "SELECT status, start_retry_queued FROM workflow_runs WHERE id = $1 FOR UPDATE", pick.ID).Scan(&status, &retryQueued)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return true, nil
 	}
+	if err != nil {
+		return false, err
+	}
+	if !stillInQueue(status, retryQueued) {
+		return true, nil
+	}
+	r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id = $1 FOR UPDATE OF r", pick.ID))
 	if err != nil {
 		return false, err
 	}

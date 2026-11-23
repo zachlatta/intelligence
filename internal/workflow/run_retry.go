@@ -56,15 +56,12 @@ func (e *Engine) RetryRun(ctx context.Context, account int64, runID string) (str
 		if err != nil {
 			return err
 		}
-		if r.Status != Failed {
-			return conflict("only a failed run can be retried (%s)", strings.ReplaceAll(r.Status, "_", " "))
-		}
 		var existing string
 		err = tx.QueryRow(ctx, `SELECT id::text FROM workflow_runs WHERE retried_from_run_id = $1 ORDER BY created_at DESC LIMIT 1`, r.ID).Scan(&existing)
-		if err == nil {
-			return conflict("this run was already retried as run %s", existing)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
 		}
-		if !errors.Is(err, pgx.ErrNoRows) {
+		if err := retryRefusal(r.Status, existing); err != nil {
 			return err
 		}
 		newID, err = e.retryRunLocked(ctx, tx, account, r, false)
@@ -74,6 +71,18 @@ func (e *Engine) RetryRun(ctx context.Context, account int64, runID string) (str
 		e.sendFailureAlertsBestEffort(ctx)
 	}
 	return newID, err
+}
+
+// retryRefusal says why a run may not be retried, or nil: only a failed run may be, and only once,
+// so concurrent retries start one run (d36a461). alreadyRetriedAs is its earlier retry's id or "".
+func retryRefusal(status, alreadyRetriedAs string) error {
+	if status != Failed {
+		return conflict("only a failed run can be retried (%s)", strings.ReplaceAll(status, "_", " "))
+	}
+	if alreadyRetriedAs != "" {
+		return conflict("this run was already retried as run %s", alreadyRetriedAs)
+	}
+	return nil
 }
 
 // retryRunLocked starts a new run on failed's workflow's latest version with the same input.
