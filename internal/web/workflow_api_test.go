@@ -726,3 +726,94 @@ func TestWorkflowAPIStreamLiveAgentsWorkersGraceAndResume(t *testing.T) {
 		t.Fatalf("expected EOF after revocation, got %v", err)
 	}
 }
+
+// TestWorkflowAPIQueuedBadCommandDoesNotBlockQueue reproduces N6: a busy host queues a bad run
+// (whose start command is refused with fleet.BadCommandError) ahead of an ordinary run. Once the
+// host frees, the bad run must fail permanently and the ordinary run behind it must start.
+func TestWorkflowAPIQueuedBadCommandDoesNotBlockQueue(t *testing.T) {
+	d := dbtest.New(t)
+	h := newServer(t, d, d.Owner, "test")
+	reg := fleet.New(d.Owner)
+	wfEng := workflow.NewEngine(d.Owner, nil)
+	ctx := context.Background()
+	_ = keyOf(t, h, "host-1")
+	now := time.Now()
+	if err := reg.Record(ctx, wfReport(), now); err != nil {
+		t.Fatal(err)
+	}
+
+	wfID := createWorkflow(t, h, apiWorkflowDef("host-1"))
+	_, key := issueAPIKey(t, h, wfID, "queue-test")
+
+	// Up-front API attachment cap matches host limits: >8 files or >8 MiB total gets 400 JSON.
+	small := base64.StdEncoding.EncodeToString([]byte("ok"))
+	nineAtts := make([]map[string]string, 9)
+	for i := range nineAtts {
+		nineAtts[i] = map[string]string{"name": "f.txt", "data": small}
+	}
+	nineBody, _ := json.Marshal(map[string]any{"input": "too many files", "attachments": nineAtts})
+	assertJSONError(t, callAPI(t, h, http.MethodPost, "/api/workflow-api/runs", key, string(nineBody)), http.StatusBadRequest)
+
+	bigFile := base64.StdEncoding.EncodeToString(make([]byte, 3<<20))
+	threeBigBody, _ := json.Marshal(map[string]any{
+		"input": "too many bytes",
+		"attachments": []map[string]string{
+			{"name": "a.txt", "data": bigFile},
+			{"name": "b.txt", "data": bigFile},
+			{"name": "c.txt", "data": bigFile},
+		},
+	})
+	assertJSONError(t, callAPI(t, h, http.MethodPost, "/api/workflow-api/runs", key, string(threeBigBody)), http.StatusBadRequest)
+
+	// Make host-1 busy (CPU 99%) so new runs queue instead of launching immediately.
+	busyAt := now.UTC().Truncate(time.Minute)
+	if _, err := d.Owner.Exec(ctx, `INSERT INTO host_minutes (host, minute, samples, cpus, cpu_avg_pct, load1, mem_total, mem_available_min)
+		VALUES ('host-1', $1, 12, 4, 99, 0.2, 16000000000, 12000000000)`, busyAt); err != nil {
+		t.Fatal(err)
+	}
+
+	// Queue a bad API run (unknown attachment reference triggers fleet.BadCommandError on launch).
+	badRec := callAPI(t, h, http.MethodPost, "/api/workflow-api/runs", key, `{"input":"Check [attachment:00000000-0000-0000-0000-000000000099]"}`)
+	if badRec.Code != http.StatusCreated {
+		t.Fatalf("POST bad queued run = %d %s", badRec.Code, badRec.Body)
+	}
+	var badRun apiRunSummary
+	_ = json.Unmarshal(badRec.Body.Bytes(), &badRun)
+	if badRun.Status != workflow.Queued {
+		t.Fatalf("bad run status = %q, want queued", badRun.Status)
+	}
+
+	// Queue an ordinary run behind it.
+	goodRec := callAPI(t, h, http.MethodPost, "/api/workflow-api/runs", key, `{"input":"Ordinary contract check"}`)
+	if goodRec.Code != http.StatusCreated {
+		t.Fatalf("POST good queued run = %d %s", goodRec.Code, goodRec.Body)
+	}
+	var goodRun apiRunSummary
+	_ = json.Unmarshal(goodRec.Body.Bytes(), &goodRun)
+	if goodRun.Status != workflow.Queued {
+		t.Fatalf("good run status = %q, want queued", goodRun.Status)
+	}
+
+	// Free host-1 (CPU 5%) and run the queue.
+	if _, err := d.Owner.Exec(ctx, `UPDATE host_minutes SET cpu_avg_pct = 5 WHERE host = 'host-1' AND minute = $1`, busyAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := wfEng.StartQueued(ctx); err != nil {
+		t.Fatalf("StartQueued returned error (should fail bad run and continue): %v", err)
+	}
+
+	// Bad run must be failed with a clear error; good run behind it must have started!
+	var badStatus, badErr, goodStatus string
+	if err := d.Owner.QueryRow(ctx, `SELECT status, error FROM workflow_runs WHERE id = $1`, badRun.ID).Scan(&badStatus, &badErr); err != nil {
+		t.Fatal(err)
+	}
+	if badStatus != workflow.Failed || badErr == "" {
+		t.Fatalf("bad run = (%q, %q), want (failed, non-empty error)", badStatus, badErr)
+	}
+	if err := d.Owner.QueryRow(ctx, `SELECT status FROM workflow_runs WHERE id = $1`, goodRun.ID).Scan(&goodStatus); err != nil {
+		t.Fatal(err)
+	}
+	if goodStatus != workflow.StartingOrchestrator {
+		t.Fatalf("good run behind bad run = %q, want %q", goodStatus, workflow.StartingOrchestrator)
+	}
+}

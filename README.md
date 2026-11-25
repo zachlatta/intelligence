@@ -2000,6 +2000,8 @@ origin (another site's request is refused with 403), and those with a body must 
     reconnecting with `Last-Event-ID` skips already-delivered events and transcript entries. Keeps
     open for a short grace window after completion to deliver final synced transcripts before `done`,
     and closes immediately with `event: error` if the key is revoked or the workflow is deleted.
+    Reconnect once with the last `id` as `Last-Event-ID` after `done` to collect any late transcript
+    lines synced after the grace window.
   - `POST /api/workflow-api/runs/{id}/cancel`, `/retry` (requires `apiTrigger: true`, else 403),
     `/resume`, `/start` (body `{}`), and `/reply`, `/input` (body `{"text", "attachments"?}`, text
     capped at 1 MiB): control a run of this workflow using the same engine methods as the web UI.

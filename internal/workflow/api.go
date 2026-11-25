@@ -67,8 +67,6 @@ type APIRunResult struct {
 // queued host command can exceed hostclient.MaxFrame.
 const MaxAPITextBytes = 1 << 20
 
-const maxAPIAttachments = 10
-
 func cleanIdempotencyKey(key string) (string, error) {
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -102,14 +100,19 @@ func AppendAttachments(ctx context.Context, tx pgx.Tx, account int64, text strin
 	if len(atts) == 0 {
 		return text, nil
 	}
-	if len(atts) > maxAPIAttachments {
-		return "", bad("at most %d attachments per request", maxAPIAttachments)
+	if len(atts) > attachment.MaxCount {
+		return "", bad("attach at most %d files, %d MiB total", attachment.MaxCount, attachment.MaxTotal>>20)
 	}
 	refs := make([]string, 0, len(atts))
+	total := 0
 	for _, a := range atts {
 		name := strings.TrimSpace(a.Name)
 		if name == "" || len(name) > 255 {
 			return "", bad("attachment name must be 1–255 bytes")
+		}
+		total += len(a.Data)
+		if total > attachment.MaxTotal {
+			return "", bad("attach at most %d files, %d MiB total", attachment.MaxCount, attachment.MaxTotal>>20)
 		}
 		media, err := attachment.ValidateFile(name, a.Data)
 		if err != nil {

@@ -582,18 +582,20 @@ func (e *Engine) startNext(ctx context.Context, tx pgx.Tx, host string) (bool, e
 		return false, rollbackErr
 	}
 	var refusal *Refusal
-	if !errors.As(err, &refusal) {
+	var badCmd *fleet.BadCommandError
+	if !errors.As(err, &refusal) && !errors.As(err, &badCmd) {
 		return false, err
 	}
-	if err := e.event(ctx, tx, r, "error", nil, nil, refusal.Error()); err != nil {
+	reason := err.Error()
+	if err := e.event(ctx, tx, r, "error", nil, nil, reason); err != nil {
 		return false, err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET status=$2,error=$3,pending_command=NULL,
 		start_retry_at=NULL,start_retry_queued=false,queue_reason='',updated_at=$4,finished_at=$4 WHERE id=$1`,
-		r.ID, Failed, refusal.Error(), e.Now()); err != nil {
+		r.ID, Failed, reason, e.Now()); err != nil {
 		return false, err
 	}
-	if err := e.recordFailureAlert(ctx, tx, r, refusal.Error()); err != nil {
+	if err := e.recordFailureAlert(ctx, tx, r, reason); err != nil {
 		return false, err
 	}
 	return true, nil // progressed: continue with the next queued run
