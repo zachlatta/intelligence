@@ -11,6 +11,7 @@ import (
 )
 
 func TestRunAnswersAndUnansweredRequests(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
@@ -86,6 +87,7 @@ func TestRunAnswersAndUnansweredRequests(t *testing.T) {
 }
 
 func TestTaskRequestedAtUsesSubmissionTime(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	run := startRun(t, h, createWorkflow(t, h, workflow.Starting), "Example task\nDate: Wed, 11 Nov 2026 14:39:00 -0500")
@@ -96,6 +98,7 @@ func TestTaskRequestedAtUsesSubmissionTime(t *testing.T) {
 }
 
 func TestRequestTimeMigrationBackfillsAndToleratesBadDates(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	wf := createWorkflow(t, h, workflow.Starting)

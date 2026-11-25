@@ -6,6 +6,7 @@ import (
 )
 
 func TestAttachmentPickerBehaviour(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	out, err := exec.Command(node, "-e", attachmentPickerHarness, "attachments.js").CombinedOutput()
 	if err != nil {

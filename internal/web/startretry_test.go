@@ -13,6 +13,7 @@ import (
 )
 
 func TestStartRetryWaitsForDaemonAndCanBeCanceledOrSucceed(t *testing.T) {
+	t.Parallel()
 	for _, cancelRun := range []bool{false, true} {
 		t.Run(map[bool]string{false: "recover", true: "cancel"}[cancelRun], func(t *testing.T) {
 			h, db := dbServer(t)
@@ -89,6 +90,7 @@ func TestStartRetryWaitsForDaemonAndCanBeCanceledOrSucceed(t *testing.T) {
 }
 
 func TestWorkflowStartRetriesDurably(t *testing.T) {
+	t.Parallel()
 	for _, fixed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "finder", true: "orchestrator"}[fixed], func(t *testing.T) {
 			h, db := dbServer(t)

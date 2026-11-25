@@ -35,6 +35,7 @@ func storedDiff(t *testing.T, r *Registry, host, ws string) (files, additions in
 }
 
 func TestRecordDiffKeepsEachWorkspacesLatest(t *testing.T) {
+	t.Parallel()
 	r := New(dbtestOwner(t))
 	if err := r.Record(ctx, full(), t1); err != nil {
 		t.Fatal(err)
@@ -65,6 +66,7 @@ func TestRecordDiffKeepsEachWorkspacesLatest(t *testing.T) {
 }
 
 func TestADiffGoesWithItsWorkspace(t *testing.T) {
+	t.Parallel()
 	r := New(dbtestOwner(t))
 	rep := full()
 	if err := r.Record(ctx, rep, t1); err != nil {

@@ -7,6 +7,7 @@ import (
 )
 
 func TestTheStylesheetIsServed(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	rec := get(t, h, "/ui.css", nil)
 	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/css") {
@@ -20,6 +21,7 @@ func TestTheStylesheetIsServed(t *testing.T) {
 }
 
 func TestTheSharedAssetsAreRevalidated(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	for _, path := range []string{"/ui.css", "/dictation.js", "/submitkeys.js"} {
 		rec := get(t, h, path, nil)
@@ -36,6 +38,7 @@ func TestTheSharedAssetsAreRevalidated(t *testing.T) {
 
 // Every page shares one stylesheet and one top bar, with its own tab marked.
 func TestEveryPageSharesTheStylesheetAndTopBar(t *testing.T) {
+	t.Parallel()
 	h, _ := cmdServer(t)
 	c := signInAs(t, h)
 	sendBatch(t, h, batch(true, "ep1", tentry(1, `{"type":"user_message","text":"go"}`)))
@@ -83,6 +86,7 @@ func TestEveryPageSharesTheStylesheetAndTopBar(t *testing.T) {
 
 // The sign-in page keeps the top bar's brand but shows no tabs: a signed-out visitor cannot open them.
 func TestLoginPageHasNoTabs(t *testing.T) {
+	t.Parallel()
 	h, _ := cmdServer(t)
 	rec := get(t, h, "/login", nil)
 	if rec.Code != http.StatusOK {
@@ -117,6 +121,7 @@ func checkNoRenamedCSSProperties(sources map[string]string) []string {
 // TestNoRenamedCSSProperties: a code rename once turned box-shadow into host-shadow, which a
 // browser drops without a word, so the workflow editor lost its selection ring and drop marks.
 func TestNoRenamedCSSProperties(t *testing.T) {
+	t.Parallel()
 	for _, msg := range checkNoRenamedCSSProperties(webAssetsByExt(t, ".css", ".html", ".js")) {
 		t.Error(msg)
 	}

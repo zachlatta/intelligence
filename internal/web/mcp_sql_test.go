@@ -14,6 +14,7 @@ func qlimit(query string, limit int) string {
 }
 
 func TestMCPOnlySQLReadSurface(t *testing.T) {
+	t.Parallel()
 	want := map[string]bool{"readme": true, "schema_overview": true, "describe_table": true, "query": true,
 		"propose_mutation": true, "withdraw_mutation": true, "propose_mutation_help": true, "comment_proposal": true}
 	for _, tool := range mcpTools() {
@@ -37,6 +38,7 @@ func TestMCPOnlySQLReadSurface(t *testing.T) {
 }
 
 func TestMCPReadmeGuidesSQL(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	_, token := mintMCP(t, h)
 	got := rpc(t, h, token, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"readme","arguments":{}}}`)
@@ -48,6 +50,7 @@ func TestMCPReadmeGuidesSQL(t *testing.T) {
 }
 
 func TestMCPProposalGuidance(t *testing.T) {
+	t.Parallel()
 	for _, term := range []string{"propose_mutation", "withdraw_mutation", "propose_mutation_help", "browser", "workflow_proposals"} {
 		if !strings.Contains(mcpReadme, term) {
 			t.Errorf("guide missing %s", term)
@@ -63,6 +66,7 @@ func TestMCPProposalGuidance(t *testing.T) {
 
 // Keep the shipped guide executable, and verify its reads use the same SQL API path.
 func TestMCPGuideExamples(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	def := workflow.Starting

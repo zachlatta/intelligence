@@ -25,6 +25,7 @@ func schedRun(id, status string, started time.Time) hostclient.ScheduleRun {
 }
 
 func TestRecordSchedulesStoresSchedulesAndKeepsTheirRuns(t *testing.T) {
+	t.Parallel()
 	r := New(dbtestOwner(t))
 	if err := r.Record(ctx, full(), t1); err != nil {
 		t.Fatal(err)
@@ -95,6 +96,7 @@ func TestRecordSchedulesStoresSchedulesAndKeepsTheirRuns(t *testing.T) {
 }
 
 func TestRecordSchedulesForABoxThatHasNotReported(t *testing.T) {
+	t.Parallel()
 	r := New(dbtestOwner(t))
 	// a stream attaches before the first report; schedules can come first
 	if err := r.Attach(ctx, "host-2", "00000000-0000-0000-0000-000000000001", t1); err != nil {

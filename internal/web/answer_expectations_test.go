@@ -8,6 +8,7 @@ import (
 )
 
 func TestExpectedAnswersRequireCheckedSendsAndExcludeCanceledAndTasks(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
@@ -82,6 +83,7 @@ func TestExpectedAnswersRequireCheckedSendsAndExcludeCanceledAndTasks(t *testing
 }
 
 func TestAnswerTimingUsesCheckedAnswer(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")

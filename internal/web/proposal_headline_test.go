@@ -3,6 +3,7 @@ package web
 import "testing"
 
 func TestProposalHeadlineIsPlainText(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ summary, want string }{
 		{"Improve **bold** and *italic* text", "Improve bold and italic text"},
 		{"# Use `workflow_id` and [the guide](https://example.com/guide)", "Use workflow_id and the guide"},

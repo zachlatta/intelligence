@@ -73,6 +73,7 @@ func incidents(t *testing.T, r *Registry) []incident {
 // The 2026-11-19 case: the host's active Claude login reached its time limit, and every Claude
 // agent's next turn came back as Claude Code's "Failed to authenticate" message.
 func TestLoginFailureInATranscriptIsAnInterruptionOfTheHostsLogin(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	r := New(d.Owner)
 	record(t, r, full(), t1)
@@ -119,6 +120,7 @@ func TestLoginFailureInATranscriptIsAnInterruptionOfTheHostsLogin(t *testing.T) 
 
 // A first sync sends an agent's whole timeline: a failure from long ago is history, not news.
 func TestOldLoginFailuresAreNotInterruptions(t *testing.T) {
+	t.Parallel()
 	r := New(dbtest.New(t).Owner)
 	record(t, r, full(), t1)
 	if err := r.StoreTranscript(ctx, hostclient.TranscriptBatch{Host: "host-1", AgentID: "a3", Epoch: "e", Replace: true,
@@ -131,6 +133,7 @@ func TestOldLoginFailuresAreNotInterruptions(t *testing.T) {
 }
 
 func TestAgentsTalkingAboutLoginsAreNotInterruptions(t *testing.T) {
+	t.Parallel()
 	r := New(dbtest.New(t).Owner)
 	record(t, r, full(), t1)
 	storeT(t, r, hostclient.TranscriptBatch{Host: "host-1", AgentID: "a3", Epoch: "e", Replace: true, Entries: []hostclient.TranscriptEntry{
@@ -142,6 +145,7 @@ func TestAgentsTalkingAboutLoginsAreNotInterruptions(t *testing.T) {
 }
 
 func TestAFreshWorkingReadingOfTheLoginClosesItsIncident(t *testing.T) {
+	t.Parallel()
 	r := New(dbtest.New(t).Owner)
 	record(t, r, full(), t1)
 	reset := t1.Add(72 * time.Hour)
@@ -172,6 +176,7 @@ func TestAFreshWorkingReadingOfTheLoginClosesItsIncident(t *testing.T) {
 
 // The meter alone can say a login is broken, before any agent trips over it.
 func TestTheMeterOpensAnIncidentForALoginWithNoSignIn(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	r := New(d.Owner)
 	record(t, r, full(), t1)
@@ -202,6 +207,7 @@ func TestTheMeterOpensAnIncidentForALoginWithNoSignIn(t *testing.T) {
 }
 
 func TestLoginExpiryIsStoredAndWarnedAboutAhead(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	r := New(d.Owner)
 	record(t, r, full(), t1)
@@ -236,6 +242,7 @@ func TestLoginExpiryIsStoredAndWarnedAboutAhead(t *testing.T) {
 }
 
 func TestMarkingALoginFixedClosesItsIncident(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	r := New(d.Owner)
 	record(t, r, full(), t1)
@@ -291,6 +298,7 @@ func safeRelogin(t *testing.T, command, login string) {
 
 // Where the host's login is unknown (no cswap meter), the command is only the first step.
 func TestAnUnknownLoginsCommandIsAFirstStep(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	r := New(d.Owner)
 	record(t, r, full(), t1)
@@ -310,6 +318,7 @@ func TestAnUnknownLoginsCommandIsAFirstStep(t *testing.T) {
 }
 
 func TestClaudeCLILoginFixDoesNotAssumeCswapAndRequiresNewSignIn(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	r := New(d.Owner)
 	record(t, r, full(), t1)

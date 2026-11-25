@@ -10,6 +10,7 @@ import (
 )
 
 func TestStepModelMigrationPreservesInstructions(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	twoAccounts(t, d)
 	const original = `{"project":{"model":"finder","thinking":"high"},"orchestrator":{"model":"orch"},"steps":[{"instructions":"Build.","model":"{{frontier_model}}"},{"instructions":"Use {{frontier_model}} already.","model":"{{frontier_model}}"},{"instructions":"Review.","model":"codex/sol","thinking":"high"},{"instructions":"Unchanged."},{"instructions":"Empty.","model":"","thinking":""}]}`

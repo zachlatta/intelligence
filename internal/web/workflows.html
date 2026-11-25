@@ -45,11 +45,45 @@
   .composer { border: 1px solid var(--line-strong); border-radius: var(--radius-lg); background: var(--panel); margin-bottom: 1.5rem; box-shadow: var(--shadow); }
   .composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
   .composer > label { margin: 1rem 1rem 0; }
-  .composer textarea { display: block; min-height: 9rem; border: 0; box-shadow: none; padding: .7rem 1rem; background: transparent; resize: vertical; }
+  .sec-head { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem .75rem; margin: 1.75rem 0 .75rem; }
+  .sec-head .section-title { margin: 0; }
+  .sec-head > .meta { font-size: 12.5px; }
+  #waiting-runs[hidden] { display: none; }
+  .ask-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(22rem, 1fr)); gap: .75rem; }
+  .ask-card { display: flex; flex-direction: column; gap: .5rem; padding: .85rem 1rem; border: 1px solid var(--orange-line); border-left: 3px solid var(--orange);
+    border-radius: var(--radius-lg); background: var(--orange-bg); }
+  .ask-card p { margin: 0; }
+  .ask-who { font-size: 13px; color: var(--fg-2); overflow-wrap: anywhere; }
+  .ask-q { font-size: 14px; line-height: 1.5; color: var(--fg); overflow-wrap: anywhere; }
+  .ask-foot { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; justify-content: space-between; margin-top: auto; }
+  .step-counts { display: flex; flex-wrap: wrap; gap: .3rem; margin-left: auto; }
+  .step-counts .chip b { margin-left: .35rem; font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
+  .step-counts .chip[data-step-count="Stalled"] { background: var(--red-bg); border-color: var(--red-line); color: var(--red); }
+  .live-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); box-shadow: var(--shadow); }
+  .live { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr) auto; gap: .35rem 1rem; align-items: start; padding: .75rem 1rem; }
+  .live + .live { border-top: 1px solid var(--line); }
+  .live .status { margin-top: .1rem; }
+  .live-title { font-weight: 600; color: var(--fg); overflow-wrap: anywhere; }
+  .live-title:hover { color: var(--accent); }
+  .live-meta { font-size: 12.5px; color: var(--muted); margin-top: .15rem; overflow-wrap: anywhere; }
+  .live-meta .mono { font-size: 11.5px; }
+  .live-now { font-size: 13px; color: var(--fg-2); margin-top: .35rem; }
+  .live-now .meta { display: inline; margin: 0 .75rem 0 0; font-size: 12px; }
+  .live-side { display: flex; flex-direction: column; align-items: flex-end; gap: .35rem; white-space: nowrap; font-size: 12.5px; }
+  .steps-bar { display: flex; gap: 3px; margin-top: .45rem; max-width: 22rem; }
+  .steps-bar i { flex: 1; height: 5px; border-radius: 3px; background: var(--bg-muted); border: 1px solid var(--line); }
+  .steps-bar i.done { background: var(--green); border-color: var(--green); }
+  .steps-bar i.now { background: var(--accent); border-color: var(--accent); }
+  .runs-table .run-what { min-width: 14rem; }
+  .runs-table .run-what .meta { margin-top: .15rem; font-size: 12px; }
+  .runs-table .run-what .mono { font-size: 11.5px; }
+  .composer textarea { display: block; min-height: 4.5rem; transition: min-height .15s; border: 0; box-shadow: none; padding: .7rem 1rem; background: transparent; resize: vertical; }
   .composer textarea:focus { box-shadow: none; }
+  .composer:focus-within textarea, .composer textarea:not(:placeholder-shown) { min-height: 9rem; }
   .composer .composer-toolbar { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; padding: .7rem 1rem; border-top: 1px solid var(--line); background: var(--bg-subtle); border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
   .composer .pick { display: flex; min-width: 0; align-items: center; gap: .5rem; margin-left: auto; }
   .composer .pick select { width: auto; max-width: 22rem; min-width: 0; }
+  .composer .pick + .pick { margin-left: 0; }
   .composer .pick label { margin: 0; font-size: 12.5px; color: var(--muted); font-weight: 500; }
   .composer .task-actions[hidden] { display: none; }
   #task-dictation .dictation { padding: .7rem 1rem; border-top: 1px solid var(--line); }
@@ -62,8 +96,11 @@
     .runs-table thead { display: none; }
     .runs-table tr { padding: .6rem; border-bottom: 1px solid var(--line); }
     .runs-table td { border: 0; padding: .25rem; text-align: left; }
-    .runs-table td:nth-child(5), .runs-table td:nth-child(6) { display: none; }
     .runs-table td.run-activity { min-width: 0; max-width: none; }
+    .live { grid-template-columns: minmax(0, 1fr); }
+    .live .status { justify-self: start; }
+    .live-side { flex-direction: row; align-items: center; justify-content: space-between; }
+    .ask-foot .btn { width: 100%; justify-content: center; }
     .composer .pick { flex: 1 1 100%; order: -1; }
     .composer .pick select { flex: 1; max-width: none; }
     .composer #submit-task { margin-left: auto; }
@@ -174,14 +211,11 @@
 {{define "list"}}{{template "wfhead" "Workflows"}}
 <main class="container page">
 <div class="page-head">
-  <div><h1>Workflows</h1><p class="sub">Each run finds its project, starts an orchestrator in the worktree, and hands it the steps one at a time.</p></div>
-  <div class="actions"><a class="btn sm" href="/workflows/email">Email</a><a class="btn sm" href="/workflows/voice-memos">Voice memos</a>{{if .Workflows}}<button class="btn sm" id="new-workflow">New workflow</button>{{end}}<button type="button" class="btn sm" data-model-groups-open>Model groups</button></div>
+  <div><h1>Workflows</h1><p class="sub">Start a task, answer what runs ask you, and follow every run step by step.</p></div>
+  <div class="actions"><a class="btn sm" href="/workflows/email">Email</a><a class="btn sm" href="/workflows/voice-memos">Voice memos</a>{{if .Workflows}}<a class="btn sm" href="#workflow-defs">Workflows ↓</a>{{end}}<button type="button" class="btn sm" data-model-groups-open>Model groups</button></div>
 </div>
 {{template "modelgroups" "dialog"}}
 <p class="banner" id="error" hidden></p>
-<div id="waiting-runs">
-{{range .Waiting}}<p class="banner callout"><b>{{.Workflow}}</b> is asking you: “{{.Title}}” · <a href="/workflow-runs/{{.ID}}">Read the note →</a></p>{{end}}
-</div>
 {{if not .Workflows}}
 <div class="empty-state">
   <p>No workflows yet. Start with the starting workflow: find the project, do the work, three gates, your sign-off for broader changes, then land.</p>
@@ -199,13 +233,69 @@
     <div class="composer-toolbar task-actions">
       <span id="task-attach-action"></span>{{if .Dictation}}{{template "dictationbutton"}}{{end}}
       <div class="pick"><label for="task-workflow">Workflow</label>
-        <select id="task-workflow">{{range .Tasks}}<option value="{{.ID}}"{{if .IsDefault}} selected{{end}}>{{.Name}}{{with .Definition.Host}} · {{.}}{{end}}</option>{{end}}</select></div>
+        <select id="task-workflow">{{range .Tasks}}<option value="{{.ID}}"{{if .IsDefault}} selected{{end}} data-host="{{.Definition.Host}}">{{.Name}}{{with .Definition.Host}} · {{.}}{{end}}</option>{{end}}</select></div>
+      <div class="pick"><label for="task-host">Host</label>
+        <select id="task-host"><option value="">Workflow’s host</option>{{range .TaskHosts}}{{if .Online}}<option value="{{.Name}}">{{.Name}}</option>{{else}}<option value="{{.Name}}" disabled>{{.Name}} · offline</option>{{end}}{{end}}</select></div>
       <button class="btn primary" id="submit-task" disabled title="⌘/Ctrl Enter">Submit task</button>
     </div>
   </section>
 {{end}}
+{{end}}
+<section id="waiting-runs" aria-label="Needs you"{{if not .Waiting}} hidden{{end}}>
+{{if .Waiting}}<div class="sec-head"><h2 class="section-title">Needs you</h2><span class="badge">{{len .Waiting}}</span><span class="meta">Runs waiting on your reply, oldest first</span></div>
+<div class="ask-list">{{range .Waiting}}
+<article class="ask-card">
+  <p class="ask-who"><b>{{.Workflow}}</b> is asking you: “{{.Title}}”</p>
+  {{with .Question}}<p class="ask-q">{{.}}</p>{{end}}
+  <div class="ask-foot"><span class="meta">{{with .StepOf}}{{.}} · {{end}}waiting {{.Waited}}</span><a class="btn sm primary" href="/workflow-runs/{{.ID}}#reply">Read the note and reply →</a></div>
+</article>{{end}}
+</div>{{end}}
+</section>
+<section id="active-runs" aria-label="In progress">
+<div class="sec-head"><h2 class="section-title">In progress</h2><span class="badge">{{with .Active}}{{len .}}{{else}}0{{end}}</span>
+  {{if .StepCounts}}<div class="step-counts" aria-label="Runs at each step">{{range .StepCounts}}<span class="chip" data-step-count="{{.Label}}">{{.Label}} <b>{{.Count}}</b></span>{{end}}</div>{{end}}</div>
 {{range .QueueHeads}}<p class="banner note queue-head" data-host="{{.Host}}"><b>{{plural .Queued "run"}} queued on <span class="mono">{{.Host}}</span>.</b> Next: <a href="/workflow-runs/{{.RunID}}">{{.Title}}</a>. {{or .Reason "Checking its host for room"}}.</p>{{end}}
-<h2 class="section-title">Workflows</h2>
+{{if .Active}}<ul class="live-list">{{range .Active}}
+  <li class="live">
+    <span class="status {{.StatusClass}}">{{.StatusLabel}}</span>
+    <div class="live-main">
+      <a class="live-title" href="/workflow-runs/{{.ID}}">{{.Title}}</a>
+      <div class="live-meta">{{.Workflow}}{{with .StepOf}} · {{.}}{{end}}{{if not .Position}} · <span class="mono">{{.Host}}</span>{{end}}{{if .Repo}} · <span class="mono" title="{{.Repo}}">{{.RepoName}}</span>{{end}}</div>
+      {{if .Steps}}<div class="steps-bar" aria-hidden="true">{{range .StepMarks}}<i class="{{.State}}" title="{{.Title}}"></i>{{end}}</div>{{end}}
+      {{if .CurrentActivity}}<div class="run-activity live-now">{{template "activity" (activityView . $.Now)}}</div>{{end}}
+    </div>
+    <div class="live-side"><span class="meta">{{ago $.Now .CreatedAt}}</span>{{if eq .Status "stalled"}}<button class="btn sm" data-resume-run="{{.ID}}">Resume</button>{{end}}</div>
+  </li>{{end}}
+</ul>{{if ge (len .Active) .ActiveLimit}}<p class="hint">Showing the newest {{.ActiveLimit}}. The Running, Queued and Stalled tabs below list them all.</p>{{end}}
+{{else}}<p class="empty-state">Nothing in progress.</p>{{end}}
+</section>
+<div class="runs-head"><h2 class="section-title" id="runs-title">Runs</h2>
+<form class="runs-search" method="get" action="/workflows" role="search">
+  <input type="hidden" name="status" value="{{.List.Status}}">
+  <input type="search" name="q" value="{{.List.Query}}" placeholder="Search runs…" aria-label="Search runs" autocomplete="off">
+  <button class="btn sm" type="submit">Search</button>{{if .List.Query}}<a class="btn sm ghost" href="{{.List.ClearSearch}}">Clear</a>{{end}}
+</form></div>
+<div id="runs">
+<nav class="run-tabs" aria-label="Filter runs by status">
+{{range .RunTabs}}<a href="{{$.List.StatusLink .Key}}#runs" data-run-status="{{.Key}}"{{if .Selected}} aria-current="page"{{end}}>{{.Label}} <span class="badge" data-run-count="{{.Key}}">{{.Count}}</span></a>{{end}}
+</nav>
+{{with .List}}{{if .Runs}}<div class="table-wrap"><table class="table runs-table">
+  <thead><tr><th>Status</th><th>What</th><th>Workflow</th><th>Now</th><th>Asked → answered</th><th class="n">Started</th></tr></thead>
+  <tbody>{{range .Runs}}<tr>
+    <td><span class="status {{.StatusClass}}">{{.StatusLabel}}</span>{{if eq .Status "stalled"}} <button class="btn sm" data-resume-run="{{.ID}}">Resume</button>{{end}}</td>
+    <td class="run-what"><a href="/workflow-runs/{{.ID}}">{{.Title}}</a><div class="meta"><span class="mono">{{.Host}}</span>{{if .Repo}} · <span class="mono" title="{{.Repo}}">{{.RepoName}}</span>{{end}}</div></td>
+    <td>{{.Workflow}} <span class="meta">v{{.Version}}{{if .WorkflowDeleted}} (deleted){{end}}</span>{{if .APIKeyID}} <span class="badge" title="Triggered via API{{with .APIKeyName}} ({{.}}){{end}}">API</span>{{end}}</td>
+    <td class="run-activity">{{if .CurrentActivity}}{{template "activity" (activityView . $.Now)}}{{else}}<span class="meta">{{.Where}}</span>{{end}}</td>
+    <td>{{if .MissingAnswer}}<span class="status st-error">{{.AnswerTiming}}</span>{{else}}{{.AnswerTiming}}{{end}}{{with .UncheckedTiming}}<div class="meta">{{.}}</div>{{end}}</td><td class="n meta">{{ago $.Now .CreatedAt}}</td></tr>{{end}}</tbody>
+</table></div>{{else if .Query}}<p class="empty-state">No runs match “{{.Query}}”.</p>{{else if gt .Page 1}}<p class="empty-state">No runs on this page.</p>{{else}}<p class="empty-state">{{if eq $.RunFilter.Key "all"}}No runs yet.{{else}}No {{$.RunFilter.Label}} runs.{{end}}</p>{{end}}
+{{if or .Runs (gt .Page 1)}}<nav class="pager" aria-label="Runs pages">
+  {{with .Newer}}<a class="btn sm" href="{{.}}" rel="prev">← Newer</a>{{end}}
+  <span class="meta">{{if .Runs}}{{.First}}–{{.Last}} of {{.Total}}{{else}}{{.Total}} in all{{end}}{{if .Query}} matching{{end}}</span>
+  {{with .Older}}<a class="btn sm" href="{{.}}" rel="next">Older →</a>{{end}}
+</nav>{{end}}{{end}}
+</div>
+{{if .Workflows}}<section id="workflow-defs" aria-label="Workflows">
+<div class="sec-head"><h2 class="section-title">Workflows</h2><span class="badge">{{len .Workflows}}</span><span class="meta">What each run follows. Edit one to change its steps or trigger.</span><span class="grow"></span><button class="btn sm" id="new-workflow">New workflow</button></div>
 <div class="wf-grid">
 {{range .Workflows}}
 <section class="card wf-card">
@@ -219,34 +309,7 @@
 </section>
 {{end}}
 </div>
-{{end}}
-<div class="runs-head"><h2 class="section-title" id="runs-title">Runs</h2>
-<form class="runs-search" method="get" action="/workflows" role="search">
-  <input type="hidden" name="status" value="{{.List.Status}}">
-  <input type="search" name="q" value="{{.List.Query}}" placeholder="Search runs…" aria-label="Search runs" autocomplete="off">
-  <button class="btn sm" type="submit">Search</button>{{if .List.Query}}<a class="btn sm ghost" href="{{.List.ClearSearch}}">Clear</a>{{end}}
-</form></div>
-<div id="runs">
-<nav class="run-tabs" aria-label="Filter runs by status">
-{{range .RunTabs}}<a href="{{$.List.StatusLink .Key}}#runs" data-run-status="{{.Key}}"{{if .Selected}} aria-current="page"{{end}}>{{.Label}} <span class="badge" data-run-count="{{.Key}}">{{.Count}}</span></a>{{end}}
-</nav>
-{{with .List}}{{if .Runs}}<div class="table-wrap"><table class="table runs-table">
-  <thead><tr><th>Status</th><th>What</th><th>Workflow</th><th>Now</th><th>Host</th><th>Project</th><th>Asked → answered</th><th class="n">Started</th></tr></thead>
-  <tbody>{{range .Runs}}<tr>
-    <td><span class="status {{.StatusClass}}">{{.StatusLabel}}</span>{{if eq .Status "stalled"}} <button class="btn sm" data-resume-run="{{.ID}}">Resume</button>{{end}}</td>
-    <td><a href="/workflow-runs/{{.ID}}">{{.Title}}</a></td>
-    <td>{{.Workflow}} <span class="meta">v{{.Version}}{{if .WorkflowDeleted}} (deleted){{end}}</span>{{if .APIKeyID}} <span class="badge" title="Triggered via API{{with .APIKeyName}} ({{.}}){{end}}">API</span>{{end}}</td>
-    <td class="run-activity">{{if .CurrentActivity}}{{template "activity" (activityView . $.Now)}}{{else}}<span class="meta">{{.Where}}</span>{{end}}</td>
-    <td class="mono" style="white-space:nowrap">{{.Host}}</td>
-    <td class="mono">{{.Repo}}</td>
-    <td>{{if .MissingAnswer}}<span class="status st-error">{{.AnswerTiming}}</span>{{else}}{{.AnswerTiming}}{{end}}{{with .UncheckedTiming}}<div class="meta">{{.}}</div>{{end}}</td><td class="n meta">{{ago $.Now .CreatedAt}}</td></tr>{{end}}</tbody>
-</table></div>{{else if .Query}}<p class="empty-state">No runs match “{{.Query}}”.</p>{{else if gt .Page 1}}<p class="empty-state">No runs on this page.</p>{{else}}<p class="empty-state">{{if eq $.RunFilter.Key "all"}}No runs yet.{{else}}No {{$.RunFilter.Label}} runs.{{end}}</p>{{end}}
-{{if or .Runs (gt .Page 1)}}<nav class="pager" aria-label="Runs pages">
-  {{with .Newer}}<a class="btn sm" href="{{.}}" rel="prev">← Newer</a>{{end}}
-  <span class="meta">{{if .Runs}}{{.First}}–{{.Last}} of {{.Total}}{{else}}{{.Total}} in all{{end}}{{if .Query}} matching{{end}}</span>
-  {{with .Older}}<a class="btn sm" href="{{.}}" rel="next">Older →</a>{{end}}
-</nav>{{end}}{{end}}
-</div>
+</section>{{end}}
 <script>
 const starting = {{json .Starting}};
 const hosts = {{json .Hosts}}; // the account's, online first: a new workflow runs on the first
@@ -291,6 +354,14 @@ document.getElementById("new-workflow")?.addEventListener("click", () => addWork
 // Task composer submission: hold the draft steady through uploads and the API call.
 const taskText = document.getElementById("task"), taskSubmit = document.getElementById("submit-task");
 const taskBox = document.getElementById("task-dictation"), taskWorkflow = document.getElementById("task-workflow");
+const taskHost = document.getElementById("task-host");
+// the default host option names the chosen workflow's host
+const taskHostDefault = () => {
+  const host = taskWorkflow?.selectedOptions?.[0]?.dataset.host, first = taskHost?.options?.[0];
+  if (first) first.textContent = host ? `Workflow’s host (${host})` : "Workflow’s host";
+};
+taskWorkflow?.addEventListener("change", taskHostDefault);
+taskHostDefault();
 const taskError = document.getElementById("task-error"), taskStatus = document.getElementById("task-status");
 const taskImages = taskText ? imageAttachments(taskText, taskBox, {
   panel: document.getElementById("task-attachments"), action: document.getElementById("task-attach-action")
@@ -304,16 +375,16 @@ taskSubmit?.addEventListener("click", async () => {
   const input = taskText.value.trim();
   if (taskSending || !input || taskText.readOnly) return;
   taskSending = true; taskReady(); taskWarning("");
-  taskText.readOnly = true; taskWorkflow.disabled = true; taskImages.setDisabled(true);
+  taskText.readOnly = true; taskWorkflow.disabled = true; taskHost.disabled = true; taskImages.setDisabled(true);
   taskBox.setAttribute("aria-busy", "true");
   taskSubmit.textContent = "Submitting…"; taskStatus.textContent = "Submitting your task…";
   const mic = document.getElementById("dictate"); if (mic) mic.disabled = true;
   try {
-    const r = await api("POST", "/api/workflow-runs", { workflowId: taskWorkflow.value, input: await taskImages.prompt(input) });
+    const r = await api("POST", "/api/workflow-runs", { workflowId: taskWorkflow.value, "host": taskHost.value, input: await taskImages.prompt(input) });
     location.href = "/workflow-runs/" + r.id;
   } catch (e) {
     taskWarning(e.message); taskStatus.textContent = "";
-    taskSending = false; taskText.readOnly = false; taskWorkflow.disabled = false; taskImages.setDisabled(false);
+    taskSending = false; taskText.readOnly = false; taskWorkflow.disabled = false; taskHost.disabled = false; taskImages.setDisabled(false);
     if (mic) mic.disabled = false;
     taskBox.setAttribute("aria-busy", "false"); taskSubmit.textContent = "Submit task"; taskReady();
   }
@@ -326,7 +397,7 @@ setInterval(async () => {
     const res = await fetch(location.href, { cache: "no-store" });
     if (!res.ok) return;
     const page = new DOMParser().parseFromString(await res.text(), "text/html");
-    for (const id of ["runs", "waiting-runs"]) {
+    for (const id of ["runs", "waiting-runs", "active-runs"]) {
       const next = page.getElementById(id);
       if (next) document.getElementById(id).replaceWith(next);
     }

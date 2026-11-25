@@ -8,6 +8,7 @@ import (
 )
 
 func TestStartExpiryReconcilesWithoutAHostUpdate(t *testing.T) {
+	t.Parallel()
 	h, db := dbServer(t)
 	b := sendReport(t, h, wfReport())
 	run := startRun(t, h, createWorkflow(t, h, workflow.Starting), "expired")

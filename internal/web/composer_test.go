@@ -11,6 +11,7 @@ import (
 )
 
 func TestTaskComposerAccessibleControls(t *testing.T) {
+	t.Parallel()
 	for _, voice := range []string{"", "/api/dictation/token"} {
 		r := httptest.NewRecorder()
 		w := workflowRow{ID: "task", Name: "Task", Definition: workflow.Starting}
@@ -25,6 +26,7 @@ func TestTaskComposerAccessibleControls(t *testing.T) {
 
 // Exercise the actual task submission script, including an upload in flight and a failed API call.
 func TestTaskComposerSubmission(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	src, err := os.ReadFile("workflows.html")
 	if err != nil {
@@ -45,26 +47,31 @@ const composerHarness = `
 const assert = require('assert');
 const el = () => ({ value: '', disabled: false, hidden: true, textContent: '', dataset: {},
   addEventListener(k, fn) { this[k] = fn; }, setAttribute(k,v) { this[k] = v; }, focus() {} });
-const ids = Object.fromEntries(['task','submit-task','task-workflow','task-dictation','task-error','task-attachments','task-status'].map(k => [k, el()]));
+const ids = Object.fromEntries(['task','submit-task','task-workflow','task-host','task-dictation','task-error','task-attachments','task-status'].map(k => [k, el()]));
 global.document = { getElementById: k => ids[k] };
 global.location = {};
-let upload, locked = false, posts = 0, fail = true;
+ids['task-workflow'].selectedOptions = [{ dataset: { host: 'host-1' } }];
+ids['task-host'].options = [{ textContent: '' }];
+let upload, locked = false, posts = 0, fail = true, sentHost;
 global.imageAttachments = () => ({ setDisabled(v) { locked = v; }, prompt: () => new Promise(r => upload = r) });
-global.api = async (method, path, body) => { posts++; assert.equal(path, '/api/workflow-runs'); assert.equal(body.input, 'task\nimage'); if (fail) throw Error('Try again'); return {id:'run'}; };
+global.api = async (method, path, body) => { posts++; assert.equal(path, '/api/workflow-runs'); assert.equal(body.input, 'task\nimage'); sentHost = body.host; if (fail) throw Error('Try again'); return {id:'run'}; };
 eval(process.argv[1]);
 const tick = () => new Promise(r => setTimeout(r, 0));
 (async () => {
   const text = ids.task, button = ids['submit-task'];
+  assert.equal(ids['task-host'].options[0].textContent, 'Workflow’s host (host-1)', 'default names the workflow host');
   assert(button.disabled, 'blank task disabled');
   text.value = 'task'; text.input(); assert(!button.disabled);
   button.click({currentTarget:button});
-  assert(button.disabled && text.readOnly && locked, 'lock while uploading');
+  assert(button.disabled && text.readOnly && locked && ids['task-host'].disabled, 'lock while uploading');
   button.click({currentTarget:button}); assert.equal(posts,0);
   upload('task\nimage'); await tick();
   assert.equal(posts,1); assert(!button.disabled && !text.readOnly && !locked);
   assert.equal(text.value,'task'); assert.equal(ids['task-error'].textContent,'Try again');
+  assert.equal(sentHost, '', 'no host chosen: the workflow host'); assert(!ids['task-host'].disabled);
+  ids['task-host'].value = 'host-2';
   fail = false; button.click({currentTarget:button}); upload('task\nimage'); await tick();
-  assert.equal(posts,2); assert.equal(location.href,'/workflow-runs/run');
+  assert.equal(posts,2); assert.equal(location.href,'/workflow-runs/run'); assert.equal(sentHost, 'host-2');
   assert(button.disabled, 'stay locked until navigation');
 })();
 `

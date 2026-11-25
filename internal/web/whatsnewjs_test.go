@@ -65,6 +65,7 @@ setTimeout(async () => {
 // The top bar says how many entries are unseen in words, not only with a mark: the tab's
 // accessible name carries the count, and the mark is the count itself.
 func TestWhatsNewScriptBehaviour(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	three := `[["c","Third"],["b","Second"],["a","First"]]`
 	for _, tc := range []struct{ name, path, unseen, act, want string }{

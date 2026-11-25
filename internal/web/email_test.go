@@ -46,12 +46,16 @@ func emailKey(t *testing.T) *email.Keyring {
 
 // emailServer is a server whose account can connect the fake mailbox, which it reads every few
 // milliseconds.
+// fakeGmailQuotaRate paces requests to the fake Gmail: 60-unit reads wait 1ms, not Gmail's 1.2s.
+const fakeGmailQuotaRate = 60000
+
 func emailServer(t *testing.T) (*testServer, *gmailfake.Server) {
 	t.Helper()
 	fake := gmailfake.New(t, "bot@example.com")
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) {
 		c.Google, c.EmailKey, c.EmailInterval = fake.Google(), emailKey(t), 20*time.Millisecond
+		c.EmailQuotaRate = fakeGmailQuotaRate
 	})
 	return h, fake
 }
@@ -123,6 +127,7 @@ func christina(t *testing.T, h http.Handler) string {
 }
 
 func TestEmailStartsTheWorkflowThatMatchesItAndRepliesGoToItsRun(t *testing.T) {
+	t.Parallel()
 	h, fake := emailServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
@@ -244,6 +249,7 @@ func TestEmailStartsTheWorkflowThatMatchesItAndRepliesGoToItsRun(t *testing.T) {
 }
 
 func TestTheMailboxTokenIsNotReadableThroughSQL(t *testing.T) {
+	t.Parallel()
 	h, fake := emailServer(t)
 	connectGmail(t, h, fake)
 	_, r := sqlPost(t, h, q("SELECT address, encode(token, 'escape') FROM gmail_connections"))
@@ -256,6 +262,7 @@ func TestTheMailboxTokenIsNotReadableThroughSQL(t *testing.T) {
 }
 
 func TestTwoWorkflowsCannotClaimTheSameSender(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	christina(t, h)
@@ -273,6 +280,7 @@ func TestTwoWorkflowsCannotClaimTheSameSender(t *testing.T) {
 }
 
 func TestASignInStartedByAnotherAccountIsRefused(t *testing.T) {
+	t.Parallel()
 	h, fake := emailServer(t)
 	other := emailKey(t).State(h.acct.ID+1, time.Now())
 	back := fake.Consent(fake.Google().SignInURL(other, "c", "http://example.com/gmail/callback"))
@@ -284,6 +292,7 @@ func TestASignInStartedByAnotherAccountIsRefused(t *testing.T) {
 }
 
 func TestWithoutGoogleSettingsEmailIsOff(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	if rec := call(t, h, http.MethodPost, "/api/gmail/sign-in", `{}`, sameOriginFetch); rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("sign-in = %d %s", rec.Code, rec.Body)
@@ -294,6 +303,7 @@ func TestWithoutGoogleSettingsEmailIsOff(t *testing.T) {
 }
 
 func TestTheEmailPageShowsTheMailboxAndWhatEachEmailDid(t *testing.T) {
+	t.Parallel()
 	h, fake := emailServer(t)
 	sendReport(t, h, wfReport())
 	christina(t, h)
@@ -323,12 +333,13 @@ func TestTheEmailPageShowsTheMailboxAndWhatEachEmailDid(t *testing.T) {
 // TestADeletedEmailWorkflowStartsNothingAndFreesItsSender: once deleted, an email workflow starts
 // no run, from a new email or a reply in an old run's thread, and its senders can start another.
 func TestADeletedEmailWorkflowStartsNothingAndFreesItsSender(t *testing.T) {
+	t.Parallel()
 	fake := gmailfake.New(t, "bot@example.com")
 	d := dbtest.New(t)
 	clock := &fakeClock{t: time.Now().UTC()}
 	key := emailKey(t)
 	h := newStallServer(t, d, d.Owner, "v", func(c *Config) {
-		c.Google, c.EmailKey, c.Now = fake.Google(), key, clock.Now
+		c.Google, c.EmailKey, c.Now, c.EmailQuotaRate = fake.Google(), key, clock.Now, fakeGmailQuotaRate
 	})
 	stallReport(t, h, wfReport())
 	wf := christina(t, h)
@@ -336,7 +347,7 @@ func TestADeletedEmailWorkflowStartsNothingAndFreesItsSender(t *testing.T) {
 
 	// The routing assertions need a completed poll, independent of the background
 	// poller's scheduling and the time it takes Gmail to pace message reads.
-	mail := email.Service{DB: d.Owner, Engine: h.local.wf, Google: fake.Google(), Key: key, Now: clock.Now}
+	mail := email.Service{DB: d.Owner, Engine: h.local.wf, Google: fake.Google(), Key: key, Now: clock.Now, QuotaRate: fakeGmailQuotaRate}
 	deliver := func(msg email.GmailMessage) map[string]any {
 		t.Helper()
 		clock.Add(email.Interval)

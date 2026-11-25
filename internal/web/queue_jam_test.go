@@ -85,6 +85,7 @@ func askingRun(t *testing.T, h http.Handler, b *rawHost, wf, agent string) strin
 // answer in desk is small even when Factory Task runs in desk are heavy. A workflow with no
 // history of its own falls back to the repository's.
 func TestMemoryEstimatesComeFromTheWorkflowsOwnHistory(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	factory := namedWorkflow(t, h, "Factory Task", "/w/desk")
@@ -121,6 +122,7 @@ func TestMemoryEstimatesComeFromTheWorkflowsOwnHistory(t *testing.T) {
 // answer in desk estimated at the 7.3 GiB of desk's Factory Task runs. Fourteen runs sat queued for
 // up to 14.5 hours behind it. The head must start.
 func TestTheNovember11QueueStarts(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
 	b := sendReport(t, h, wfReport())
@@ -157,6 +159,7 @@ func TestTheNovember11QueueStarts(t *testing.T) {
 // When runs waiting for Zach's sign-off are what fills the host, the queue says so plainly, and
 // the Workflows page shows the queue head's reason.
 func TestTheQueueSaysWhenSignOffsHoldItsMemory(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
 	b := sendReport(t, h, wfReport())
@@ -192,6 +195,7 @@ func TestTheQueueSaysWhenSignOffsHoldItsMemory(t *testing.T) {
 // A failed start keeps its run's memory reservation while its retry is pending, so the next queued
 // run cannot take that room and leave the retry with none. The retry then starts within capacity.
 func TestAFailedStartsRetryIsNotOvertakenByTheNextQueuedRun(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	clock := &fakeClock{t: time.Now().UTC()}
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour; c.Now = clock.Now })
@@ -237,6 +241,7 @@ func TestAFailedStartsRetryIsNotOvertakenByTheNextQueuedRun(t *testing.T) {
 // Once it is RetryWaitLimit past due and still cannot go, the run fails and says why: the host is
 // not ready, or it has no room (with the queue reason).
 func TestAStuckStartRetryRetriesOrFailsWithinMinutes(t *testing.T) {
+	t.Parallel()
 	if workflow.RetryWaitLimit > 10*time.Minute {
 		t.Fatalf("RetryWaitLimit = %v, want at most 10 minutes", workflow.RetryWaitLimit)
 	}

@@ -50,6 +50,7 @@ func runHex(run string) string { return strings.ReplaceAll(run, "-", "")[:12] }
 // capacity, a new run waits in a queue (readable with SQL, with why), and the queue starts in the
 // order the runs came, one per fresh measurement, once the host has room.
 func TestABusyHostQueuesNewRunsAndStartsThemInOrder(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	clock := &fakeClock{t: time.Now().UTC().Truncate(time.Minute)}
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.Now = clock.Now; c.QueueInterval = time.Hour })
@@ -134,6 +135,7 @@ func TestABusyHostQueuesNewRunsAndStartsThemInOrder(t *testing.T) {
 
 // TestAQuietHostStartsARunAtOnce: below the thresholds nothing is queued.
 func TestAQuietHostStartsARunAtOnce(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	b := openStream(t, h, "host-1")
@@ -150,6 +152,7 @@ func TestAQuietHostStartsARunAtOnce(t *testing.T) {
 // TestAQueuedRunCanBeStartedNowOrCanceled: the escape hatch starts a queued run whatever the
 // host's load; a queued run cancels like any other.
 func TestAQueuedRunCanBeStartedNowOrCanceled(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
 	sendReport(t, h, wfReport())
@@ -185,6 +188,7 @@ func TestAQueuedRunCanBeStartedNowOrCanceled(t *testing.T) {
 }
 
 func TestQueuePositionsReadAsOrdinals(t *testing.T) {
+	t.Parallel()
 	for n, want := range map[int]string{1: "1st", 2: "2nd", 3: "3rd", 4: "4th", 11: "11th", 12: "12th", 13: "13th", 21: "21st", 22: "22nd", 111: "111th", 123: "123rd"} {
 		if got := ordinal(n); got != want {
 			t.Errorf("ordinal(%d) = %q, want %q", n, got, want)
@@ -222,6 +226,7 @@ func burst(t *testing.T, h http.Handler, wf string, n int) (queued int) {
 // run started since counts at its estimated footprint (10% CPU a run with no history to learn
 // from): at 10% CPU, 7 of 10 runs started at once fit under 85%, and 3 queue.
 func TestABurstOnAnIdleHostStartsWhatFits(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
 	sendReport(t, h, wfReport())
@@ -238,6 +243,7 @@ func TestABurstOnAnIdleHostStartsWhatFits(t *testing.T) {
 
 // TestAnIdleHostStartsRunsBackToBack: with room, a run starts at once, however recently the last did.
 func TestAnIdleHostStartsRunsBackToBack(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	b := openStream(t, h, "host-1")
@@ -254,6 +260,7 @@ func TestAnIdleHostStartsRunsBackToBack(t *testing.T) {
 // TestAnUnmonitoredHostStartsEveryRun: a host that never sent its resources gives no sign it is
 // near capacity, and there is no count of runs to hold them to, so they all start.
 func TestAnUnmonitoredHostStartsEveryRun(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
 	sendReport(t, h, wfReport())
@@ -265,6 +272,7 @@ func TestAnUnmonitoredHostStartsEveryRun(t *testing.T) {
 // TestEachHostLearnsARunsFootprint: host_run_footprint fits the host's history (its load against
 // how many runs were going) to say what one run adds, which then projects its load.
 func TestEachHostLearnsARunsFootprint(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
 	sendReport(t, h, wfReport())
@@ -309,6 +317,7 @@ func TestEachHostLearnsARunsFootprint(t *testing.T) {
 // a fresh measurement rather than starting on no evidence, and a host away for long keeps holding
 // until it reports again.
 func TestStaleResourcesHoldTheQueue(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	clock := &fakeClock{t: time.Now().UTC().Truncate(time.Minute)}
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.Now = clock.Now; c.QueueInterval = time.Hour })
@@ -345,6 +354,7 @@ func TestStaleResourcesHoldTheQueue(t *testing.T) {
 // still count against the projection; once the host reports them done and a minute measured after
 // that shows their load, they stop counting and the queue moves.
 func TestARunHoldsItsReservationUntilTheHostHasStartedIt(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	clock := &fakeClock{t: time.Now().UTC().Truncate(time.Minute)}
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.Now = clock.Now; c.QueueInterval = time.Hour })
@@ -389,6 +399,7 @@ func TestARunHoldsItsReservationUntilTheHostHasStartedIt(t *testing.T) {
 // TestContradictoryHistoryIsNotLearned: a fit that says runs lighten the host (here, two runs going
 // while CPU was low) is not a footprint: the default stands for that metric.
 func TestContradictoryHistoryIsNotLearned(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
 	sendReport(t, h, wfReport())
@@ -417,6 +428,7 @@ func TestContradictoryHistoryIsNotLearned(t *testing.T) {
 // starts twice on its host, its finder and then its workspace and orchestrator; it counts as
 // starting until the host has made the second as well, not only the first.
 func TestAFinderRunKeepsItsReservationThroughItsOrchestrator(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	clock := &fakeClock{t: time.Now().UTC().Truncate(time.Minute)}
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.Now = clock.Now; c.QueueInterval = time.Hour })
@@ -457,6 +469,7 @@ func TestAFinderRunKeepsItsReservationThroughItsOrchestrator(t *testing.T) {
 // project, so a newer minute after its finder was made, but before the project is chosen and the
 // orchestrator asked for, does not release the queue.
 func TestAFinderRunIsReservedWhileItFindsItsProject(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	clock := &fakeClock{t: time.Now().UTC().Truncate(time.Minute)}
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.Now = clock.Now; c.QueueInterval = time.Hour })
@@ -511,6 +524,7 @@ func lastMinute(t *testing.T, d dbtest.DB, ago time.Duration, cpu float64) time.
 // not connected) keeps holding its runs however long it is gone: they would all land on it at once
 // when it came back.
 func TestAHostAwayForLongKeepsItsQueue(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
 	sendReport(t, h, wfReport())
@@ -531,6 +545,7 @@ func TestAHostAwayForLongKeepsItsQueue(t *testing.T) {
 // TestAConnectedHostThatSendsNoResourcesStartsRuns: a host that is connected but has sent no
 // minute for long (its monitoring stopped) is no sign of being near capacity: its runs start.
 func TestAConnectedHostThatSendsNoResourcesStartsRuns(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
 	sendReport(t, h, wfReport())

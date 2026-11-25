@@ -22,6 +22,7 @@ func mintMCP(t *testing.T, h http.Handler) (string, string) {
 }
 
 func TestMCPProposalTokenIdentityAndApprovalBoundary(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	tokenID, token := mintMCP(t, h)
@@ -82,6 +83,7 @@ func TestMCPProposalTokenIdentityAndApprovalBoundary(t *testing.T) {
 }
 
 func TestMCPProtocolErrorsAndOrigin(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	_, token := mintMCP(t, h)
 	headers := map[string]string{"Authorization": "Bearer " + token}
@@ -119,8 +121,10 @@ func TestMCPProtocolErrorsAndOrigin(t *testing.T) {
 }
 
 func TestMCPPagingAndTimeout(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
-	h := newServer(t, d, d.Owner, "test", func(c *Config) { c.SQLTimeout = 50 * time.Millisecond })
+	// Long enough for this test's other queries on a busy host, far short of pg_sleep(5).
+	h := newServer(t, d, d.Owner, "test", func(c *Config) { c.SQLTimeout = time.Second })
 	sendReport(t, h, sampleReport)
 	sendBatch(t, h, batch(true, "epoch-1", tentry(0, `{"type":"user_message","text":"first"}`), tentry(1, `{"type":"assistant_message","text":"second"}`)))
 	_, token := mintMCP(t, h)
@@ -166,6 +170,7 @@ func rpc(t *testing.T, h http.Handler, token, body string) string {
 }
 
 func TestMCPTransportAndTools(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, sampleReport)
 	_, token := mintMCP(t, h)
@@ -200,6 +205,7 @@ func TestMCPTransportAndTools(t *testing.T) {
 }
 
 func TestMCPRunReadsAndAccountIsolation(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	wf := createWorkflow(t, h, workflow.Starting)
@@ -234,6 +240,7 @@ func TestMCPRunReadsAndAccountIsolation(t *testing.T) {
 }
 
 func TestMCPSQLRunSummaryAndExplicitInput(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	wf := createWorkflow(t, h, workflow.Starting)
@@ -273,6 +280,7 @@ func TestMCPSQLRunSummaryAndExplicitInput(t *testing.T) {
 }
 
 func TestMCPConfiguredOrigin(t *testing.T) {
+	t.Parallel()
 	r := httptest.NewRequest("POST", "http://backend.example/mcp", nil)
 	r.Header.Set("Origin", "https://public.example")
 	if !mcpOrigin(Config{PublicURL: "https://public.example"}, r) {
@@ -285,6 +293,7 @@ func TestMCPConfiguredOrigin(t *testing.T) {
 }
 
 func TestMCPVersionsAndTrailingSlash(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	_, token := mintMCP(t, h)
 	for _, path := range []string{"/mcp", "/mcp/"} {
@@ -316,6 +325,7 @@ func TestMCPVersionsAndTrailingSlash(t *testing.T) {
 }
 
 func TestAccountMCPTokenControls(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	id, secret := mintMCP(t, h)
 	ts := h.(*testServer)
@@ -351,6 +361,7 @@ func TestAccountMCPTokenControls(t *testing.T) {
 }
 
 func TestMCPTokenIsolationAndRevocation(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, sampleReport)
 	id, token := mintMCP(t, h)
@@ -396,6 +407,7 @@ func TestMCPTokenIsolationAndRevocation(t *testing.T) {
 }
 
 func TestMCPWorkflowProposals(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	_, key := mintMCP(t, h)

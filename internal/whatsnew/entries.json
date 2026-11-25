@@ -1,11 +1,27 @@
 [
   {
     "id": "workflow-api-triggers",
-    "released": "2026-11-24",
+    "released": "2026-11-25",
     "title": "Trigger, stream and control workflows with scoped API keys",
     "summary": "Any workflow can now enable Allow triggering via API beside its existing trigger so external repositories and services can start runs idempotently, list and inspect runs, read agent transcripts, stream live events and transcripts over resumable SSE, and reply, send input, cancel or retry runs. Open a workflow's Trigger panel, check Allow triggering via API, save, and issue or revoke scoped keys there.",
     "media": "workflow-api-triggers-v2.png",
     "mediaAlt": "The workflow editor's Trigger panel for Agreement review in a local demo showing Allow triggering via API checked beside the manual trigger and the scoped API keys list with active and revoked keys."
+  },
+  {
+    "id": "task-composer-host-picker",
+    "released": "2026-11-25",
+    "title": "Pick the host a new task runs on",
+    "summary": "The New task box on the Workflows page now has a Host menu beside Workflow. Leave it on Workflow's host to run where the workflow says, as before, or pick any of your online hosts to run this one task there. Offline hosts show but cannot be picked. A workflow that always works in one repository needs that repository on the host you pick. Retrying a failed run keeps the host it ran on.",
+    "media": "task-composer-host-picker.png",
+    "mediaAlt": "The New task box on the Workflows page in a local demo: a task typed, the Workflow menu on its workflow's host example-host-1, and the new Host menu set to example-host-2 beside Submit task."
+  },
+  {
+    "id": "workflows-needs-you-in-progress",
+    "released": "2026-11-25",
+    "title": "Workflows shows what needs you and what is running first",
+    "summary": "The Workflows page now leads with your runs, not the workflow definitions. Under the task box, Needs you shows each run waiting on your reply with its question, the step it is at and how long it has waited. In progress lists every live run with its step (Step 2 of 7), a progress bar and what it is doing now, plus how many runs are at each step. The full runs history follows, and the workflows are at the bottom.",
+    "media": "workflows-needs-you-in-progress.png",
+    "mediaAlt": "The Workflows page in a local demo: two Needs you cards with their questions, then In progress with per-step counts and live runs showing their step and progress bar."
   },
   {
     "id": "android-pwa-notifications",

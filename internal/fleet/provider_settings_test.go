@@ -11,6 +11,7 @@ import (
 )
 
 func TestUnsubscribedIsNotAnActivePlanEvenAfterFreshReports(t *testing.T) {
+	t.Parallel()
 	for _, provider := range []string{usage.Muse, "gemini"} {
 		t.Run(provider, func(t *testing.T) {
 			r := usageRig(t)
@@ -57,6 +58,7 @@ func TestUnsubscribedIsNotAnActivePlanEvenAfterFreshReports(t *testing.T) {
 }
 
 func TestUnsubscribedLaunchCommandsAreRefused(t *testing.T) {
+	t.Parallel()
 	for _, provider := range []string{usage.Muse, "gemini"} {
 		t.Run(provider, func(t *testing.T) {
 			r := commandRig(t)
@@ -75,6 +77,7 @@ func TestUnsubscribedLaunchCommandsAreRefused(t *testing.T) {
 }
 
 func TestUnsubscribedSchedulesArePausedOnReport(t *testing.T) {
+	t.Parallel()
 	for _, provider := range []string{usage.Muse, "gemini"} {
 		t.Run(provider, func(t *testing.T) {
 			r := commandRig(t)

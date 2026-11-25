@@ -11,6 +11,7 @@ import (
 )
 
 func TestProposalAnswerUsesDeskCatalog(t *testing.T) {
+	t.Parallel()
 	project := func(name, dir string) hostclient.Project {
 		return hostclient.Project{ID: name, Name: name, Kind: "git", Directory: dir}
 	}
@@ -97,6 +98,7 @@ func TestProposalAnswerUsesDeskCatalog(t *testing.T) {
 }
 
 func TestProposalAnswerDoesNotUseAnotherAccountsDesk(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	ts := h.(*testServer)

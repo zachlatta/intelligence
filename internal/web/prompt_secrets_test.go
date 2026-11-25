@@ -10,6 +10,7 @@ import (
 )
 
 func TestWorkflowRefusesCredentialNotesRepliesAndLaterSteps(t *testing.T) {
+	t.Parallel()
 	h, db := dbServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")

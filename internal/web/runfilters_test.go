@@ -12,6 +12,7 @@ import (
 )
 
 func TestWaitingRunBannerIgnoresStatusFilter(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
 	sendReport(t, h, wfReport())
@@ -21,7 +22,7 @@ func TestWaitingRunBannerIgnoresStatusFilter(t *testing.T) {
 	}
 	for _, status := range []string{"completed", "all", "running", "queued", "waiting", "failed", "canceled", "stalled"} {
 		page := get(t, h, "/workflows?status="+status, nil)
-		if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "is asking you:") || !strings.Contains(page.Body.String(), `href="/workflow-runs/`+run+`">Read the note`) {
+		if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "is asking you:") || !strings.Contains(page.Body.String(), `href="/workflow-runs/`+run+`#reply">Read the note and reply`) {
 			t.Fatalf("%s: waiting run's banner is missing", status)
 		}
 	}
@@ -43,6 +44,7 @@ func TestWaitingRunBannerIgnoresStatusFilter(t *testing.T) {
 }
 
 func TestRunStatusTabsFilterBeforeLimitAndCountAllRuns(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
 	sendReport(t, h, wfReport())
@@ -112,6 +114,7 @@ func TestRunStatusTabsFilterBeforeLimitAndCountAllRuns(t *testing.T) {
 }
 
 func TestStatusFilterKeepsSearchAndPagination(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	wf := createWorkflow(t, h, workflow.Starting)
@@ -123,7 +126,8 @@ func TestStatusFilterKeepsSearchAndPagination(t *testing.T) {
 	}
 	startRun(t, h, wf, "Needle active task")
 	page := get(t, h, "/workflows?status=completed&q=Needle", nil).Body.String()
-	if !strings.Contains(page, "1–50 of 55") || strings.Contains(page, ">Needle active task</a>") {
+	_, history, _ := strings.Cut(page, `<div id="runs">`) // In progress above lists live runs whatever the filter
+	if !strings.Contains(history, "1–50 of 55") || strings.Contains(history, ">Needle active task</a>") {
 		t.Fatal("search and status must filter before pagination")
 	}
 	if !strings.Contains(page, `href="/workflows?page=2&amp;q=Needle&amp;status=completed"`) {

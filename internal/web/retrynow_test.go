@@ -14,6 +14,7 @@ import (
 // A queued start retry can be started by hand, ahead of the capacity queue. It spends a retry like
 // any other attempt, and a failure is handled like any other failed retry.
 func TestStartRetryNowSkipsQueue(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	clock := &fakeClock{t: time.Now().UTC()}
 	h := newServer(t, d, d.Owner, "v", func(c *Config) {

@@ -730,7 +730,12 @@ the capabilities it needs (BPF, perfmon, ptrace read of other processes' environ
 ### Workflows
 
 A workflow is the host it runs on, a trigger, a way to find the project, an orchestrator, and steps
-(`internal/workflow`). Every run of it happens on its host, which must be one of the account's. Each save is a new version (`workflow_versions.definition`); a run keeps the
+(`internal/workflow`). Every run of it happens on its host, which must be one of the account's.
+A task can run elsewhere: the New task box on `/workflows` has a Host menu (the account's online
+hosts; offline ones are listed but disabled), and `POST /api/workflow-runs` takes an optional
+`"host"`, one of the account's. Empty, or the workflow's own host, keeps the workflow's. A run on
+another host records `workflow_runs.host_chosen`, and its Retry stays on that host. A fixed-project
+workflow runs on another host only when that host reports the directory (`host_repositories`). Each save is a new version (`workflow_versions.definition`); a run keeps the
 version it started with. A run:
 
 0. **Waits for room on its host.** A run started while its host is near capacity is `queued`
@@ -1765,9 +1770,20 @@ make run    # http://localhost:8080 (needs DATABASE_URL and READONLY_DATABASE_UR
 
 Tests talk to a fake Paseo daemon (`internal/paseo/paseotest`). Database tests get their own
 database and read-only role (`internal/dbtest`) on the server in `TEST_DATABASE_URL`, which
-`make test` sets when it is empty. A package whose `TestMain` calls `dbtest.RunWithTemplate`
-(`internal/web` does) migrates one template database once and clones it for each test, instead
-of migrating every test database; each clone still gets its own read-only role.
+`make test` sets when it is empty. If you set it to your own Postgres, give that server
+`max_connections=500` as `scripts/with-test-postgres` does: the tests run in parallel, and
+Postgres's default of 100 runs out ("too many clients").
+
+Every package whose tests use `dbtest` has a `TestMain` that calls `dbtest.RunWithTemplate` (a
+`dbtest` test fails when one does not): it migrates one template database once and clones it for
+each test, instead of migrating every test database; each clone still gets its own read-only role.
+
+Every test in those packages starts with `t.Parallel()`, since each has its own database;
+`TestEveryDatabasePackageTestRunsInParallel` (in `internal/dbtest`) fails on one that does not,
+unless a line of its doc comment starts with "Not parallel:" and says why. Parallel tests must
+not write into shared fixtures such as `sampleReport` or `workflow.Starting`: copy them, and
+decode JSON into a new value, not a copy that shares their slices. The race detector fails such a
+test.
 
 ### Public repository
 
@@ -1943,9 +1959,18 @@ origin (another site's request is refused with 403), and those with a body must 
   page shows locally. Other API and SQL values stay as they are.
 - `GET /ui.css`: the one stylesheet every page shares, with the top bar (`layout.html`) that links the
   pages.
-- `GET /workflows`: a new task (for workflows triggered by a task: pick the workflow, which names
-  its host, with the default first and selected), the account's workflows and their runs. Without
-  workflows, a button adds the starting one (`workflow.Starting`) on the account's first host.
+- `GET /workflows`: in this order, a new task (for workflows triggered by a task: pick the
+  workflow, which names its host, with the default first and selected), Needs you, In progress,
+  the runs history, and the account's workflows last. Without workflows, a button adds the
+  starting one (`workflow.Starting`) on the account's first host. **Needs you** has a card for
+  each run waiting on a reply, oldest first: the workflow and run, the start of its note as plain
+  text (280 characters at most), its step and how long since its latest `ask` event, with a link
+  to the reply box (`/workflow-runs/{id}#reply`). **In progress** lists the live runs (finding the
+  project, starting, running, queued or stalled), newest first and at most 200: each with its
+  step (“Step 2 of 7 · Meets the request”, or where it is in the queue), a bar of its steps, host,
+  project and activity line, and above them how many runs are at each place (queued, finding the
+  project, starting, each step title across workflows, stalled). The history table shows the host
+  and the project's last directory under each run's What.
   Tabs above Runs filter by All, Running, Queued, Needs you, Stalled, Completed, Failed or Canceled,
   with counts across the account's full run history. The linkable `?status=` filter accepts
   `all`, `running`, `queued`, `waiting`, `stalled`, `completed`, `failed` or `canceled` (default: `all`).

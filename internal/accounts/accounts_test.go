@@ -25,6 +25,7 @@ func store(t *testing.T) (*accounts.Store, dbtest.DB) {
 const goodPassword = "correct horse battery"
 
 func TestCreateAndSignIn(t *testing.T) {
+	t.Parallel()
 	s, d := store(t)
 	a, err := s.Create(ctx, " Ann ", goodPassword)
 	if err != nil {
@@ -58,6 +59,7 @@ func TestCreateAndSignIn(t *testing.T) {
 }
 
 func TestSessions(t *testing.T) {
+	t.Parallel()
 	s, d := store(t)
 	a, _ := s.Create(ctx, "ann", goodPassword)
 	tok, exp, err := s.StartSession(ctx, a, accounts.SessionMetadata{})
@@ -91,6 +93,7 @@ func TestSessions(t *testing.T) {
 }
 
 func TestChangingThePasswordEndsOtherSessions(t *testing.T) {
+	t.Parallel()
 	s, _ := store(t)
 	a, _ := s.Create(ctx, "ann", goodPassword)
 	other, _, _ := s.StartSession(ctx, a, accounts.SessionMetadata{})
@@ -112,6 +115,7 @@ func TestChangingThePasswordEndsOtherSessions(t *testing.T) {
 }
 
 func TestAHostJoinsAnAccountWithACode(t *testing.T) {
+	t.Parallel()
 	s, d := store(t)
 	ann, _ := s.Create(ctx, "ann", goodPassword)
 	bob, _ := s.Create(ctx, "bob", goodPassword)
@@ -202,6 +206,7 @@ func TestAHostJoinsAnAccountWithACode(t *testing.T) {
 }
 
 func TestAnExpiredCodeCannotBeClaimed(t *testing.T) {
+	t.Parallel()
 	s, d := store(t)
 	ann, _ := s.Create(ctx, "ann", goodPassword)
 	e, _ := s.Enroll(ctx, "host-1")
@@ -215,6 +220,7 @@ func TestAnExpiredCodeCannotBeClaimed(t *testing.T) {
 }
 
 func TestEachAccountReadsThroughItsOwnRole(t *testing.T) {
+	t.Parallel()
 	s, _ := store(t)
 	ann, _ := s.Create(ctx, "ann", goodPassword)
 	s.Create(ctx, "bob", goodPassword)

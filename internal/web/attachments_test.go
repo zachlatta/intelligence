@@ -15,6 +15,7 @@ import (
 )
 
 func TestImageAttachments(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	var img bytes.Buffer
@@ -124,6 +125,7 @@ func TestImageAttachments(t *testing.T) {
 }
 
 func TestAttachmentControlsOnTaskAndSpawnForms(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	wf := createWorkflow(t, h, workflow.Starting)
@@ -136,6 +138,7 @@ func TestAttachmentControlsOnTaskAndSpawnForms(t *testing.T) {
 }
 
 func TestAttachmentsScriptIsServed(t *testing.T) {
+	t.Parallel()
 	rec := get(t, dictationServer(t, "", ""), "/attachments.js", nil)
 	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/javascript") ||
 		!strings.Contains(rec.Body.String(), "function imageAttachments") || rec.Header().Get("ETag") == "" {
@@ -144,6 +147,7 @@ func TestAttachmentsScriptIsServed(t *testing.T) {
 }
 
 func TestTooManyImageAttachmentsRefusesRun(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	var img bytes.Buffer
@@ -179,6 +183,7 @@ func TestTooManyImageAttachmentsRefusesRun(t *testing.T) {
 }
 
 func TestWorkflowRunReplyAndInputAttachments(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	b := openStream(t, h, "host-1")

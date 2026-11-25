@@ -11,6 +11,7 @@ import (
 )
 
 func TestStallWatchdogLeavesAdmissionAndStartupRetriesAlone(t *testing.T) {
+	t.Parallel()
 	f := newStallFixture(t)
 	for _, state := range []string{"queued", "finding_project", "starting", "retry_admission", "retry_backoff", "retry_running"} {
 		t.Run(state, func(t *testing.T) {
@@ -59,6 +60,7 @@ func TestStallWatchdogLeavesAdmissionAndStartupRetriesAlone(t *testing.T) {
 }
 
 func TestStallWatchdogContinuesOtherRunsAfterOneBadDefinition(t *testing.T) {
+	t.Parallel()
 	f := newStallFixture(t)
 	b := f.reset(t)
 	d, clock, h := f.d, f.clock, f.h
@@ -89,6 +91,7 @@ func TestStallWatchdogContinuesOtherRunsAfterOneBadDefinition(t *testing.T) {
 }
 
 func TestNewEngineReconcilesExistingIdleRun(t *testing.T) {
+	t.Parallel()
 	f := newStallFixture(t)
 	b := f.reset(t)
 	d, clock, h := f.d, f.clock, f.h

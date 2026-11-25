@@ -28,6 +28,7 @@ type Service struct {
 	Google    *Google
 	Key       *Keyring
 	Now       func() time.Time
+	QuotaRate int          // Gmail quota units charged per second, per mailbox; 0 is QuotaRate
 	pixelHTTP *http.Client // nil uses the isolated public-address-only client
 
 	mu        sync.Mutex
@@ -229,7 +230,7 @@ func (s *Service) Poll(ctx context.Context, account int64) error {
 			return nil
 		}
 		started := s.now()
-		pace := &pacer{Next: nextRequest}
+		pace := &pacer{Next: nextRequest, Rate: s.QuotaRate}
 		perr := s.read(context.WithValue(ctx, paceKey{}, pace), account, owners, token, connected, &history, &backfilled, &pending)
 		every := Interval
 		if d, ok := ctx.Value(intervalKey{}).(time.Duration); ok {

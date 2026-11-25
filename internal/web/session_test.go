@@ -11,6 +11,7 @@ import (
 )
 
 func TestSessionOnCrossSiteNavigation(t *testing.T) {
+	t.Parallel()
 	server, _ := cmdServer(t)
 	h := anon(server)
 	c := signInAs(t, h)
@@ -48,6 +49,7 @@ func TestSessionOnCrossSiteNavigation(t *testing.T) {
 }
 
 func TestCrossOriginSessionWritesAreRefused(t *testing.T) {
+	t.Parallel()
 	server, _ := cmdServer(t)
 	h := anon(server)
 	c := signInAs(t, h)
@@ -77,6 +79,7 @@ func TestCrossOriginSessionWritesAreRefused(t *testing.T) {
 }
 
 func TestSessionCreationRequiresJSON(t *testing.T) {
+	t.Parallel()
 	server, _ := cmdServer(t)
 	h := anon(server)
 	for _, req := range []struct{ path, body string }{
@@ -91,6 +94,7 @@ func TestSessionCreationRequiresJSON(t *testing.T) {
 }
 
 func TestExistingSessionCookieUpgradesWithoutExtendingSession(t *testing.T) {
+	t.Parallel()
 	h, d := cmdServer(t)
 	c := h.(*testServer).cookie
 	expires := time.Now().Truncate(time.Second).Add(48 * time.Hour)
@@ -115,6 +119,7 @@ func TestExistingSessionCookieUpgradesWithoutExtendingSession(t *testing.T) {
 }
 
 func TestSessionCreationMetadataIsReadableViaSQL(t *testing.T) {
+	t.Parallel()
 	server, _ := cmdServer(t)
 	h := anon(server)
 	const ua = "Mozilla/5.0 (Linux; Android 16; Mobile) Chrome"

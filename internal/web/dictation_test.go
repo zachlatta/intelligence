@@ -46,6 +46,7 @@ func dictationServer(t *testing.T, key, tokenURL string) http.Handler {
 }
 
 func TestDictationTokenIsMintedWithTheServersKey(t *testing.T) {
+	t.Parallel()
 	aai := fakeAssemblyAI(t, "test-key", "temp-token")
 	h := dictationServer(t, "test-key", aai.URL)
 
@@ -82,6 +83,7 @@ func TestDictationTokenIsMintedWithTheServersKey(t *testing.T) {
 }
 
 func TestDictationTokenFailsClearly(t *testing.T) {
+	t.Parallel()
 	aai := fakeAssemblyAI(t, "right-key", "temp-token")
 	rec := post(t, dictationServer(t, "wrong-key", aai.URL), "/api/dictation/token", "", []byte(`{}`))
 	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "Invalid API key") {
@@ -94,6 +96,7 @@ func TestDictationTokenFailsClearly(t *testing.T) {
 }
 
 func TestChatBoxOffersDictationOnlyWithAKey(t *testing.T) {
+	t.Parallel()
 	aai := fakeAssemblyAI(t, "k", "t")
 	page := get(t, dictationServer(t, "k", aai.URL), "/hosts/host-1/agents/"+agentA1, nil).Body.String()
 	for _, want := range []string{`data-dictation="/api/dictation/token"`, `id="dictate"`, `src="/dictation.js"`} {
@@ -176,6 +179,7 @@ func requireNode(t *testing.T) string {
 // TestDictationCanOnlyInsert: with insertOnly, an empty box does not choose sending: dictation
 // always appends at the cursor, and stopping it never calls send.
 func TestDictationCanOnlyInsert(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	out, err := exec.Command(node, "-e", dictationInsertOnlyHarness, "dictation.js").CombinedOutput()
 	if err != nil || strings.TrimSpace(string(out)) != "ok" {
@@ -186,6 +190,7 @@ func TestDictationCanOnlyInsert(t *testing.T) {
 // TestDictationBarWrapsOnNarrowScreens guards cce6417: on a phone the dictation bar keeps its
 // status readable and wraps its grouped buttons onto the next row when needed.
 func TestDictationBarWrapsOnNarrowScreens(t *testing.T) {
+	t.Parallel()
 	if !strings.Contains(string(dictationJS), `<span class="dactions">`) {
 		t.Error("dictation.js does not group the bar's buttons")
 	}
@@ -199,6 +204,7 @@ func TestDictationBarWrapsOnNarrowScreens(t *testing.T) {
 }
 
 func TestDictationScriptIsServed(t *testing.T) {
+	t.Parallel()
 	rec := get(t, dictationServer(t, "", ""), "/dictation.js", nil)
 	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/javascript") ||
 		!strings.Contains(rec.Body.String(), "AudioWorklet") || rec.Header().Get("ETag") == "" {
@@ -210,6 +216,7 @@ func TestDictationScriptIsServed(t *testing.T) {
 // workflow task, a workflow run, a reply to a waiting run, a proposal question, a new agent, a new
 // workspace, a new or edited schedule) offers the shared dictation button, loads the engine and wires it to that form's own text box; none does without a key.
 func TestEveryTaskEntryPointOffersDictation(t *testing.T) {
+	t.Parallel()
 	entries := []struct {
 		name, path string
 		wiring     []string // the box the button dictates into, and how it sends

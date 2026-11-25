@@ -23,6 +23,7 @@ import (
 // runs older than it are holding. Once only the runs that started after the head keep it waiting,
 // the queue holds for it, so it is not starved, and it starts when they end.
 func TestTheNovember16QueueStartsSmallRunsAroundAHeavyHead(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	clock := &fakeClock{t: time.Now().UTC().Truncate(time.Minute)}
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.Now = clock.Now; c.QueueInterval = time.Hour })
@@ -141,6 +142,7 @@ func TestTheNovember16QueueStartsSmallRunsAroundAHeavyHead(t *testing.T) {
 // Every queued run's reason is kept current, not only the head's: a run that was fifth in line
 // when it came does not still say so when it is second.
 func TestEveryQueuedRunsReasonIsKeptCurrent(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	clock := &fakeClock{t: time.Now().UTC().Truncate(time.Minute)}
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.Now = clock.Now; c.QueueInterval = time.Hour })
@@ -173,6 +175,7 @@ func rawMinute(t *testing.T, d dbtest.DB, m time.Time, cpu float64, total, avail
 // A run canceled while the queue is choosing it is not started: the queue reads its runs without
 // locking them, so it locks the one it picks only while that one is still queued.
 func TestARunCanceledAsTheQueuePicksItIsNotStarted(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	clock := &fakeClock{t: time.Now().UTC().Truncate(time.Minute)}
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.Now = clock.Now; c.QueueInterval = time.Hour })
@@ -238,6 +241,7 @@ func TestARunCanceledAsTheQueuePicksItIsNotStarted(t *testing.T) {
 // does not hold the runs behind it: one that fits starts. The retry keeps its memory, so the run
 // after that, which would fit beside the first without it, waits.
 func TestAHeldStartRetryDoesNotHoldTheRunsBehindIt(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	clock := &fakeClock{t: time.Now().UTC().Truncate(time.Minute)}
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.Now = clock.Now; c.QueueInterval = time.Hour })

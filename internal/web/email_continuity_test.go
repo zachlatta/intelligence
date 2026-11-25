@@ -38,6 +38,7 @@ func readContinuityRun(t *testing.T, h http.Handler, id string) map[string]any {
 }
 
 func TestEmailFollowUpContinuity(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"three follow-ups", "agent gone", "older than 24 hours", "transport failure", "cleanup pending", "arrival during restoration", "pre-send inspect_agent", "pre-send inspect_workspace", "pre-send unrecoverable_workspace", "pre-send restore_workspace", "pre-send refresh_agent"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
@@ -228,6 +229,7 @@ func TestEmailFollowUpContinuity(t *testing.T) {
 }
 
 func TestEmailContinuityEventsReadNaturally(t *testing.T) {
+	t.Parallel()
 	const earlier = "11111111-2222-3333-4444-555555555555"
 	for _, kind := range []string{"email_continuation_requested", "email_continued", "email_cold_start"} {
 		got := (runEvent{Kind: kind, Text: "Follow-up to run " + earlier}).Line()

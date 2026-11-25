@@ -74,6 +74,7 @@ func setupModelQuotaFixture(t *testing.T) (*testServer, dbtest.DB, *fakeClock, *
 }
 
 func TestModelQuotaBlockWaitsAndResumesWithoutAsk(t *testing.T) {
+	t.Parallel()
 	h, d, clock, e, b, wfID, token := setupModelQuotaFixture(t)
 	run := startRun(t, h, wfID, "Fix the widget")
 	cmd := b.command()
@@ -178,6 +179,7 @@ func TestModelQuotaBlockWaitsAndResumesWithoutAsk(t *testing.T) {
 }
 
 func TestModelQuotaOutageSendsAtMostOneHostNotice(t *testing.T) {
+	t.Parallel()
 	h, d, clock, e, b, wfID, token := setupModelQuotaFixture(t)
 	notifier := &fakeQuotaNotifier{}
 	e.Notify = notifier
@@ -256,6 +258,7 @@ func TestModelQuotaOutageSendsAtMostOneHostNotice(t *testing.T) {
 }
 
 func TestParkedModelOnlyAskResumesAutomatically(t *testing.T) {
+	t.Parallel()
 	h, d, clock, e, b, wfID, token := setupModelQuotaFixture(t)
 
 	// Run 1: already parked on a model-only ask (simulating runs parked before this change).
@@ -334,6 +337,7 @@ func TestParkedModelOnlyAskResumesAutomatically(t *testing.T) {
 }
 
 func TestModelQuotaHonorsExcludeAndResumesOnAllowedModel(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	clock := &fakeClock{t: time.Date(2026, 11, 22, 7, 0, 0, 0, time.UTC)}
 	h := newStallServer(t, d, d.Owner, "v", func(c *Config) { c.Now = clock.Now })

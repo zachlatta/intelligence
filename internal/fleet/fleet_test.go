@@ -55,6 +55,7 @@ func list(t *testing.T, r *Registry) []Host {
 }
 
 func TestHostWorkspacesAndAgentsRoundTrip(t *testing.T) {
+	t.Parallel()
 	r := New(dbtest.New(t).Owner)
 	want := full()
 	record(t, r, want, time.Now())
@@ -85,6 +86,7 @@ func TestHostWorkspacesAndAgentsRoundTrip(t *testing.T) {
 }
 
 func TestWorkspacesWithWorkFirst(t *testing.T) {
+	t.Parallel()
 	r := New(dbtest.New(t).Owner)
 	record(t, r, full(), time.Now())
 	var order []string
@@ -98,6 +100,7 @@ func TestWorkspacesWithWorkFirst(t *testing.T) {
 }
 
 func TestAgentsAreRunningFirstThenNewest(t *testing.T) {
+	t.Parallel()
 	r := New(dbtest.New(t).Owner)
 	rep := full()
 	rep.Paseo.Agents = []hostclient.Agent{
@@ -117,6 +120,7 @@ func TestAgentsAreRunningFirstThenNewest(t *testing.T) {
 
 // Sub-agents follow their parent, so an indented row always sits under the agent that started it.
 func TestSubAgentsFollowTheirParent(t *testing.T) {
+	t.Parallel()
 	r := New(dbtest.New(t).Owner)
 	rep := full()
 	rep.Paseo.Agents = []hostclient.Agent{
@@ -142,6 +146,7 @@ func TestSubAgentsFollowTheirParent(t *testing.T) {
 
 // A parent loop, which a host should never report, still lists every agent once.
 func TestTreeOrderKeepsAgentsInAParentLoop(t *testing.T) {
+	t.Parallel()
 	var agents []AgentView
 	for _, a := range []hostclient.Agent{{ID: "x", ParentID: "y"}, {ID: "y", ParentID: "x"}, {ID: "z"}} {
 		agents = append(agents, AgentView{Agent: a})
@@ -156,6 +161,7 @@ func TestTreeOrderKeepsAgentsInAParentLoop(t *testing.T) {
 }
 
 func TestAnAgentInAnUnlistedWorkspaceIsKept(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	r := New(d.Owner)
 	rep := full()
@@ -173,6 +179,7 @@ func TestAnAgentInAnUnlistedWorkspaceIsKept(t *testing.T) {
 }
 
 func TestEachReportReplacesTheHostsWorkspacesAndAgents(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	r := New(d.Owner)
 	record(t, r, full(), time.Now())
@@ -192,6 +199,7 @@ func TestEachReportReplacesTheHostsWorkspacesAndAgents(t *testing.T) {
 }
 
 func TestADisconnectedHostShowsNoStaleWork(t *testing.T) {
+	t.Parallel()
 	r := New(dbtest.New(t).Owner)
 	record(t, r, full(), time.Now())
 	record(t, r, hostclient.Report{Name: "host-1", Paseo: hostclient.PaseoStatus{Error: "connect: refused"}}, time.Now())
@@ -202,6 +210,7 @@ func TestADisconnectedHostShowsNoStaleWork(t *testing.T) {
 }
 
 func TestHostsListByNameAndAreOnlineWhileStreaming(t *testing.T) {
+	t.Parallel()
 	r := New(dbtest.New(t).Owner)
 	now := time.Now()
 	record(t, r, hostclient.Report{Name: "zeta"}, now) // reported, but no stream
@@ -224,6 +233,7 @@ func attach(t *testing.T, r *Registry, host string, at time.Time) {
 }
 
 func TestStatusViewsCountWork(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	record(t, New(d.Owner), full(), time.Now())
 	attach(t, New(d.Owner), "host-1", time.Now())
@@ -248,6 +258,7 @@ func TestStatusViewsCountWork(t *testing.T) {
 // home page counts each workspace's agents without re-reading workflow history per workspace,
 // which took longer than the read roles' statement timeout once history grew.
 func TestRecordedWorkspaceStatusCountsInOnePass(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	record(t, New(d.Owner), full(), time.Now())
 	reader := dbtest.Reader(t, d, "host-1")
@@ -284,6 +295,7 @@ func TestRecordedWorkspaceStatusCountsInOnePass(t *testing.T) {
 }
 
 func TestDeletingAHostDeletesItsWorkspacesAndAgents(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	record(t, New(d.Owner), full(), time.Now())
 	if _, err := d.Owner.Exec(ctx, "DELETE FROM hosts"); err != nil {
@@ -297,6 +309,7 @@ func TestDeletingAHostDeletesItsWorkspacesAndAgents(t *testing.T) {
 }
 
 func TestWorkspacesKeepTheirProjectRoot(t *testing.T) {
+	t.Parallel()
 	r := New(dbtest.New(t).Owner)
 	rep := full()
 	rep.Paseo.Workspaces[0].ProjectRoot = "/w/app"
@@ -313,6 +326,7 @@ func TestWorkspacesKeepTheirProjectRoot(t *testing.T) {
 }
 
 func TestWorkspacesKeepTheirTags(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	r := New(d.Owner)
 	rep := full()
@@ -347,6 +361,7 @@ func TestWorkspacesKeepTheirTags(t *testing.T) {
 // TestProviderCatalogReadsAsRows: each provider's models and modes are kept with the host and
 // read, one row each, through the provider_models and provider_modes views.
 func TestProviderCatalogReadsAsRows(t *testing.T) {
+	t.Parallel()
 	r := New(dbtest.New(t).Owner)
 	rep := full()
 	rep.Paseo.Providers[0] = hostclient.Provider{Name: "claude", Available: true, Label: "Claude", DefaultMode: "auto",

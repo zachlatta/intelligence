@@ -42,6 +42,7 @@ func seedHost(t *testing.T, d dbtest.DB) {
 }
 
 func TestIndexShowsEachHostsResourcesAndAgentsMemory(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	seedHost(t, d)
 	body := get(t, h, "/", nil).Body.String()
@@ -54,6 +55,7 @@ func TestIndexShowsEachHostsResourcesAndAgentsMemory(t *testing.T) {
 }
 
 func TestResourcesPageChartsEachHostAndRanksAgents(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	seedHost(t, d)
 	rec := get(t, h, "/resources", nil)
@@ -77,6 +79,7 @@ func TestResourcesPageChartsEachHostAndRanksAgents(t *testing.T) {
 
 // With no ?hours=, the page shows the last hour, like /resources?hours=1.
 func TestResourcesPageDefaultsToOneHour(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.Now = func() time.Time { return t0 } })
 	sendReport(t, h, sampleReport)
@@ -135,6 +138,7 @@ func TestResourcesPageDefaultsToOneHour(t *testing.T) {
 }
 
 func TestHostResourcesAPI(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	seedHost(t, d)
 	if body := get(t, h, "/api/hosts/resources", nil).Body.String(); !strings.Contains(body, `"host-1"`) || !strings.Contains(body, `"cpus":24`) {
@@ -144,6 +148,7 @@ func TestHostResourcesAPI(t *testing.T) {
 
 // The resources page was /hosts, before the home page's hosts took the name.
 func TestHostsPageMovedToResources(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	rec := get(t, h, "/hosts?hours=6", nil)
 	if rec.Code != http.StatusMovedPermanently || rec.Header().Get("Location") != "/resources?hours=6" {

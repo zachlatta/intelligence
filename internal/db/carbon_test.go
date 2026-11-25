@@ -9,6 +9,7 @@ import (
 )
 
 func TestCarbonMigrationVersionsSavedWorkflows(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	_, ann, _ := twoAccounts(t, d)
 	const original = `{"project":{"directory":"/srv/gemini-4-argon-high"},"orchestrator":{"provider":"antigravity","model":"gemini-4-argon-high","instructions":"Use Gemini 4 Argon and antigravity/gemini-4-argon-medium."},"steps":[{"instructions":"Review with gemini-4-argon-low."}]}`

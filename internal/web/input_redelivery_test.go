@@ -41,6 +41,7 @@ func commandText(t *testing.T, c hostclient.Command) string {
 // 2c75da8c, 2026-11-19). A reply whose delivery failed goes to the orchestrator with the next
 // thing that reaches it, once, and it cannot ask the question the reply answered.
 func TestAReplyThatFailedToSendReachesTheOrchestratorOnce(t *testing.T) {
+	t.Parallel()
 	f := newStallFixture(t)
 	const reply = "Sounds good. Make sure every export that can be hardware accelerated is, then land it"
 	for _, next := range []string{"continuation", "ask", "message"} {
@@ -144,6 +145,7 @@ func TestAReplyThatFailedToSendReachesTheOrchestratorOnce(t *testing.T) {
 // The migration links a live run's earlier replies and messages to the send_message made with
 // each, as Reply and MessageTx now record them, so a reply lost before the deploy goes again too.
 func TestInputDeliveryMigrationLinksEarlierInputs(t *testing.T) {
+	t.Parallel()
 	f := newStallFixture(t)
 	b := f.reset(t)
 	d, clock, h := f.d, f.clock, f.h

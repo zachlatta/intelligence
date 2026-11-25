@@ -36,6 +36,7 @@ func seedUsage(t *testing.T, d dbtest.DB) time.Time {
 }
 
 func TestIndexShowsEachLoginsPlan(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	seedUsage(t, d)
 	body := get(t, h, "/", nil).Body.String()
@@ -51,6 +52,7 @@ func TestIndexShowsEachLoginsPlan(t *testing.T) {
 }
 
 func TestIndexWithoutUsageSaysNothingAboutPlans(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	if body := get(t, h, "/", nil).Body.String(); strings.Contains(body, `class="plans"`) {
 		t.Errorf("an empty plans section is shown")
@@ -58,6 +60,7 @@ func TestIndexWithoutUsageSaysNothingAboutPlans(t *testing.T) {
 }
 
 func TestUsagePageChartsHistoryAndWeeklyPeaks(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	seedUsage(t, d)
 	rec := get(t, h, "/usage", nil)
@@ -76,6 +79,7 @@ func TestUsagePageChartsHistoryAndWeeklyPeaks(t *testing.T) {
 }
 
 func TestUsagePageFoldsOlderWeeklyPeaks(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	now := time.Now().UTC().Truncate(time.Second)
 	fixtureFor(t, d).keyFor(t, "host-1")
@@ -99,6 +103,7 @@ func TestUsagePageFoldsOlderWeeklyPeaks(t *testing.T) {
 }
 
 func TestUsageAPI(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	seedUsage(t, d)
 	var v fleet.PlansView
@@ -114,6 +119,7 @@ func TestUsageAPI(t *testing.T) {
 }
 
 func TestIndexAndUsageShowPerHostPlanAuth(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	now := time.Now().UTC().Truncate(time.Second)
 	f := fixtureFor(t, d)
@@ -156,6 +162,7 @@ func TestIndexAndUsageShowPerHostPlanAuth(t *testing.T) {
 }
 
 func TestChartScalesUsedPercentOverTime(t *testing.T) {
+	t.Parallel()
 	from := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	svg := string(usageChart([]fleet.Series{{Window: "7d", Points: []fleet.Point{{At: from, Used: 0}, {At: from.Add(24 * time.Hour), Used: 100}}}},
 		from, from.Add(48*time.Hour)))
@@ -168,6 +175,7 @@ func TestChartScalesUsedPercentOverTime(t *testing.T) {
 // TestChartColorsAreNotMostlyBlue: the first series (and so host monitoring's average and used
 // lines) is a neutral stone, and at most one series leans blue.
 func TestChartColorsAreNotMostlyBlue(t *testing.T) {
+	t.Parallel()
 	blue := 0
 	for i, c := range chartColors {
 		v, err := strconv.ParseUint(strings.TrimPrefix(c, "#"), 16, 32)

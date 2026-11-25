@@ -35,6 +35,7 @@ func b64url(t *testing.T, s string) []byte {
 // TestEncryptRFC8291Vector checks our aes128gcm encryption against RFC 8291 Section 5's test vector
 // (both intermediate values and full UA decryption with ua_private).
 func TestEncryptRFC8291Vector(t *testing.T) {
+	t.Parallel()
 	uaPrivBytes := b64url(t, "q1dXpw3UpT5VOmu_cf_v6ih07Aems3njxI-JWgLcM94")
 	uaPubBytes := b64url(t, "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4")
 	asPrivBytes := b64url(t, "yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw")
@@ -138,6 +139,7 @@ func TestEncryptRFC8291Vector(t *testing.T) {
 }
 
 func TestVAPIDConfigAndJWTVerification(t *testing.T) {
+	t.Parallel()
 	pubB64, privB64, err := GenerateVAPIDKeys()
 	if err != nil {
 		t.Fatalf("GenerateVAPIDKeys: %v", err)
@@ -190,6 +192,7 @@ func TestVAPIDConfigAndJWTVerification(t *testing.T) {
 }
 
 func TestParseVAPIDRejectsBadInputs(t *testing.T) {
+	t.Parallel()
 	pubB64, privB64, err := GenerateVAPIDKeys()
 	if err != nil {
 		t.Fatal(err)
@@ -215,6 +218,7 @@ func TestParseVAPIDRejectsBadInputs(t *testing.T) {
 }
 
 func TestSendPostsEncryptedPayloadAndDetectsExpired(t *testing.T) {
+	t.Parallel()
 	pubB64, privB64, err := GenerateVAPIDKeys()
 	if err != nil {
 		t.Fatal(err)
@@ -275,6 +279,7 @@ func TestSendPostsEncryptedPayloadAndDetectsExpired(t *testing.T) {
 }
 
 func TestSealAndUnsealSubscription(t *testing.T) {
+	t.Parallel()
 	pubB64, privB64, err := GenerateVAPIDKeys()
 	if err != nil {
 		t.Fatal(err)

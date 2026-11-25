@@ -14,6 +14,7 @@ import (
 )
 
 func TestQueueCreationUpgradeDoesNotRelabelLegacyFinder(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	b := sendReport(t, h, wfReport())
 	legacy := startRun(t, h, createWorkflow(t, h, workflow.Starting), "legacy finder")
@@ -46,6 +47,7 @@ func TestQueueCreationUpgradeDoesNotRelabelLegacyFinder(t *testing.T) {
 }
 
 func TestRepositoryHistoryIgnoresIncompleteAndUnselectedRuns(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		status, repo string
 		selected     bool
@@ -77,6 +79,7 @@ func TestRepositoryHistoryIgnoresIncompleteAndUnselectedRuns(t *testing.T) {
 }
 
 func TestProjectSelectionCannotSkipOlderReadyRetry(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	clock := &fakeClock{t: time.Now().UTC()}
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour; c.Now = clock.Now })
@@ -117,6 +120,7 @@ func TestProjectSelectionCannotSkipOlderReadyRetry(t *testing.T) {
 }
 
 func TestFixedRepositoryPathsUseCanonicalHistory(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	b := sendReport(t, h, wfReport())
 	repositoryHistory(t, h, d, "/w/app")
@@ -142,6 +146,7 @@ func TestFixedRepositoryPathsUseCanonicalHistory(t *testing.T) {
 }
 
 func TestNewLiveWorkerIsCapturedOnItsFirstReport(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	b := sendReport(t, h, wfReport())
 	wf := repositoryHistory(t, h, d, "/w/app")
@@ -178,6 +183,7 @@ func TestNewLiveWorkerIsCapturedOnItsFirstReport(t *testing.T) {
 }
 
 func TestMatchedProjectSelectionIsVisibleWhileQueued(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	b := sendReport(t, h, wfReport())
 	repositoryHistory(t, h, d, "/w/app")

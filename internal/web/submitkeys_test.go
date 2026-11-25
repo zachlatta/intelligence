@@ -11,6 +11,7 @@ import (
 )
 
 func TestTheSubmitKeysScriptIsServed(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	rec := get(t, h, "/submitkeys.js", nil)
 	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/javascript") {
@@ -23,6 +24,7 @@ func TestTheSubmitKeysScriptIsServed(t *testing.T) {
 
 // Every page loads the shared ⌘/Ctrl Enter handler from the layout, so a new text box gets it too.
 func TestEveryPageLoadsTheSubmitKeys(t *testing.T) {
+	t.Parallel()
 	h, _ := cmdServer(t)
 	c := signInAs(t, h)
 	sendBatch(t, h, batch(true, "ep1", tentry(1, `{"type":"user_message","text":"go"}`)))
@@ -44,6 +46,7 @@ func TestEveryPageLoadsTheSubmitKeys(t *testing.T) {
 
 // A text box outside a form names the button ⌘/Ctrl Enter presses, with data-submit on an ancestor.
 func TestTextBoxesOutsideAFormNameTheirSendButton(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	wf := createWorkflow(t, h, workflow.Starting)
@@ -161,6 +164,7 @@ console.log("ok");
 
 // The handler itself, in Node with a fake DOM. Skipped where there is no Node.
 func TestSubmitKeysBehaviour(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	out, err := exec.Command(node, "-e", submitKeysHarness, "submitkeys.js").CombinedOutput()
 	if err != nil || strings.TrimSpace(string(out)) != "ok" {

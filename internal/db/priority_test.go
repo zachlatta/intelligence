@@ -8,6 +8,7 @@ import (
 )
 
 func TestPriorityMigrationPreservesRunSnapshots(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	_, ann, _ := twoAccounts(t, d)
 	for _, tc := range []struct{ name, definition, want string }{

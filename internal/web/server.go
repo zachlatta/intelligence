@@ -55,7 +55,10 @@ type Config struct {
 	Google        *email.Google
 	EmailKey      *email.Keyring
 	EmailInterval time.Duration
-	PublicURL     string // PUBLIC_URL: the server's origin for Google's redirect; default the request's
+	// EmailQuotaRate is the Gmail quota units each mailbox is charged per second (default
+	// email.QuotaRate); tests on a fake Gmail raise it.
+	EmailQuotaRate int
+	PublicURL      string // PUBLIC_URL: the server's origin for Google's redirect; default the request's
 	// QueueLimits are when a host is too busy to start another workflow run, which then queues;
 	// default workflow.DefaultLimits. Queued runs are checked every QueueInterval (default
 	// workflow.QueueEvery), on every host minute and whenever a run ends.
@@ -158,7 +161,7 @@ func newHandler(cfg Config, workers bool) http.Handler {
 		}
 	}
 	if cfg.Google != nil && cfg.EmailKey != nil {
-		a.mail = &email.Service{DB: cfg.DB, Engine: a.wf, Google: cfg.Google, Key: cfg.EmailKey, Now: cfg.Now}
+		a.mail = &email.Service{DB: cfg.DB, Engine: a.wf, Google: cfg.Google, Key: cfg.EmailKey, Now: cfg.Now, QuotaRate: cfg.EmailQuotaRate}
 		interval := cfg.EmailInterval
 		if interval == 0 {
 			interval = email.Interval

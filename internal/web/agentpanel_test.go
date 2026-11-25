@@ -12,6 +12,7 @@ import (
 // The transcript's agent list re-reads itself through the SQL API. Like Hosts, it lists each
 // sub-agent right under its parent, even when the sub-agent sorts first on its own.
 func TestAgentPanelListsSubAgentsUnderTheirParent(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	rep := sampleReport
 	rep.Paseo.Agents = slices.Clone(sampleReport.Paseo.Agents)

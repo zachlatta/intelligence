@@ -10,6 +10,7 @@ import (
 )
 
 func TestRetryEventsReadNaturally(t *testing.T) {
+	t.Parallel()
 	for kind, want := range map[string]string{"start_retry": "Start failed; retry queued: daemon unavailable", "start_retry_sent": "Retry sent: Retry 1 of 3"} {
 		text := "daemon unavailable"
 		if kind == "start_retry_sent" {
@@ -22,6 +23,7 @@ func TestRetryEventsReadNaturally(t *testing.T) {
 }
 
 func TestRetryPageShowsProgressAndRecoveryWait(t *testing.T) {
+	t.Parallel()
 	h, db := dbServer(t)
 	rep := wfReport()
 	b := sendReport(t, h, rep)
@@ -77,6 +79,7 @@ func TestRetryPageShowsProgressAndRecoveryWait(t *testing.T) {
 
 // A retry whose host is still not ready RetryWaitLimit after it was due fails the run, saying why.
 func TestRetryWaitExpiresAfterTheWaitLimit(t *testing.T) {
+	t.Parallel()
 	for _, connected := range []bool{false, true} {
 		t.Run(map[bool]string{false: "daemon", true: "host upgrade"}[connected], func(t *testing.T) {
 			h, db := dbServer(t)
@@ -118,6 +121,7 @@ func TestRetryWaitExpiresAfterTheWaitLimit(t *testing.T) {
 }
 
 func TestRetryReconciliationContinuesAfterBadRun(t *testing.T) {
+	t.Parallel()
 	h, db := dbServer(t)
 	b := sendReport(t, h, wfReport())
 	wf := createWorkflow(t, h, workflow.Starting)

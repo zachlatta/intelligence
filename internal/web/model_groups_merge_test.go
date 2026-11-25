@@ -11,6 +11,7 @@ import (
 )
 
 func TestModelTokensValidateDirectAndReviewedWorkflowWrites(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	def := workflow.Starting
@@ -48,6 +49,7 @@ func TestModelTokensValidateDirectAndReviewedWorkflowWrites(t *testing.T) {
 }
 
 func TestModelTokensInApprovedQueuedRunSummaryAndStartRetry(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	rep := wfReport()
 	rep.StartRetryKeys = true

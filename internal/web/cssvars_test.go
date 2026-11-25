@@ -41,6 +41,7 @@ func webAssetsByExt(t *testing.T, exts ...string) map[string]string {
 // initial value without a word, so a box once lost its rounded corners and shadow and a label
 // turned monospace. Every variable a page or script reads is defined in ui.css or on that page.
 func TestEveryCSSVariableIsDefined(t *testing.T) {
+	t.Parallel()
 	sources := webAssetsByExt(t, ".css", ".html", ".js")
 	defs := regexp.MustCompile(`(--[a-zA-Z0-9-]+)\s*:`)
 	uses := regexp.MustCompile(`var\(\s*(--[a-zA-Z0-9-]+)`)
@@ -77,6 +78,7 @@ func TestEveryCSSVariableIsDefined(t *testing.T) {
 // live but changes nothing (--accent-hover outlived its last reader when links and the primary
 // button moved to --link).
 func TestEverySharedCSSVariableIsRead(t *testing.T) {
+	t.Parallel()
 	files, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
@@ -110,6 +112,7 @@ func TestEverySharedCSSVariableIsRead(t *testing.T) {
 // TestPagesDoNotRedefineSharedKeyframes: a page's own copy of a ui.css animation silently wins and
 // drifts from the shared one.
 func TestPagesDoNotRedefineSharedKeyframes(t *testing.T) {
+	t.Parallel()
 	frames := regexp.MustCompile(`@keyframes\s+([a-zA-Z0-9_-]+)`)
 	shared := map[string]bool{}
 	for _, m := range frames.FindAllStringSubmatch(string(uiCSS), -1) {
@@ -190,6 +193,7 @@ func checkNoNestedBodyTags(templates map[string]string) []string {
 }
 
 func TestNoNestedBodyTagsInTemplates(t *testing.T) {
+	t.Parallel()
 	for _, msg := range checkNoNestedBodyTags(webAssetsByExt(t, ".html")) {
 		t.Error(msg)
 	}
@@ -203,6 +207,7 @@ func TestNoNestedBodyTagsInTemplates(t *testing.T) {
 // focus, running pills) are warm or true neutrals in both schemes, never blue-tinted; blue is
 // --link alone, which links and the primary button use.
 func TestPaletteIsNeutral(t *testing.T) {
+	t.Parallel()
 	css := string(uiCSS)
 	dark := strings.Index(css, "@media (prefers-color-scheme: dark)")
 	if dark < 0 {

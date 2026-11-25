@@ -13,6 +13,7 @@ import (
 )
 
 func TestProposalReviewAndUndo(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
@@ -60,6 +61,7 @@ func TestProposalReviewAndUndo(t *testing.T) {
 }
 
 func TestDirectAndProposedDeletionUseTheSameVersionAndRunRules(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
@@ -97,6 +99,7 @@ func TestDirectAndProposedDeletionUseTheSameVersionAndRunRules(t *testing.T) {
 }
 
 func TestProposalCreateDeleteExpiryAndIsolation(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
@@ -186,6 +189,7 @@ func TestProposalCreateDeleteExpiryAndIsolation(t *testing.T) {
 }
 
 func TestProposalConcurrentApprovalAndUndoConflict(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
@@ -231,6 +235,7 @@ func TestProposalConcurrentApprovalAndUndoConflict(t *testing.T) {
 }
 
 func TestProposalDeleteClearsDefaultAndUndoChecksDefaultConflict(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
@@ -266,6 +271,7 @@ func TestProposalDeleteClearsDefaultAndUndoChecksDefaultConflict(t *testing.T) {
 }
 
 func TestProposalStaleWithdrawReject(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")

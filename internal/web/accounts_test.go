@@ -19,6 +19,7 @@ import (
 // TestEachAccountSeesOnlyItsOwnHosts: two accounts, a host each. Every page and API, and SQL,
 // shows each account its own host, its workspaces, agents, transcripts and plans, and never the other's.
 func TestEachAccountSeesOnlyItsOwnHosts(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	ts := h.(*testServer)
 	sendReport(t, h, sampleReport) // host-1, someone's
@@ -80,6 +81,7 @@ func TestEachAccountSeesOnlyItsOwnHosts(t *testing.T) {
 // TestAHostJoinsAnAccountWithItsCode is the whole join: the host asks, shows its code, the
 // account enters it, and the host collects its key (woken by the claim, not polling) and streams.
 func TestAHostJoinsAnAccountWithItsCode(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	srv := serve(t, h)
 	rec := call(t, anon(h), http.MethodPost, "/api/host-enrollments", `{"host":"new-host"}`, nil)
@@ -143,6 +145,7 @@ func TestAHostJoinsAnAccountWithItsCode(t *testing.T) {
 }
 
 func TestRemovingAHostRevokesItsKeyAndDeletesItsReports(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, sampleReport)
 	if rec := call(t, h, http.MethodDelete, "/api/hosts/host-1", "", map[string]string{"Sec-Fetch-Site": "cross-site"}); rec.Code != http.StatusForbidden {
@@ -163,6 +166,7 @@ func TestRemovingAHostRevokesItsKeyAndDeletesItsReports(t *testing.T) {
 }
 
 func TestReadsNeedASignedInAccount(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, sampleReport)
 	for _, path := range []string{"/", "/usage", "/resources", "/account", "/hosts/host-1/agents/" + agentA1} {
@@ -187,6 +191,7 @@ func TestReadsNeedASignedInAccount(t *testing.T) {
 // logs a code, someone signed in enters it, and the host collects its key, streams and reports,
 // visible to that account.
 func TestAKeylessHostJoinsAndReports(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	srv := serve(t, h)
 	daemon := paseotest.New(t, "tok")

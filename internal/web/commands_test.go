@@ -34,6 +34,7 @@ func instance(t *testing.T, d dbtest.DB, p *pgxpool.Pool) http.Handler {
 // goes at once down a stream held by the other, and a wait on one returns as soon as the host's
 // result lands through the other. Neither polls.
 func TestCommandsCrossServerInstances(t *testing.T) {
+	t.Parallel()
 	h, d := cmdServer(t)
 	other := instance(t, d, dbtest.Pool(t, d))
 	b := openStream(t, h, "host-1")
@@ -89,6 +90,7 @@ const archiveA1 = `{"kind":"archive_agent","args":{"agentId":"a1"}}`
 // TestCommandsGoOnlyToTheAccountsOwnHosts: another account can neither queue a command for a host
 // that is not its own nor read one.
 func TestCommandsGoOnlyToTheAccountsOwnHosts(t *testing.T) {
+	t.Parallel()
 	h, _ := cmdServer(t)
 	_, c, _ := enqueue(t, h, "host-1", "", archiveA1)
 	ts := h.(*testServer)
@@ -109,6 +111,7 @@ func TestCommandsGoOnlyToTheAccountsOwnHosts(t *testing.T) {
 }
 
 func TestCommandsAreChecked(t *testing.T) {
+	t.Parallel()
 	h, _ := cmdServer(t)
 	for body, want := range map[string]int{
 		`{"kind":"explode"}`:                                           http.StatusBadRequest,
@@ -131,6 +134,7 @@ func TestCommandsAreChecked(t *testing.T) {
 }
 
 func TestACommandGoesDownTheStreamAtOnceAndItsResultComesBack(t *testing.T) {
+	t.Parallel()
 	h, _ := cmdServer(t)
 	b := openStream(t, h, "host-1")
 	code, c, msg := enqueue(t, h, "host-1", "", `{"kind":"create_agent","args":{"cwd":"/w/app","provider":"claude","prompt":"go"},"ttl":"1m"}`)
@@ -168,6 +172,7 @@ func TestACommandGoesDownTheStreamAtOnceAndItsResultComesBack(t *testing.T) {
 }
 
 func TestQueuedCommandsWaitForTheHostAndUnfinishedOnesAreResent(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := instance(t, d, d.Owner)
 	key := keyOf(t, h, "host-1")                                                             // the account's
@@ -200,6 +205,7 @@ func TestQueuedCommandsWaitForTheHostAndUnfinishedOnesAreResent(t *testing.T) {
 }
 
 func TestShowCommandWaitIsBounded(t *testing.T) {
+	t.Parallel()
 	h, _ := cmdServer(t)
 	_, c, _ := enqueue(t, h, "host-1", "", archiveA1)
 	if code, _ := showCmd(t, h, "host-1", c.ID, "?wait=2h"); code != http.StatusBadRequest {
@@ -218,6 +224,7 @@ func TestShowCommandWaitIsBounded(t *testing.T) {
 // daemon) connects and reports, the server queues a command, the host receives and runs it, and
 // the result lands in Postgres.
 func TestAHostRunsTheServersCommands(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := instance(t, d, d.Owner)
 	srv := serve(t, h)

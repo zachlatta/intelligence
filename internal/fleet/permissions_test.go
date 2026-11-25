@@ -8,6 +8,7 @@ import (
 )
 
 func TestPermissionAuditSurvivesReportsAndRetries(t *testing.T) {
+	t.Parallel()
 	r := New(dbtestOwner(t))
 	record(t, r, full(), t1)
 	p := hostclient.PermissionResolution{AgentID: "a1", PermissionID: "p", Provider: "claude", Mode: "bypassPermissions", Tool: "Bash", Status: "pending", Message: "rewrite", At: t1}
@@ -32,6 +33,7 @@ func TestPermissionAuditSurvivesReportsAndRetries(t *testing.T) {
 }
 
 func TestPermissionAuditEscalatesAndClearsOneRow(t *testing.T) {
+	t.Parallel()
 	r := New(dbtestOwner(t))
 	record(t, r, full(), t1)
 	p := hostclient.PermissionResolution{AgentID: "a1", PermissionID: "p", Provider: "claude", Mode: "bypassPermissions", Tool: "Bash", Status: "denied", Message: "rewrite", At: t1, FirstSeenAt: t1, DeniedAt: t1}
@@ -64,6 +66,7 @@ func TestPermissionAuditEscalatesAndClearsOneRow(t *testing.T) {
 }
 
 func TestPermissionRestorePagesUnresolvedRows(t *testing.T) {
+	t.Parallel()
 	r := New(dbtestOwner(t))
 	record(t, r, full(), t1)
 	if _, err := r.p.Exec(ctx, `INSERT INTO permission_resolutions

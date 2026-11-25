@@ -15,6 +15,7 @@ import (
 )
 
 func TestHostCallKeepsCommandsBeforeAck(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, nil)
 		if err != nil {

@@ -26,6 +26,7 @@ func enqueue(t *testing.T, r *Registry, kind, args string, at time.Time) Command
 }
 
 func TestEnqueueChecksTheHostKindAndArgs(t *testing.T) {
+	t.Parallel()
 	r := commandRig(t)
 	c := enqueue(t, r, hostclient.ArchiveAgentKind, `{"agentId":"a1"}`, t1)
 	if c.ID == "" || c.Status != hostclient.CommandQueued || !c.CreatedAt.Equal(t1) || !c.ExpiresAt.Equal(t1.Add(10*time.Minute)) {
@@ -44,6 +45,7 @@ func TestEnqueueChecksTheHostKindAndArgs(t *testing.T) {
 }
 
 func TestClaimSendsEachQueuedCommandOnceInOrder(t *testing.T) {
+	t.Parallel()
 	r := commandRig(t)
 	a := enqueue(t, r, hostclient.ArchiveAgentKind, `{"agentId":"a1"}`, t1)
 	b := enqueue(t, r, hostclient.CancelAgentKind, `{"agentId":"a2"}`, t1.Add(time.Second))
@@ -64,6 +66,7 @@ func TestClaimSendsEachQueuedCommandOnceInOrder(t *testing.T) {
 }
 
 func TestANewStreamResendsWhatHasNoResult(t *testing.T) {
+	t.Parallel()
 	r := commandRig(t)
 	a := enqueue(t, r, hostclient.CreateAgentKind, `{"cwd":"/w","provider":"claude"}`, t1)
 	r.Claim(ctx, "host-1", ClaimOptions{}, t1)
@@ -82,6 +85,7 @@ func TestANewStreamResendsWhatHasNoResult(t *testing.T) {
 }
 
 func TestUpdateRecordsTheResult(t *testing.T) {
+	t.Parallel()
 	r := commandRig(t)
 	a := enqueue(t, r, hostclient.CreateAgentKind, `{"cwd":"/w","provider":"claude"}`, t1)
 	r.Claim(ctx, "host-1", ClaimOptions{}, t1)
@@ -112,6 +116,7 @@ func TestUpdateRecordsTheResult(t *testing.T) {
 }
 
 func TestCommandsExpire(t *testing.T) {
+	t.Parallel()
 	r := commandRig(t)
 	never := enqueue(t, r, hostclient.ArchiveAgentKind, `{"agentId":"a1"}`, t1)
 	lost := enqueue(t, r, hostclient.ArchiveAgentKind, `{"agentId":"a2"}`, t1)

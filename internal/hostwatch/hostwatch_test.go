@@ -95,6 +95,7 @@ func (f *fixture) watcher(n hostwatch.Notifier, now *time.Time) *hostwatch.Watch
 }
 
 func TestSilentHostWithRunsAlertsOnceAndRecoversOnce(t *testing.T) {
+	t.Parallel()
 	f := setup(t)
 	ctx := context.Background()
 	rec := &recorder{}
@@ -194,6 +195,7 @@ func TestSilentHostWithRunsAlertsOnceAndRecoversOnce(t *testing.T) {
 }
 
 func TestBannerShowsOpenAlertToItsAccountOnly(t *testing.T) {
+	t.Parallel()
 	f := setup(t)
 	ctx := context.Background()
 	now := t0.Add(25 * time.Minute)
@@ -219,6 +221,7 @@ func TestBannerShowsOpenAlertToItsAccountOnly(t *testing.T) {
 // The probe often cannot upload while the host is wedged, so the kills it last managed to record
 // can be hours old: they still say what the host went through.
 func TestAlertNamesTheLastOOMKillsHoweverOld(t *testing.T) {
+	t.Parallel()
 	f := setup(t)
 	f.exec(`DELETE FROM oom_kills WHERE comm <> 'old'`)
 	rec := &recorder{}
@@ -242,6 +245,7 @@ func TestAlertNamesTheLastOOMKillsHoweverOld(t *testing.T) {
 }
 
 func TestServerStartIsNotSilence(t *testing.T) {
+	t.Parallel()
 	f := setup(t)
 	rec := &recorder{}
 	now := t0.Add(time.Hour)
@@ -256,6 +260,7 @@ func TestServerStartIsNotSilence(t *testing.T) {
 }
 
 func TestFailedSendIsRetriedNotLost(t *testing.T) {
+	t.Parallel()
 	f := setup(t)
 	ctx := context.Background()
 	rec := &recorder{fail: errors.New("PDW HTTP 502")}
@@ -306,6 +311,7 @@ func (p *pushSpy) sent() ([]int64, []webpush.Message) {
 }
 
 func TestSilentHostWebPushesItsOwnerOnceAndOnRecovery(t *testing.T) {
+	t.Parallel()
 	f := setup(t)
 	ctx := context.Background()
 	var owner int64
@@ -343,6 +349,7 @@ func TestSilentHostWebPushesItsOwnerOnceAndOnRecovery(t *testing.T) {
 }
 
 func TestOtherAccountsHostsGetBannerButNoPush(t *testing.T) {
+	t.Parallel()
 	f := setup(t)
 	rec := &recorder{}
 	now := t0.Add(15 * time.Minute)
@@ -361,6 +368,7 @@ func TestOtherAccountsHostsGetBannerButNoPush(t *testing.T) {
 }
 
 func TestPDWSendsThroughNotifyTool(t *testing.T) {
+	t.Parallel()
 	var got struct {
 		path, auth string
 		body       map[string]any

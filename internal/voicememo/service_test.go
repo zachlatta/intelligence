@@ -8,6 +8,7 @@ import (
 )
 
 func TestPDWReadAndFailures(t *testing.T) {
+	t.Parallel()
 	body := `{"feed":"feed:voice-memos","next_cursor":"MQ","recordings":[{"source":"apple_voice_memos","account":"owner","recording_id":"one","transcript":"hello","duration_seconds":15}]}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/external-feeds/voice-memos" || r.Header.Get("Authorization") != "Bearer intelligence:test-key" {

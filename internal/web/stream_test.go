@@ -138,6 +138,7 @@ func (b *rawHost) command() hostclient.Command {
 }
 
 func TestReplacementStreamWaitsForRetryKeySupport(t *testing.T) {
+	t.Parallel()
 	h, db := dbServer(t)
 	rep := wfReport()
 	old := sendReport(t, h, rep)
@@ -194,6 +195,7 @@ func sendBatch(t *testing.T, h http.Handler, b hostclient.TranscriptBatch) hostc
 }
 
 func TestStreamNeedsTheHostsOwnKey(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	srv := serve(t, h)
 	for _, key := range []string{"", "wrong", keyOf(t, h, "host-2")} { // another host's key is no good
@@ -211,6 +213,7 @@ func TestStreamNeedsTheHostsOwnKey(t *testing.T) {
 }
 
 func TestStreamRefusesABadName(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	if _, resp, err := dialStream(t, serve(t, h), "Bad_Name", keyOf(t, h, "host-1")); err == nil || resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("%v, want 400", err)
@@ -218,6 +221,7 @@ func TestStreamRefusesABadName(t *testing.T) {
 }
 
 func TestStreamStoresReportsOnlyForItsOwnHost(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	b := openStream(t, h, "host-1")
 	other := sampleReport
@@ -238,6 +242,7 @@ func TestStreamStoresReportsOnlyForItsOwnHost(t *testing.T) {
 }
 
 func TestStreamStoresTranscriptsAndHellosWithCursors(t *testing.T) {
+	t.Parallel()
 	h := reported(t)
 	b := openStream(t, h, "host-1")
 	first := batch(true, "ep1", tentry(1, `{"type":"user_message","text":"fix the <b>login</b>"}`),
@@ -266,6 +271,7 @@ func TestStreamStoresTranscriptsAndHellosWithCursors(t *testing.T) {
 }
 
 func TestStreamStoresUsage(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	b := openStream(t, h, "host-1") // before the host's first report: usage does not wait for it
 	at := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
@@ -287,6 +293,7 @@ func TestStreamStoresUsage(t *testing.T) {
 }
 
 func TestAHostIsOnlineWhileItsStreamIsOpen(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	b := openStream(t, h, "host-1")
 	rep := sampleReport
@@ -307,6 +314,7 @@ func TestAHostIsOnlineWhileItsStreamIsOpen(t *testing.T) {
 // TestANewStreamEndsTheOldOneOnAnyInstance: a host that dials again, even to another server
 // instance, takes over; the old stream ends without taking the host offline.
 func TestANewStreamEndsTheOldOneOnAnyInstance(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	one := newServer(t, d, d.Owner, "v")
 	two := newServer(t, d, dbtest.Pool(t, d), "v")
@@ -329,6 +337,7 @@ func TestANewStreamEndsTheOldOneOnAnyInstance(t *testing.T) {
 }
 
 func TestStreamStoresHostMinutes(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	b := openStream(t, h, "host-1")
 	m := time.Now().UTC().Truncate(time.Minute)

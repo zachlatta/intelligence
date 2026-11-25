@@ -25,6 +25,7 @@ func testKey(t *testing.T) *Keyring {
 }
 
 func TestATokenIsSealedSoOnlyTheKeyOpensIt(t *testing.T) {
+	t.Parallel()
 	k := testKey(t)
 	sealed, err := k.Seal("a refresh token")
 	if err != nil {
@@ -48,6 +49,7 @@ func TestATokenIsSealedSoOnlyTheKeyOpensIt(t *testing.T) {
 }
 
 func TestTheSignInStateNamesItsAccountAndExpires(t *testing.T) {
+	t.Parallel()
 	k := testKey(t)
 	now := time.Unix(1762632000, 0)
 	state := k.State(42, now)
@@ -67,6 +69,7 @@ func TestTheSignInStateNamesItsAccountAndExpires(t *testing.T) {
 }
 
 func TestAGoogleClientIsReadFromItsJSON(t *testing.T) {
+	t.Parallel()
 	installed := `{"installed":{"client_id":"id-1","client_secret":"s-1","auth_uri":"https://accounts.example.com/auth","token_uri":"https://oauth.example.com/token"}}`
 	for _, raw := range []string{installed, base64.StdEncoding.EncodeToString([]byte(installed))} {
 		g, err := ParseClient(raw)
@@ -88,6 +91,7 @@ func TestAGoogleClientIsReadFromItsJSON(t *testing.T) {
 }
 
 func TestTheSignInLinkAsksOnlyToReadMail(t *testing.T) {
+	t.Parallel()
 	g := &Google{ClientID: "id-1", AuthURL: "https://accounts.example.com/auth"}
 	u, err := url.Parse(g.SignInURL("st", "challenge", "https://app.example.com/gmail/callback"))
 	if err != nil {
@@ -179,6 +183,7 @@ func startBlackholeHTTP2Proxy(t *testing.T, handler http.Handler) (proxyURL stri
 }
 
 func TestBlackholedHTTP2ConnectionRecoversOnNextPoll(t *testing.T) {
+	t.Parallel()
 	var calls atomic.Int32
 	proxyURL, srv, blackhole, conns := startBlackholeHTTP2Proxy(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.ProtoMajor != 2 {
@@ -230,6 +235,7 @@ func TestBlackholedHTTP2ConnectionRecoversOnNextPoll(t *testing.T) {
 }
 
 func TestDefaultGoogleClientConfiguresHTTP2HealthChecks(t *testing.T) {
+	t.Parallel()
 	g := &Google{}
 	c1 := g.client()
 	c2 := g.client()

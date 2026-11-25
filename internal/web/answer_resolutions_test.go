@@ -53,6 +53,7 @@ func unanswered(t *testing.T, h http.Handler) []string {
 }
 
 func TestSteeredRunIsAnsweredByTheRunItWasHandedTo(t *testing.T) {
+	t.Parallel()
 	h, runs, key, d := answerRuns(t, 4)
 	a, b, c, other := runs[0], runs[1], runs[2], runs[3]
 	steer := func(from, to, at string) *httptest.ResponseRecorder {
@@ -125,6 +126,7 @@ func TestSteeredRunIsAnsweredByTheRunItWasHandedTo(t *testing.T) {
 }
 
 func TestNotNeededNeedsAReasonAndLeavesTheView(t *testing.T) {
+	t.Parallel()
 	h, runs, key, d := answerRuns(t, 2)
 	for _, body := range []string{`{"kind":"not_needed"}`, `{"kind":"not_needed","reason":"   "}`, `{"kind":"not_needed","reason":"` + strings.Repeat("a", 2001) + `"}`, `{"kind":"other","reason":"x"}`} {
 		if rec := resolve(t, h, key, runs[0], body); rec.Code != 400 {
@@ -163,6 +165,7 @@ func TestNotNeededNeedsAReasonAndLeavesTheView(t *testing.T) {
 }
 
 func TestRunsFromBeforeAnswerRecordingAreMarkedLegacyOnce(t *testing.T) {
+	t.Parallel()
 	h, runs, key, d := answerRuns(t, 4)
 	old, oldAnswered, oldTask, recent := runs[0], runs[1], runs[2], runs[3]
 	rec := call(t, anon(h), "POST", "/api/workflow-runs/"+oldAnswered+"/answers", `{"channel":"email","messageId":"sent","checked":true}`, map[string]string{"Authorization": "Bearer " + key})

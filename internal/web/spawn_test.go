@@ -58,6 +58,7 @@ func cookieOf(t *testing.T, rec *httptest.ResponseRecorder) *http.Cookie {
 }
 
 func TestSignUpSignInAndSignOut(t *testing.T) {
+	t.Parallel()
 	h, _ := cmdServer(t)
 	h = anon(h)
 	up := call(t, h, http.MethodPost, "/api/accounts", `{"username":"Ann","password":"ann's long password"}`, sameOriginFetch)
@@ -109,6 +110,7 @@ func TestSignUpSignInAndSignOut(t *testing.T) {
 }
 
 func TestChangingThePasswordSignsOutOtherBrowsers(t *testing.T) {
+	t.Parallel()
 	h, _ := cmdServer(t)
 	other := signInAs(t, h)
 	this := signInAs(t, h)
@@ -129,6 +131,7 @@ func TestChangingThePasswordSignsOutOtherBrowsers(t *testing.T) {
 }
 
 func TestTheCommandsAPITakesABrowserSession(t *testing.T) {
+	t.Parallel()
 	h, _ := cmdServer(t)
 	c := signInAs(t, h)
 	path := "/api/hosts/host-1/commands"
@@ -173,6 +176,7 @@ func TestTheCommandsAPITakesABrowserSession(t *testing.T) {
 }
 
 func TestSpawnPagesNeedASession(t *testing.T) {
+	t.Parallel()
 	h, _ := cmdServer(t)
 	for _, p := range []string{newAgentPath, "/hosts/host-1/workspaces/new"} {
 		rec := get(t, anon(h), p, nil)
@@ -195,6 +199,7 @@ func TestSpawnPagesNeedASession(t *testing.T) {
 }
 
 func TestNewAgentPage(t *testing.T) {
+	t.Parallel()
 	h, _ := cmdServer(t)
 	c := signInAs(t, h)
 	rec := call(t, h, http.MethodGet, newAgentPath, "", nil, c)
@@ -218,6 +223,7 @@ func TestNewAgentPage(t *testing.T) {
 }
 
 func TestNewWorkspacePageOffersTheHostsRepositories(t *testing.T) {
+	t.Parallel()
 	h, _ := cmdServer(t)
 	rep := sampleReport
 	rep.Paseo.Workspaces = append([]hostclient.Workspace{}, sampleReport.Paseo.Workspaces...)
@@ -246,6 +252,7 @@ func TestNewWorkspacePageOffersTheHostsRepositories(t *testing.T) {
 }
 
 func TestHomePageLinksToSpawning(t *testing.T) {
+	t.Parallel()
 	h, _ := cmdServer(t)
 	home := get(t, h, "/", nil).Body.String()
 	for _, want := range []string{`href="` + newAgentPath + `"`, `href="/hosts/host-1/workspaces/w-idle/agents/new"`,
@@ -262,6 +269,7 @@ func TestHomePageLinksToSpawning(t *testing.T) {
 
 // The spawn pages follow a command through the read-only SQL API with commandProgressSQL.
 func TestCommandProgressIsReadableThroughSQL(t *testing.T) {
+	t.Parallel()
 	h, _ := cmdServer(t)
 	b := openStream(t, h, "host-1")
 	_, cmd, _ := enqueue(t, h, "host-1", "", `{"kind":"create_workspace","args":{"cwd":"/w/app","worktree":true,
@@ -314,6 +322,7 @@ func pageCatalog(t *testing.T, page string) map[string]hostclient.Provider {
 // TestSpawnFormsKnowEachProvidersModels: the forms that start an agent carry the models, thinking
 // levels and modes of each provider the host can run, so they offer them as choices.
 func TestSpawnFormsKnowEachProvidersModels(t *testing.T) {
+	t.Parallel()
 	h, _ := cmdServer(t)
 	rep := sampleReport
 	agyModels := []hostclient.Model{

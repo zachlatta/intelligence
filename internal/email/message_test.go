@@ -22,6 +22,7 @@ func gmailJSON(t *testing.T, m GmailMessage) []byte {
 }
 
 func TestAGmailMessageIsReadAsMail(t *testing.T) {
+	t.Parallel()
 	raw := gmailJSON(t, GmailMessage{ID: "m1", ThreadID: "t1", LabelIDs: []string{"INBOX", "UNREAD"}, InternalDate: "1762632000000",
 		Payload: Part{MimeType: "multipart/mixed", Headers: []Header{
 			{"Authentication-Results", passAR},
@@ -56,6 +57,7 @@ func TestAGmailMessageIsReadAsMail(t *testing.T) {
 }
 
 func TestHTMLOnlyMailIsReadAsText(t *testing.T) {
+	t.Parallel()
 	g := GmailMessage{Payload: Part{MimeType: "text/html", Headers: []Header{{"From", "x@example.com"}},
 		Body: Body{Data: b64("<div>Hi &amp; thanks</div><br><p>Second line</p><style>p{}</style>")}}}
 	if got := g.Mail().Text; got != "Hi & thanks\nSecond line" {
@@ -64,6 +66,7 @@ func TestHTMLOnlyMailIsReadAsText(t *testing.T) {
 }
 
 func TestOnlyGmailsOwnVerdictVerifiesASender(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name    string
 		headers []Header
@@ -95,6 +98,7 @@ func TestOnlyGmailsOwnVerdictVerifiesASender(t *testing.T) {
 }
 
 func TestOwnAndBulkMailAreKnown(t *testing.T) {
+	t.Parallel()
 	if !(GmailMessage{LabelIDs: []string{"SENT"}}).Ours() || !(GmailMessage{LabelIDs: []string{"DRAFT"}}).Ours() {
 		t.Error("sent mail and drafts are ours")
 	}
@@ -109,6 +113,7 @@ func TestOwnAndBulkMailAreKnown(t *testing.T) {
 }
 
 func TestARepliesQuotedHistoryIsCut(t *testing.T) {
+	t.Parallel()
 	for in, want := range map[string]string{
 		"Use Nov 1.\n\nOn Sat, Nov 8, 2026 at 2:30 PM Zach <zach@example.com> wrote:\n> Draft attached": "Use Nov 1.",
 		"Yes.\n\nOn Sat, Nov 8, 2026 at 2:30 PM Christina\n<christina@example.com> wrote:\n> old":       "Yes.",

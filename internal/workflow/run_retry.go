@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
 
@@ -26,8 +27,9 @@ func (e *Engine) RetryRun(ctx context.Context, account int64, runID string) (str
 	ctx, flushPushes := e.CollectPushes(ctx)
 	var newID string
 	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
-		var workflowID string
-		err := tx.QueryRow(ctx, `SELECT workflow_id::text FROM workflow_runs WHERE id = $1 AND account_id = $2`, runID, account).Scan(&workflowID)
+		var workflowID, runHost string
+		var hostChosen bool
+		err := tx.QueryRow(ctx, `SELECT workflow_id::text, host, host_chosen FROM workflow_runs WHERE id = $1 AND account_id = $2`, runID, account).Scan(&workflowID, &runHost, &hostChosen)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -47,6 +49,9 @@ func (e *Engine) RetryRun(ctx context.Context, account int64, runID string) (str
 		}
 		if deleted {
 			return conflict("this run's workflow was deleted")
+		}
+		if hostChosen { // a run's host never changes: its retry goes where it went
+			host = runHost
 		}
 		if host != "" {
 			if err := lockQueue(ctx, tx, host); err != nil {
@@ -90,7 +95,11 @@ func retryRefusal(status, alreadyRetriedAs string) error {
 // retryRunLocked starts a new run on failed's workflow's latest version with the same input.
 // The caller holds the workflow lock, the target host's queue lock, and failed's row lock.
 func (e *Engine) retryRunLocked(ctx context.Context, tx pgx.Tx, account int64, failed run, automatic bool) (string, error) {
-	newID, err := e.StartRunTx(ctx, tx, account, failed.WorkflowID, failed.Input, time.Time{})
+	host := ""
+	if failed.HostChosen {
+		host = failed.Host
+	}
+	newID, err := e.startRunTx(ctx, tx, account, failed.WorkflowID, failed.Input, host, time.Time{})
 	if err != nil {
 		return "", err
 	}
@@ -129,12 +138,28 @@ func (e *Engine) retryRunLocked(ctx context.Context, tx pgx.Tx, account int64, f
 // new workflow version is saved. Each run retries in its own savepoint so an unstartable old run
 // never blocks saving the workflow.
 func (e *Engine) retryFailedRunsForWorkflow(ctx context.Context, tx pgx.Tx, account int64, workflowID string, newVersion int, host string) error {
+	since := e.Now().Add(-AutoRetryWindow)
+	// A run started on a chosen host retries there. Take every queue a retry may add to before any
+	// run row (queue before run, as startNext), and the queues in name order.
+	chosen, err := tx.Query(ctx, `SELECT DISTINCT host FROM workflow_runs
+		WHERE workflow_id = $1 AND account_id = $2 AND status = $3 AND host_chosen AND finished_at >= $4`,
+		workflowID, account, Failed, since)
+	if err != nil {
+		return err
+	}
+	hosts, err := pgx.CollectRows(chosen, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
 	if host != "" {
-		if err := lockQueue(ctx, tx, host); err != nil {
+		hosts = append(hosts, host)
+	}
+	slices.Sort(hosts)
+	for _, h := range slices.Compact(hosts) {
+		if err := lockQueue(ctx, tx, h); err != nil {
 			return err
 		}
 	}
-	since := e.Now().Add(-AutoRetryWindow)
 	rows, err := tx.Query(ctx, `SELECT r.id::text
 		FROM workflow_runs r
 		WHERE r.workflow_id = $1 AND r.account_id = $2
