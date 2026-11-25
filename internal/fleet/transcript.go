@@ -102,6 +102,11 @@ func (r *Registry) TranscriptCursors(ctx context.Context, host string) (map[stri
 // Transcript is agentID's transcript on host from seq fromSeq on (0 for all), in seq order;
 // pgx.ErrNoRows when none is synced.
 func (r *Registry) Transcript(ctx context.Context, host, agentID string, fromSeq int) (Transcript, error) {
+	return r.TranscriptPage(ctx, host, agentID, fromSeq, 0)
+}
+
+// TranscriptPage is Transcript limited to its first limit entries (0 for all).
+func (r *Registry) TranscriptPage(ctx context.Context, host, agentID string, fromSeq, limit int) (Transcript, error) {
 	var t Transcript
 	if err := r.p.QueryRow(ctx, "SELECT epoch, synced_at FROM transcripts WHERE host = $1 AND agent_id = $2", host, agentID).
 		Scan(&t.Epoch, &t.SyncedAt); err != nil {
@@ -109,7 +114,8 @@ func (r *Registry) Transcript(ctx context.Context, host, agentID string, fromSeq
 	}
 	t.SyncedAt = t.SyncedAt.UTC()
 	rows, err := r.p.Query(ctx, `SELECT seq_start, seq_end, turn_id, provider, at, item, kind, tool, status, text
-		FROM transcript_entries WHERE host = $1 AND agent_id = $2 AND seq_start >= $3 ORDER BY seq_start`, host, agentID, fromSeq)
+		FROM transcript_entries WHERE host = $1 AND agent_id = $2 AND seq_start >= $3 ORDER BY seq_start
+		LIMIT nullif($4::int, 0)`, host, agentID, fromSeq, limit)
 	if err != nil {
 		return t, err
 	}

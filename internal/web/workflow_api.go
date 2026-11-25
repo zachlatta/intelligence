@@ -316,9 +316,20 @@ type apiTranscriptEntry struct {
 	Item     json.RawMessage `json:"item"`
 }
 
-func runSummaryFromRow(r runRow, taskSummary, apiKeyID, apiKeyName string) apiRunSummary {
+// apiEntry is a synced transcript entry as the workflow API shows it.
+func apiEntry(e fleet.Entry) apiTranscriptEntry {
+	out := apiTranscriptEntry{SeqStart: e.SeqStart, SeqEnd: e.SeqEnd, TurnID: e.TurnID, Provider: e.Provider,
+		Kind: e.Kind, Tool: e.Tool, Status: e.Status, Text: e.Text, Item: e.Item}
+	if !e.At.IsZero() {
+		at := e.At.UTC()
+		out.At = &at
+	}
+	return out
+}
+
+func runSummaryFromRow(r runRow) apiRunSummary {
 	triggerSource := "workflow"
-	if apiKeyID != "" {
+	if r.APIKeyID != "" {
 		triggerSource = "api"
 	}
 	s := apiRunSummary{
@@ -328,7 +339,7 @@ func runSummaryFromRow(r runRow, taskSummary, apiKeyID, apiKeyName string) apiRu
 		Version:           r.Version,
 		Status:            r.Status,
 		Title:             r.Title,
-		TaskSummary:       taskSummary,
+		TaskSummary:       r.TaskSummary,
 		Host:              r.Host,
 		Repo:              r.Repo,
 		Branch:            r.Branch,
@@ -345,8 +356,8 @@ func runSummaryFromRow(r runRow, taskSummary, apiKeyID, apiKeyName string) apiRu
 		ActivityETA:       r.ActivityETA,
 		ActivityWaitingOn: r.ActivityWaitingOn,
 		TriggerSource:     triggerSource,
-		APIKeyID:          apiKeyID,
-		APIKeyName:        apiKeyName,
+		APIKeyID:          r.APIKeyID,
+		APIKeyName:        r.APIKeyName,
 		RetriedFromRunID:  r.RetriedFrom,
 		RetriedToRunID:    r.RetriedTo,
 		CreatedAt:         r.CreatedAt.UTC(),
@@ -360,29 +371,20 @@ func runSummaryFromRow(r runRow, taskSummary, apiKeyID, apiKeyName string) apiRu
 	return s
 }
 
-func readScopedRunRow(ctx context.Context, p *pgxpool.Pool, workflowID, runID string) (runRow, string, string, string, bool, error) {
+// readScopedRunRow is run runID if it belongs to workflowID (found=false otherwise).
+func readScopedRunRow(ctx context.Context, p *pgxpool.Pool, workflowID, runID string) (runRow, bool, error) {
 	if !workflowIDRe.MatchString(runID) {
-		return runRow{}, "", "", "", false, nil
+		return runRow{}, false, nil
 	}
 	rows, err := p.Query(ctx, runRowSelect+"WHERE r.id = $1 AND r.workflow_id = $2", runID, workflowID)
 	if err != nil {
-		return runRow{}, "", "", "", false, err
+		return runRow{}, false, err
 	}
 	list, err := pgx.CollectRows(rows, scanRunRow)
-	if err != nil {
-		return runRow{}, "", "", "", false, err
+	if err != nil || len(list) == 0 {
+		return runRow{}, false, err
 	}
-	if len(list) == 0 {
-		return runRow{}, "", "", "", false, nil
-	}
-	var taskSummary, keyID, keyName string
-	err = p.QueryRow(ctx, `SELECT r.task_summary, coalesce(r.api_key_id::text, ''), coalesce(k.name, '')
-		FROM workflow_runs r LEFT JOIN workflow_api_keys k ON k.id = r.api_key_id
-		WHERE r.id = $1 AND r.workflow_id = $2`, runID, workflowID).Scan(&taskSummary, &keyID, &keyName)
-	if err != nil {
-		return runRow{}, "", "", "", false, err
-	}
-	return list[0], taskSummary, keyID, keyName, true, nil
+	return list[0], true, nil
 }
 
 func verifyScopedRun(ctx context.Context, p *pgxpool.Pool, workflowID, runID string) (bool, error) {
@@ -485,7 +487,7 @@ func (a *app) apiTriggerRun(c apiCaller) http.HandlerFunc {
 			apiWorkflowError(w, err)
 			return
 		}
-		row, taskSummary, keyID, keyName, found, err := readScopedRunRow(r.Context(), c.pool, c.auth.WorkflowID, res.RunID)
+		row, found, err := readScopedRunRow(r.Context(), c.pool, c.auth.WorkflowID, res.RunID)
 		if err != nil || !found {
 			apiError(w, http.StatusInternalServerError, "run created but could not be read")
 			return
@@ -493,12 +495,12 @@ func (a *app) apiTriggerRun(c apiCaller) http.HandlerFunc {
 		w.Header().Set("Location", "/api/workflow-api/runs/"+res.RunID)
 		if res.Replayed {
 			w.Header().Set("Idempotency-Replayed", "true")
-			writeJSON(w, runSummaryFromRow(row, taskSummary, keyID, keyName))
+			writeJSON(w, runSummaryFromRow(row))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(runSummaryFromRow(row, taskSummary, keyID, keyName))
+		_ = json.NewEncoder(w).Encode(runSummaryFromRow(row))
 	}
 }
 
@@ -620,38 +622,9 @@ func (a *app) apiListRuns(c apiCaller) http.HandlerFunc {
 			last := list[len(list)-1]
 			nextCursor = encodeRunCursor(last.CreatedAt, last.ID)
 		}
-		ids := make([]string, len(list))
-		for i, rr := range list {
-			ids[i] = rr.ID
-		}
-		type meta struct {
-			summary, keyID, keyName string
-		}
-		metas := map[string]meta{}
-		if len(ids) > 0 {
-			mrows, err := c.pool.Query(r.Context(), `SELECT r.id::text, r.task_summary, coalesce(r.api_key_id::text, ''), coalesce(k.name, '')
-				FROM workflow_runs r LEFT JOIN workflow_api_keys k ON k.id = r.api_key_id
-				WHERE r.id = ANY($1::uuid[]) AND r.workflow_id = $2`, ids, c.auth.WorkflowID)
-			if err != nil {
-				apiError(w, http.StatusInternalServerError, "could not read run metadata")
-				return
-			}
-			for mrows.Next() {
-				var id string
-				var m meta
-				if err := mrows.Scan(&id, &m.summary, &m.keyID, &m.keyName); err != nil {
-					mrows.Close()
-					apiError(w, http.StatusInternalServerError, "could not read run metadata")
-					return
-				}
-				metas[id] = m
-			}
-			mrows.Close()
-		}
 		out := make([]apiRunSummary, len(list))
 		for i, rr := range list {
-			m := metas[rr.ID]
-			out[i] = runSummaryFromRow(rr, m.summary, m.keyID, m.keyName)
+			out[i] = runSummaryFromRow(rr)
 		}
 		writeJSON(w, map[string]any{
 			"runs":       out,
@@ -666,7 +639,7 @@ func (a *app) apiGetRun(c apiCaller) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		id := r.PathValue("id")
-		row, taskSummary, keyID, keyName, found, err := readScopedRunRow(ctx, c.pool, c.auth.WorkflowID, id)
+		row, found, err := readScopedRunRow(ctx, c.pool, c.auth.WorkflowID, id)
 		if err != nil {
 			apiError(w, http.StatusInternalServerError, "could not read run")
 			return
@@ -721,7 +694,7 @@ func (a *app) apiGetRun(c apiCaller) http.HandlerFunc {
 			}
 		}
 		writeJSON(w, apiRunDetail{
-			apiRunSummary: runSummaryFromRow(row, taskSummary, keyID, keyName),
+			apiRunSummary: runSummaryFromRow(row),
 			Input:         row.Input,
 			Steps:         steps,
 			Events:        apiEvents,
@@ -735,7 +708,7 @@ func (a *app) apiListRunTranscripts(c apiCaller) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		id := r.PathValue("id")
-		row, _, _, _, found, err := readScopedRunRow(ctx, c.pool, c.auth.WorkflowID, id)
+		row, found, err := readScopedRunRow(ctx, c.pool, c.auth.WorkflowID, id)
 		if err != nil {
 			apiError(w, http.StatusInternalServerError, "could not read run")
 			return
@@ -784,7 +757,7 @@ func (a *app) apiGetRunTranscript(c apiCaller) http.HandlerFunc {
 		ctx := r.Context()
 		id := r.PathValue("id")
 		agentID := r.PathValue("agentId")
-		row, _, _, _, found, err := readScopedRunRow(ctx, c.pool, c.auth.WorkflowID, id)
+		row, found, err := readScopedRunRow(ctx, c.pool, c.auth.WorkflowID, id)
 		if err != nil {
 			apiError(w, http.StatusInternalServerError, "could not read run")
 			return
@@ -810,14 +783,13 @@ func (a *app) apiGetRunTranscript(c apiCaller) http.HandlerFunc {
 			return
 		}
 		fromSeq := 0
-		exclusive := false
 		if raw := strings.TrimSpace(r.URL.Query().Get("after_seq")); raw != "" {
 			n, err := strconv.ParseInt(raw, 10, 32)
 			if err != nil || n < 0 {
 				apiError(w, http.StatusBadRequest, "after_seq must be a non-negative 32-bit integer")
 				return
 			}
-			fromSeq, exclusive = int(n), true
+			fromSeq = int(n) + 1
 		} else if raw := strings.TrimSpace(r.URL.Query().Get("from_seq")); raw != "" {
 			n, err := strconv.ParseInt(raw, 10, 32)
 			if err != nil || n < 0 {
@@ -835,10 +807,7 @@ func (a *app) apiGetRunTranscript(c apiCaller) http.HandlerFunc {
 			}
 			limit = int(n)
 		}
-		var epoch string
-		var syncedAt time.Time
-		err = c.pool.QueryRow(ctx, `SELECT epoch, synced_at FROM transcripts WHERE host = $1 AND agent_id = $2`,
-			row.Host, agentID).Scan(&epoch, &syncedAt)
+		tr, err := c.reg.TranscriptPage(ctx, row.Host, agentID, fromSeq, limit+1)
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeJSON(w, map[string]any{
 				"runId": id, "agentId": agentID, "host": row.Host,
@@ -850,37 +819,10 @@ func (a *app) apiGetRunTranscript(c apiCaller) http.HandlerFunc {
 			apiError(w, http.StatusInternalServerError, "could not read transcript")
 			return
 		}
-		cmp := ">="
-		if exclusive {
-			cmp = ">"
-		}
-		rows, err := c.pool.Query(ctx, `SELECT seq_start, seq_end, turn_id, provider, at, item, kind, tool, status, text
-			FROM transcript_entries WHERE host = $1 AND agent_id = $2 AND seq_start `+cmp+` $3 ORDER BY seq_start LIMIT $4`,
-			row.Host, agentID, fromSeq, limit+1)
-		if err != nil {
-			apiError(w, http.StatusInternalServerError, "could not read transcript entries")
-			return
-		}
-		defer rows.Close()
-		entries := []apiTranscriptEntry{}
-		for rows.Next() {
-			var e apiTranscriptEntry
-			var at *time.Time
-			var item []byte
-			if err := rows.Scan(&e.SeqStart, &e.SeqEnd, &e.TurnID, &e.Provider, &at, &item, &e.Kind, &e.Tool, &e.Status, &e.Text); err != nil {
-				apiError(w, http.StatusInternalServerError, "could not scan transcript entry")
-				return
-			}
-			if at != nil {
-				u := at.UTC()
-				e.At = &u
-			}
-			e.Item = json.RawMessage(append([]byte(nil), item...))
-			entries = append(entries, e)
-		}
-		if err := rows.Err(); err != nil {
-			apiError(w, http.StatusInternalServerError, "could not read transcript entries")
-			return
+		epoch, syncedAt := tr.Epoch, tr.SyncedAt
+		entries := make([]apiTranscriptEntry, 0, len(tr.Entries))
+		for _, e := range tr.Entries {
+			entries = append(entries, apiEntry(e))
 		}
 		hasMore := false
 		nextSeq := 0
@@ -1068,7 +1010,7 @@ func (a *app) apiStreamRun(c apiCaller) http.HandlerFunc {
 		keyWake, stopKey := a.changes.Subscribe(fleet.WorkflowKeyTopic(c.auth.KeyID))
 		defer stopKey()
 
-		row, taskSummary, keyID, keyName, found, err := readScopedRunRow(ctx, c.pool, c.auth.WorkflowID, id)
+		row, found, err := readScopedRunRow(ctx, c.pool, c.auth.WorkflowID, id)
 		if err != nil {
 			apiError(w, http.StatusInternalServerError, "could not read run")
 			return
@@ -1170,32 +1112,16 @@ func (a *app) apiStreamRun(c apiCaller) http.HandlerFunc {
 					cur.seqStart = e.SeqStart
 					cur.seqEnd = e.SeqEnd
 					cur.textLen = len(e.Text)
-					var atPtr *time.Time
-					if !e.At.IsZero() {
-						u := e.At.UTC()
-						atPtr = &u
-					}
 					payload := struct {
 						RunID   string `json:"runId"`
 						AgentID string `json:"agentId"`
 						Epoch   string `json:"epoch"`
 						apiTranscriptEntry
 					}{
-						RunID:   id,
-						AgentID: ag.ID,
-						Epoch:   tr.Epoch,
-						apiTranscriptEntry: apiTranscriptEntry{
-							SeqStart: e.SeqStart,
-							SeqEnd:   e.SeqEnd,
-							TurnID:   e.TurnID,
-							Provider: e.Provider,
-							At:       atPtr,
-							Kind:     e.Kind,
-							Tool:     e.Tool,
-							Status:   e.Status,
-							Text:     e.Text,
-							Item:     e.Item,
-						},
+						RunID:              id,
+						AgentID:            ag.ID,
+						Epoch:              tr.Epoch,
+						apiTranscriptEntry: apiEntry(e),
 					}
 					if err := writeSSE(w, flusher, "transcript", cursor.encode(), payload); err != nil {
 						return err
@@ -1205,7 +1131,7 @@ func (a *app) apiStreamRun(c apiCaller) http.HandlerFunc {
 			return nil
 		}
 
-		lastSummary := runSummaryFromRow(row, taskSummary, keyID, keyName)
+		lastSummary := runSummaryFromRow(row)
 		if err := writeSSE(w, flusher, "run", "", lastSummary); err != nil {
 			return
 		}
@@ -1300,7 +1226,7 @@ func (a *app) apiStreamRun(c apiCaller) http.HandlerFunc {
 				if !checkKey() {
 					return
 				}
-				rr, ts, kid, kname, ok, err := readScopedRunRow(ctx, c.pool, c.auth.WorkflowID, id)
+				rr, ok, err := readScopedRunRow(ctx, c.pool, c.auth.WorkflowID, id)
 				if err != nil || !ok {
 					_ = writeSSE(w, flusher, "error", "", map[string]string{"error": "run no longer available"})
 					return
@@ -1316,7 +1242,7 @@ func (a *app) apiStreamRun(c apiCaller) http.HandlerFunc {
 						return
 					}
 				}
-				curSummary := runSummaryFromRow(rr, ts, kid, kname)
+				curSummary := runSummaryFromRow(rr)
 				if runSnapshotChanged(lastSummary, curSummary) {
 					lastSummary = curSummary
 					if err := writeSSE(w, flusher, "run", "", curSummary); err != nil {
@@ -1463,7 +1389,7 @@ func (a *app) apiRetryRun(c apiCaller) http.HandlerFunc {
 			apiWorkflowError(w, err)
 			return
 		}
-		row, taskSummary, keyID, keyName, found, err := readScopedRunRow(r.Context(), c.pool, c.auth.WorkflowID, newID)
+		row, found, err := readScopedRunRow(r.Context(), c.pool, c.auth.WorkflowID, newID)
 		if err != nil || !found {
 			apiError(w, http.StatusInternalServerError, "retry created but could not be read")
 			return
@@ -1471,7 +1397,7 @@ func (a *app) apiRetryRun(c apiCaller) http.HandlerFunc {
 		w.Header().Set("Location", "/api/workflow-api/runs/"+newID)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(runSummaryFromRow(row, taskSummary, keyID, keyName))
+		_ = json.NewEncoder(w).Encode(runSummaryFromRow(row))
 	}
 }
 
@@ -1521,11 +1447,11 @@ func (a *app) apiStartQueuedRun(c apiCaller) http.HandlerFunc {
 			apiWorkflowError(w, err)
 			return
 		}
-		row, taskSummary, keyID, keyName, found, err := readScopedRunRow(r.Context(), c.pool, c.auth.WorkflowID, id)
+		row, found, err := readScopedRunRow(r.Context(), c.pool, c.auth.WorkflowID, id)
 		if err != nil || !found {
 			writeJSON(w, map[string]string{"id": id, "status": workflow.Running})
 			return
 		}
-		writeJSON(w, runSummaryFromRow(row, taskSummary, keyID, keyName))
+		writeJSON(w, runSummaryFromRow(row))
 	}
 }

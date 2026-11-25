@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/zachlatta/intelligence/internal/dbtest"
 	"github.com/zachlatta/intelligence/internal/hostclient"
 )
@@ -52,6 +54,26 @@ func TestTranscriptStoresEntriesWithReadableColumns(t *testing.T) {
 	if tr.Epoch != "ep1" || len(tr.Entries) != 3 || tr.Entries[1].Kind != "assistant_message" || tr.Entries[1].Text != "on it" ||
 		tr.Entries[2].Tool != "Bash" || !tr.Entries[0].At.Equal(t1) {
 		t.Errorf("transcript = %+v", tr)
+	}
+}
+
+func TestTranscriptPageReadsAtMostLimitEntriesFromSeq(t *testing.T) {
+	r := New(dbtest.New(t).Owner)
+	record(t, r, full(), time.Now())
+	storeT(t, r, hostclient.TranscriptBatch{Host: "host-1", AgentID: "a1", Epoch: "ep1", Replace: true,
+		Entries: []hostclient.TranscriptEntry{entry(1, 1, userMsg), entry(2, 4, asstMsg), entry(5, 5, toolCall)}})
+	tr, err := r.TranscriptPage(ctx, "host-1", "a1", 2, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.Epoch != "ep1" || len(tr.Entries) != 1 || tr.Entries[0].SeqStart != 2 || tr.Entries[0].Text != "on it" {
+		t.Fatalf("page = %+v", tr)
+	}
+	if tr, _ := r.TranscriptPage(ctx, "host-1", "a1", 0, 0); len(tr.Entries) != 3 {
+		t.Fatalf("limit 0 reads all, got %d", len(tr.Entries))
+	}
+	if _, err := r.TranscriptPage(ctx, "host-1", "nobody", 0, 1); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("unsynced agent: %v, want pgx.ErrNoRows", err)
 	}
 }
 

@@ -127,12 +127,27 @@ func TestWorkflowAPIKeyScopingAuthAndControl(t *testing.T) {
 	emailDef := apiWorkflowDef("host-1")
 	emailDef.Trigger = workflow.TriggerEmail
 	emailDef.Email = &workflow.EmailFilter{From: []string{"sender@example.com"}}
-	_ = createWorkflow(t, h, emailDef)
+	wfEmail := createWorkflow(t, h, emailDef)
 
 	vmDef := apiWorkflowDef("host-1")
 	vmDef.Trigger = workflow.TriggerVoiceMemo
 	vmDef.VoiceMemo = &workflow.VoiceMemoFilter{Title: "contracts"}
-	_ = createWorkflow(t, h, vmDef)
+	wfVoice := createWorkflow(t, h, vmDef)
+
+	// An API-started run of an email or voice-memo workflow has no email or memo to answer.
+	for _, wfID := range []string{wfEmail, wfVoice} {
+		_, k := issueAPIKey(t, h, wfID, "answer-check")
+		rec := callAPI(t, h, http.MethodPost, "/api/workflow-api/runs", k, `{"input":"Check this contract"}`)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("API run of %s = %d %s", wfID, rec.Code, rec.Body)
+		}
+		var run apiRunSummary
+		_ = json.Unmarshal(rec.Body.Bytes(), &run)
+		var expected bool
+		if err := d.Owner.QueryRow(ctx, `SELECT answer_expected FROM workflow_runs WHERE id = $1`, run.ID).Scan(&expected); err != nil || expected {
+			t.Fatalf("API run of %s: answer_expected = %v (err %v), want false", wfID, expected, err)
+		}
+	}
 
 	// Create two API-enabled workflows: A and B.
 	wfA := createWorkflow(t, h, apiWorkflowDef("host-1"))
