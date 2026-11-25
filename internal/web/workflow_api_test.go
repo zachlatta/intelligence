@@ -22,9 +22,10 @@ import (
 
 func apiWorkflowDef(host string) workflow.Definition {
 	return workflow.Definition{
-		Host:    host,
-		Trigger: workflow.TriggerAPI,
-		Project: workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"},
+		Host:       host,
+		Trigger:    workflow.TriggerManual,
+		APITrigger: true,
+		Project:    workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"},
 		Orchestrator: workflow.Orchestrator{
 			Provider:     "claude",
 			Model:        "opus",
@@ -74,6 +75,21 @@ func callAPI(t *testing.T, h http.Handler, method, path, key, body string, extra
 	return call(t, anon(h), method, path, body, hdrs)
 }
 
+func assertJSONError(t *testing.T, rec *httptest.ResponseRecorder, wantCode int) string {
+	t.Helper()
+	if rec.Code != wantCode {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, wantCode, rec.Body)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("Content-Type = %q, want application/json (body: %s)", ct, rec.Body)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["error"] == "" {
+		t.Fatalf("expected JSON {\"error\":...}, got %s", rec.Body)
+	}
+	return body["error"]
+}
+
 func TestWorkflowAPIKeyScopingAuthAndControl(t *testing.T) {
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "test")
@@ -85,13 +101,46 @@ func TestWorkflowAPIKeyScopingAuthAndControl(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create two API-triggered workflows: A ("Agreement review") and B ("Other workflow").
+	// M3: trigger="api" is rejected; apiTrigger works alongside task (preserving default), email, voice_memo, and manual.
+	badDef := apiWorkflowDef("host-1")
+	badDef.Trigger = "api"
+	if rec := call(t, h, http.MethodPost, "/api/workflows", wfBody(t, "Bad", badDef), sameOriginFetch); rec.Code != http.StatusBadRequest {
+		t.Fatalf("trigger=api = %d, want 400", rec.Code)
+	}
+
+	taskDef := apiWorkflowDef("host-1")
+	taskDef.Trigger = workflow.TriggerTask
+	taskDef.APITrigger = false
+	wfTask := createWorkflow(t, h, taskDef)
+	if rec := call(t, h, http.MethodPut, "/api/workflows/"+wfTask+"/default", `{"default":true}`, sameOriginFetch); rec.Code != http.StatusNoContent {
+		t.Fatalf("set default = %d %s", rec.Code, rec.Body)
+	}
+	taskDef.APITrigger = true
+	if rec := call(t, h, http.MethodPut, "/api/workflows/"+wfTask, wfBody(t, "Default Task", taskDef), sameOriginFetch); rec.Code != http.StatusOK {
+		t.Fatalf("enable apiTrigger on default task = %d %s", rec.Code, rec.Body)
+	}
+	var isDefault bool
+	if err := d.Owner.QueryRow(ctx, `SELECT is_default FROM workflows WHERE id = $1`, wfTask).Scan(&isDefault); err != nil || !isDefault {
+		t.Fatalf("enabling apiTrigger cleared is_default: %v %v", isDefault, err)
+	}
+
+	emailDef := apiWorkflowDef("host-1")
+	emailDef.Trigger = workflow.TriggerEmail
+	emailDef.Email = &workflow.EmailFilter{From: []string{"sender@example.com"}}
+	_ = createWorkflow(t, h, emailDef)
+
+	vmDef := apiWorkflowDef("host-1")
+	vmDef.Trigger = workflow.TriggerVoiceMemo
+	vmDef.VoiceMemo = &workflow.VoiceMemoFilter{Title: "contracts"}
+	_ = createWorkflow(t, h, vmDef)
+
+	// Create two API-enabled workflows: A and B.
 	wfA := createWorkflow(t, h, apiWorkflowDef("host-1"))
 	wfB := createWorkflow(t, h, apiWorkflowDef("host-1"))
 	keyAID, keyA := issueAPIKey(t, h, wfA, "ci-prod")
 	_, keyB := issueAPIKey(t, h, wfB, "other-repo")
 
-	// 1. Auth boundary: API key cannot reach any non-workflow-API route (including SQL, workflows, MCP, key management).
+	// 1. Auth boundary: API key cannot reach any non-workflow-API route.
 	for _, tc := range []struct{ method, path, body string }{
 		{http.MethodPost, "/api/sql", `{"query":"SELECT 1"}`},
 		{http.MethodGet, "/api/hosts", ""},
@@ -117,18 +166,15 @@ func TestWorkflowAPIKeyScopingAuthAndControl(t *testing.T) {
 		{"host key", hostKey, http.StatusUnauthorized},
 	} {
 		rec := callAPI(t, h, http.MethodGet, "/api/workflow-api/workflow", tc.key, "")
-		if rec.Code != tc.want {
-			t.Errorf("auth %s: got %d, want %d", tc.name, rec.Code, tc.want)
-		}
+		assertJSONError(t, rec, tc.want)
 	}
-	// Browser session cookie without Bearer key is rejected on /api/workflow-api/*.
 	if rec := call(t, h, http.MethodGet, "/api/workflow-api/workflow", "", sameOriginFetch); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("browser cookie on /api/workflow-api/workflow = %d, want 401", rec.Code)
 	}
 
-	// 3. GET /api/workflow-api/workflow returns scoped workflow metadata.
+	// 3. GET /api/workflow-api/workflow returns scoped workflow metadata including apiTrigger=true.
 	rec := callAPI(t, h, http.MethodGet, "/api/workflow-api/workflow", keyA, "")
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), wfA) {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"apiTrigger":true`) {
 		t.Fatalf("GET /api/workflow-api/workflow = %d %s", rec.Code, rec.Body)
 	}
 
@@ -158,11 +204,9 @@ func TestWorkflowAPIKeyScopingAuthAndControl(t *testing.T) {
 		t.Fatalf("replay created new run %s != %s", runA2.ID, runA.ID)
 	}
 
-	// Same Idempotency-Key with DIFFERENT body returns 409 Conflict.
+	// Same Idempotency-Key with DIFFERENT body returns 409 Conflict JSON.
 	recConflict := callAPI(t, h, http.MethodPost, "/api/workflow-api/runs", keyA, `{"input":"Different contract"}`, map[string]string{"Idempotency-Key": "req-123"})
-	if recConflict.Code != http.StatusConflict {
-		t.Fatalf("idempotency mismatch = %d, want 409 (%s)", recConflict.Code, recConflict.Body)
-	}
+	assertJSONError(t, recConflict, http.StatusConflict)
 
 	// Concurrent duplicate POSTs with same Idempotency-Key create only one run.
 	var wg sync.WaitGroup
@@ -197,24 +241,16 @@ func TestWorkflowAPIKeyScopingAuthAndControl(t *testing.T) {
 	var runB apiRunSummary
 	_ = json.Unmarshal(recB.Body.Bytes(), &runB)
 
-	// 5. Strict workflow scoping: key A cannot see or control workflow B's run!
-	if r := callAPI(t, h, http.MethodGet, "/api/workflow-api/runs/"+runB.ID, keyA, ""); r.Code != http.StatusNotFound {
-		t.Fatalf("keyA GET wfB run = %d, want 404", r.Code)
-	}
-	if r := callAPI(t, h, http.MethodGet, "/api/workflow-api/runs/"+runB.ID+"/transcripts", keyA, ""); r.Code != http.StatusNotFound {
-		t.Fatalf("keyA GET wfB transcripts = %d, want 404", r.Code)
-	}
-	if r := callAPI(t, h, http.MethodGet, "/api/workflow-api/runs/"+runB.ID+"/stream", keyA, ""); r.Code != http.StatusNotFound {
-		t.Fatalf("keyA GET wfB stream = %d, want 404", r.Code)
-	}
+	// 5. Strict workflow scoping: key A cannot see or control workflow B's run.
+	assertJSONError(t, callAPI(t, h, http.MethodGet, "/api/workflow-api/runs/"+runB.ID, keyA, ""), http.StatusNotFound)
+	assertJSONError(t, callAPI(t, h, http.MethodGet, "/api/workflow-api/runs/"+runB.ID+"/transcripts", keyA, ""), http.StatusNotFound)
+	assertJSONError(t, callAPI(t, h, http.MethodGet, "/api/workflow-api/runs/"+runB.ID+"/stream", keyA, ""), http.StatusNotFound)
 	for _, action := range []string{"cancel", "reply", "input", "retry", "resume", "start"} {
 		body := `{}`
 		if action == "reply" || action == "input" {
 			body = `{"text":"hi"}`
 		}
-		if r := callAPI(t, h, http.MethodPost, "/api/workflow-api/runs/"+runB.ID+"/"+action, keyA, body); r.Code != http.StatusNotFound {
-			t.Errorf("keyA POST wfB %s = %d, want 404", action, r.Code)
-		}
+		assertJSONError(t, callAPI(t, h, http.MethodPost, "/api/workflow-api/runs/"+runB.ID+"/"+action, keyA, body), http.StatusNotFound)
 	}
 
 	// List runs with keyA only returns wfA runs, with pagination and status filtering.
@@ -228,11 +264,8 @@ func TestWorkflowAPIKeyScopingAuthAndControl(t *testing.T) {
 		NextCursor string          `json:"nextCursor"`
 	}
 	_ = json.Unmarshal(listRec.Body.Bytes(), &page1)
-	if page1.Total != 2 || len(page1.Runs) != 1 || page1.NextCursor == "" {
+	if page1.Total != 2 || len(page1.Runs) != 1 || page1.NextCursor == "" || page1.Runs[0].WorkflowID != wfA {
 		t.Fatalf("page1 = %+v", page1)
-	}
-	if page1.Runs[0].WorkflowID != wfA {
-		t.Fatalf("leaked workflow %s", page1.Runs[0].WorkflowID)
 	}
 	listRec2 := callAPI(t, h, http.MethodGet, "/api/workflow-api/runs?limit=1&cursor="+page1.NextCursor, keyA, "")
 	var page2 struct {
@@ -244,11 +277,10 @@ func TestWorkflowAPIKeyScopingAuthAndControl(t *testing.T) {
 	if len(page2.Runs) != 1 || page2.Runs[0].ID == page1.Runs[0].ID || page2.NextCursor != "" {
 		t.Fatalf("page2 = %+v", page2)
 	}
-	if badStatus := callAPI(t, h, http.MethodGet, "/api/workflow-api/runs?status=bogus", keyA, ""); badStatus.Code != http.StatusBadRequest {
-		t.Fatalf("bad status filter = %d, want 400", badStatus.Code)
-	}
+	assertJSONError(t, callAPI(t, h, http.MethodGet, "/api/workflow-api/runs?status=bogus", keyA, ""), http.StatusBadRequest)
 
-	// 6. Simulate orchestrator starting for runA, reporting transcript, asking, replying, adding input, failing, retrying, and canceling!
+	// 6. Simulate orchestrator starting for runA, moving to Sign-off step, asking, API-key replying (M4!),
+	// adding input, failing, retrying, and canceling!
 	var launchCmdID string
 	if err := d.Owner.QueryRow(ctx, `SELECT pending_command::text FROM workflow_runs WHERE id = $1`, runA.ID).Scan(&launchCmdID); err != nil {
 		t.Fatal(err)
@@ -280,7 +312,7 @@ func TestWorkflowAPIKeyScopingAuthAndControl(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Read run detail: includes attachment reference in input, steps, events, agents.
+	// Read run detail & transcripts; unrelated agent returns 404.
 	detRec := callAPI(t, h, http.MethodGet, "/api/workflow-api/runs/"+runA.ID, keyA, "")
 	if detRec.Code != http.StatusOK {
 		t.Fatalf("GET run detail = %d %s", detRec.Code, detRec.Body)
@@ -290,8 +322,6 @@ func TestWorkflowAPIKeyScopingAuthAndControl(t *testing.T) {
 	if det.Status != workflow.Running || !strings.Contains(det.Input, "[attachment:") || len(det.Steps) != 2 || len(det.Agents) != 2 {
 		t.Fatalf("unexpected run detail: status=%s steps=%d agents=%d input=%q", det.Status, len(det.Steps), len(det.Agents), det.Input)
 	}
-
-	// Read transcripts list & single agent transcript; unrelated agent returns 404.
 	trListRec := callAPI(t, h, http.MethodGet, "/api/workflow-api/runs/"+runA.ID+"/transcripts", keyA, "")
 	if trListRec.Code != http.StatusOK || !strings.Contains(trListRec.Body.String(), `"entryCount":2`) {
 		t.Fatalf("GET transcripts = %d %s", trListRec.Code, trListRec.Body)
@@ -300,20 +330,51 @@ func TestWorkflowAPIKeyScopingAuthAndControl(t *testing.T) {
 	if trRec.Code != http.StatusOK || !strings.Contains(trRec.Body.String(), "Clause 4 looks risky.") || strings.Contains(trRec.Body.String(), "Checking clauses.") {
 		t.Fatalf("GET transcript after_seq=1 = %d %s", trRec.Code, trRec.Body)
 	}
-	if otherTr := callAPI(t, h, http.MethodGet, "/api/workflow-api/runs/"+runA.ID+"/transcripts/other-agent", keyA, ""); otherTr.Code != http.StatusNotFound {
-		t.Fatalf("unrelated agent transcript = %d, want 404", otherTr.Code)
+	assertJSONError(t, callAPI(t, h, http.MethodGet, "/api/workflow-api/runs/"+runA.ID+"/transcripts/other-agent", keyA, ""), http.StatusNotFound)
+
+	// Refused reply (run is not waiting) with inline attachment must leave zero orphaned attachments.
+	var attBefore int
+	_ = d.Owner.QueryRow(ctx, `SELECT count(*) FROM attachments`).Scan(&attBefore)
+	assertJSONError(t, callAPI(t, h, http.MethodPost, "/api/workflow-api/runs/"+runA.ID+"/reply", keyA,
+		`{"text":"too early","attachments":[{"name":"note.txt","data":"`+attData+`"}]}`), http.StatusConflict)
+	var attAfter int
+	_ = d.Owner.QueryRow(ctx, `SELECT count(*) FROM attachments`).Scan(&attAfter)
+	if attAfter != attBefore {
+		t.Fatalf("orphaned attachment after 409 reply: before=%d after=%d", attBefore, attAfter)
 	}
 
-	// Control: input (while running), ask -> reply (while waiting), fail -> retry, cancel!
+	// M4: Send input while running, advance to Sign-off step, ask, reply via API key!
 	if r := callAPI(t, h, http.MethodPost, "/api/workflow-api/runs/"+runA.ID+"/input", keyA, `{"text":"Also check indemnity cap"}`); r.Code != http.StatusOK {
 		t.Fatalf("POST input = %d %s", r.Code, r.Body)
 	}
-	if code, msg := move(t, h, hostKey, runA.ID, map[string]string{"move": "ask", "note": "Should we accept 2x cap?"}); code != http.StatusOK {
+	if code, msg := move(t, h, hostKey, runA.ID, map[string]string{"move": "next", "summary": "Checked"}); code != http.StatusOK {
+		t.Fatalf("move next = %d %s", code, msg)
+	}
+	if code, msg := move(t, h, hostKey, runA.ID, map[string]string{"move": "ask", "note": "Approve sign-off?"}); code != http.StatusOK {
 		t.Fatalf("move ask = %d %s", code, msg)
 	}
-	if r := callAPI(t, h, http.MethodPost, "/api/workflow-api/runs/"+runA.ID+"/reply", keyA, `{"text":"Yes, 2x is fine."}`); r.Code != http.StatusOK {
+	if r := callAPI(t, h, http.MethodPost, "/api/workflow-api/runs/"+runA.ID+"/reply", keyA, `{"text":"Approved, proceed."}`); r.Code != http.StatusOK {
 		t.Fatalf("POST reply = %d %s", r.Code, r.Body)
 	}
+
+	// Verify M4: orchestrator command names the API key (never "Zach replied") AND includes non-Zach sign-off warning!
+	var replyMsg string
+	if err := d.Owner.QueryRow(ctx, `SELECT args->>'text' FROM commands WHERE host='host-1' AND kind='send_message' ORDER BY created_at DESC LIMIT 1`).Scan(&replyMsg); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(replyMsg, "Zach replied") || !strings.Contains(replyMsg, `API key "ci-prod"`) || !strings.Contains(replyMsg, "not Zach's approval") {
+		t.Fatalf("sign-off reply message missing API key attribution: %q", replyMsg)
+	}
+	// Verify M4: workflow_run_events.api_key_id is set on reply and input events!
+	var replyKeyID, inputKeyID string
+	if err := d.Owner.QueryRow(ctx, `SELECT coalesce(api_key_id::text,'') FROM workflow_run_events WHERE run_id=$1 AND kind='reply'`, runA.ID).Scan(&replyKeyID); err != nil || replyKeyID != keyAID {
+		t.Fatalf("reply event api_key_id = %q, want %q (err=%v)", replyKeyID, keyAID, err)
+	}
+	if err := d.Owner.QueryRow(ctx, `SELECT coalesce(api_key_id::text,'') FROM workflow_run_events WHERE run_id=$1 AND kind='input'`, runA.ID).Scan(&inputKeyID); err != nil || inputKeyID != keyAID {
+		t.Fatalf("input event api_key_id = %q, want %q (err=%v)", inputKeyID, keyAID, err)
+	}
+
+	// Fail, retry, and cancel via API key; check cancel attribution on event and move refusal!
 	if code, msg := move(t, h, hostKey, runA.ID, map[string]string{"move": "fail", "why": "temporary error"}); code != http.StatusOK {
 		t.Fatalf("move fail = %d %s", code, msg)
 	}
@@ -326,52 +387,124 @@ func TestWorkflowAPIKeyScopingAuthAndControl(t *testing.T) {
 	if retried.RetriedFromRunID != runA.ID || retried.APIKeyID != keyAID {
 		t.Fatalf("retried run = %+v", retried)
 	}
-	// Second retry returns 409.
-	if r := callAPI(t, h, http.MethodPost, "/api/workflow-api/runs/"+runA.ID+"/retry", keyA, `{}`); r.Code != http.StatusConflict {
-		t.Fatalf("second retry = %d, want 409", r.Code)
-	}
-	// Cancel the retried run.
+	assertJSONError(t, callAPI(t, h, http.MethodPost, "/api/workflow-api/runs/"+runA.ID+"/retry", keyA, `{}`), http.StatusConflict)
 	if r := callAPI(t, h, http.MethodPost, "/api/workflow-api/runs/"+retried.ID+"/cancel", keyA, `{}`); r.Code != http.StatusOK {
 		t.Fatalf("POST cancel = %d %s", r.Code, r.Body)
 	}
+	if code, msg := move(t, h, hostKey, retried.ID, map[string]string{"move": "next", "summary": "late"}); code != http.StatusConflict || !strings.Contains(msg, `API key "ci-prod" canceled`) || strings.Contains(msg, "Zach canceled") {
+		t.Fatalf("move on API-canceled run = (%d, %q)", code, msg)
+	}
 
-	// 7. UI pages render API trigger, API keys, and API-triggered run attribution.
+	// 7. UI pages render API trigger checkbox, API keys, and API-key reply/cancel attribution (never "Zach replied").
 	editorRec := call(t, h, http.MethodGet, "/workflows/"+wfA, "", sameOriginFetch)
-	if editorRec.Code != http.StatusOK || !strings.Contains(editorRec.Body.String(), "ci-prod") {
-		t.Fatalf("GET /workflows/%s = %d (missing key name)", wfA, editorRec.Code)
+	if editorRec.Code != http.StatusOK || !strings.Contains(editorRec.Body.String(), "ci-prod") || !strings.Contains(editorRec.Body.String(), "Allow triggering via API") {
+		t.Fatalf("GET /workflows/%s = %d (missing API UI)", wfA, editorRec.Code)
 	}
 	runPageRec := call(t, h, http.MethodGet, "/workflow-runs/"+runA.ID, "", sameOriginFetch)
-	if runPageRec.Code != http.StatusOK || !strings.Contains(runPageRec.Body.String(), "triggered via <b>API</b>") || !strings.Contains(runPageRec.Body.String(), "ci-prod") {
-		t.Fatalf("GET /workflow-runs/%s = %d (missing API attribution)", runA.ID, runPageRec.Code)
+	if runPageRec.Code != http.StatusOK || !strings.Contains(runPageRec.Body.String(), "API key ci-prod replied:") || strings.Contains(runPageRec.Body.String(), "Zach replied:") {
+		t.Fatalf("GET /workflow-runs/%s = %d (wrong reply attribution)", runA.ID, runPageRec.Code)
 	}
-	listPageRec := call(t, h, http.MethodGet, "/workflows", "", sameOriginFetch)
-	if listPageRec.Code != http.StatusOK || !strings.Contains(listPageRec.Body.String(), "API trigger enabled") {
-		t.Fatalf("GET /workflows = %d (missing API trigger badge)", listPageRec.Code)
+	canceledPageRec := call(t, h, http.MethodGet, "/workflow-runs/"+retried.ID, "", sameOriginFetch)
+	if canceledPageRec.Code != http.StatusOK || !strings.Contains(canceledPageRec.Body.String(), "Canceled by API key ci-prod") {
+		t.Fatalf("GET /workflow-runs/%s = %d (missing cancel key attribution)", retried.ID, canceledPageRec.Code)
 	}
 
-	// 8. Disabling API trigger makes keyA return 403; re-enabling makes it work; revoking makes it return 401.
-	manualDef := apiWorkflowDef("host-1")
-	manualDef.Trigger = workflow.TriggerManual
-	if rec := call(t, h, http.MethodPut, "/api/workflows/"+wfA, wfBody(t, "Agreement review", manualDef), sameOriginFetch); rec.Code != http.StatusOK {
-		t.Fatalf("PUT manual = %d %s", rec.Code, rec.Body)
+	// 8. M3: Disabling apiTrigger blocks new starts and retries (403), while reads and existing-run controls still work!
+	disabledDef := apiWorkflowDef("host-1")
+	disabledDef.APITrigger = false
+	if rec := call(t, h, http.MethodPut, "/api/workflows/"+wfA, wfBody(t, "Agreement review", disabledDef), sameOriginFetch); rec.Code != http.StatusOK {
+		t.Fatalf("PUT apiTrigger=false = %d %s", rec.Code, rec.Body)
 	}
-	if rec := callAPI(t, h, http.MethodGet, "/api/workflow-api/runs", keyA, ""); rec.Code != http.StatusForbidden {
-		t.Fatalf("disabled trigger = %d, want 403", rec.Code)
+	assertJSONError(t, callAPI(t, h, http.MethodPost, "/api/workflow-api/runs", keyA, `{"input":"blocked"}`), http.StatusForbidden)
+	assertJSONError(t, callAPI(t, h, http.MethodPost, "/api/workflow-api/runs/"+runA.ID+"/retry", keyA, `{}`), http.StatusForbidden)
+	if rec := callAPI(t, h, http.MethodGet, "/api/workflow-api/runs", keyA, ""); rec.Code != http.StatusOK {
+		t.Fatalf("GET /runs while apiTrigger=false = %d, want 200", rec.Code)
 	}
-	if rec := call(t, h, http.MethodPut, "/api/workflows/"+wfA, wfBody(t, "Agreement review", apiWorkflowDef("host-1")), sameOriginFetch); rec.Code != http.StatusOK {
-		t.Fatalf("PUT api = %d %s", rec.Code, rec.Body)
+	if rec := callAPI(t, h, http.MethodGet, "/api/workflow-api/runs/"+runA.ID, keyA, ""); rec.Code != http.StatusOK {
+		t.Fatalf("GET /runs/{id} while apiTrigger=false = %d, want 200", rec.Code)
 	}
+
+	// Revoking the key cuts off ALL routes (401).
 	if rec := call(t, h, http.MethodDelete, "/api/workflows/"+wfA+"/api-keys/"+keyAID, "", sameOriginFetch); rec.Code != http.StatusNoContent {
 		t.Fatalf("DELETE key = %d %s", rec.Code, rec.Body)
 	}
-	if rec := callAPI(t, h, http.MethodGet, "/api/workflow-api/runs", keyA, ""); rec.Code != http.StatusUnauthorized {
-		t.Fatalf("revoked key = %d, want 401", rec.Code)
-	}
+	assertJSONError(t, callAPI(t, h, http.MethodGet, "/api/workflow-api/runs", keyA, ""), http.StatusUnauthorized)
 
 	// 9. SQL contract check passes.
 	if err := db.CheckContract(ctx, d.Owner, d.Readonly); err != nil {
 		t.Fatalf("CheckContract: %v", err)
 	}
+}
+
+func TestWorkflowAPIInputValidationAndSizeLimits(t *testing.T) {
+	d := dbtest.New(t)
+	h := newServer(t, d, d.Owner, "test")
+	reg := fleet.New(d.Owner)
+	ctx := context.Background()
+	_ = keyOf(t, h, "host-1")
+	if err := reg.Record(ctx, wfReport(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	wfID := createWorkflow(t, h, apiWorkflowDef("host-1"))
+	_, key := issueAPIKey(t, h, wfID, "validator")
+
+	// Start a valid run so we can test reply/input/transcript bad-input cases against it.
+	rec := callAPI(t, h, http.MethodPost, "/api/workflow-api/runs", key, `{"input":"Valid run"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST valid run = %d %s", rec.Code, rec.Body)
+	}
+	var runA apiRunSummary
+	_ = json.Unmarshal(rec.Body.Bytes(), &runA)
+
+	// M1: > 1 MiB input on trigger -> 413 JSON.
+	bigText := strings.Repeat("a", (1<<20)+1)
+	bigPayload, _ := json.Marshal(map[string]string{"input": bigText})
+	assertJSONError(t, callAPI(t, h, http.MethodPost, "/api/workflow-api/runs", key, string(bigPayload)), http.StatusRequestEntityTooLarge)
+
+	// M1: > 1 MiB text on reply and input -> 413 JSON.
+	bigReply, _ := json.Marshal(map[string]string{"text": bigText})
+	assertJSONError(t, callAPI(t, h, http.MethodPost, "/api/workflow-api/runs/"+runA.ID+"/reply", key, string(bigReply)), http.StatusRequestEntityTooLarge)
+	assertJSONError(t, callAPI(t, h, http.MethodPost, "/api/workflow-api/runs/"+runA.ID+"/input", key, string(bigReply)), http.StatusRequestEntityTooLarge)
+
+	// M1: host MaxFrame guard in fleet.EnqueueTx refuses an oversized command frame.
+	hugeArgs, _ := json.Marshal(hostclient.AgentArgs{AgentID: "a1", Text: strings.Repeat("x", hostclient.MaxFrame)})
+	if _, err := reg.Enqueue(ctx, "host-1", hostclient.SendMessageKind, hugeArgs, time.Minute, time.Now()); err == nil {
+		t.Fatal("expected fleet.Enqueue to refuse command exceeding hostclient.MaxFrame")
+	}
+
+	// M5: NUL bytes in trigger input, reply text, and input text -> 400 JSON.
+	assertJSONError(t, callAPI(t, h, http.MethodPost, "/api/workflow-api/runs", key, `{"input":"a\u0000b"}`), http.StatusBadRequest)
+	assertJSONError(t, callAPI(t, h, http.MethodPost, "/api/workflow-api/runs/"+runA.ID+"/reply", key, `{"text":"a\u0000b"}`), http.StatusBadRequest)
+	assertJSONError(t, callAPI(t, h, http.MethodPost, "/api/workflow-api/runs/"+runA.ID+"/input", key, `{"text":"a\u0000b"}`), http.StatusBadRequest)
+
+	// M5: Credential in input -> 400 JSON without disclosing the key.
+	credRec := callAPI(t, h, http.MethodPost, "/api/workflow-api/runs", key, `{"input":"Use `+key+` here"}`)
+	credErr := assertJSONError(t, credRec, http.StatusBadRequest)
+	if strings.Contains(credErr, key) {
+		t.Fatalf("error disclosed API key: %q", credErr)
+	}
+
+	// M5: Wrong Content-Type -> 415 JSON (not plain text!).
+	assertJSONError(t, callAPI(t, h, http.MethodPost, "/api/workflow-api/runs", key, `{"input":"hi"}`, map[string]string{"Content-Type": "text/plain"}), http.StatusUnsupportedMediaType)
+
+	// M5: Trailing JSON value -> 400 JSON.
+	assertJSONError(t, callAPI(t, h, http.MethodPost, "/api/workflow-api/runs", key, `{"input":"first"}{"input":"second"}`), http.StatusBadRequest)
+
+	// M5: Over-long Idempotency-Key -> 400 JSON.
+	assertJSONError(t, callAPI(t, h, http.MethodPost, "/api/workflow-api/runs", key, `{"input":"hi"}`, map[string]string{"Idempotency-Key": strings.Repeat("k", 256)}), http.StatusBadRequest)
+
+	// M5: Int32 overflow on after_seq and from_seq -> 400 JSON.
+	var launchCmdID string
+	_ = d.Owner.QueryRow(ctx, `SELECT pending_command::text FROM workflow_runs WHERE id = $1`, runA.ID).Scan(&launchCmdID)
+	resJSON, _ := json.Marshal(hostclient.CommandResult{WorkspaceID: "ws-v", AgentID: "orch-v"})
+	_ = reg.UpdateCommand(ctx, "host-1", hostclient.CommandUpdate{ID: launchCmdID, Status: hostclient.CommandSucceeded, Result: resJSON}, time.Now())
+	_ = workflow.NewEngine(d.Owner, nil).CommandUpdated(ctx, launchCmdID)
+	rep := wfReport()
+	rep.Paseo.Workspaces = append(rep.Paseo.Workspaces, hostclient.Workspace{ID: "ws-v", Name: "ws-v", ProjectRoot: "/w/app"})
+	rep.Paseo.Agents = append(rep.Paseo.Agents, hostclient.Agent{ID: "orch-v", WorkspaceID: "ws-v", Title: "Orchestrator", Provider: "claude", Model: "opus", Status: "running"})
+	_ = reg.Record(ctx, rep, time.Now())
+	assertJSONError(t, callAPI(t, h, http.MethodGet, "/api/workflow-api/runs/"+runA.ID+"/transcripts/orch-v?after_seq=99999999999999", key, ""), http.StatusBadRequest)
+	assertJSONError(t, callAPI(t, h, http.MethodGet, "/api/workflow-api/runs/"+runA.ID+"/transcripts/orch-v?from_seq=99999999999999", key, ""), http.StatusBadRequest)
 }
 
 type sseMessage struct {
@@ -405,9 +538,10 @@ func readSSE(r *bufio.Reader) (sseMessage, error) {
 	}
 }
 
-func TestWorkflowAPIStreamRealtimeResumeAndRevocation(t *testing.T) {
+// TestWorkflowAPIStreamLiveAgentsWorkersGraceAndResume covers M2a, M2b, M2c, M2d, and key revocation.
+func TestWorkflowAPIStreamLiveAgentsWorkersGraceAndResume(t *testing.T) {
 	d := dbtest.New(t)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	h := newServer(t, d, d.Owner, "test", func(c *Config) { c.Context = ctx })
 	reg := fleet.New(d.Owner)
@@ -428,7 +562,7 @@ func TestWorkflowAPIStreamRealtimeResumeAndRevocation(t *testing.T) {
 	var runA apiRunSummary
 	_ = json.Unmarshal(rec.Body.Bytes(), &runA)
 
-	// Start orchestrator so we can stream live moves and transcripts.
+	// Launch completes, setting orchestrator_id="orch-s", BEFORE the host reports the agent (M2a order!).
 	var launchCmdID string
 	if err := d.Owner.QueryRow(ctx, `SELECT pending_command::text FROM workflow_runs WHERE id = $1`, runA.ID).Scan(&launchCmdID); err != nil {
 		t.Fatal(err)
@@ -440,17 +574,11 @@ func TestWorkflowAPIStreamRealtimeResumeAndRevocation(t *testing.T) {
 	if err := wfEng.CommandUpdated(ctx, launchCmdID); err != nil {
 		t.Fatal(err)
 	}
-	rep := wfReport()
-	rep.Paseo.Workspaces = append(rep.Paseo.Workspaces, hostclient.Workspace{ID: "ws-s", Name: "ws-s", ProjectRoot: "/w/app"})
-	rep.Paseo.Agents = append(rep.Paseo.Agents, hostclient.Agent{ID: "orch-s", WorkspaceID: "ws-s", Title: "Orchestrator", Provider: "claude", Model: "opus", Status: "running"})
-	if err := reg.Record(ctx, rep, time.Now()); err != nil {
-		t.Fatal(err)
-	}
 
 	ts := httptest.NewServer(anon(h))
 	defer ts.Close()
 
-	// 1. Open SSE stream, read initial snapshot + events, then push live transcript + move + revocation!
+	// Open SSE stream BEFORE orch-s is reported by host (M2a).
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/workflow-api/runs/"+runA.ID+"/stream", nil)
 	req.Header.Set("Authorization", "Bearer "+key)
 	resp, err := http.DefaultClient.Do(req)
@@ -458,81 +586,99 @@ func TestWorkflowAPIStreamRealtimeResumeAndRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		t.Fatalf("SSE status=%d ct=%q", resp.StatusCode, resp.Header.Get("Content-Type"))
-	}
 	reader := bufio.NewReader(resp.Body)
 
-	// Read initial `run` snapshot and initial `run_event`s.
-	msg, err := readSSE(reader)
-	if err != nil || msg.Event != "run" {
-		t.Fatalf("first SSE = (%+v, %v), want event=run", msg, err)
+	// Drain initial run + 3 initial events (started, project, workspace).
+	if m, err := readSSE(reader); err != nil || m.Event != "run" {
+		t.Fatalf("first SSE = (%+v, %v)", m, err)
 	}
-	var lastEventID string
-	for range 3 { // started, project, workspace
-		m, err := readSSE(reader)
-		if err != nil || m.Event != "run_event" {
+	for range 3 {
+		if m, err := readSSE(reader); err != nil || m.Event != "run_event" {
 			t.Fatalf("initial event = (%+v, %v)", m, err)
 		}
-		lastEventID = m.ID
 	}
 
-	// Push a live transcript batch and verify it arrives on the stream!
+	// M2a: Host now reports orch-s, then stores its transcript. No unrelated move happens!
+	rep := wfReport()
+	rep.Paseo.Workspaces = append(rep.Paseo.Workspaces, hostclient.Workspace{ID: "ws-s", Name: "ws-s", ProjectRoot: "/w/app"})
+	rep.Paseo.Agents = append(rep.Paseo.Agents, hostclient.Agent{ID: "orch-s", WorkspaceID: "ws-s", Title: "Orchestrator", Provider: "claude", Model: "opus", Status: "running"})
+	if err := reg.Record(ctx, rep, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	if err := reg.StoreTranscript(ctx, hostclient.TranscriptBatch{
 		Host: "host-1", AgentID: "orch-s", Epoch: "ep1", Replace: true,
 		Entries: []hostclient.TranscriptEntry{
-			{SeqStart: 1, SeqEnd: 1, Provider: "claude", Item: json.RawMessage(`{"type":"assistant_message","text":"Live streaming line 1"}`)},
+			{SeqStart: 1, SeqEnd: 1, Provider: "claude", Item: json.RawMessage(`{"type":"assistant_message","text":"Orchestrator live line"}`)},
 		},
 	}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	trMsg, err := readSSE(reader)
-	if err != nil || trMsg.Event != "transcript" || !strings.Contains(trMsg.Data, "Live streaming line 1") {
-		t.Fatalf("live transcript SSE = (%+v, %v)", trMsg, err)
+	if err != nil || trMsg.Event != "transcript" || !strings.Contains(trMsg.Data, "Orchestrator live line") || trMsg.ID == "" {
+		t.Fatalf("M2a orchestrator transcript = (%+v, %v)", trMsg, err)
 	}
 
-	// Advance the run (`next`) and verify live run_event + updated run snapshot arrive!
-	if code, m := move(t, h, hostKey, runA.ID, map[string]string{"move": "next", "summary": "Contract checked"}); code != http.StatusOK {
-		t.Fatalf("move next = %d %s", code, m)
+	// M2b: Host reports a new worker sub-agent while orchestrator is idle, then worker writes transcript!
+	rep.Paseo.Agents = append(rep.Paseo.Agents, hostclient.Agent{ID: "worker-s", WorkspaceID: "ws-s", ParentID: "orch-s", Title: "Worker", Provider: "claude", Model: "opus", Status: "running"})
+	if err := reg.Record(ctx, rep, time.Now()); err != nil {
+		t.Fatal(err)
 	}
-	evMsg, err := readSSE(reader)
-	if err != nil || evMsg.Event != "run_event" || !strings.Contains(evMsg.Data, "Contract checked") {
-		t.Fatalf("live next event = (%+v, %v)", evMsg, err)
+	if err := reg.StoreTranscript(ctx, hostclient.TranscriptBatch{
+		Host: "host-1", AgentID: "worker-s", Epoch: "wep1", Replace: true,
+		Entries: []hostclient.TranscriptEntry{
+			{SeqStart: 1, SeqEnd: 1, Provider: "claude", Item: json.RawMessage(`{"type":"assistant_message","text":"Worker live line"}`)},
+		},
+	}, time.Now()); err != nil {
+		t.Fatal(err)
 	}
-	nextID := evMsg.ID
-	runMsg, err := readSSE(reader)
-	if err != nil || runMsg.Event != "run" {
-		t.Fatalf("live run update = (%+v, %v)", runMsg, err)
+	wMsg, err := readSSE(reader)
+	if err != nil || wMsg.Event != "transcript" || !strings.Contains(wMsg.Data, "Worker live line") || wMsg.ID == "" {
+		t.Fatalf("M2b worker transcript = (%+v, %v)", wMsg, err)
 	}
+	resumeCursor := wMsg.ID
 
-	// Revoke the key while the stream is open: the stream must emit an error event and close!
-	if rec := call(t, h, http.MethodDelete, "/api/workflows/"+wfID+"/api-keys/"+keyID, "", sameOriginFetch); rec.Code != http.StatusNoContent {
-		t.Fatalf("revoke key = %d %s", rec.Code, rec.Body)
+	// M2d: Reconnect a second stream using Last-Event-ID = resumeCursor -> must NOT resend earlier transcripts!
+	// Store a new entry seq=2 on orch-s first, then reconnect with resumeCursor.
+	if err := reg.StoreTranscript(ctx, hostclient.TranscriptBatch{
+		Host: "host-1", AgentID: "orch-s", Epoch: "ep1", Replace: false,
+		Entries: []hostclient.TranscriptEntry{
+			{SeqStart: 2, SeqEnd: 2, Provider: "claude", Item: json.RawMessage(`{"type":"assistant_message","text":"After resume line"}`)},
+		},
+	}, time.Now()); err != nil {
+		t.Fatal(err)
 	}
-	errMsg, err := readSSE(reader)
-	if err != nil || errMsg.Event != "error" || !strings.Contains(errMsg.Data, "revoked") {
-		t.Fatalf("revocation SSE = (%+v, %v), want error with revoked", errMsg, err)
-	}
-	if _, err := readSSE(reader); err != io.EOF {
-		t.Fatalf("expected stream EOF after revocation, got %v", err)
-	}
-
-	// 2. Resumability: issue a new key, finish the run, connect with Last-Event-ID = lastEventID,
-	// verify we only get events AFTER lastEventID and then `done` + EOF!
-	_, key2 := issueAPIKey(t, h, wfID, "stream-client-2")
-	if code, m := move(t, h, hostKey, runA.ID, map[string]string{"move": "done", "summary": "All done"}); code != http.StatusOK {
-		t.Fatalf("move done = %d %s", code, m)
-	}
-	req2, _ := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/workflow-api/runs/"+runA.ID+"/stream?include_transcripts=false", nil)
-	req2.Header.Set("Authorization", "Bearer "+key2)
-	req2.Header.Set("Last-Event-ID", lastEventID)
+	req2, _ := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/workflow-api/runs/"+runA.ID+"/stream", nil)
+	req2.Header.Set("Authorization", "Bearer "+key)
+	req2.Header.Set("Last-Event-ID", resumeCursor)
 	resp2, err := http.DefaultClient.Do(req2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp2.Body.Close()
 	r2 := bufio.NewReader(resp2.Body)
-	var gotEvents []sseMessage
+	if m, err := readSSE(r2); err != nil || m.Event != "run" {
+		t.Fatalf("M2d first SSE = (%+v, %v)", m, err)
+	}
+	m2, err := readSSE(r2)
+	if err != nil || m2.Event != "transcript" || !strings.Contains(m2.Data, "After resume line") || strings.Contains(m2.Data, "Orchestrator live line") || strings.Contains(m2.Data, "Worker live line") {
+		t.Fatalf("M2d resumed transcript = (%+v, %v), want only 'After resume line'", m2, err)
+	}
+
+	// M2c: Finish the run (`done`), then 150ms later store "FINAL VERDICT" transcript -> stream must deliver it BEFORE `done`!
+	if code, msg := move(t, h, hostKey, runA.ID, map[string]string{"move": "done", "summary": "All done"}); code != http.StatusOK {
+		t.Fatalf("move done = %d %s", code, msg)
+	}
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		_ = reg.StoreTranscript(ctx, hostclient.TranscriptBatch{
+			Host: "host-1", AgentID: "orch-s", Epoch: "ep1", Replace: false,
+			Entries: []hostclient.TranscriptEntry{
+				{SeqStart: 3, SeqEnd: 3, Provider: "claude", Item: json.RawMessage(`{"type":"assistant_message","text":"FINAL VERDICT"}`)},
+			},
+		}, time.Now())
+	}()
+	sawFinal := false
+	sawDone := false
 	for {
 		m, err := readSSE(r2)
 		if err == io.EOF {
@@ -541,70 +687,42 @@ func TestWorkflowAPIStreamRealtimeResumeAndRevocation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		gotEvents = append(gotEvents, m)
+		if m.Event == "transcript" && strings.Contains(m.Data, "FINAL VERDICT") {
+			sawFinal = true
+		}
+		if m.Event == "done" {
+			sawDone = true
+		}
 	}
-	// Expect: run snapshot, next event (id == nextID), done event, SSE done.
-	if len(gotEvents) != 4 || gotEvents[0].Event != "run" || gotEvents[1].ID != nextID || gotEvents[2].Event != "run_event" || gotEvents[3].Event != "done" {
-		t.Fatalf("resumed SSE sequence = %+v", gotEvents)
-	}
-}
-
-func TestWorkflowAPIDisableTriggerDuringStreamAndCredentialsRejected(t *testing.T) {
-	d := dbtest.New(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	h := newServer(t, d, d.Owner, "test", func(c *Config) { c.Context = ctx })
-	reg := fleet.New(d.Owner)
-
-	_ = keyOf(t, h, "host-1")
-	if err := reg.Record(ctx, wfReport(), time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	wfID := createWorkflow(t, h, apiWorkflowDef("host-1"))
-	_, key := issueAPIKey(t, h, wfID, "stream-disable-test")
-
-	// Credential in input is rejected with 400 without leaking the secret.
-	badRec := callAPI(t, h, http.MethodPost, "/api/workflow-api/runs", key, `{"input":"Use `+key+` to auth"}`)
-	if badRec.Code != http.StatusBadRequest || strings.Contains(badRec.Body.String(), key) {
-		t.Fatalf("credential in input = %d %s", badRec.Code, badRec.Body)
+	if !sawFinal || !sawDone {
+		t.Fatalf("M2c: sawFinal=%v sawDone=%v, want both true", sawFinal, sawDone)
 	}
 
-	// Start a run, open SSE stream, then disable API trigger -> stream must close with error.
-	rec := callAPI(t, h, http.MethodPost, "/api/workflow-api/runs", key, `{"input":"Check vendor NDA"}`)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("POST run = %d %s", rec.Code, rec.Body)
-	}
-	var runA apiRunSummary
-	_ = json.Unmarshal(rec.Body.Bytes(), &runA)
-
-	ts := httptest.NewServer(anon(h))
-	defer ts.Close()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/workflow-api/runs/"+runA.ID+"/stream?include_transcripts=false", nil)
-	req.Header.Set("Authorization", "Bearer "+key)
-	resp, err := http.DefaultClient.Do(req)
+	// Revocation closes an open stream immediately with event: error!
+	rec3 := callAPI(t, h, http.MethodPost, "/api/workflow-api/runs", key, `{"input":"Revoke test run"}`)
+	var run3 apiRunSummary
+	_ = json.Unmarshal(rec3.Body.Bytes(), &run3)
+	req3, _ := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/workflow-api/runs/"+run3.ID+"/stream?include_transcripts=false", nil)
+	req3.Header.Set("Authorization", "Bearer "+key)
+	resp3, err := http.DefaultClient.Do(req3)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
-	reader := bufio.NewReader(resp.Body)
-	// Drain initial run snapshot + started + project events.
-	for range 3 {
-		if _, err := readSSE(reader); err != nil {
+	defer resp3.Body.Close()
+	r3 := bufio.NewReader(resp3.Body)
+	for range 3 { // run, started, project
+		if _, err := readSSE(r3); err != nil {
 			t.Fatal(err)
 		}
 	}
-
-	// Switch workflow trigger to manual while stream is open.
-	manualDef := apiWorkflowDef("host-1")
-	manualDef.Trigger = workflow.TriggerManual
-	if r := call(t, h, http.MethodPut, "/api/workflows/"+wfID, wfBody(t, "Agreement review", manualDef), sameOriginFetch); r.Code != http.StatusOK {
-		t.Fatalf("PUT manual = %d %s", r.Code, r.Body)
+	if rec := call(t, h, http.MethodDelete, "/api/workflows/"+wfID+"/api-keys/"+keyID, "", sameOriginFetch); rec.Code != http.StatusNoContent {
+		t.Fatalf("revoke = %d", rec.Code)
 	}
-	errMsg, err := readSSE(reader)
-	if err != nil || errMsg.Event != "error" || !strings.Contains(errMsg.Data, "disabled") {
-		t.Fatalf("disable trigger SSE = (%+v, %v), want error mentioning disabled", errMsg, err)
+	errMsg, err := readSSE(r3)
+	if err != nil || errMsg.Event != "error" || !strings.Contains(errMsg.Data, "revoked") {
+		t.Fatalf("revocation SSE = (%+v, %v)", errMsg, err)
 	}
-	if _, err := readSSE(reader); err != io.EOF {
-		t.Fatalf("expected EOF after trigger disabled, got %v", err)
+	if _, err := readSSE(r3); err != io.EOF {
+		t.Fatalf("expected EOF after revocation, got %v", err)
 	}
 }

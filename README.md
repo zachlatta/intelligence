@@ -104,11 +104,12 @@ The hierarchy is hosts > workspaces > agents:
 - `accounts` (username, argon2id password hash, its role), `sessions` (signed-in browsers; a hash
   of each cookie's token), `host_keys` (each host's account and a hash of its key) and
   `host_enrollments` (hosts waiting for their code to be entered). An account reads only its own.
-- `workflows`, `workflow_versions` (every saved definition), `workflow_api_keys` (scoped API keys
+- `workflows`, `workflow_versions` (every saved definition, including `apiTrigger`), `workflow_api_keys` (scoped API keys
   for API-triggered workflows: name, prefix, SHA-256 hash, creation, last-used and revocation
   times; account-isolated by RLS), `workflow_runs` (including `api_key_id`, `idempotency_key` and
   `idempotency_hash` for API-triggered runs) and
-  `workflow_run_events` (what happened in each run, in order), with the views
+  `workflow_run_events` (what happened in each run, in order, including `api_key_id` when an API key
+  acted), with the views
   `workflow_run_step_visits` (each time a run was on a step, from its moves) and
   `workflow_run_step_times` (each step's visits and time spent, the current one to now): Workflows, below.
 - `gmail_connections` (the account's Gmail mailbox: its address, the account holder's own
@@ -233,7 +234,9 @@ host as seen. A newer stream for the same host takes it over and ends the older 
 server instance holds it.
 
 Server instances learn of each other's changes through Postgres `NOTIFY` on the `fleet` channel
-(`fleet.Changes`): a queued command, a command's update and a stream taking a host over.
+(`fleet.Changes`): a queued command, a command's update, a stream taking a host over, a workflow
+change (`wf:<id>`), a workflow run event or newly recorded agent (`wfrun:<id>`), a revoked workflow
+API key (`wfkey:<id>`) and a transcript update (`transcript:<host>:<agent>`).
 Workflow start retries additionally reconcile finished startup commands every five seconds.
 The stall watchdog checks idle orchestrators each minute through the same command queue.
 
@@ -1975,26 +1978,33 @@ origin (another site's request is refused with 403), and those with a body must 
 - `DELETE /api/workflows/{id}/api-keys/{keyId}`: revokes key `{keyId}` for workflow `{id}` (204, or
   404 if absent) and immediately disconnects any active SSE streams using it. Requires a same-origin
   browser session.
-- Scoped workflow API-key routes (all require `Authorization: Bearer iwfk_...` for a workflow whose
-  current saved trigger is `api`; browser cookies, host keys and MCP tokens are not accepted, and
-  workflow API keys are never accepted on `/api/sql` or any other route):
-  - `GET /api/workflow-api/workflow`: metadata and steps of the key's workflow.
+- Scoped workflow API-key routes (all require `Authorization: Bearer iwfk_...`; browser cookies,
+  host keys and MCP tokens are not accepted, and workflow API keys are never accepted on `/api/sql`
+  or any other route. All errors are JSON; text fields are capped at 1 MiB and bodies at 16 MiB):
+  - `GET /api/workflow-api/workflow`: metadata (`trigger`, `apiTrigger`, `steps`, `priority`) of the key's workflow.
   - `POST /api/workflow-api/runs` with `{"input", "attachments"?: [{"name", "data"}], "idempotencyKey"?}`
-    and optional `Idempotency-Key` header: triggers a run through the normal queue and startup path
-    (201, or 200 with `Idempotency-Replayed: true` on an exact idempotent retry, 409 on a mismatched
-    idempotency payload).
+    and optional `Idempotency-Key` header: requires `apiTrigger: true` (else 403); triggers a run
+    through the normal queue and startup path (201, or 200 with `Idempotency-Replayed: true` on an
+    exact idempotent retry, 409 on a mismatched idempotency payload, 413 if `input` exceeds 1 MiB
+    or body exceeds 16 MiB).
   - `GET /api/workflow-api/runs?status=&limit=&cursor=`: lists runs of this workflow, newest first.
-  - `GET /api/workflow-api/runs/{id}`: one run's state, steps, events and agents (404 outside this workflow).
+  - `GET /api/workflow-api/runs/{id}`: one run's state, steps, events (including `apiKeyId` / `apiKeyName`) and agents (404 outside this workflow).
   - `GET /api/workflow-api/runs/{id}/transcripts`: the run's agents and their transcript metadata.
   - `GET /api/workflow-api/runs/{id}/transcripts/{agentId}?from_seq=&after_seq=&limit=`: one agent's
-    synced transcript entries (404 if the agent does not belong to this run).
+    synced transcript entries (404 if the agent does not belong to this run). Poll with `from_seq`
+    (inclusive) rather than `after_seq` to observe in-place growth of the newest streaming entry.
   - `GET /api/workflow-api/runs/{id}/stream` (optional `Last-Event-ID` header, `?after_event_id=`,
     `?include_transcripts=true|false`): resumable Server-Sent Events stream of `run`, `run_event`,
-    `transcript`, `done` and `error` events; closes promptly if the key is revoked or the API trigger
-    is disabled.
-  - `POST /api/workflow-api/runs/{id}/cancel`, `/retry`, `/resume`, `/start` (body `{}`), and
-    `/reply`, `/input` (body `{"text", "attachments"?}`): control a run of this workflow using the
-    same engine methods as the web UI.
+    `transcript`, `done` and `error` events. Each `run_event` and `transcript` event carries a
+    composite `id` (`v1:<eventID>;<agentID>=<epoch>:<seqStart>:<seqEnd>:<textLen>,...`) so
+    reconnecting with `Last-Event-ID` skips already-delivered events and transcript entries. Keeps
+    open for a short grace window after completion to deliver final synced transcripts before `done`,
+    and closes immediately with `event: error` if the key is revoked or the workflow is deleted.
+  - `POST /api/workflow-api/runs/{id}/cancel`, `/retry` (requires `apiTrigger: true`, else 403),
+    `/resume`, `/start` (body `{}`), and `/reply`, `/input` (body `{"text", "attachments"?}`, text
+    capped at 1 MiB): control a run of this workflow using the same engine methods as the web UI.
+    Every API-key action records `api_key_id` on its event and names the key in messages to the
+    orchestrator (including an explicit non-Zach notice at sign-off steps).
 - `GET /workflows/{id}`: the editor: the host and trigger, how the project is found, the orchestrator, and
   the steps (add, reorder, edit, remove), or the definition as JSON. Saving makes a new version.
   A project that is always the same repository is picked from those the workflow's host reported
@@ -2115,22 +2125,33 @@ for nested entry points; do not set it yourself.
 
 ### API-triggered workflows
 
-Set a workflow's trigger to **An API request arrives** (`"trigger": "api"`) in its editor (or via
-`POST /api/workflows` / `PUT /api/workflows/{id}`) to allow external repositories and services to
-start, monitor and control runs of that workflow with a scoped API key.
+Check **Allow triggering via API** (`"apiTrigger": true`) in a workflow editor's Trigger panel (or
+via `POST /api/workflows` / `PUT /api/workflows/{id}`) to allow external repositories and services to
+start, monitor and control runs of that workflow with a scoped API key. This setting is independent
+of the primary trigger (`task`, `manual`, `email` or `voice_memo`), so task defaults, email filters
+and voice-memo filters all keep working alongside it.
 
 - **Scoped keys.** Issue keys in the workflow editor's Trigger panel (`POST /api/workflows/{id}/api-keys`,
   requiring a normal browser session) and revoke them there (`DELETE /api/workflows/{id}/api-keys/{keyId}`).
   Each key (`iwfk_...`) has 256 bits of random entropy, is shown once at creation, and is stored only
-  as its SHA-256 hash in `workflow_api_keys` (account-isolated by RLS). Switching the workflow's trigger
-  away from `api` disables API access (403) without losing the key audit trail; revoking a key returns
-  401 and immediately closes any active SSE stream using it.
+  as its SHA-256 hash in `workflow_api_keys` (account-isolated by RLS). Unchecking **Allow triggering
+  via API** stops new starts and retries (`403`) while letting existing runs be monitored, streamed
+  and controlled until their key is revoked. Revoking a key (`401`) or deleting the workflow (`403`)
+  cuts off all access and immediately closes any active SSE stream.
+- **Attribution & sign-off integrity.** Every run started by an API key records `workflow_runs.api_key_id`,
+  and every control action (`reply`, `input`, `cancel`, `resume`, `start`, `retry`) records
+  `workflow_run_events.api_key_id`. Messages delivered to the orchestrator explicitly name the API key
+  (never "Zach replied"), and replies at a sign-off step state that the reply came from an API key and
+  is not Zach's personal approval unless the workflow instructions authorize it.
 - **Why scoped read routes exist alongside `/api/sql`.** Intelligence's general read contract is
   account-scoped read-only SQL (`/api/sql`). A workflow API key is strictly narrower than an account:
   it may only touch runs and transcripts of its single workflow, never other workflows, hosts, or
   account tables. All state still lives in `public` tables (`workflow_api_keys`, `workflow_runs`,
   `workflow_run_events`, `transcripts`, `transcript_entries`) and every `/api/workflow-api/*` read
   queries through the account's read-only Postgres role (RLS) plus an explicit `workflow_id` filter.
+- **Size limits.** Text fields (`input` and `text`) are capped at 1 MiB (`413`), request bodies with
+  attachments at 16 MiB (`413`), and queued host commands are checked against `hostclient.MaxFrame`
+  (16 MiB) before enqueueing.
 - **Network reachability.** Intelligence runs in Coolify on the tailnet (no separate browser login
   proxy sits in front of `/api/workflow-api/*`, matching `/mcp`), so any host or CI runner on the
   tailnet can call it directly with `Authorization: Bearer $WORKFLOW_API_KEY`. Callers outside the
@@ -2150,7 +2171,7 @@ RUN_ID=$(curl -fsS -X POST "$INTELLIGENCE_URL/api/workflow-api/runs" \
   -d '{"input":"Check Acme MSA for unlimited liability and auto-renewal clauses."}' \
   | jq -r '.id')
 
-# Stream live run events and agent transcripts (resumable with Last-Event-ID)
+# Stream live run events and agent transcripts (pass the last id as Last-Event-ID to resume)
 curl -N "$INTELLIGENCE_URL/api/workflow-api/runs/$RUN_ID/stream" \
   -H "Authorization: Bearer $WORKFLOW_API_KEY"
 
@@ -2158,19 +2179,19 @@ curl -N "$INTELLIGENCE_URL/api/workflow-api/runs/$RUN_ID/stream" \
 curl -fsS "$INTELLIGENCE_URL/api/workflow-api/runs?status=active&limit=20" \
   -H "Authorization: Bearer $WORKFLOW_API_KEY"
 
-# Answer an open ask, send additional input, cancel or retry
+# When the run status is "waiting" on an ask, answer it with /reply (returns 409 if not waiting):
 curl -fsS -X POST "$INTELLIGENCE_URL/api/workflow-api/runs/$RUN_ID/reply" \
   -H "Authorization: Bearer $WORKFLOW_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"text":"Proceed with the 2x liability cap exception."}'
 ```
 
-#### Small integration example (Node / TypeScript)
+#### Small integration example (Node.js)
 
-```ts
-const base = process.env.INTELLIGENCE_URL!;
+```js
+const base = process.env.INTELLIGENCE_URL;
 const headers = {
-  Authorization: `Bearer ${process.env.WORKFLOW_API_KEY!}`,
+  Authorization: `Bearer ${process.env.WORKFLOW_API_KEY}`,
   "Content-Type": "application/json",
 };
 
@@ -2181,7 +2202,7 @@ const res = await fetch(`${base}/api/workflow-api/runs`, {
 });
 const run = await res.json();
 
-// Monitor status and transcripts until finished
+// Inspect state and poll an agent's transcript (use from_seq to observe in-place entry growth)
 const detail = await fetch(`${base}/api/workflow-api/runs/${run.id}`, { headers }).then((r) => r.json());
 const transcripts = await fetch(`${base}/api/workflow-api/runs/${run.id}/transcripts`, { headers }).then((r) => r.json());
 ```

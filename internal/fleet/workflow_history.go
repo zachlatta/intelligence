@@ -12,7 +12,7 @@ import (
 // setting finished_at. runID limits a terminal move to its own run; reports pass "".
 // Shared run locks serialize capture with terminal moves, so membership freezes at completion.
 func CaptureWorkflowAgents(ctx context.Context, tx pgx.Tx, host, runID string, at time.Time) error {
-	_, err := tx.Exec(ctx, `WITH RECURSIVE candidates AS MATERIALIZED (
+	rows, err := tx.Query(ctx, `WITH RECURSIVE candidates AS MATERIALIZED (
   SELECT r.id, r.host, r.workspace_id, r.orchestrator_id, r.project_agent_id
   FROM workflow_runs r
   WHERE r.host = $1 AND r.finished_at IS NULL AND ($3 = '' OR r.id::text = $3)
@@ -39,6 +39,33 @@ func CaptureWorkflowAgents(ctx context.Context, tx pgx.Tx, host, runID string, a
  FROM tree t JOIN agents a ON a.host=t.host AND a.id=t.agent_id
  JOIN workspaces w ON w.host=a.host AND w.id=a.workspace_id
  ON CONFLICT (run_id,host,agent_id) DO UPDATE SET
-   agent=EXCLUDED.agent,workspace=EXCLUDED.workspace,captured_at=EXCLUDED.captured_at`, host, at, runID)
-	return err
+   agent=EXCLUDED.agent,workspace=EXCLUDED.workspace,captured_at=EXCLUDED.captured_at
+ RETURNING run_id::text, (xmax = 0)`, host, at, runID)
+	if err != nil {
+		return err
+	}
+	notified := map[string]bool{}
+	var notifyRuns []string
+	for rows.Next() {
+		var rid string
+		var inserted bool
+		if err := rows.Scan(&rid, &inserted); err != nil {
+			rows.Close()
+			return err
+		}
+		if inserted && !notified[rid] {
+			notified[rid] = true
+			notifyRuns = append(notifyRuns, rid)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, rid := range notifyRuns {
+		if _, err := tx.Exec(ctx, notifySQL, WorkflowRunTopic(rid)); err != nil {
+			return err
+		}
+	}
+	return nil
 }

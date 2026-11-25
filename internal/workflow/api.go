@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -15,6 +14,35 @@ import (
 
 	"github.com/zachlatta/intelligence/internal/attachment"
 )
+
+// APIActor identifies the scoped workflow API key performing an action.
+type APIActor struct {
+	KeyID   string
+	KeyName string
+}
+
+type apiActorKey struct{}
+
+// WithAPIActor attaches an authenticated workflow API key to ctx so engine
+// events, messages and run attributions record the acting key.
+func WithAPIActor(ctx context.Context, actor APIActor) context.Context {
+	if actor.KeyID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, apiActorKey{}, actor)
+}
+
+func apiActorFrom(ctx context.Context) APIActor {
+	actor, _ := ctx.Value(apiActorKey{}).(APIActor)
+	return actor
+}
+
+func nullUUID(id string) any {
+	if id == "" {
+		return nil
+	}
+	return id
+}
 
 // APIAttachment is an inline file attached to an API-triggered run, reply or input.
 type APIAttachment struct {
@@ -34,6 +62,10 @@ type APIRunResult struct {
 	RunID    string
 	Replayed bool
 }
+
+// MaxAPITextBytes caps text fields (input, reply/input text) at 1 MiB so no
+// queued host command can exceed hostclient.MaxFrame.
+const MaxAPITextBytes = 1 << 20
 
 const maxAPIAttachments = 10
 
@@ -98,12 +130,18 @@ func AppendAttachments(ctx context.Context, tx pgx.Tx, account int64, text strin
 }
 
 // StartAPIRun triggers a run of workflowID using an authenticated API key. It enforces
-// that the workflow's trigger is "api", stores optional attachments in the same transaction,
-// records api_key_id, and supports idempotent retries via idempotencyKey.
+// that the workflow's apiTrigger setting is enabled, stores optional attachments in the
+// same transaction, records api_key_id, and supports idempotent retries via idempotencyKey.
 func (e *Engine) StartAPIRun(ctx context.Context, account int64, workflowID, keyID string, req APIRunRequest) (APIRunResult, error) {
 	idemKey, err := cleanIdempotencyKey(req.IdempotencyKey)
 	if err != nil {
 		return APIRunResult{}, err
+	}
+	if len(req.Input) > MaxAPITextBytes {
+		return APIRunResult{}, bad("input exceeds 1 MiB limit")
+	}
+	if strings.ContainsRune(req.Input, 0) {
+		return APIRunResult{}, bad("input cannot contain a NUL character")
 	}
 	if strings.TrimSpace(req.Input) == "" {
 		return APIRunResult{}, bad("a run needs input: what should be done")
@@ -115,19 +153,18 @@ func (e *Engine) StartAPIRun(ctx context.Context, account int64, workflowID, key
 	ctx, flushPushes := e.CollectPushes(ctx)
 	var out APIRunResult
 	err = pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
-		var trigger string
-		var def []byte
-		err := tx.QueryRow(ctx, `SELECT coalesce(v.definition->>'trigger', ''), v.definition
+		var apiEnabled bool
+		err := tx.QueryRow(ctx, `SELECT coalesce((v.definition->>'apiTrigger')::boolean, false)
 			FROM workflows w JOIN workflow_versions v ON v.workflow_id = w.id AND v.version = w.version
 			WHERE w.id = $1 AND w.account_id = $2 AND w.deleted_at IS NULL FOR SHARE OF w`,
-			workflowID, account).Scan(&trigger, &def)
+			workflowID, account).Scan(&apiEnabled)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
 		if err != nil {
 			return err
 		}
-		if trigger != TriggerAPI {
+		if !apiEnabled {
 			return conflict("API trigger is disabled for this workflow")
 		}
 		if idemKey != "" {
@@ -163,7 +200,6 @@ func (e *Engine) StartAPIRun(ctx context.Context, account int64, workflowID, key
 	if err != nil {
 		var pg *pgconn.PgError
 		if idemKey != "" && errors.As(err, &pg) && pg.Code == "23505" && pg.ConstraintName == "workflow_runs_api_idempotency" {
-			// Concurrent duplicate POST won the unique index race: look up the committed run.
 			var existingID, existingHash string
 			qerr := e.p.QueryRow(ctx, `SELECT id::text, idempotency_hash FROM workflow_runs
 				WHERE workflow_id = $1 AND idempotency_key = $2`, workflowID, idemKey).Scan(&existingID, &existingHash)
@@ -184,19 +220,50 @@ func (e *Engine) StartAPIRun(ctx context.Context, account int64, workflowID, key
 	return out, nil
 }
 
-// StoreAttachments stores inline attachments in a transaction and returns text with references appended.
-func (e *Engine) StoreAttachments(ctx context.Context, account int64, text string, atts []APIAttachment) (string, error) {
-	if len(atts) == 0 {
-		return text, nil
+// ReplyWithAttachments stores optional inline attachments and sends a reply in one transaction,
+// so a refused reply (e.g. 409) leaves no orphaned attachments.
+func (e *Engine) ReplyWithAttachments(ctx context.Context, account int64, runID, text string, atts []APIAttachment) error {
+	if !uuidRe.MatchString(runID) {
+		return ErrNotFound
 	}
-	var out string
-	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
-		var err error
-		out, err = AppendAttachments(ctx, tx, account, text, atts)
-		return err
+	if len(text) > MaxAPITextBytes {
+		return bad("text exceeds 1 MiB limit")
+	}
+	if strings.ContainsRune(text, 0) {
+		return bad("a reply cannot contain a NUL character")
+	}
+	if strings.TrimSpace(text) == "" {
+		return bad("a reply needs text")
+	}
+	return pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+		fullText, err := AppendAttachments(ctx, tx, account, text, atts)
+		if err != nil {
+			return err
+		}
+		return e.ReplyTx(ctx, tx, account, runID, fullText)
 	})
-	return out, err
 }
 
-// Ensure json import stays used if needed later.
-var _ = json.Valid
+// AddInputWithAttachments stores optional inline attachments and sends follow-up input in one
+// transaction, so a refused request (e.g. 409) leaves no orphaned attachments.
+func (e *Engine) AddInputWithAttachments(ctx context.Context, account int64, runID, text string, atts []APIAttachment) error {
+	if !uuidRe.MatchString(runID) {
+		return ErrNotFound
+	}
+	if len(text) > MaxAPITextBytes {
+		return bad("text exceeds 1 MiB limit")
+	}
+	if strings.ContainsRune(text, 0) {
+		return bad("additional input cannot contain a NUL character")
+	}
+	if strings.TrimSpace(text) == "" {
+		return bad("additional input needs text")
+	}
+	return e.forAccount(ctx, account, runID, func(tx pgx.Tx, r run) error {
+		fullText, err := AppendAttachments(ctx, tx, account, text, atts)
+		if err != nil {
+			return err
+		}
+		return e.addInputLocked(ctx, tx, account, r, fullText)
+	})
+}

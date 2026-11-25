@@ -94,7 +94,8 @@ func (e *Engine) retryRunLocked(ctx context.Context, tx pgx.Tx, account int64, f
 	if err != nil {
 		return "", err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET retried_from_run_id = $2 WHERE id = $1`, newID, failed.ID); err != nil {
+	actor := apiActorFrom(ctx)
+	if _, err := tx.Exec(ctx, `UPDATE workflow_runs SET retried_from_run_id = $2, api_key_id = coalesce(api_key_id, $3) WHERE id = $1`, newID, failed.ID, nullUUID(actor.KeyID)); err != nil {
 		return "", err
 	}
 	var newVersion int

@@ -38,11 +38,12 @@ type WorkflowAPIKey struct {
 
 // WorkflowAPIKeyAuth is the authenticated identity of a scoped workflow API key.
 type WorkflowAPIKeyAuth struct {
-	Account      Account
-	KeyID        string
-	KeyName      string
-	WorkflowID   string
-	WorkflowName string
+	Account           Account
+	KeyID             string
+	KeyName           string
+	WorkflowID        string
+	WorkflowName      string
+	APITriggerEnabled bool
 }
 
 func cleanKeyName(name string) (string, error) {
@@ -119,24 +120,27 @@ func (s *Store) RevokeWorkflowAPIKey(ctx context.Context, a Account, workflowID,
 }
 
 // AuthenticateWorkflowAPIKey validates a scoped workflow API key and records its use.
-// It fails with ErrNoSession (unknown/missing), ErrKeyRevoked, ErrWorkflowDeleted, or ErrAPITriggerDisabled.
+// It fails with ErrNoSession (unknown/missing), ErrKeyRevoked, or ErrWorkflowDeleted.
+// APITriggerEnabled reports whether new runs/retries are currently allowed; reads and
+// controls on existing runs remain allowed while the key is active.
 func (s *Store) AuthenticateWorkflowAPIKey(ctx context.Context, key string) (WorkflowAPIKeyAuth, error) {
 	if key == "" || !strings.HasPrefix(key, "iwfk_") {
 		return WorkflowAPIKeyAuth{}, ErrNoSession
 	}
 	wantHash := sha(key)
 	var auth WorkflowAPIKeyAuth
-	var storedHash, trigger string
+	var storedHash string
 	var revoked, deleted bool
 	err := s.p.QueryRow(ctx, `SELECT a.id, a.username, a.role_name, k.id::text, k.name, k.key_hash,
-		k.revoked_at IS NOT NULL, w.id::text, w.name, w.deleted_at IS NOT NULL, coalesce(v.definition->>'trigger', '')
+		k.revoked_at IS NOT NULL, w.id::text, w.name, w.deleted_at IS NOT NULL,
+		coalesce((v.definition->>'apiTrigger')::boolean, false)
 		FROM workflow_api_keys k
 		JOIN accounts a ON a.id = k.account_id
 		JOIN workflows w ON w.id = k.workflow_id
 		JOIN workflow_versions v ON v.workflow_id = w.id AND v.version = w.version
 		WHERE k.key_hash = $1`, wantHash).
 		Scan(&auth.Account.ID, &auth.Account.Username, &auth.Account.Role, &auth.KeyID, &auth.KeyName, &storedHash,
-			&revoked, &auth.WorkflowID, &auth.WorkflowName, &deleted, &trigger)
+			&revoked, &auth.WorkflowID, &auth.WorkflowName, &deleted, &auth.APITriggerEnabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return WorkflowAPIKeyAuth{}, ErrNoSession
 	}
@@ -152,9 +156,6 @@ func (s *Store) AuthenticateWorkflowAPIKey(ctx context.Context, key string) (Wor
 	if deleted {
 		return WorkflowAPIKeyAuth{}, ErrWorkflowDeleted
 	}
-	if trigger != "api" {
-		return WorkflowAPIKeyAuth{}, ErrAPITriggerDisabled
-	}
 	if _, err := s.p.Exec(ctx, `UPDATE workflow_api_keys SET last_used_at = $2 WHERE id = $1`, auth.KeyID, s.Now()); err != nil {
 		return WorkflowAPIKeyAuth{}, err
 	}
@@ -162,18 +163,17 @@ func (s *Store) AuthenticateWorkflowAPIKey(ctx context.Context, key string) (Wor
 }
 
 // CheckWorkflowAPIKeyActive checks whether an already-authenticated key is still allowed
-// to stream (not revoked, workflow not deleted, and API trigger still enabled).
+// to stream (not revoked and workflow not deleted). Disabling apiTrigger blocks new runs
+// and retries without cutting off streams of existing runs.
 func (s *Store) CheckWorkflowAPIKeyActive(ctx context.Context, keyID string) error {
 	if !workflowKeyUUIDRe.MatchString(keyID) {
 		return ErrNoSession
 	}
 	var revoked, deleted bool
-	var trigger string
-	err := s.p.QueryRow(ctx, `SELECT k.revoked_at IS NOT NULL, w.deleted_at IS NOT NULL, coalesce(v.definition->>'trigger', '')
+	err := s.p.QueryRow(ctx, `SELECT k.revoked_at IS NOT NULL, w.deleted_at IS NOT NULL
 		FROM workflow_api_keys k
 		JOIN workflows w ON w.id = k.workflow_id
-		JOIN workflow_versions v ON v.workflow_id = w.id AND v.version = w.version
-		WHERE k.id = $1`, keyID).Scan(&revoked, &deleted, &trigger)
+		WHERE k.id = $1`, keyID).Scan(&revoked, &deleted)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNoSession
 	}
@@ -185,9 +185,6 @@ func (s *Store) CheckWorkflowAPIKeyActive(ctx context.Context, keyID string) err
 	}
 	if deleted {
 		return ErrWorkflowDeleted
-	}
-	if trigger != "api" {
-		return ErrAPITriggerDisabled
 	}
 	return nil
 }

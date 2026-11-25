@@ -36,7 +36,7 @@ func TestWorkflowAPIKeysLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := d.Owner.Exec(ctx, `INSERT INTO workflow_versions (workflow_id, version, account_id, definition, created_at)
-		VALUES ($1, 1, $2, '{"trigger":"api","host":"box-1","project":{"mode":"fixed","directory":"/w/app"},"orchestrator":{"provider":"claude","instructions":"run"},"steps":[{"id":"s1","kind":"step","title":"S1","instructions":"do"}]}'::jsonb, $3)`, wfID, alice.ID, now); err != nil {
+		VALUES ($1, 1, $2, '{"trigger":"manual","apiTrigger":true,"host":"box-1","project":{"mode":"fixed","directory":"/w/app"},"orchestrator":{"provider":"claude","instructions":"run"},"steps":[{"id":"s1","kind":"step","title":"S1","instructions":"do"}]}'::jsonb, $3)`, wfID, alice.ID, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -106,15 +106,20 @@ func TestWorkflowAPIKeysLifecycle(t *testing.T) {
 		}
 	}
 
-	// Disabling API trigger makes auth return ErrAPITriggerDisabled.
-	if _, err := d.Owner.Exec(ctx, `UPDATE workflow_versions SET definition = jsonb_set(definition, '{trigger}', '"manual"') WHERE workflow_id = $1`, wfID); err != nil {
+	// Disabling apiTrigger still authenticates the key for existing-run reads/controls,
+	// with APITriggerEnabled == false.
+	if _, err := d.Owner.Exec(ctx, `UPDATE workflow_versions SET definition = jsonb_set(definition, '{apiTrigger}', 'false') WHERE workflow_id = $1`, wfID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AuthenticateWorkflowAPIKey(ctx, k.Key); !errors.Is(err, accounts.ErrAPITriggerDisabled) {
-		t.Fatalf("disabled trigger auth = %v, want ErrAPITriggerDisabled", err)
+	authOff, err := store.AuthenticateWorkflowAPIKey(ctx, k.Key)
+	if err != nil {
+		t.Fatalf("disabled apiTrigger auth failed: %v", err)
 	}
-	// Re-enable trigger.
-	if _, err := d.Owner.Exec(ctx, `UPDATE workflow_versions SET definition = jsonb_set(definition, '{trigger}', '"api"') WHERE workflow_id = $1`, wfID); err != nil {
+	if authOff.APITriggerEnabled {
+		t.Fatal("expected APITriggerEnabled=false when apiTrigger is off")
+	}
+	// Re-enable apiTrigger.
+	if _, err := d.Owner.Exec(ctx, `UPDATE workflow_versions SET definition = jsonb_set(definition, '{apiTrigger}', 'true') WHERE workflow_id = $1`, wfID); err != nil {
 		t.Fatal(err)
 	}
 

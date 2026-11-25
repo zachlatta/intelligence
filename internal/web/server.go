@@ -68,15 +68,16 @@ type Config struct {
 }
 
 type app struct {
-	cfg          Config
-	routes       *http.ServeMux
-	store        *accounts.Store
-	reg          *fleet.Registry // as the owner: for the host streams and for writes
-	changes      *fleet.Changes
-	wf           *workflow.Engine // as the owner: workflows and their runs
-	mail         *email.Service   // reads connected mailboxes; nil when email triggers are off
-	push         *webpush.Store   // nil when VAPID is unset
-	sseKeepalive time.Duration    // override for tests; default defaultSSEInterval
+	cfg              Config
+	routes           *http.ServeMux
+	store            *accounts.Store
+	reg              *fleet.Registry // as the owner: for the host streams and for writes
+	changes          *fleet.Changes
+	wf               *workflow.Engine // as the owner: workflows and their runs
+	mail             *email.Service   // reads connected mailboxes; nil when email triggers are off
+	push             *webpush.Store   // nil when VAPID is unset
+	sseKeepalive     time.Duration    // override for tests; default defaultSSEInterval
+	sseTerminalGrace time.Duration    // override for tests; default defaultSSETerminalGrace
 }
 
 //go:embed index.html

@@ -220,7 +220,11 @@ func (e *Engine) Resume(ctx context.Context, account int64, id string) error {
 		if !fresh || !idle || blocked || pending {
 			return conflict("Resume needs a fresh online host, an idle orchestrator, no active or permission-blocked worker, no pending command and no agent waiting for a working login. Inspect the existing agents first.")
 		}
-		if err := e.event(ctx, tx, r, "resume", ptr(r.Step), nil, "Resumed the existing orchestrator."); err != nil {
+		resumeText := "Resumed the existing orchestrator."
+		if actor := apiActorFrom(ctx); actor.KeyID != "" {
+			resumeText = fmt.Sprintf("Resumed by API key %q.", actor.KeyName)
+		}
+		if err := e.event(ctx, tx, r, "resume", ptr(r.Step), nil, resumeText); err != nil {
 			return err
 		}
 		var event int64

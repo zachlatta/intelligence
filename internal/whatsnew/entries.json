@@ -3,9 +3,9 @@
     "id": "workflow-api-triggers",
     "released": "2026-11-24",
     "title": "Trigger, stream and control workflows with scoped API keys",
-    "summary": "Workflows can now use an API trigger so external repositories and services can start runs idempotently, list and inspect runs, read agent transcripts, stream live events and transcripts over SSE, and reply, send input, cancel or retry runs. Open any workflow's Trigger panel, choose An API request arrives, save, and issue or revoke scoped API keys there.",
-    "media": "workflow-api-triggers.png",
-    "mediaAlt": "The workflow editor's Trigger panel for Agreement review in a local demo showing the API trigger selected and the scoped API keys table with active and revoked keys."
+    "summary": "Any workflow can now enable Allow triggering via API beside its existing trigger so external repositories and services can start runs idempotently, list and inspect runs, read agent transcripts, stream live events and transcripts over resumable SSE, and reply, send input, cancel or retry runs. Open a workflow's Trigger panel, check Allow triggering via API, save, and issue or revoke scoped keys there.",
+    "media": "workflow-api-triggers-v2.png",
+    "mediaAlt": "The workflow editor's Trigger panel for Agreement review in a local demo showing Allow triggering via API checked beside the manual trigger and the scoped API keys list with active and revoked keys."
   },
   {
     "id": "android-pwa-notifications",

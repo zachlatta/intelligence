@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -22,8 +23,9 @@ import (
 )
 
 const (
-	maxWorkflowAPIBody = 16 << 20 // allows inline attachments (up to 4 MiB each, base64)
-	defaultSSEInterval = 15 * time.Second
+	maxWorkflowAPIBody      = 16 << 20 // allows inline attachments (up to 4 MiB each, base64); text fields capped at 1 MiB
+	defaultSSEInterval      = 15 * time.Second
+	defaultSSETerminalGrace = 3 * time.Second
 )
 
 // --- Browser-session key management (never reachable with an API key) ---
@@ -110,6 +112,10 @@ type apiCaller struct {
 	reg  *fleet.Registry
 }
 
+func (c apiCaller) actorCtx(ctx context.Context) context.Context {
+	return workflow.WithAPIActor(ctx, workflow.APIActor{KeyID: c.auth.KeyID, KeyName: c.auth.KeyName})
+}
+
 func apiError(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -158,8 +164,6 @@ func (a *app) workflowAPI(h func(apiCaller) http.HandlerFunc) http.HandlerFunc {
 				apiError(w, http.StatusUnauthorized, "API key has been revoked")
 			case errors.Is(err, accounts.ErrWorkflowDeleted):
 				apiError(w, http.StatusForbidden, "workflow has been deleted")
-			case errors.Is(err, accounts.ErrAPITriggerDisabled):
-				apiError(w, http.StatusForbidden, "API trigger is disabled for this workflow")
 			default:
 				log.Printf("workflow api auth: %v", err)
 				apiError(w, http.StatusInternalServerError, "authentication unavailable")
@@ -194,7 +198,22 @@ func decodeAPIBody(w http.ResponseWriter, r *http.Request, limit int64, v any) b
 		if errors.Is(err, io.EOF) {
 			return true
 		}
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			apiError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return false
+		}
 		apiError(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return false
+	}
+	var trailing any
+	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			apiError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return false
+		}
+		apiError(w, http.StatusBadRequest, "request body must contain a single JSON object")
 		return false
 	}
 	return true
@@ -249,12 +268,14 @@ type apiStepState struct {
 }
 
 type apiRunEvent struct {
-	ID     int64     `json:"id"`
-	Kind   string    `json:"kind"`
-	Step   *int      `json:"step,omitempty"`
-	ToStep *int      `json:"toStep,omitempty"`
-	Text   string    `json:"text"`
-	At     time.Time `json:"at"`
+	ID         int64     `json:"id"`
+	Kind       string    `json:"kind"`
+	Step       *int      `json:"step,omitempty"`
+	ToStep     *int      `json:"toStep,omitempty"`
+	Text       string    `json:"text"`
+	At         time.Time `json:"at"`
+	APIKeyID   string    `json:"apiKeyId,omitempty"`
+	APIKeyName string    `json:"apiKeyName,omitempty"`
 }
 
 type apiRunAgent struct {
@@ -374,9 +395,11 @@ func verifyScopedRun(ctx context.Context, p *pgxpool.Pool, workflowID, runID str
 }
 
 func readRunEventsWithID(ctx context.Context, p *pgxpool.Pool, runID string, afterID int64) ([]apiRunEvent, []runEvent, error) {
-	rows, err := p.Query(ctx, `SELECT e.id, e.kind, e.step, e.to_step, e.text, e.at, s.snapshot->'selected', s.token
+	rows, err := p.Query(ctx, `SELECT e.id, e.kind, e.step, e.to_step, e.text, e.at, s.snapshot->'selected', s.token,
+		coalesce(e.api_key_id::text, ''), coalesce(ek.name, '')
 		FROM workflow_run_events e
 		LEFT JOIN workflow_model_suggestions s ON s.id = e.suggestion_id
+		LEFT JOIN workflow_api_keys ek ON ek.id = e.api_key_id
 		WHERE e.run_id = $1 AND e.id > $2 ORDER BY e.id`, runID, afterID)
 	if err != nil {
 		return nil, nil, err
@@ -388,7 +411,7 @@ func readRunEventsWithID(ctx context.Context, p *pgxpool.Pool, runID string, aft
 		var ev apiRunEvent
 		var selected []byte
 		var token *string
-		if err := rows.Scan(&ev.ID, &ev.Kind, &ev.Step, &ev.ToStep, &ev.Text, &ev.At, &selected, &token); err != nil {
+		if err := rows.Scan(&ev.ID, &ev.Kind, &ev.Step, &ev.ToStep, &ev.Text, &ev.At, &selected, &token, &ev.APIKeyID, &ev.APIKeyName); err != nil {
 			return nil, nil, err
 		}
 		if ev.Kind == "model_suggestion" {
@@ -396,7 +419,7 @@ func readRunEventsWithID(ctx context.Context, p *pgxpool.Pool, runID string, aft
 		}
 		ev.At = ev.At.UTC()
 		apiEvents = append(apiEvents, ev)
-		viewEvents = append(viewEvents, runEvent{Kind: ev.Kind, Step: ev.Step, ToStep: ev.ToStep, Text: ev.Text, At: ev.At})
+		viewEvents = append(viewEvents, runEvent{Kind: ev.Kind, Step: ev.Step, ToStep: ev.ToStep, Text: ev.Text, At: ev.At, APIKeyID: ev.APIKeyID, APIKeyName: ev.APIKeyName})
 	}
 	return apiEvents, viewEvents, rows.Err()
 }
@@ -432,6 +455,7 @@ func (a *app) apiGetWorkflow(c apiCaller) http.HandlerFunc {
 			"version":     wf.Version,
 			"host":        wf.Definition.Host,
 			"trigger":     wf.Definition.Trigger,
+			"apiTrigger":  wf.Definition.APITrigger,
 			"priority":    wf.Definition.EffectivePriority(),
 			"steps":       steps,
 		})
@@ -441,14 +465,22 @@ func (a *app) apiGetWorkflow(c apiCaller) http.HandlerFunc {
 // apiTriggerRun: POST /api/workflow-api/runs.
 func (a *app) apiTriggerRun(c apiCaller) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !c.auth.APITriggerEnabled {
+			apiError(w, http.StatusForbidden, "API trigger is disabled for this workflow")
+			return
+		}
 		var req workflow.APIRunRequest
 		if !decodeAPIBody(w, r, maxWorkflowAPIBody, &req) {
+			return
+		}
+		if len(req.Input) > workflow.MaxAPITextBytes {
+			apiError(w, http.StatusRequestEntityTooLarge, "input exceeds 1 MiB limit")
 			return
 		}
 		if hdr := strings.TrimSpace(r.Header.Get("Idempotency-Key")); hdr != "" {
 			req.IdempotencyKey = hdr
 		}
-		res, err := a.wf.StartAPIRun(r.Context(), c.auth.Account.ID, c.auth.WorkflowID, c.auth.KeyID, req)
+		res, err := a.wf.StartAPIRun(c.actorCtx(r.Context()), c.auth.Account.ID, c.auth.WorkflowID, c.auth.KeyID, req)
 		if err != nil {
 			apiWorkflowError(w, err)
 			return
@@ -539,12 +571,12 @@ func (a *app) apiListRuns(c apiCaller) http.HandlerFunc {
 		}
 		limit := 25
 		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-			n, err := strconv.Atoi(raw)
+			n, err := strconv.ParseInt(raw, 10, 32)
 			if err != nil || n < 1 || n > 100 {
 				apiError(w, http.StatusBadRequest, "limit must be between 1 and 100")
 				return
 			}
-			limit = n
+			limit = int(n)
 		}
 		var cursorAt *time.Time
 		var cursorID string
@@ -588,7 +620,6 @@ func (a *app) apiListRuns(c apiCaller) http.HandlerFunc {
 			last := list[len(list)-1]
 			nextCursor = encodeRunCursor(last.CreatedAt, last.ID)
 		}
-		// Fetch task_summary and api_key metadata for the page in one query.
 		ids := make([]string, len(list))
 		for i, rr := range list {
 			ids[i] = rr.ID
@@ -781,28 +812,28 @@ func (a *app) apiGetRunTranscript(c apiCaller) http.HandlerFunc {
 		fromSeq := 0
 		exclusive := false
 		if raw := strings.TrimSpace(r.URL.Query().Get("after_seq")); raw != "" {
-			n, err := strconv.Atoi(raw)
+			n, err := strconv.ParseInt(raw, 10, 32)
 			if err != nil || n < 0 {
-				apiError(w, http.StatusBadRequest, "after_seq must be a non-negative integer")
+				apiError(w, http.StatusBadRequest, "after_seq must be a non-negative 32-bit integer")
 				return
 			}
-			fromSeq, exclusive = n, true
+			fromSeq, exclusive = int(n), true
 		} else if raw := strings.TrimSpace(r.URL.Query().Get("from_seq")); raw != "" {
-			n, err := strconv.Atoi(raw)
+			n, err := strconv.ParseInt(raw, 10, 32)
 			if err != nil || n < 0 {
-				apiError(w, http.StatusBadRequest, "from_seq must be a non-negative integer")
+				apiError(w, http.StatusBadRequest, "from_seq must be a non-negative 32-bit integer")
 				return
 			}
-			fromSeq = n
+			fromSeq = int(n)
 		}
 		limit := 500
 		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-			n, err := strconv.Atoi(raw)
+			n, err := strconv.ParseInt(raw, 10, 32)
 			if err != nil || n < 1 || n > 2000 {
 				apiError(w, http.StatusBadRequest, "limit must be between 1 and 2000")
 				return
 			}
-			limit = n
+			limit = int(n)
 		}
 		var epoch string
 		var syncedAt time.Time
@@ -873,25 +904,105 @@ func (a *app) apiGetRunTranscript(c apiCaller) http.HandlerFunc {
 	}
 }
 
-// --- Real-time SSE streaming ---
+// --- Real-time SSE streaming with composite resumable cursor ---
 
-func parseLastEventID(r *http.Request) (int64, error) {
+// streamCursor tracks the last delivered run event ID and per-agent transcript
+// position so SSE reconnects (Last-Event-ID) skip already-delivered events and
+// transcript entries without rereading from sequence 0.
+//
+// Wire format:
+//
+//	v1:<eventID>
+//	v1:<eventID>;<agentID>=<epoch>:<seqStart>:<seqEnd>:<textLen>,...
+type agentStreamPos struct {
+	epoch    string
+	seqStart int
+	seqEnd   int
+	textLen  int
+}
+
+type streamCursor struct {
+	eventID int64
+	agents  map[string]*agentStreamPos
+}
+
+func (sc *streamCursor) encode() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "v1:%d", sc.eventID)
+	if len(sc.agents) == 0 {
+		return b.String()
+	}
+	ids := make([]string, 0, len(sc.agents))
+	for id := range sc.agents {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	b.WriteByte(';')
+	for i, id := range ids {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		p := sc.agents[id]
+		fmt.Fprintf(&b, "%s=%s:%d:%d:%d", id, p.epoch, p.seqStart, p.seqEnd, p.textLen)
+	}
+	return b.String()
+}
+
+func parseStreamCursor(r *http.Request) (*streamCursor, error) {
+	sc := &streamCursor{agents: map[string]*agentStreamPos{}}
 	if raw := strings.TrimSpace(r.URL.Query().Get("after_event_id")); raw != "" {
 		n, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || n < 0 {
-			return 0, errors.New("after_event_id must be a non-negative integer")
+			return nil, errors.New("after_event_id must be a non-negative integer")
 		}
-		return n, nil
+		sc.eventID = n
+		return sc, nil
 	}
-	if raw := strings.TrimSpace(r.Header.Get("Last-Event-ID")); raw != "" {
-		raw = strings.TrimPrefix(raw, "event:")
-		n, err := strconv.ParseInt(raw, 10, 64)
+	raw := strings.TrimSpace(r.Header.Get("Last-Event-ID"))
+	if raw == "" {
+		return sc, nil
+	}
+	if rest, ok := strings.CutPrefix(raw, "v1:"); ok {
+		evPart, agPart, hasAgents := strings.Cut(rest, ";")
+		n, err := strconv.ParseInt(evPart, 10, 64)
 		if err != nil || n < 0 {
-			return 0, errors.New("invalid Last-Event-ID")
+			return nil, errors.New("invalid Last-Event-ID")
 		}
-		return n, nil
+		sc.eventID = n
+		if hasAgents && agPart != "" {
+			for _, item := range strings.Split(agPart, ",") {
+				agID, spec, ok := strings.Cut(item, "=")
+				if !ok || agID == "" {
+					return nil, errors.New("invalid Last-Event-ID")
+				}
+				parts := strings.Split(spec, ":")
+				if len(parts) != 4 {
+					return nil, errors.New("invalid Last-Event-ID")
+				}
+				seqStart, err1 := strconv.ParseInt(parts[1], 10, 32)
+				seqEnd, err2 := strconv.ParseInt(parts[2], 10, 32)
+				textLen, err3 := strconv.ParseInt(parts[3], 10, 32)
+				if err1 != nil || err2 != nil || err3 != nil || seqStart < 0 || seqEnd < 0 || textLen < 0 {
+					return nil, errors.New("invalid Last-Event-ID")
+				}
+				sc.agents[agID] = &agentStreamPos{
+					epoch:    parts[0],
+					seqStart: int(seqStart),
+					seqEnd:   int(seqEnd),
+					textLen:  int(textLen),
+				}
+			}
+		}
+		return sc, nil
 	}
-	return 0, nil
+	// Legacy event:<id> or plain numeric ID.
+	raw = strings.TrimPrefix(raw, "event:")
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n < 0 {
+		return nil, errors.New("invalid Last-Event-ID")
+	}
+	sc.eventID = n
+	return sc, nil
 }
 
 func writeSSE(w http.ResponseWriter, flusher http.Flusher, event, id string, payload any) error {
@@ -915,12 +1026,30 @@ func runTerminal(status string) bool {
 	return status == workflow.Succeeded || status == workflow.Failed || status == workflow.Canceled
 }
 
+func runSnapshotChanged(a, b apiRunSummary) bool {
+	if a.Status != b.Status || a.Step != b.Step || a.Note != b.Note || a.Error != b.Error ||
+		a.TaskSummary != b.TaskSummary || a.CurrentActivity != b.CurrentActivity ||
+		a.OrchestratorID != b.OrchestratorID || a.ProjectAgentID != b.ProjectAgentID ||
+		a.QueueReason != b.QueueReason || a.QueuePosition != b.QueuePosition ||
+		a.ActivityWaitingOn != b.ActivityWaitingOn || a.Title != b.Title ||
+		a.Branch != b.Branch || a.WorkspaceID != b.WorkspaceID {
+		return true
+	}
+	if (a.ActivityETA == nil) != (b.ActivityETA == nil) {
+		return true
+	}
+	if a.ActivityETA != nil && !a.ActivityETA.Equal(*b.ActivityETA) {
+		return true
+	}
+	return false
+}
+
 // apiStreamRun: GET /api/workflow-api/runs/{id}/stream (SSE, resumable).
 func (a *app) apiStreamRun(c apiCaller) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		id := r.PathValue("id")
-		afterEventID, err := parseLastEventID(r)
+		cursor, err := parseStreamCursor(r)
 		if err != nil {
 			apiError(w, http.StatusBadRequest, err.Error())
 			return
@@ -955,12 +1084,6 @@ func (a *app) apiStreamRun(c apiCaller) http.HandlerFunc {
 		w.Header().Set("X-Accel-Buffering", "no")
 		w.WriteHeader(http.StatusOK)
 
-		type agentCursor struct {
-			epoch   string
-			seqEnd  map[int]int
-			textLen map[int]int
-		}
-		agentCursors := map[string]*agentCursor{}
 		transcriptStops := map[string]func(){}
 		transcriptWake := make(chan struct{}, 1)
 		defer func() {
@@ -1011,25 +1134,42 @@ func (a *app) apiStreamRun(c apiCaller) http.HandlerFunc {
 			}
 			syncAgentSubs(rr.Host, agents)
 			for _, ag := range agents {
-				tr, err := c.reg.Transcript(ctx, rr.Host, ag.ID, 0)
+				var epoch string
+				err := c.pool.QueryRow(ctx, `SELECT epoch FROM transcripts WHERE host = $1 AND agent_id = $2`, rr.Host, ag.ID).Scan(&epoch)
 				if errors.Is(err, pgx.ErrNoRows) {
 					continue
 				}
 				if err != nil {
 					return err
 				}
-				cur := agentCursors[ag.ID]
+				cur := cursor.agents[ag.ID]
+				fromSeq := 0
+				if cur != nil && cur.epoch == epoch {
+					fromSeq = cur.seqStart
+				} else {
+					cur = nil
+				}
+				tr, err := c.reg.Transcript(ctx, rr.Host, ag.ID, fromSeq)
+				if errors.Is(err, pgx.ErrNoRows) {
+					continue
+				}
+				if err != nil {
+					return err
+				}
 				if cur == nil || cur.epoch != tr.Epoch {
-					cur = &agentCursor{epoch: tr.Epoch, seqEnd: map[int]int{}, textLen: map[int]int{}}
-					agentCursors[ag.ID] = cur
+					cur = &agentStreamPos{epoch: tr.Epoch}
+					cursor.agents[ag.ID] = cur
 				}
 				for _, e := range tr.Entries {
-					prevEnd, seen := cur.seqEnd[e.SeqStart]
-					if seen && prevEnd == e.SeqEnd && cur.textLen[e.SeqStart] == len(e.Text) {
+					if e.SeqStart < cur.seqStart {
 						continue
 					}
-					cur.seqEnd[e.SeqStart] = e.SeqEnd
-					cur.textLen[e.SeqStart] = len(e.Text)
+					if e.SeqStart == cur.seqStart && e.SeqEnd <= cur.seqEnd && len(e.Text) == cur.textLen {
+						continue
+					}
+					cur.seqStart = e.SeqStart
+					cur.seqEnd = e.SeqEnd
+					cur.textLen = len(e.Text)
 					var atPtr *time.Time
 					if !e.At.IsZero() {
 						u := e.At.UTC()
@@ -1057,7 +1197,7 @@ func (a *app) apiStreamRun(c apiCaller) http.HandlerFunc {
 							Item:     e.Item,
 						},
 					}
-					if err := writeSSE(w, flusher, "transcript", "", payload); err != nil {
+					if err := writeSSE(w, flusher, "transcript", cursor.encode(), payload); err != nil {
 						return err
 					}
 				}
@@ -1069,23 +1209,46 @@ func (a *app) apiStreamRun(c apiCaller) http.HandlerFunc {
 		if err := writeSSE(w, flusher, "run", "", lastSummary); err != nil {
 			return
 		}
-		events, _, err := readRunEventsWithID(ctx, c.pool, id, afterEventID)
+		events, _, err := readRunEventsWithID(ctx, c.pool, id, cursor.eventID)
 		if err != nil {
 			_ = writeSSE(w, flusher, "error", "", map[string]string{"error": "could not read events"})
 			return
 		}
 		for _, ev := range events {
-			if err := writeSSE(w, flusher, "run_event", fmt.Sprintf("event:%d", ev.ID), ev); err != nil {
+			cursor.eventID = ev.ID
+			if err := writeSSE(w, flusher, "run_event", cursor.encode(), ev); err != nil {
 				return
 			}
-			afterEventID = ev.ID
 		}
 		if err := flushTranscripts(row); err != nil {
 			return
 		}
+
+		grace := a.sseTerminalGrace
+		if grace <= 0 {
+			grace = defaultSSETerminalGrace
+		}
+		var graceTimer *time.Timer
+		var graceCh <-chan time.Time
+		startGrace := func() {
+			if graceTimer != nil {
+				return
+			}
+			graceTimer = time.NewTimer(grace)
+			graceCh = graceTimer.C
+		}
+		defer func() {
+			if graceTimer != nil {
+				graceTimer.Stop()
+			}
+		}()
+
 		if runTerminal(row.Status) {
-			_ = writeSSE(w, flusher, "done", "", lastSummary)
-			return
+			if !includeTranscripts || (row.FinishedAt != nil && a.cfg.Now().Sub(*row.FinishedAt) >= grace) {
+				_ = writeSSE(w, flusher, "done", cursor.encode(), lastSummary)
+				return
+			}
+			startGrace()
 		}
 
 		interval := a.sseKeepalive
@@ -1115,8 +1278,18 @@ func (a *app) apiStreamRun(c apiCaller) http.HandlerFunc {
 				if !checkKey() {
 					return
 				}
+			case <-graceCh:
+				if !checkKey() {
+					return
+				}
+				_ = flushTranscripts(row)
+				_ = writeSSE(w, flusher, "done", cursor.encode(), lastSummary)
+				return
 			case <-ticker.C:
 				if !checkKey() {
+					return
+				}
+				if err := flushTranscripts(row); err != nil {
 					return
 				}
 				if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
@@ -1133,21 +1306,18 @@ func (a *app) apiStreamRun(c apiCaller) http.HandlerFunc {
 					return
 				}
 				row = rr
-				evs, _, err := readRunEventsWithID(ctx, c.pool, id, afterEventID)
+				evs, _, err := readRunEventsWithID(ctx, c.pool, id, cursor.eventID)
 				if err != nil {
 					return
 				}
 				for _, ev := range evs {
-					if err := writeSSE(w, flusher, "run_event", fmt.Sprintf("event:%d", ev.ID), ev); err != nil {
+					cursor.eventID = ev.ID
+					if err := writeSSE(w, flusher, "run_event", cursor.encode(), ev); err != nil {
 						return
 					}
-					afterEventID = ev.ID
 				}
 				curSummary := runSummaryFromRow(rr, ts, kid, kname)
-				if curSummary.Status != lastSummary.Status || curSummary.Step != lastSummary.Step ||
-					curSummary.Note != lastSummary.Note || curSummary.Error != lastSummary.Error ||
-					curSummary.TaskSummary != lastSummary.TaskSummary || curSummary.CurrentActivity != lastSummary.CurrentActivity ||
-					curSummary.OrchestratorID != lastSummary.OrchestratorID || curSummary.ProjectAgentID != lastSummary.ProjectAgentID {
+				if runSnapshotChanged(lastSummary, curSummary) {
 					lastSummary = curSummary
 					if err := writeSSE(w, flusher, "run", "", curSummary); err != nil {
 						return
@@ -1157,8 +1327,11 @@ func (a *app) apiStreamRun(c apiCaller) http.HandlerFunc {
 					return
 				}
 				if runTerminal(rr.Status) {
-					_ = writeSSE(w, flusher, "done", "", curSummary)
-					return
+					if !includeTranscripts {
+						_ = writeSSE(w, flusher, "done", cursor.encode(), curSummary)
+						return
+					}
+					startGrace()
 				}
 			case <-transcriptWake:
 				if !checkKey() {
@@ -1191,7 +1364,7 @@ func (a *app) apiCancelRun(c apiCaller) http.HandlerFunc {
 			apiError(w, http.StatusNotFound, "no such run in this workflow")
 			return
 		}
-		if err := a.wf.Cancel(r.Context(), c.auth.Account.ID, id); err != nil {
+		if err := a.wf.Cancel(c.actorCtx(r.Context()), c.auth.Account.ID, id); err != nil {
 			apiWorkflowError(w, err)
 			return
 		}
@@ -1210,6 +1383,10 @@ func (a *app) apiReplyToRun(c apiCaller) http.HandlerFunc {
 		if !decodeAPIBody(w, r, maxWorkflowAPIBody, &req) {
 			return
 		}
+		if len(req.Text) > workflow.MaxAPITextBytes {
+			apiError(w, http.StatusRequestEntityTooLarge, "text exceeds 1 MiB limit")
+			return
+		}
 		id := r.PathValue("id")
 		ok, err := verifyScopedRun(r.Context(), c.pool, c.auth.WorkflowID, id)
 		if err != nil {
@@ -1220,12 +1397,7 @@ func (a *app) apiReplyToRun(c apiCaller) http.HandlerFunc {
 			apiError(w, http.StatusNotFound, "no such run in this workflow")
 			return
 		}
-		text, err := a.wf.StoreAttachments(r.Context(), c.auth.Account.ID, req.Text, req.Attachments)
-		if err != nil {
-			apiWorkflowError(w, err)
-			return
-		}
-		if err := a.wf.Reply(r.Context(), c.auth.Account.ID, id, text); err != nil {
+		if err := a.wf.ReplyWithAttachments(c.actorCtx(r.Context()), c.auth.Account.ID, id, req.Text, req.Attachments); err != nil {
 			apiWorkflowError(w, err)
 			return
 		}
@@ -1243,6 +1415,10 @@ func (a *app) apiAddRunInput(c apiCaller) http.HandlerFunc {
 		if !decodeAPIBody(w, r, maxWorkflowAPIBody, &req) {
 			return
 		}
+		if len(req.Text) > workflow.MaxAPITextBytes {
+			apiError(w, http.StatusRequestEntityTooLarge, "text exceeds 1 MiB limit")
+			return
+		}
 		id := r.PathValue("id")
 		ok, err := verifyScopedRun(r.Context(), c.pool, c.auth.WorkflowID, id)
 		if err != nil {
@@ -1253,12 +1429,7 @@ func (a *app) apiAddRunInput(c apiCaller) http.HandlerFunc {
 			apiError(w, http.StatusNotFound, "no such run in this workflow")
 			return
 		}
-		text, err := a.wf.StoreAttachments(r.Context(), c.auth.Account.ID, req.Text, req.Attachments)
-		if err != nil {
-			apiWorkflowError(w, err)
-			return
-		}
-		if err := a.wf.AddInput(r.Context(), c.auth.Account.ID, id, text); err != nil {
+		if err := a.wf.AddInputWithAttachments(c.actorCtx(r.Context()), c.auth.Account.ID, id, req.Text, req.Attachments); err != nil {
 			apiWorkflowError(w, err)
 			return
 		}
@@ -1269,6 +1440,10 @@ func (a *app) apiAddRunInput(c apiCaller) http.HandlerFunc {
 // apiRetryRun: POST /api/workflow-api/runs/{id}/retry {}.
 func (a *app) apiRetryRun(c apiCaller) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !c.auth.APITriggerEnabled {
+			apiError(w, http.StatusForbidden, "API trigger is disabled for this workflow")
+			return
+		}
 		var body struct{}
 		if !decodeAPIBody(w, r, 1024, &body) {
 			return
@@ -1283,13 +1458,11 @@ func (a *app) apiRetryRun(c apiCaller) http.HandlerFunc {
 			apiError(w, http.StatusNotFound, "no such run in this workflow")
 			return
 		}
-		newID, err := a.wf.RetryRun(r.Context(), c.auth.Account.ID, id)
+		newID, err := a.wf.RetryRun(c.actorCtx(r.Context()), c.auth.Account.ID, id)
 		if err != nil {
 			apiWorkflowError(w, err)
 			return
 		}
-		// Attribute the retried run to the API key that triggered the retry.
-		_, _ = a.cfg.DB.Exec(r.Context(), `UPDATE workflow_runs SET api_key_id = $2 WHERE id = $1`, newID, c.auth.KeyID)
 		row, taskSummary, keyID, keyName, found, err := readScopedRunRow(r.Context(), c.pool, c.auth.WorkflowID, newID)
 		if err != nil || !found {
 			apiError(w, http.StatusInternalServerError, "retry created but could not be read")
@@ -1319,7 +1492,7 @@ func (a *app) apiResumeRun(c apiCaller) http.HandlerFunc {
 			apiError(w, http.StatusNotFound, "no such run in this workflow")
 			return
 		}
-		if err := a.wf.Resume(r.Context(), c.auth.Account.ID, id); err != nil {
+		if err := a.wf.Resume(c.actorCtx(r.Context()), c.auth.Account.ID, id); err != nil {
 			apiWorkflowError(w, err)
 			return
 		}
@@ -1344,7 +1517,7 @@ func (a *app) apiStartQueuedRun(c apiCaller) http.HandlerFunc {
 			apiError(w, http.StatusNotFound, "no such run in this workflow")
 			return
 		}
-		if err := a.wf.StartNow(r.Context(), c.auth.Account.ID, id); err != nil {
+		if err := a.wf.StartNow(c.actorCtx(r.Context()), c.auth.Account.ID, id); err != nil {
 			apiWorkflowError(w, err)
 			return
 		}

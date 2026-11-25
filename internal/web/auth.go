@@ -7,6 +7,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -185,7 +186,11 @@ func (a *app) startBrowserSession(w http.ResponseWriter, r *http.Request, acct a
 
 func requireJSON(w http.ResponseWriter, r *http.Request) bool {
 	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/json" {
-		http.Error(w, "send JSON", http.StatusUnsupportedMediaType)
+		if strings.HasPrefix(r.URL.Path, "/api/workflow-api/") {
+			apiError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
+		} else {
+			http.Error(w, "send JSON", http.StatusUnsupportedMediaType)
+		}
 		return false
 	}
 	return true

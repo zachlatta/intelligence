@@ -542,6 +542,8 @@ type runEvent struct {
 	At           time.Time
 	InputStatus  string
 	InputError   string
+	APIKeyID     string
+	APIKeyName   string
 }
 
 // stepView is one step of a run as its page shows it.
@@ -975,11 +977,13 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 		// A model suggestion reads as its saved choice; its full text stays in SQL.
 		rows, err = v.pool.Query(ctx, `SELECT e.kind,e.step,e.to_step,e.text,e.at,s.snapshot->'selected',s.token,
             CASE WHEN i.delivered THEN 'delivered' WHEN i.pending THEN 'pending'
-                 WHEN i.event_id IS NOT NULL THEN 'failed' ELSE '' END, COALESCE(c.error, '')
+                 WHEN i.event_id IS NOT NULL THEN 'failed' ELSE '' END, COALESCE(c.error, ''),
+            COALESCE(e.api_key_id::text, ''), COALESCE(ek.name, '')
             FROM workflow_run_events e
             LEFT JOIN workflow_model_suggestions s ON s.id=e.suggestion_id
             LEFT JOIN workflow_run_inputs i ON i.event_id=e.id AND i.run_id=e.run_id AND e.kind='input'
             LEFT JOIN commands c ON c.id=i.command_id
+            LEFT JOIN workflow_api_keys ek ON ek.id=e.api_key_id
             WHERE e.run_id=$1 ORDER BY e.id`, id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -989,7 +993,7 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 			var e runEvent
 			var selected []byte
 			var token *string
-			err := row.Scan(&e.Kind, &e.Step, &e.ToStep, &e.Text, &e.At, &selected, &token, &e.InputStatus, &e.InputError)
+			err := row.Scan(&e.Kind, &e.Step, &e.ToStep, &e.Text, &e.At, &selected, &token, &e.InputStatus, &e.InputError, &e.APIKeyID, &e.APIKeyName)
 			if err == nil && e.Kind == "model_suggestion" {
 				e.Text = modelSuggestionLine(selected, token)
 			}
@@ -1128,12 +1132,26 @@ func (e runEvent) Line() string {
 	case "ask":
 		return "Asked Zach"
 	case "reply":
+		if e.APIKeyName != "" {
+			return "API key " + e.APIKeyName + " replied: " + e.Text
+		}
 		return "Zach replied: " + e.Text
+	case "input":
+		if e.APIKeyName != "" {
+			return "API key " + e.APIKeyName + " sent input: " + e.Text
+		}
+		return e.Kind + " " + e.Text
 	case "message":
 		return linkRuns(e.Text)
 	case "fail":
 		return "Failed: " + e.Text
 	case "cancel":
+		if e.APIKeyName != "" {
+			return "Canceled by API key " + e.APIKeyName
+		}
+		if e.Text != "" {
+			return e.Text
+		}
 		return "Canceled"
 	case "claim":
 		return "Claimed " + e.Text

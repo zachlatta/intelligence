@@ -438,8 +438,9 @@ func scanRun(row pgx.Row) (run, error) {
 }
 
 func (e *Engine) event(ctx context.Context, tx pgx.Tx, r run, kind string, step, to *int, text string) error {
-	if _, err := tx.Exec(ctx, `INSERT INTO workflow_run_events (run_id, account_id, at, kind, step, to_step, text)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`, r.ID, r.Account, e.Now(), kind, step, to, text); err != nil {
+	actor := apiActorFrom(ctx)
+	if _, err := tx.Exec(ctx, `INSERT INTO workflow_run_events (run_id, account_id, at, kind, step, to_step, text, api_key_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, r.ID, r.Account, e.Now(), kind, step, to, text, nullUUID(actor.KeyID)); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, fleet.NotifySQL, fleet.WorkflowRunTopic(r.ID)); err != nil {
@@ -474,6 +475,9 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 	}
 	if requestedAt.IsZero() {
 		requestedAt = e.Now()
+	}
+	if strings.ContainsRune(input, 0) {
+		return "", bad("input cannot contain a NUL character")
 	}
 	if strings.TrimSpace(input) == "" {
 		return "", bad("a run needs input: what should be done")
@@ -529,10 +533,11 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		if why != "" {
 			status = Queued
 		}
+		answerExpected := apiActorFrom(ctx).KeyID == "" && (d.Trigger == TriggerEmail || d.Trigger == TriggerVoiceMemo)
 		if err := tx.QueryRow(ctx, `INSERT INTO workflow_runs (account_id, workflow_id, version, host, title, input, status, queue_reason, created_at, updated_at,
 			repo, project_selected, estimated_memory_bytes, queued_at_creation, requested_at, answer_expected, priority)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id::text`, account, workflowID, version, host, taskName(input), input,
-			status, why, e.Now(), repo, selected, estimate, why != "", requestedAt, d.Trigger == TriggerEmail || d.Trigger == TriggerVoiceMemo, priority).Scan(&id); err != nil { // now, holding the lock: the queue's order is the order decided
+			status, why, e.Now(), repo, selected, estimate, why != "", requestedAt, answerExpected, priority).Scan(&id); err != nil { // now, holding the lock: the queue's order is the order decided
 			return err
 		}
 		r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id = $1", id))
@@ -694,6 +699,10 @@ func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo s
 	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET status = $2, repo = $3, branch = $4, workspace_title = $5, pending_command = $6, launch_command = $6, updated_at = $7,
 		start_retries=0, start_retry_at=NULL, start_retry_queued=false, error='',
 		title = $8 WHERE id = $1`, r.ID, StartingOrchestrator, repo, r.Branch, wsTitle, c.ID, e.Now(), r.Title)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, fleet.NotifySQL, fleet.WorkflowRunTopic(r.ID))
 	return err
 }
 
@@ -890,6 +899,13 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 	}
 	switch r.Status {
 	case Canceled:
+		var cancelKey string
+		_ = tx.QueryRow(ctx, `SELECT coalesce(k.name, '') FROM workflow_run_events e
+			JOIN workflow_api_keys k ON k.id = e.api_key_id
+			WHERE e.run_id = $1 AND e.kind = 'cancel' ORDER BY e.id DESC LIMIT 1`, r.ID).Scan(&cancelKey)
+		if cancelKey != "" {
+			return "", conflict("API key %q canceled this run. Stop: do nothing more for it.", cancelKey)
+		}
 		return "", conflict("Zach canceled this run. Stop: do nothing more for it.")
 	case Succeeded, Failed:
 		return "", conflict("This run is over (%s). Do nothing more for it.", r.Status)
@@ -1209,6 +1225,9 @@ func (e *Engine) ReplyTx(ctx context.Context, tx pgx.Tx, account int64, runID, t
 	if err := agenttext.Validate(text); err != nil {
 		return bad("%s", err)
 	}
+	if strings.ContainsRune(text, 0) {
+		return bad("a reply cannot contain a NUL character")
+	}
 	if strings.TrimSpace(text) == "" {
 		return bad("a reply needs text")
 	}
@@ -1219,19 +1238,34 @@ func (e *Engine) ReplyTx(ctx context.Context, tx pgx.Tx, account int64, runID, t
 	if r.Status != Waiting && r.Status != Stalled {
 		return conflict("this run is not waiting for a reply (%s)", r.Status)
 	}
+	actor := apiActorFrom(ctx)
 	heading := "Zach replied to your note:"
+	signoffNote := ""
+	if actor.KeyID != "" {
+		heading = fmt.Sprintf("API key %q replied to your note (this is an automated API caller, not Zach):", actor.KeyName)
+		if r.Step >= 0 && r.Step < len(r.Def.Steps) && r.Def.Steps[r.Step].Kind == KindSignoff {
+			signoffNote = fmt.Sprintf("\n\nNote: This reply came from API key %q, not from Zach. It is not Zach's approval unless this workflow's instructions explicitly authorize this API key to approve sign-off.", actor.KeyName)
+		}
+	}
 	if r.Status == Stalled {
-		heading = "A reply arrived for this workflow:"
-		if err := e.unstall(ctx, tx, r, "Resumed: a reply arrived for the existing orchestrator."); err != nil {
-			return err
+		if actor.KeyID != "" {
+			heading = fmt.Sprintf("API key %q replied for this workflow (this is an automated API caller, not Zach):", actor.KeyName)
+			if err := e.unstall(ctx, tx, r, fmt.Sprintf("Resumed: API key %q replied for the existing orchestrator.", actor.KeyName)); err != nil {
+				return err
+			}
+		} else {
+			heading = "A reply arrived for this workflow:"
+			if err := e.unstall(ctx, tx, r, "Resumed: a reply arrived for the existing orchestrator."); err != nil {
+				return err
+			}
 		}
 	}
 	lost, err := undeliveredInputs(ctx, tx, r.ID, e.Now())
 	if err != nil {
 		return err
 	}
-	args, _ := json.Marshal(hostclient.AgentArgs{AgentID: r.Orchestrator, Text: withRedelivery(lost, fmt.Sprintf("%s\n\n%s\n\n"+
-		"Decide what it means for the run, then move it with intelligence workflow (next, back, skip, ask or fail) --run %s.", heading, text, r.ID))})
+	args, _ := json.Marshal(hostclient.AgentArgs{AgentID: r.Orchestrator, Text: withRedelivery(lost, fmt.Sprintf("%s\n\n%s%s\n\n"+
+		"Decide what it means for the run, then move it with intelligence workflow (next, back, skip, ask or fail) --run %s.", heading, text, signoffNote, r.ID))})
 	c, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.SendMessageKind, args, replyTTL, e.Now())
 	if err != nil {
 		return err
@@ -1311,29 +1345,46 @@ func (e *Engine) AddInput(ctx context.Context, account int64, runID, text string
 		return bad("additional input cannot contain a NUL character")
 	}
 	return e.forAccount(ctx, account, runID, func(tx pgx.Tx, r run) error {
-		if r.Status == Waiting {
-			return conflict("the orchestrator is asking you a question; use the reply box")
-		}
-		if (r.Status != Running && r.Status != Stalled) || r.Orchestrator == "" {
-			return conflict("additional input needs a running or stalled run with an orchestrator (%s)", r.Status)
-		}
-		// Enrolled host names can be reused. Hold ownership until the message commits.
-		var host string
-		if err := tx.QueryRow(ctx, "SELECT host FROM host_keys WHERE host=$1 AND account_id=$2 FOR KEY SHARE", r.Host, account).Scan(&host); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return conflict("this run's host is no longer enrolled in this account")
-			}
-			return err
-		}
-		prompt := "Additional input for this run:\n\n" + text +
-			"\n\nTake this into account as you continue the run. If the run is waiting on an answer, keep waiting for the reply."
-		return e.sendInput(ctx, tx, r, "input", text, prompt, nil)
+		return e.addInputLocked(ctx, tx, account, r, text)
 	})
+}
+
+func (e *Engine) addInputLocked(ctx context.Context, tx pgx.Tx, account int64, r run, text string) error {
+	if err := agenttext.Validate(text); err != nil {
+		return bad("%s", err)
+	}
+	if r.Status == Waiting {
+		return conflict("the orchestrator is asking you a question; use the reply box")
+	}
+	if (r.Status != Running && r.Status != Stalled) || r.Orchestrator == "" {
+		return conflict("additional input needs a running or stalled run with an orchestrator (%s)", r.Status)
+	}
+	// Enrolled host names can be reused. Hold ownership until the message commits.
+	var host string
+	if err := tx.QueryRow(ctx, "SELECT host FROM host_keys WHERE host=$1 AND account_id=$2 FOR KEY SHARE", r.Host, account).Scan(&host); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return conflict("this run's host is no longer enrolled in this account")
+		}
+		return err
+	}
+	actor := apiActorFrom(ctx)
+	heading := "Additional input for this run:"
+	if actor.KeyID != "" {
+		heading = fmt.Sprintf("Additional input from API key %q for this run:", actor.KeyName)
+	}
+	prompt := heading + "\n\n" + text +
+		"\n\nTake this into account as you continue the run. If the run is waiting on an answer, keep waiting for the reply."
+	return e.sendInput(ctx, tx, r, "input", text, prompt, nil)
 }
 
 // sendInput records the new input and any redeliveries with their shared command.
 func (e *Engine) sendInput(ctx context.Context, tx pgx.Tx, r run, kind, eventText, prompt string, continuation *string) error {
-	if err := e.unstall(ctx, tx, r, "Resumed: new input arrived for the existing orchestrator."); err != nil {
+	actor := apiActorFrom(ctx)
+	why := "Resumed: new input arrived for the existing orchestrator."
+	if actor.KeyID != "" {
+		why = fmt.Sprintf("Resumed: new input from API key %q arrived for the existing orchestrator.", actor.KeyName)
+	}
+	if err := e.unstall(ctx, tx, r, why); err != nil {
 		return err
 	}
 	lost, err := undeliveredInputs(ctx, tx, r.ID, e.Now())
@@ -1388,7 +1439,11 @@ func (e *Engine) Cancel(ctx context.Context, account int64, runID string) error 
 		if err := fleet.CaptureWorkflowAgents(ctx, tx, r.Host, r.ID, e.Now()); err != nil {
 			return err
 		}
-		if err := e.event(ctx, tx, r, "cancel", nil, nil, ""); err != nil {
+		cancelText := ""
+		if actor := apiActorFrom(ctx); actor.KeyID != "" {
+			cancelText = fmt.Sprintf("Canceled by API key %q", actor.KeyName)
+		}
+		if err := e.event(ctx, tx, r, "cancel", nil, nil, cancelText); err != nil {
 			return err
 		}
 		if err := e.noteUnansweredSteers(ctx, tx, r, Canceled); err != nil {

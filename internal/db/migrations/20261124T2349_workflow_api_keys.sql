@@ -34,3 +34,8 @@ CREATE UNIQUE INDEX workflow_runs_api_idempotency
 
 CREATE INDEX workflow_runs_workflow_created
     ON workflow_runs (workflow_id, created_at DESC, id DESC);
+
+-- Record which API key caused a run event (reply, input, cancel, resume, start, retry).
+ALTER TABLE workflow_run_events
+    ADD COLUMN api_key_id uuid REFERENCES workflow_api_keys(id) ON DELETE SET NULL;
+

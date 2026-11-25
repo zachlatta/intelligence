@@ -673,7 +673,11 @@ func (e *Engine) StartNow(ctx context.Context, account int64, runID string) erro
 			return err
 		}
 		r.StartedByHand = true
-		return e.dequeue(ctx, tx, r, startedByHand)
+		why := startedByHand
+		if actor := apiActorFrom(ctx); actor.KeyID != "" {
+			why = fmt.Sprintf("started by API key %q, ahead of the queue", actor.KeyName)
+		}
+		return e.dequeue(ctx, tx, r, why)
 	})
 	if err == nil {
 		e.sendFailureAlertsBestEffort(ctx)

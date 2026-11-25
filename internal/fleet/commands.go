@@ -119,6 +119,18 @@ func EnqueueTx(ctx context.Context, tx pgx.Tx, host, kind string, args json.RawM
 	if len(args) == 0 {
 		args = json.RawMessage("{}")
 	}
+	// Guarantee the command frame sent down the host WebSocket cannot exceed hostclient.MaxFrame.
+	frameBytes, err := json.Marshal(hostclient.Frame{
+		ID:      1 << 60,
+		Type:    "command",
+		Command: &hostclient.Command{ID: "00000000-0000-0000-0000-000000000000", Kind: kind, Args: args, CreatedAt: at, ExpiresAt: at.Add(ttl), IdempotencyKey: "00000000-0000-0000-0000-000000000000"},
+	})
+	if err != nil {
+		return Command{}, &BadCommandError{err}
+	}
+	if len(frameBytes) > hostclient.MaxFrame {
+		return Command{}, &BadCommandError{fmt.Errorf("command exceeds maximum host frame size (%d bytes)", hostclient.MaxFrame)}
+	}
 	var known bool
 	if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM hosts WHERE name = $1)", host).Scan(&known); err != nil {
 		return Command{}, err
