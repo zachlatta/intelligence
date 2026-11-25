@@ -1759,10 +1759,13 @@ make run    # http://localhost:8080 (needs DATABASE_URL and READONLY_DATABASE_UR
 
 Tests talk to a fake Paseo daemon (`internal/paseo/paseotest`). Database tests get their own
 database and read-only role (`internal/dbtest`) on the server in `TEST_DATABASE_URL`, which
-`make test` sets when it is empty. Every package whose tests use `dbtest` has a `TestMain` that
-calls `dbtest.RunWithTemplate` (a `dbtest` test fails when one does not): it migrates one template
-database once and clones it for each test, instead of migrating every test database; each clone
-still gets its own read-only role.
+`make test` sets when it is empty. If you set it to your own Postgres, give that server
+`max_connections=500` as `scripts/with-test-postgres` does: the tests run in parallel, and
+Postgres's default of 100 runs out ("too many clients").
+
+Every package whose tests use `dbtest` has a `TestMain` that calls `dbtest.RunWithTemplate` (a
+`dbtest` test fails when one does not): it migrates one template database once and clones it for
+each test, instead of migrating every test database; each clone still gets its own read-only role.
 
 Every test in those packages starts with `t.Parallel()`, since each has its own database;
 `TestEveryDatabasePackageTestRunsInParallel` (in `internal/dbtest`) fails on one that does not,

@@ -159,3 +159,47 @@ func notParallel(fn *ast.FuncDecl) bool {
 	}
 	return false
 }
+
+// TestParallelCheckReadsTestsAndOptOuts: the check above accepts a test whose first statement is
+// t.Parallel() on its own *testing.T, or whose doc comment has a "Not parallel:" line, and no other.
+func TestParallelCheckReadsTestsAndOptOuts(t *testing.T) {
+	t.Parallel()
+	src := `package p
+
+import "testing"
+
+func TestFirst(t *testing.T) { t.Parallel() }
+
+func TestOtherName(tt *testing.T) { tt.Parallel() }
+
+func TestLater(t *testing.T) { _ = 1; t.Parallel() }
+
+func TestSerial(t *testing.T) {}
+
+// TestOptedOut sets the environment.
+//
+// Not parallel: it calls t.Setenv.
+func TestOptedOut(t *testing.T) {}
+
+// TestMentionsIt says Not parallel: only mid-line.
+func TestMentionsIt(t *testing.T) {}
+
+func TestMain(m *testing.M) {}
+`
+	f, err := parser.ParseFile(token.NewFileSet(), "p_test.go", src, parser.ParseComments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"TestFirst": true, "TestOtherName": true, "TestLater": false, "TestSerial": false, "TestOptedOut": true, "TestMentionsIt": false, "TestMain": true}
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+		param := testingT(fn)
+		passes := param == "" || callsParallel(fn, param) || notParallel(fn)
+		if passes != want[fn.Name.Name] {
+			t.Errorf("%s passes = %v, want %v", fn.Name.Name, passes, want[fn.Name.Name])
+		}
+	}
+}
