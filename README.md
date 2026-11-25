@@ -1937,9 +1937,18 @@ origin (another site's request is refused with 403), and those with a body must 
   page shows locally. Other API and SQL values stay as they are.
 - `GET /ui.css`: the one stylesheet every page shares, with the top bar (`layout.html`) that links the
   pages.
-- `GET /workflows`: a new task (for workflows triggered by a task: pick the workflow, which names
-  its host, with the default first and selected), the account's workflows and their runs. Without
-  workflows, a button adds the starting one (`workflow.Starting`) on the account's first host.
+- `GET /workflows`: in this order, a new task (for workflows triggered by a task: pick the
+  workflow, which names its host, with the default first and selected), Needs you, In progress,
+  the runs history, and the account's workflows last. Without workflows, a button adds the
+  starting one (`workflow.Starting`) on the account's first host. **Needs you** has a card for
+  each run waiting on a reply, oldest first: the workflow and run, the start of its note as plain
+  text (280 characters at most), its step and how long since its latest `ask` event, with a link
+  to the reply box (`/workflow-runs/{id}#reply`). **In progress** lists the live runs (finding the
+  project, starting, running, queued or stalled), newest first and at most 200: each with its
+  step (“Step 2 of 7 · Meets the request”, or where it is in the queue), a bar of its steps, host,
+  project and activity line, and above them how many runs are at each place (queued, finding the
+  project, starting, each step title across workflows, stalled). The history table shows the host
+  and the project's last directory under each run's What.
   Tabs above Runs filter by All, Running, Queued, Needs you, Stalled, Completed, Failed or Canceled,
   with counts across the account's full run history. The linkable `?status=` filter accepts
   `all`, `running`, `queued`, `waiting`, `stalled`, `completed`, `failed` or `canceled` (default: `all`).

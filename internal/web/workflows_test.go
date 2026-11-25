@@ -1387,12 +1387,12 @@ func TestWorkflowsPageStylesWaitingCalloutAndStickyInspector(t *testing.T) {
 	rec := httptest.NewRecorder()
 	renderWorkflows(rec, "list", map[string]any{
 		"Workflows": []map[string]any{{"ID": "w1", "Name": "Task", "Version": 1, "IsDefault": true, "Description": "", "Definition": workflow.Starting}},
-		"Waiting":   []runRow{run},
+		"Waiting":   []waitingRun{{runRow: run, Waited: "5m", Question: "Ship it?"}},
 		"List":      runsPage{Runs: []runRow{run}, Page: 1, Total: 1},
 		"Now":       t0,
 	})
 	body := rec.Body.String()
-	for _, want := range []string{`class="banner callout"`, "<thead>", "top: calc(var(--topbar-h) + 1rem)"} {
+	for _, want := range []string{`class="ask-card"`, "Ship it?", "waiting 5m", "<thead>", "top: calc(var(--topbar-h) + 1rem)"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("workflows page misses %q", want)
 		}

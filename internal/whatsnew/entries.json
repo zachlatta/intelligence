@@ -1,5 +1,13 @@
 [
   {
+    "id": "workflows-needs-you-in-progress",
+    "released": "2026-11-25",
+    "title": "Workflows shows what needs you and what is running first",
+    "summary": "The Workflows page now leads with your runs, not the workflow definitions. Under the task box, Needs you shows each run waiting on your reply with its question, the step it is at and how long it has waited. In progress lists every live run with its step (Step 2 of 7), a progress bar and what it is doing now, plus how many runs are at each step. The full runs history follows, and the workflows are at the bottom.",
+    "media": "workflows-needs-you-in-progress.png",
+    "mediaAlt": "The Workflows page in a local demo: two Needs you cards with their questions, then In progress with per-step counts and live runs showing their step and progress bar."
+  },
+  {
     "id": "android-pwa-notifications",
     "released": "2026-11-23",
     "title": "Install Intelligence as a standalone app with native push notifications",

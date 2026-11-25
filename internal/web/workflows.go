@@ -831,12 +831,12 @@ func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 		}
 		list.Status = selected.Key
 		// Attention banners must not depend on the list's filter, search or pagination.
-		waitingRows, err := v.pool.Query(ctx, runRowSelect+"WHERE r.status = $1 ORDER BY r.created_at, r.id", workflow.Waiting)
+		waitingRuns, err := readWaitingRuns(ctx, v.pool, cfg.Now())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		waitingRuns, err := pgx.CollectRows(waitingRows, scanRunRow)
+		activeRuns, err := readActiveRuns(ctx, v.pool)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -859,7 +859,7 @@ func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 		}
 		renderWorkflows(w, "list", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Workflows": wfs,
 			"List": list, "Waiting": waitingRuns, "RunTabs": tabs, "RunFilter": selected, "Hosts": hosts, "Tasks": tasks, "Starting": workflow.Starting, "Dictation": dictationPath(cfg),
-			"QueueHeads": heads})
+			"QueueHeads": heads, "Active": activeRuns, "StepCounts": stepCounts(activeRuns), "ActiveLimit": activeRunsLimit})
 	}
 }
 
