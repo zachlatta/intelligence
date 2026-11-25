@@ -47,6 +47,7 @@ func runHost(t *testing.T, h http.Handler, run string) (string, bool) {
 }
 
 func TestATaskRunsOnTheHostChosenForIt(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	sendReport(t, h, hostReport("host-2", "/w/app"))
@@ -92,6 +93,7 @@ func TestATaskRunsOnTheHostChosenForIt(t *testing.T) {
 }
 
 func TestAChosenHostMustBeTheAccountsAndAbleToRunIt(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	ts := h.(*testServer)
 	sendReport(t, h, wfReport())
@@ -134,6 +136,7 @@ func TestAChosenHostMustBeTheAccountsAndAbleToRunIt(t *testing.T) {
 }
 
 func TestRetryingARunKeepsTheHostChosenForIt(t *testing.T) {
+	t.Parallel()
 	h, db := dbServer(t)
 	sendReport(t, h, wfReport())
 	sendReport(t, h, hostReport("host-2", "/w/app"))
@@ -168,6 +171,7 @@ func TestRetryingARunKeepsTheHostChosenForIt(t *testing.T) {
 // The save takes that host's queue lock before the run's row, as everything else does (startNext,
 // MoveRun, command results), so one of those holding the queue and wanting the row cannot deadlock it.
 func TestSavingAWorkflowRetriesAChosenHostRunThereQueueBeforeRow(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	sendReport(t, h, hostReport("host-2", "/w/app"))
@@ -206,7 +210,8 @@ func TestSavingAWorkflowRetriesAChosenHostRunThereQueueBeforeRow(t *testing.T) {
 			t.Fatalf("the save did not wait for host-2's queue: %d %s", rec.Code, rec.Body)
 		default:
 		}
-		if err := d.Owner.QueryRow(t.Context(), "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted)").Scan(&waiting); err != nil {
+		// pg_locks is cluster-wide: count only this test's database, not parallel tests' waits
+		if err := d.Owner.QueryRow(t.Context(), "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted AND database = (SELECT oid FROM pg_database WHERE datname = current_database()))").Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -230,6 +235,7 @@ func TestSavingAWorkflowRetriesAChosenHostRunThereQueueBeforeRow(t *testing.T) {
 }
 
 func TestTheTaskComposerOffersTheHostsThatCanRunIt(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	sendReport(t, h, hostReport("host-2", "/w/app"))
