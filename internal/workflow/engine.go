@@ -399,6 +399,7 @@ type run struct {
 	EstimatedMemory                              int64
 	ProjectSelected                              bool
 	StartedByHand                                bool // Start now: it bypasses its host's queue until it has started
+	HostChosen                                   bool // started on a host other than its workflow's: its retries stay there
 	AnswerExpected                               bool
 	Name                                         string
 	Priority                                     string // the effective priority snapshotted at creation: normal or immediate
@@ -413,14 +414,14 @@ func (r run) vars() Vars { return Vars{Run: r.ID, Input: r.Input, Repo: r.Repo, 
 
 const runSelect = `SELECT r.id::text, r.host, r.title, r.input, r.status, r.repo, r.branch, r.account_id, r.step, r.workspace_id,
 	r.project_agent_id, r.orchestrator_id, r.project_command::text, w.name, v.definition, r.start_retry_at, r.start_retries,
-	r.estimated_memory_bytes, r.project_selected, r.started_by_hand, r.answer_expected, r.priority, r.workflow_id::text, coalesce(r.continued_run_id::text,'')
+	r.estimated_memory_bytes, r.project_selected, r.started_by_hand, r.answer_expected, r.priority, r.workflow_id::text, coalesce(r.continued_run_id::text,''), r.host_chosen
 	FROM workflow_runs r JOIN workflow_versions v USING (workflow_id, version) JOIN workflows w ON w.id = r.workflow_id `
 
 func scanRun(row pgx.Row) (run, error) {
 	var r run
 	var def []byte
 	err := row.Scan(&r.ID, &r.Host, &r.Title, &r.Input, &r.Status, &r.Repo, &r.Branch, &r.Account, &r.Step, &r.WorkspaceID,
-		&r.ProjectAgent, &r.Orchestrator, &r.ProjectCommand, &r.Name, &def, &r.StartRetryAt, &r.StartRetries, &r.EstimatedMemory, &r.ProjectSelected, &r.StartedByHand, &r.AnswerExpected, &r.Priority, &r.WorkflowID, &r.ContinuedRun)
+		&r.ProjectAgent, &r.Orchestrator, &r.ProjectCommand, &r.Name, &def, &r.StartRetryAt, &r.StartRetries, &r.EstimatedMemory, &r.ProjectSelected, &r.StartedByHand, &r.AnswerExpected, &r.Priority, &r.WorkflowID, &r.ContinuedRun, &r.HostChosen)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, ErrNotFound
 	}
@@ -438,14 +439,15 @@ func (e *Engine) event(ctx context.Context, tx pgx.Tx, r run, kind string, step,
 
 func ptr(i int) *int { return &i }
 
-// StartRun starts account's workflow with input, on the host its definition names, and returns
-// the run's id. A matched project starts its finder agent; a fixed one, the orchestrator.
-func (e *Engine) StartRun(ctx context.Context, account int64, workflowID, input string) (string, error) {
+// StartRun starts account's workflow with input on host, one of the account's ("": the host its
+// definition names), and returns the run's id. A matched project starts its finder agent; a fixed
+// one, the orchestrator.
+func (e *Engine) StartRun(ctx context.Context, account int64, workflowID, input, host string) (string, error) {
 	ctx, flushPushes := e.CollectPushes(ctx)
 	var id string
 	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
 		var err error
-		id, err = e.StartRunTx(ctx, tx, account, workflowID, input, time.Time{})
+		id, err = e.startRunTx(ctx, tx, account, workflowID, input, host, time.Time{})
 		return err
 	})
 	if err == nil {
@@ -455,8 +457,16 @@ func (e *Engine) StartRun(ctx context.Context, account int64, workflowID, input 
 	return id, err
 }
 
-// StartRunTx is StartRun in tx, for a request sent at requestedAt (zero: now).
+// StartRunTx is StartRun in tx on the workflow's host, for a request sent at requestedAt (zero: now).
 func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workflowID, input string, requestedAt time.Time) (string, error) {
+	return e.startRunTx(ctx, tx, account, workflowID, input, "", requestedAt)
+}
+
+// startRunTx is StartRunTx on chosen, a host of the account's ("": the workflow's).
+func (e *Engine) startRunTx(ctx context.Context, tx pgx.Tx, account int64, workflowID, input, chosen string, requestedAt time.Time) (string, error) {
+	if chosen != "" && !hostclient.ValidName(chosen) {
+		return "", bad("%q is not a host's name", chosen)
+	}
 	if err := agenttext.Validate(input); err != nil {
 		return "", credentialRefusal(err)
 	}
@@ -487,11 +497,25 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		}
 		d = d.normalized()
 		host = d.Host
+		hostChosen := chosen != "" && chosen != d.Host
+		if hostChosen {
+			host = chosen
+		}
 		if host == "" {
 			return bad("this workflow does not say which host it runs on: pick one in its editor, and save")
 		}
 		if err := ownsHost(ctx, tx, account, host); err != nil {
 			return err
+		}
+		if hostChosen && d.Project.Mode == ProjectFixed {
+			// a fixed project's directory is the workflow host's: another host must have it too
+			var has bool
+			if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM host_repositories WHERE host = $1 AND directory = $2)", host, d.Project.Directory).Scan(&has); err != nil {
+				return err
+			}
+			if !has {
+				return bad("this workflow always works in %s, which host %s has not reported: run it on %s, or pick a host with that repository", d.Project.Directory, host, d.Host)
+			}
 		}
 		if err := lockQueue(ctx, tx, host); err != nil {
 			return err
@@ -518,9 +542,9 @@ func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 			status = Queued
 		}
 		if err := tx.QueryRow(ctx, `INSERT INTO workflow_runs (account_id, workflow_id, version, host, title, input, status, queue_reason, created_at, updated_at,
-			repo, project_selected, estimated_memory_bytes, queued_at_creation, requested_at, answer_expected, priority)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id::text`, account, workflowID, version, host, taskName(input), input,
-			status, why, e.Now(), repo, selected, estimate, why != "", requestedAt, d.Trigger == TriggerEmail || d.Trigger == TriggerVoiceMemo, priority).Scan(&id); err != nil { // now, holding the lock: the queue's order is the order decided
+			repo, project_selected, estimated_memory_bytes, queued_at_creation, requested_at, answer_expected, priority, host_chosen)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING id::text`, account, workflowID, version, host, taskName(input), input,
+			status, why, e.Now(), repo, selected, estimate, why != "", requestedAt, d.Trigger == TriggerEmail || d.Trigger == TriggerVoiceMemo, priority, hostChosen).Scan(&id); err != nil { // now, holding the lock: the queue's order is the order decided
 			return err
 		}
 		r, err := scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id = $1", id))

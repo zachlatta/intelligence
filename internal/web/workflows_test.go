@@ -599,7 +599,7 @@ func TestWorkflowPages(t *testing.T) {
 	list = get(t, h, "/workflows", nil)
 	for _, want := range []string{"Task from Intelligence", "Show each agent&#39;s model", "finding the project", `href="/workflows/` + wf + `"`, "host-1",
 		// the new task box says which workflow it runs, and where
-		`<label for="task-workflow">Workflow</label>`, `<option value="` + wf + `">Task from Intelligence · host-1</option>`} {
+		`<label for="task-workflow">Workflow</label>`, `<option value="` + wf + `" data-host="host-1">Task from Intelligence · host-1</option>`} {
 		if !strings.Contains(list.Body.String(), want) {
 			t.Errorf("/workflows misses %q", want)
 		}

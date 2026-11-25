@@ -168,17 +168,19 @@ func (a *app) deleteWorkflow(v viewer) http.HandlerFunc {
 	}
 }
 
-// startRun: POST /api/workflow-runs {"workflowId", "input"}: on the host the workflow names.
+// startRun: POST /api/workflow-runs {"workflowId", "input", "host"}: on host, one of the account's,
+// or with none, on the host the workflow names.
 func (a *app) startRun(v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			WorkflowID string `json:"workflowId"`
 			Input      string `json:"input"`
+			Host       string `json:"host"`
 		}
 		if !decodeJSON(w, r, &req) {
 			return
 		}
-		id, err := a.wf.StartRun(r.Context(), v.acct.ID, req.WorkflowID, req.Input)
+		id, err := a.wf.StartRun(r.Context(), v.acct.ID, req.WorkflowID, req.Input, strings.TrimSpace(req.Host))
 		if err != nil {
 			workflowError(w, err)
 			return
@@ -696,6 +698,25 @@ func readHosts(ctx context.Context, p *pgxpool.Pool) ([]string, error) {
 	return out, err
 }
 
+// taskHost is a host the task composer offers to run a task on: a host of the account's that has
+// reported. Offline ones are listed but cannot be picked: a run there would wait for it.
+type taskHost struct {
+	Name   string
+	Online bool
+}
+
+func readTaskHosts(ctx context.Context, p *pgxpool.Pool) ([]taskHost, error) {
+	rows, err := p.Query(ctx, "SELECT name, coalesce(online, false) FROM host_status ORDER BY online DESC, name")
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (taskHost, error) {
+		var h taskHost
+		err := row.Scan(&h.Name, &h.Online)
+		return h, err
+	})
+}
+
 // repoOption is a repository a workflow can always use: a main checkout some of the account's
 // hosts reported (their workspaces' project root).
 type repoOption struct {
@@ -846,6 +867,11 @@ func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		taskHosts, err := readTaskHosts(ctx, v.pool)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		heads, err := readQueueHeads(ctx, v.pool)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -858,7 +884,7 @@ func workflowsPage(cfg Config, v viewer) http.HandlerFunc {
 			}
 		}
 		renderWorkflows(w, "list", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Workflows": wfs,
-			"List": list, "Waiting": waitingRuns, "RunTabs": tabs, "RunFilter": selected, "Hosts": hosts, "Tasks": tasks, "Starting": workflow.Starting, "Dictation": dictationPath(cfg),
+			"List": list, "Waiting": waitingRuns, "RunTabs": tabs, "RunFilter": selected, "Hosts": hosts, "TaskHosts": taskHosts, "Tasks": tasks, "Starting": workflow.Starting, "Dictation": dictationPath(cfg),
 			"QueueHeads": heads, "Active": activeRuns, "StepCounts": stepCounts(activeRuns), "ActiveLimit": activeRunsLimit})
 	}
 }

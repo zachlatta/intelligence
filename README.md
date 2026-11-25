@@ -724,7 +724,12 @@ the capabilities it needs (BPF, perfmon, ptrace read of other processes' environ
 ### Workflows
 
 A workflow is the host it runs on, a trigger, a way to find the project, an orchestrator, and steps
-(`internal/workflow`). Every run of it happens on its host, which must be one of the account's. Each save is a new version (`workflow_versions.definition`); a run keeps the
+(`internal/workflow`). Every run of it happens on its host, which must be one of the account's.
+A task can run elsewhere: the New task box on `/workflows` has a Host menu (the account's online
+hosts; offline ones are listed but disabled), and `POST /api/workflow-runs` takes an optional
+`"host"`, one of the account's. Empty, or the workflow's own host, keeps the workflow's. A run on
+another host records `workflow_runs.host_chosen`, and its Retry stays on that host. A fixed-project
+workflow runs on another host only when that host reports the directory (`host_repositories`). Each save is a new version (`workflow_versions.definition`); a run keeps the
 version it started with. A run:
 
 0. **Waits for room on its host.** A run started while its host is near capacity is `queued`
