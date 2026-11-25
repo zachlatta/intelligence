@@ -194,7 +194,6 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--line);
   border: 1px solid var(--red-line); background: var(--red-bg); color: var(--red); white-space: pre-wrap; overflow-wrap: anywhere; }
 .banner[hidden] { display: none; }
 .banner.note { border-color: var(--line-strong); background: var(--panel); color: var(--fg-2); box-shadow: var(--shadow); }
-.banner.callout { border-color: var(--orange-line); border-left: 3px solid var(--orange); background: var(--orange-bg); color: var(--fg); }
 #start-retry { white-space: normal; }
 .warn { color: var(--red); }
 .empty-state { padding: 3rem 1.25rem; text-align: center; color: var(--muted); background: var(--panel);
