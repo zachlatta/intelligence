@@ -11,6 +11,7 @@ import (
 )
 
 func TestStartRetrySharesCapacityQueue(t *testing.T) {
+	t.Parallel()
 	for _, phase := range []string{workflow.FindingProject, workflow.StartingOrchestrator} {
 		t.Run(phase, func(t *testing.T) {
 			d := dbtest.New(t)

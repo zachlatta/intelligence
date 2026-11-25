@@ -12,6 +12,7 @@ import (
 )
 
 func TestStreamPermissionAuditIsReadableThroughSQL(t *testing.T) {
+	t.Parallel()
 	h := reported(t)
 	b := openStream(t, h, "host-1")
 	p := hostclient.PermissionResolution{AgentID: agentA1, PermissionID: "permission-1", Provider: "claude", Mode: "bypassPermissions", Tool: "Bash", Status: "denied", Message: "rewrite", At: t0}
@@ -29,6 +30,7 @@ func TestStreamPermissionAuditIsReadableThroughSQL(t *testing.T) {
 }
 
 func TestStuckPermissionAppearsOnHostAndAgentPages(t *testing.T) {
+	t.Parallel()
 	h := reported(t)
 	b := openStream(t, h, "host-1")
 	p := hostclient.PermissionResolution{AgentID: agentA1, PermissionID: "p", Provider: "claude", Mode: "bypassPermissions", Tool: "Bash", Status: "stuck", Message: "rewrite", At: t0, FirstSeenAt: t0.Add(-20 * time.Minute), StuckAt: t0}
@@ -52,6 +54,7 @@ func TestStuckPermissionAppearsOnHostAndAgentPages(t *testing.T) {
 }
 
 func TestPermissionRestoreStreamIsHostScoped(t *testing.T) {
+	t.Parallel()
 	h := reported(t)
 	b := openStream(t, h, "host-1")
 	p := hostclient.PermissionResolution{AgentID: agentA1, PermissionID: "p", Status: "stuck", FirstSeenAt: t0, At: t0, NextRetryAt: t0.Add(time.Minute), RetryDelay: time.Minute}
@@ -84,6 +87,7 @@ func TestPermissionRestoreStreamIsHostScoped(t *testing.T) {
 }
 
 func TestPermissionRestartClearsPersistedWarning(t *testing.T) {
+	t.Parallel()
 	h := reported(t)
 	b := openStream(t, h, "host-1")
 	p := hostclient.PermissionResolution{AgentID: agentA1, PermissionID: "p", Provider: "claude", Mode: "bypassPermissions",

@@ -131,6 +131,7 @@ func (g *loginRig) status(t *testing.T, agent string) string {
 // not spend its continuations on a login that cannot work, and once the host has a working login
 // the same orchestrator (same model, its context intact) is told to carry on, exactly once.
 func TestAnOrchestratorStoppedByADeadLoginIsResumedOnceALoginWorks(t *testing.T) {
+	t.Parallel()
 	g := newLoginRig(t)
 	g.fail(t, "orch-1", 92)
 	if s := g.status(t, "orch-1"); s != "waiting" {
@@ -199,6 +200,7 @@ func TestAnOrchestratorStoppedByADeadLoginIsResumedOnceALoginWorks(t *testing.T)
 // orchestrator (another agent) to resume or replace it with the same model, rather than starting it
 // behind its back.
 func TestAWorkerStoppedByADeadLoginIsHandedToItsOrchestrator(t *testing.T) {
+	t.Parallel()
 	g := newLoginRig(t)
 	g.fail(t, "child", 40)
 	g.usage(t, "grace@example.com", "ada@example.com")
@@ -215,6 +217,7 @@ func TestAWorkerStoppedByADeadLoginIsHandedToItsOrchestrator(t *testing.T) {
 
 // Both broke: the orchestrator is resumed first, and told about its worker after.
 func TestAParentStoppedTooIsResumedBeforeItHearsAboutItsWorker(t *testing.T) {
+	t.Parallel()
 	g := newLoginRig(t)
 	g.fail(t, "orch-1", 92)
 	g.fail(t, "child", 40)
@@ -230,6 +233,7 @@ func TestAParentStoppedTooIsResumedBeforeItHearsAboutItsWorker(t *testing.T) {
 }
 
 func TestRecoveryLeavesAloneAnAgentThatAlreadyCarriedOnOrIsGone(t *testing.T) {
+	t.Parallel()
 	g := newLoginRig(t)
 	g.fail(t, "orch-1", 92)
 	g.fail(t, "child", 40)
@@ -253,6 +257,7 @@ func TestRecoveryLeavesAloneAnAgentThatAlreadyCarriedOnOrIsGone(t *testing.T) {
 
 // Recovery is bounded: an agent that keeps failing is left for someone to look at.
 func TestRecoveryGivesUpOnAnAgentThatKeepsFailing(t *testing.T) {
+	t.Parallel()
 	g := newLoginRig(t)
 	g.usage(t, "grace@example.com", "ada@example.com")
 	for i := range 4 {
@@ -278,6 +283,7 @@ func TestRecoveryGivesUpOnAnAgentThatKeepsFailing(t *testing.T) {
 // With no meter on the host, Intelligence cannot tell when the login works again: the warning asks
 // Zach to fix it, and marking it fixed (a JSON write) lets the waiting agents carry on.
 func TestMarkingALoginFixedResumesWhatWaitedForIt(t *testing.T) {
+	t.Parallel()
 	f := newStallFixture(t)
 	b := f.reset(t)
 	def := workflow.Starting
@@ -332,6 +338,7 @@ func TestMarkingALoginFixedResumesWhatWaitedForIt(t *testing.T) {
 // The 2026-11-19 orchestrator failed twice on the dead login (its turn, then a nudge): it gets one
 // resume, for its newest failure, and the older one is settled as superseded.
 func TestAnAgentThatFailedTwiceIsResumedOnce(t *testing.T) {
+	t.Parallel()
 	g := newLoginRig(t)
 	g.fail(t, "orch-1", 92)
 	g.clock.Add(2 * time.Minute)
@@ -351,6 +358,7 @@ func TestAnAgentThatFailedTwiceIsResumedOnce(t *testing.T) {
 
 // A message already on its way to the agent (Zach's, say) gets it going: no second one.
 func TestAMessageAlreadyOnItsWayIsNotDuplicated(t *testing.T) {
+	t.Parallel()
 	g := newLoginRig(t)
 	g.fail(t, "orch-1", 92)
 	if r := call(t, g.h, http.MethodPost, "/api/hosts/host-1/commands", `{"kind":"send_message","args":{"agentId":"orch-1","text":"carry on"}}`, sameOriginFetch); r.Code >= 300 {

@@ -10,6 +10,7 @@ import (
 )
 
 func TestProposalReopen(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"success", "drift", "expired", "pending"} {
 		t.Run(scenario, func(t *testing.T) {
 			h, d := dbServer(t)
@@ -70,6 +71,7 @@ func TestProposalReopen(t *testing.T) {
 }
 
 func TestProposalOwnerCommentReopenAnswer(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	id := proposalForQuestion(t, h)
@@ -99,6 +101,7 @@ func TestProposalOwnerCommentReopenAnswer(t *testing.T) {
 }
 
 func TestProposalReopenAnswerRefusals(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"drift", "expired", "wrong host", "ordinary answer", "standalone"} {
 		t.Run(scenario, func(t *testing.T) {
 			h, d := dbServer(t)
@@ -166,6 +169,7 @@ func TestProposalReopenAnswerRefusals(t *testing.T) {
 }
 
 func TestProposalReopenAccountIsolation(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	id := proposalForQuestion(t, h)

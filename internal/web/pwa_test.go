@@ -17,6 +17,7 @@ import (
 )
 
 func TestPWAManifestServiceWorkerAndIcons(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 
 	// Manifest is open (no sign-in needed) and valid JSON with standalone display and icons.
@@ -100,6 +101,7 @@ func TestPWAManifestServiceWorkerAndIcons(t *testing.T) {
 }
 
 func TestPushSubscriptionsDegradeGracefullyWhenVAPIDUnset(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	c := signInAs(t, h)
 
@@ -155,6 +157,7 @@ func signUpTestAccount(t *testing.T, h http.Handler) *http.Cookie {
 }
 
 func TestPushSubscriptionsAPIAndTestNotification(t *testing.T) {
+	t.Parallel()
 	pubB64, privB64, err := webpush.GenerateVAPIDKeys()
 	if err != nil {
 		t.Fatal(err)
@@ -265,6 +268,7 @@ func enrollPushTestHost(t *testing.T, h http.Handler, c *http.Cookie, host strin
 }
 
 func TestWorkflowAskAndFailSendWebPushNotifications(t *testing.T) {
+	t.Parallel()
 	pubB64, privB64, err := webpush.GenerateVAPIDKeys()
 	if err != nil {
 		t.Fatal(err)
@@ -371,6 +375,7 @@ func TestWorkflowAskAndFailSendWebPushNotifications(t *testing.T) {
 }
 
 func TestDisabledProviderFailureSendsWebPushNotification(t *testing.T) {
+	t.Parallel()
 	pubB64, privB64, err := webpush.GenerateVAPIDKeys()
 	if err != nil {
 		t.Fatal(err)
@@ -458,6 +463,7 @@ func TestDisabledProviderFailureSendsWebPushNotification(t *testing.T) {
 }
 
 func TestProposalApproveRunDisabledProviderSendsWebPush(t *testing.T) {
+	t.Parallel()
 	pubB64, privB64, err := webpush.GenerateVAPIDKeys()
 	if err != nil {
 		t.Fatal(err)

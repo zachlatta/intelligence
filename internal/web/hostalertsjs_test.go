@@ -44,6 +44,7 @@ setTimeout(() => {
 `
 
 func TestHostAlertsScriptShowsARedBannerPerSilentHost(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	run := func(rows string) string {
 		t.Helper()
@@ -81,6 +82,7 @@ func TestHostAlertsScriptShowsARedBannerPerSilentHost(t *testing.T) {
 }
 
 func TestEveryPageLoadsTheHostAlerts(t *testing.T) {
+	t.Parallel()
 	h, _ := cmdServer(t)
 	if js := get(t, h, "/hostalerts.js", nil); js.Code != http.StatusOK || !strings.Contains(js.Body.String(), "host_silence_current") {
 		t.Fatalf("hostalerts.js: %d", js.Code)

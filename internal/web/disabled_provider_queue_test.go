@@ -15,6 +15,7 @@ import (
 // TestOrchestratorGetsSubscriptionPolicyOnce: the policy overrides saved model lists, so the
 // orchestrator's first prompt carries it, once; with nothing disabled it carries none.
 func TestOrchestratorGetsSubscriptionPolicyOnce(t *testing.T) {
+	t.Parallel()
 	for _, disabled := range []bool{true, false} {
 		t.Run(map[bool]string{true: "disabled", false: "all_enabled"}[disabled], func(t *testing.T) {
 			h, d := dbServer(t)
@@ -44,6 +45,7 @@ func TestOrchestratorGetsSubscriptionPolicyOnce(t *testing.T) {
 }
 
 func TestDisabledOrchestratorCannotStrandProjectFinder(t *testing.T) {
+	t.Parallel()
 	for _, provider := range []string{"muse", "antigravity", "gemini"} {
 		for _, alreadyRunning := range []bool{false, true} {
 			name := provider + "/before_launch"
@@ -116,6 +118,7 @@ func TestDisabledOrchestratorCannotStrandProjectFinder(t *testing.T) {
 }
 
 func TestDisabledProviderDoesNotBlockHostQueue(t *testing.T) {
+	t.Parallel()
 	for _, provider := range []string{"muse", "antigravity", "gemini"} {
 		for _, finder := range []bool{false, true} {
 			for _, retry := range []bool{false, true} {

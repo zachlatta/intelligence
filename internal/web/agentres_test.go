@@ -6,6 +6,7 @@ import (
 )
 
 func TestTranscriptPageShowsTheAgentsResources(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	seedHost(t, d)
 	rec := get(t, h, "/hosts/host-1/agents/"+agentA1, nil)
@@ -28,6 +29,7 @@ func TestTranscriptPageShowsTheAgentsResources(t *testing.T) {
 }
 
 func TestTranscriptPageWithoutResourcesSaysSo(t *testing.T) {
+	t.Parallel()
 	h := reported(t)
 	body := get(t, h, "/hosts/host-1/agents/"+agentA1, nil).Body.String()
 	if !strings.Contains(body, "No resources recorded") {

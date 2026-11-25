@@ -11,6 +11,7 @@ import (
 )
 
 func TestRunProposals(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	wf := createWorkflow(t, h, workflow.Starting)
@@ -198,6 +199,7 @@ func TestRunProposals(t *testing.T) {
 }
 
 func TestRunProposalToolSchema(t *testing.T) {
+	t.Parallel()
 	var schema struct {
 		Properties map[string]struct {
 			Type string

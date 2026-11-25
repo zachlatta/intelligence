@@ -47,6 +47,7 @@ func repositoryMinute(t *testing.T, b *rawHost, available uint64) {
 }
 
 func TestRepositoryEstimateGatesExistingQueue(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	b := sendReport(t, h, wfReport())
 	heavy := repositoryHistory(t, h, d, "/w/app")
@@ -80,6 +81,7 @@ func TestRepositoryEstimateGatesExistingQueue(t *testing.T) {
 }
 
 func TestRepositoryMemoryEstimateHoldsStartRetry(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	clock := &fakeClock{t: time.Now().UTC()}
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.Now = clock.Now; c.QueueInterval = time.Hour })
@@ -111,6 +113,7 @@ func TestRepositoryMemoryEstimateHoldsStartRetry(t *testing.T) {
 }
 
 func TestMatchedRepositoryReentersExistingQueue(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	b := sendReport(t, h, wfReport())
 	repositoryHistory(t, h, d, "/w/app")
@@ -132,6 +135,7 @@ func TestMatchedRepositoryReentersExistingQueue(t *testing.T) {
 }
 
 func TestOversizedRepositoryRunsAloneWithoutBlockingFIFOForever(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	b := sendReport(t, h, wfReport())
 	wf := repositoryHistory(t, h, d, "/w/app")
@@ -180,6 +184,7 @@ func TestOversizedRepositoryRunsAloneWithoutBlockingFIFOForever(t *testing.T) {
 }
 
 func TestActiveRepositoryRunKeepsUnconsumedMemoryReservation(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	clock := &fakeClock{t: time.Now().UTC()}
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.Now = clock.Now; c.QueueInterval = time.Hour })

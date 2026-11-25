@@ -5,6 +5,7 @@ import (
 )
 
 func TestMemoryPercentileAndWorkflowFallback(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	wf := namedWorkflow(t, h, "estimate", "/w/history")
@@ -24,6 +25,7 @@ func TestMemoryPercentileAndWorkflowFallback(t *testing.T) {
 }
 
 func TestOlderMemoryHistoryPrecedesUnknownFallback(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	wf := namedWorkflow(t, h, "infrequent", "/w/infrequent")
@@ -41,6 +43,7 @@ func TestOlderMemoryHistoryPrecedesUnknownFallback(t *testing.T) {
 }
 
 func TestOversizedHeadStillAllowsLightBackfill(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	b := sendReport(t, h, wfReport())
 	wf := repositoryHistory(t, h, d, "/w/oversized")

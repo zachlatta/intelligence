@@ -64,6 +64,7 @@ func assertActivityRemaining(t *testing.T, h *testServer, clock *fakeClock, run 
 }
 
 func TestActivityEstimateTransitions(t *testing.T) {
+	t.Parallel()
 	h, clock, key, run := activityRevisionRun(t)
 	assertActivityRemaining(t, h, clock, run, 3600)
 	for _, m := range []map[string]string{{"move": "next"}, {"move": "back", "step": "build", "why": "Rework"}, {"move": "skip", "why": "Already checked"}} {
@@ -79,6 +80,7 @@ func TestActivityEstimateTransitions(t *testing.T) {
 }
 
 func TestActivityEstimateExpiry(t *testing.T) {
+	t.Parallel()
 	h, clock, key, run := activityRevisionRun(t)
 	clock.Add(2 * time.Hour)
 	page := get(t, h, "/workflow-runs/"+run, nil).Body.String()
@@ -102,6 +104,7 @@ func TestActivityEstimateExpiry(t *testing.T) {
 }
 
 func TestActivityReplyClearsResolvedWait(t *testing.T) {
+	t.Parallel()
 	h, clock, key, run := activityRevisionRun(t)
 	if code, msg := move(t, h, key, run, map[string]string{"move": "next"}); code != 200 {
 		t.Fatalf("%d %s", code, msg)
@@ -128,6 +131,7 @@ func TestActivityReplyClearsResolvedWait(t *testing.T) {
 }
 
 func TestActivitySendBackUsesCurrentVisit(t *testing.T) {
+	t.Parallel()
 	h, clock, key, run := activityRevisionRun(t)
 	if _, err := h.d.Owner.Exec(t.Context(), `UPDATE workflow_run_events SET at=$2 WHERE run_id=$1 AND kind='workspace'`, run, clock.Now().Add(-20*time.Minute)); err != nil {
 		t.Fatal(err)
@@ -145,6 +149,7 @@ func TestActivitySendBackUsesCurrentVisit(t *testing.T) {
 }
 
 func TestActivityTransitionsPreserveAgentETA(t *testing.T) {
+	t.Parallel()
 	h, clock, key, run := activityRevisionRun(t)
 	eta := clock.Now().Add(4 * time.Hour).Format(time.RFC3339)
 	if code, msg := move(t, h, key, run, map[string]string{"move": "status", "now": "Checking", "eta": eta}); code != 200 {

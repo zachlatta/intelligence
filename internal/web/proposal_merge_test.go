@@ -9,6 +9,7 @@ import (
 )
 
 func TestProposalPagesKeepSharedNavigation(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	proposal := proposalForQuestion(t, h)
@@ -27,6 +28,7 @@ func TestProposalPagesKeepSharedNavigation(t *testing.T) {
 }
 
 func TestProposalReviewHasReleaseNote(t *testing.T) {
+	t.Parallel()
 	entries, err := whatsnew.Entries()
 	if err != nil {
 		t.Fatal(err)

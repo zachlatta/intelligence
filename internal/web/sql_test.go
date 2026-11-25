@@ -44,6 +44,7 @@ func q(query string) string {
 }
 
 func TestSQLReadsAppState(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, sampleReport)
 	code, r := sqlPost(t, h, q("SELECT name, paseo_version, online, running_agents::text AS running FROM host_status"))
@@ -59,6 +60,7 @@ func TestSQLReadsAppState(t *testing.T) {
 }
 
 func TestSQLGETWithQueryParameter(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	rec := get(t, h, "/api/sql?q="+url.QueryEscape("SELECT 1 + 1 AS two"), nil)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"two"`) || !strings.Contains(rec.Body.String(), "[[2]]") {
@@ -67,6 +69,7 @@ func TestSQLGETWithQueryParameter(t *testing.T) {
 }
 
 func TestSQLRefusesWrites(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	for _, query := range []string{
 		"INSERT INTO hosts (name, last_seen) VALUES ('x', now())",
@@ -84,6 +87,7 @@ func TestSQLRefusesWrites(t *testing.T) {
 }
 
 func TestSQLCapsRows(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	code, r := sqlPost(t, h, `{"query": "SELECT generate_series(1, 50)", "limit": 10}`)
 	if code != http.StatusOK || r.RowCount != 10 || !r.Truncated {
@@ -95,6 +99,7 @@ func TestSQLCapsRows(t *testing.T) {
 }
 
 func TestSQLTimesOut(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.SQLTimeout = 200 * time.Millisecond })
 	start := time.Now()
@@ -105,6 +110,7 @@ func TestSQLTimesOut(t *testing.T) {
 }
 
 func TestSQLRejectsEmptyQuery(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	if code, _ := sqlPost(t, h, `{"query": "  "}`); code != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400", code)
@@ -113,6 +119,7 @@ func TestSQLRejectsEmptyQuery(t *testing.T) {
 
 // The contract, through the API: every table and view in the app schema can be read with SQL.
 func TestEveryTableIsReadableThroughTheSQLAPI(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v")
 	rows, err := d.Owner.Query(t.Context(), `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'`)
@@ -136,6 +143,7 @@ func TestEveryTableIsReadableThroughTheSQLAPI(t *testing.T) {
 }
 
 func TestSQLWalksHostsWorkspacesAndAgents(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, sampleReport)
 	code, r := sqlPost(t, h, q(`SELECT d.name, w.name, a.title, a.status FROM hosts d JOIN workspaces w ON w.host = d.name

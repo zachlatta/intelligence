@@ -7,6 +7,7 @@ import (
 )
 
 func TestProposalRepliesRefreshWithoutLosingDraft(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	_, src, found := strings.Cut(proposalsHTML, "<script>\n// Use the run page's")
 	if !found {

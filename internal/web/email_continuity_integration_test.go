@@ -16,6 +16,7 @@ import (
 )
 
 func TestEmailContinuationUsesMainStartupPolicy(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"normal queue", "immediate priority", "fallback queue", "disabled provider", "credential", "cancellation blocks redelivery", "prior resolution", "late expiry"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()

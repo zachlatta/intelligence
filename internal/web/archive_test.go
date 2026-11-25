@@ -7,6 +7,7 @@ import (
 )
 
 func TestHomePageArchivesWorkspacesAndAgentsThroughTheCommandsAPI(t *testing.T) {
+	t.Parallel()
 	h := reported(t)
 	page := get(t, h, "/", nil).Body.String()
 	for _, want := range []string{
@@ -30,6 +31,7 @@ func TestHomePageArchivesWorkspacesAndAgentsThroughTheCommandsAPI(t *testing.T) 
 }
 
 func TestAgentPageHasAnArchiveButton(t *testing.T) {
+	t.Parallel()
 	h := reported(t)
 	page := get(t, h, "/hosts/host-1/agents/"+agentA1, nil).Body.String()
 	for _, want := range []string{`data-archive="agent" data-host="host-1" data-id="` + agentA1 + `"`, `data-running="1"`, `data-then="/"`, `function archive(`} {

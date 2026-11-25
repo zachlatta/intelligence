@@ -48,6 +48,7 @@ func voiceMemoWorkflowDef() workflow.Definition {
 }
 
 func TestFailedAnswerExpectedRunNotifiesPhone(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	rec := &noticeRecorder{}
 	h := newServer(t, d, d.Owner, "v", func(c *Config) {
@@ -108,6 +109,7 @@ func TestFailedAnswerExpectedRunNotifiesPhone(t *testing.T) {
 }
 
 func TestWorkflowUpdateAutoRetriesFailedStartRuns(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	host := sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
@@ -197,6 +199,7 @@ func TestWorkflowUpdateAutoRetriesFailedStartRuns(t *testing.T) {
 }
 
 func TestWorkflowRunRetryAPIAndPage(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	host := sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
@@ -288,6 +291,7 @@ func TestWorkflowRunRetryAPIAndPage(t *testing.T) {
 }
 
 func TestConcurrentRetriesOfOneFailedRunStartOneRun(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	host := sendReport(t, h, wfReport())
 	wfID := createWorkflow(t, h, voiceMemoWorkflowDef())
@@ -324,6 +328,7 @@ func TestConcurrentRetriesOfOneFailedRunStartOneRun(t *testing.T) {
 }
 
 func TestDatabaseRejectsDuplicateRetryForSameRun(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	host := sendReport(t, h, wfReport())
 	wfID := createWorkflow(t, h, voiceMemoWorkflowDef())

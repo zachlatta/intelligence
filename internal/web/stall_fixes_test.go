@@ -11,6 +11,7 @@ import (
 )
 
 func TestRecoveryAttentionStates(t *testing.T) {
+	t.Parallel()
 	f := newStallFixture(t)
 	for _, state := range []string{"finished", "permission-parent", "permission-child", "pending", "error", "stuck", "cleared", "denied"} {
 		t.Run(state, func(t *testing.T) {
@@ -77,6 +78,7 @@ func TestRecoveryAttentionStates(t *testing.T) {
 }
 
 func TestStallRecoveryWritesHistory(t *testing.T) {
+	t.Parallel()
 	f := newStallFixture(t)
 	b := f.reset(t)
 	d, clock, h := f.d, f.clock, f.h
@@ -126,6 +128,7 @@ func TestStallRecoveryWritesHistory(t *testing.T) {
 }
 
 func TestStalledPresentation(t *testing.T) {
+	t.Parallel()
 	r := runRow{Status: workflow.Stalled, Step: 1, Steps: []workflow.Step{{Title: "Build"}, {Title: "Check"}, {Title: "Land"}}}
 	if r.StatusClass() != "st-error" {
 		t.Errorf("uncoloured stalled badge: %s", r.StatusClass())
@@ -140,6 +143,7 @@ func TestStalledPresentation(t *testing.T) {
 }
 
 func TestStallWatchdogWithoutLifecycleEvent(t *testing.T) {
+	t.Parallel()
 	f := newStallFixture(t)
 	b := f.reset(t)
 	d, clock, h := f.d, f.clock, f.h

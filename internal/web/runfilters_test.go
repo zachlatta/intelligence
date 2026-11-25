@@ -12,6 +12,7 @@ import (
 )
 
 func TestWaitingRunBannerIgnoresStatusFilter(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
 	sendReport(t, h, wfReport())
@@ -43,6 +44,7 @@ func TestWaitingRunBannerIgnoresStatusFilter(t *testing.T) {
 }
 
 func TestRunStatusTabsFilterBeforeLimitAndCountAllRuns(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
 	sendReport(t, h, wfReport())
@@ -112,6 +114,7 @@ func TestRunStatusTabsFilterBeforeLimitAndCountAllRuns(t *testing.T) {
 }
 
 func TestStatusFilterKeepsSearchAndPagination(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	wf := createWorkflow(t, h, workflow.Starting)

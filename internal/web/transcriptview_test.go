@@ -29,6 +29,7 @@ func shell(seq int, cmd, out string, exit int) fleet.Entry {
 }
 
 func TestBlocksGroupToolRunsAndStartTurnsAtUserMessages(t *testing.T) {
+	t.Parallel()
 	bs := buildBlocks([]fleet.Entry{
 		fe(1, `{"type":"user_message","text":"fix it"}`),
 		fe(2, `{"type":"reasoning","text":"hmm"}`),
@@ -52,6 +53,7 @@ func TestBlocksGroupToolRunsAndStartTurnsAtUserMessages(t *testing.T) {
 }
 
 func TestMarkdownRendersButStaysSafe(t *testing.T) {
+	t.Parallel()
 	html := string(markdown("**bold** `code`\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n<script>alert(1)</script>\n\n[x](javascript:alert(1)) [ok](https://example.com)"))
 	for _, want := range []string{"<strong>bold</strong>", "<code>code</code>", "<table>", `href="https://example.com"`} {
 		if !strings.Contains(html, want) {
@@ -69,6 +71,7 @@ func TestMarkdownRendersButStaysSafe(t *testing.T) {
 }
 
 func TestToolSummariesByKind(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		item string
 		want []string
@@ -109,6 +112,7 @@ func TestToolSummariesByKind(t *testing.T) {
 }
 
 func TestLongOutputIsCutWithALinkToTheWhole(t *testing.T) {
+	t.Parallel()
 	out := strings.Repeat("line\n", 500)
 	page := renderBlocksForTest(t, []fleet.Entry{shell(9, "seq 500", out, 0)})
 	if strings.Count(page, "line\n") > 100 {
@@ -129,6 +133,7 @@ func renderBlocksForTest(t *testing.T, entries []fleet.Entry) string {
 }
 
 func TestTranscriptLiveUpdateSendsBlocksFromASeq(t *testing.T) {
+	t.Parallel()
 	h := reported(t)
 	sendBatch(t, h, batch(true, "ep1",
 		tentry(1, `{"type":"user_message","text":"go"}`),
@@ -154,6 +159,7 @@ func TestTranscriptLiveUpdateSendsBlocksFromASeq(t *testing.T) {
 }
 
 func TestTranscriptEntryShowsTheWholeItem(t *testing.T) {
+	t.Parallel()
 	h := reported(t)
 	sendBatch(t, h, batch(true, "ep1",
 		tentry(1, `{"type":"tool_call","callId":"c","name":"Bash","status":"completed","detail":{"type":"shell","command":"cat <big>","output":"`+strings.Repeat("y", 9000)+`"},"error":null}`)))
@@ -167,6 +173,7 @@ func TestTranscriptEntryShowsTheWholeItem(t *testing.T) {
 }
 
 func TestTranscriptPageHasTheToolbarAndOtherAgents(t *testing.T) {
+	t.Parallel()
 	h := reported(t)
 	sendBatch(t, h, batch(true, "ep1", tentry(1, `{"type":"user_message","text":"go"}`)))
 	page := get(t, h, "/hosts/host-1/agents/"+agentA1, nil).Body.String()
@@ -181,6 +188,7 @@ func TestTranscriptPageHasTheToolbarAndOtherAgents(t *testing.T) {
 }
 
 func TestMarkdownImagesBecomePlaceholders(t *testing.T) {
+	t.Parallel()
 	html := string(markdown("before ![Screenshot of the grid](/tmp/shots/a.png) after ![](https://example.com/b.png)"))
 	if strings.Contains(html, "<img") {
 		t.Errorf("images point at files on the host the page cannot load; want a placeholder: %s", html)
@@ -193,6 +201,7 @@ func TestMarkdownImagesBecomePlaceholders(t *testing.T) {
 }
 
 func TestSharedImagesRenderInlineWithoutAllowingOtherOrigins(t *testing.T) {
+	t.Parallel()
 	url := "https://files.zachlatta.com/unknown-namespace/screenshot.png"
 	html := string(markdown(`![Grid & chart](` + url + `)`))
 	for _, want := range []string{`<img`, `src="` + url + `"`, `alt="Grid &amp; chart"`, `loading="lazy"`, `referrerpolicy="no-referrer"`} {
@@ -213,6 +222,7 @@ func TestSharedImagesRenderInlineWithoutAllowingOtherOrigins(t *testing.T) {
 }
 
 func TestToolLabelsAreFriendly(t *testing.T) {
+	t.Parallel()
 	page := renderBlocksForTest(t, []fleet.Entry{fe(1,
 		`{"type":"tool_call","name":"task_notification","status":"completed","detail":{"type":"plain_text","label":"Done","text":"x"},"error":null}`)})
 	if strings.Contains(page, "plain_text") || !strings.Contains(page, ">note<") {
@@ -221,6 +231,7 @@ func TestToolLabelsAreFriendly(t *testing.T) {
 }
 
 func TestTranscriptEditDiffHasNoBlankGapLinesAndRespectsTopbar(t *testing.T) {
+	t.Parallel()
 	diffHTML := renderBlocksForTest(t, []fleet.Entry{fe(1,
 		`{"type":"tool_call","name":"Edit","status":"completed","detail":{"type":"edit","filePath":"/w/a.go","unifiedDiff":"@@ -1 +1 @@\n-old\n+new"},"error":null}`)})
 	if !strings.Contains(diffHTML, `class="del">-old</span><span class="add">&#43;new</span>`) {

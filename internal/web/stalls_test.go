@@ -17,6 +17,7 @@ import (
 )
 
 func TestStallRecoveryIsBoundedAndResumable(t *testing.T) {
+	t.Parallel()
 	f := newStallFixture(t)
 	b := f.reset(t)
 	d, clock, h := f.d, f.clock, f.h
@@ -130,6 +131,7 @@ func TestStallRecoveryIsBoundedAndResumable(t *testing.T) {
 }
 
 func TestWatchdogExcludesUnsafeContinuations(t *testing.T) {
+	t.Parallel()
 	f := newStallFixture(t)
 	for _, why := range []string{"worker", "permission", "pending", "waiting", "offline", "stale", "canceled", "missing", "busy"} {
 		t.Run(why, func(t *testing.T) {
@@ -209,6 +211,7 @@ func TestWatchdogExcludesUnsafeContinuations(t *testing.T) {
 }
 
 func TestContinuationIsNotDeliveredAfterProgress(t *testing.T) {
+	t.Parallel()
 	f := newStallFixture(t)
 	for _, ending := range []string{"next", "ask", "fail", "cancel"} {
 		t.Run(ending, func(t *testing.T) {
@@ -252,6 +255,7 @@ func TestContinuationIsNotDeliveredAfterProgress(t *testing.T) {
 
 // Admission landed after this worktree branched; recovery must preserve its queued status.
 func TestStallMigrationPreservesAdmissionState(t *testing.T) {
+	t.Parallel()
 	f := newStallFixture(t)
 	f.reset(t)
 	h, d := f.h, f.d

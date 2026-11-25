@@ -16,6 +16,7 @@ import (
 )
 
 func TestModelGroupsStableTokensAndIsolation(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	rec := call(t, h, http.MethodPost, "/api/model-groups", `{"name":"Frontier Models","members":[]}`, sameOriginFetch)
 	if rec.Code != 201 {
@@ -65,6 +66,7 @@ func TestModelGroupsStableTokensAndIsolation(t *testing.T) {
 }
 
 func TestModelGroupPageMarkup(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	wf := createWorkflow(t, h, workflow.Starting)
@@ -82,6 +84,7 @@ func TestModelGroupPageMarkup(t *testing.T) {
 }
 
 func TestModelGroupInitialLoadGate(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	out, err := exec.Command(node, "-e", `
 const assert=require('assert'),vm=require('vm'),fs=require('fs');
@@ -111,6 +114,7 @@ async function scenario(sheet, fail) {
 }
 
 func TestModelGroupClientHelpers(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	out, err := exec.Command(node, "-e", `
 const assert=require('assert'),vm=require('vm'),fs=require('fs');
@@ -150,6 +154,7 @@ assert(modelTokenChips([]).includes('Edit groups'));
 }
 
 func TestWorkflowHostAPIErrorsAreJSON(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	for _, action := range []string{"moves", "suggestions"} {
 		for _, body := range []string{`{}`, `not-json`} {
@@ -173,6 +178,7 @@ func TestWorkflowHostAPIErrorsAreJSON(t *testing.T) {
 }
 
 func TestModelGroupUsesObservedQuotaPools(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	rep := wfReport()
 	rep.Paseo.Providers = []hostclient.Provider{{Name: "antigravity", Available: true, Models: []hostclient.Model{{ID: "new-model", Thinking: []string{"high"}}}}}
@@ -201,6 +207,7 @@ func TestModelGroupUsesObservedQuotaPools(t *testing.T) {
 }
 
 func TestModelGroupBalancesHeadroomAcrossResetPhases(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	rep := wfReport()
 	rep.Paseo.Providers = []hostclient.Provider{
@@ -306,6 +313,7 @@ func TestModelGroupBalancesHeadroomAcrossResetPhases(t *testing.T) {
 // Members keep only what the editor chooses: the provider is the plan's provider, and shorter
 // windows in a pool are read live from usage, so neither is stored a second time.
 func TestModelGroupSchemaStoresNoDerivedCopies(t *testing.T) {
+	t.Parallel()
 	_, d := dbServer(t)
 	var cols []string
 	rows, err := d.Owner.Query(t.Context(), `SELECT table_name||'.'||column_name FROM information_schema.columns
@@ -326,6 +334,7 @@ func TestModelGroupSchemaStoresNoDerivedCopies(t *testing.T) {
 }
 
 func TestModelGroupNames(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	body := func(name string, revision int) string {
 		b, _ := json.Marshal(map[string]any{"name": name, "revision": revision, "members": []any{}})
@@ -384,6 +393,7 @@ func TestModelGroupNames(t *testing.T) {
 }
 
 func TestModelGroupCanConfigureUnknownMeters(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	if _, err := d.Owner.Exec(t.Context(), `UPDATE provider_plan_settings SET enabled=true WHERE provider='muse'`); err != nil {
 		t.Fatal(err)
@@ -425,6 +435,7 @@ func TestModelGroupCanConfigureUnknownMeters(t *testing.T) {
 }
 
 func TestModelGroupRejectsBlankLoginAndHidesDatabaseErrors(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	rep := wfReport()
 	rep.Paseo.Providers = []hostclient.Provider{{Name: "codex", Available: true, Models: []hostclient.Model{{ID: "sol", Thinking: []string{"high"}}}}}
@@ -461,6 +472,7 @@ func TestModelGroupRejectsBlankLoginAndHidesDatabaseErrors(t *testing.T) {
 }
 
 func TestModelGroupRankingAndWorkflowExpansion(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	rep := wfReport()
 	rep.Paseo.Providers = []hostclient.Provider{
@@ -601,6 +613,7 @@ func TestModelGroupRankingAndWorkflowExpansion(t *testing.T) {
 // A member on a host login that is broken (an open login_incidents row, or one on the host's unknown
 // login) is not suggested; once the incident is resolved it is again.
 func TestModelGroupSkipsABrokenLogin(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	rep := wfReport()
 	rep.Paseo.Providers = []hostclient.Provider{{Name: "codex", Available: true, Models: []hostclient.Model{{ID: "sol", Thinking: []string{"high"}}}}}
@@ -643,6 +656,7 @@ func TestModelGroupSkipsABrokenLogin(t *testing.T) {
 // points of a weekly allowance for an hour each made a busy fleet's weekly Claude plan with 63%
 // left look empty while its meter moved about 0.15 points per suggestion.
 func TestModelGroupPenaltyIsAShareOfTheWindowUntilTheNextReading(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	rep := wfReport()
 	rep.Paseo.Providers = []hostclient.Provider{{Name: "claude", Available: true, Models: []hostclient.Model{{ID: "opus", Thinking: []string{"medium"}}, {ID: "claude-fable-5-2"}}}}
@@ -717,6 +731,7 @@ func TestModelGroupPenaltyIsAShareOfTheWindowUntilTheNextReading(t *testing.T) {
 // switch (a switch_login command, readable in SQL) and hands it out only once the host's usage
 // report shows it active. One request at a time per host, and none while the active login is close.
 func TestModelGroupSwitchesToAHeldLogin(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	rep := wfReport()
 	rep.Paseo.Providers = []hostclient.Provider{{Name: "claude", Available: true, Models: []hostclient.Model{{ID: "opus", Label: "Claude Opus 5.5", Thinking: []string{"medium"}}}}}
@@ -824,6 +839,7 @@ func TestModelGroupSwitchesToAHeldLogin(t *testing.T) {
 
 // model-groups.js is served like the other embedded scripts: revalidated by an ETag of its content.
 func TestModelGroupsScriptIsServed(t *testing.T) {
+	t.Parallel()
 	rec := get(t, dictationServer(t, "", ""), "/model-groups.js", nil)
 	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/javascript") ||
 		!strings.Contains(rec.Body.String(), "model-groups") || rec.Header().Get("ETag") == "" || rec.Header().Get("Cache-Control") != "no-cache" {
@@ -832,6 +848,7 @@ func TestModelGroupsScriptIsServed(t *testing.T) {
 }
 
 func TestWorkflowAPIRejectsStepModelFields(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	def := workflow.Starting
@@ -850,6 +867,7 @@ func TestWorkflowAPIRejectsStepModelFields(t *testing.T) {
 // model_group_candidates using fresh quota readings from another host on the same login,
 // and a login incident on one host only blocks that host.
 func TestModelGroupWorksOnClaudeCLIHostWithSharedQuota(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	now := time.Now().UTC().Truncate(time.Second)
 	rep1 := wfReport()

@@ -10,6 +10,7 @@ import (
 )
 
 func TestProposalReplacementAndIdentity(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
@@ -48,6 +49,7 @@ func TestProposalReplacementAndIdentity(t *testing.T) {
 }
 
 func TestProposalReviewDiffKeepsUnchangedLines(t *testing.T) {
+	t.Parallel()
 	lines := proposalLineDiff("one\nold\nsame\nlast", "one\nnew\nsame\nlast")
 	changed := 0
 	for _, line := range lines {
@@ -61,6 +63,7 @@ func TestProposalReviewDiffKeepsUnchangedLines(t *testing.T) {
 }
 
 func TestProposalLineDiffReconstructsBothInputs(t *testing.T) {
+	t.Parallel()
 	r := rand.New(rand.NewPCG(7, 11))
 	for range 300 {
 		makeText := func() string {
@@ -93,6 +96,7 @@ func TestProposalLineDiffReconstructsBothInputs(t *testing.T) {
 }
 
 func TestProposalReviewReadableAndDiscoverable(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
@@ -141,6 +145,7 @@ func TestProposalReviewReadableAndDiscoverable(t *testing.T) {
 // review or a saved version, breadcrumbs back to the list; the Proposals tab's count sits apart
 // from its name.
 func TestProposalPagesShareThePageLayout(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")

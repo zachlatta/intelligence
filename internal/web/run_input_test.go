@@ -11,6 +11,7 @@ import (
 )
 
 func TestWorkflowRunInputAPI(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	host := sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
@@ -107,6 +108,7 @@ func TestWorkflowRunInputAPI(t *testing.T) {
 }
 
 func TestWorkflowRunInputCannotReachAReassignedHost(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	ts := h.(*testServer)
 	host := sendReport(t, h, wfReport())
@@ -134,6 +136,7 @@ func TestWorkflowRunInputCannotReachAReassignedHost(t *testing.T) {
 }
 
 func TestWorkflowRunInputPage(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	host := sendReport(t, h, wfReport())
 	run := startRun(t, h, fixedWorkflow(t, h), "Improve the help page")

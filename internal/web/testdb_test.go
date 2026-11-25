@@ -14,6 +14,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestDatabaseFixturesAreIsolated(t *testing.T) {
+	t.Parallel()
 	first := dbtest.New(t)
 	fixtureFor(t, first)
 	second := dbtest.New(t)

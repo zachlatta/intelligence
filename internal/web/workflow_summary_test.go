@@ -11,6 +11,7 @@ import (
 )
 
 func TestRunSummaryIsStoredThroughTheAPIAndDisplayed(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
@@ -82,6 +83,7 @@ func TestRunSummaryIsStoredThroughTheAPIAndDisplayed(t *testing.T) {
 }
 
 func TestSummaryLabelsEveryRunStatusWithoutMovingIt(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
 	sendReport(t, h, wfReport())
@@ -117,6 +119,7 @@ func TestSummaryLabelsEveryRunStatusWithoutMovingIt(t *testing.T) {
 }
 
 func TestRunSummaryHeadingRefresh(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	run := startRun(t, h, createWorkflow(t, h, workflow.Starting), "Keep the heading current")

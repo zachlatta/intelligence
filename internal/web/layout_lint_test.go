@@ -31,6 +31,7 @@ func checkTablesAreWrapped(templates map[string]string) []string {
 }
 
 func TestTablesAreWrappedForHorizontalScroll(t *testing.T) {
+	t.Parallel()
 	for _, msg := range checkTablesAreWrapped(webAssetsByExt(t, ".html")) {
 		t.Error(msg)
 	}
@@ -81,6 +82,7 @@ func checkFlexInputRowsWrap(sources map[string]string) []string {
 }
 
 func TestFlexInputRowsWrapOnNarrowScreens(t *testing.T) {
+	t.Parallel()
 	for _, msg := range checkFlexInputRowsWrap(webAssetsByExt(t, ".css", ".html")) {
 		t.Error(msg)
 	}

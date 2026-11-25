@@ -12,6 +12,7 @@ import (
 )
 
 func TestPagedAndSearchedRunsKeepAnswerTimingAndWarnings(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	def := workflow.Starting
@@ -83,6 +84,7 @@ func TestPagedAndSearchedRunsKeepAnswerTimingAndWarnings(t *testing.T) {
 // time, with links to older ones, and its search box finds runs in all of history, not only the
 // page on screen.
 func TestTheRunsListPagesThroughHistoryAndSearchesIt(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	wf := fixedWorkflow(t, h)

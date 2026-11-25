@@ -11,6 +11,7 @@ import (
 )
 
 func TestTaskComposerAccessibleControls(t *testing.T) {
+	t.Parallel()
 	for _, voice := range []string{"", "/api/dictation/token"} {
 		r := httptest.NewRecorder()
 		w := workflowRow{ID: "task", Name: "Task", Definition: workflow.Starting}
@@ -25,6 +26,7 @@ func TestTaskComposerAccessibleControls(t *testing.T) {
 
 // Exercise the actual task submission script, including an upload in flight and a failed API call.
 func TestTaskComposerSubmission(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	src, err := os.ReadFile("workflows.html")
 	if err != nil {

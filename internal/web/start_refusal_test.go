@@ -19,6 +19,7 @@ func refusalTestToken() string {
 }
 
 func TestCredentialEmailIsIgnoredAndLaterMailRoutes(t *testing.T) {
+	t.Parallel()
 	h, fake := emailServer(t)
 	sendReport(t, h, wfReport())
 	christina(t, h)
@@ -35,6 +36,7 @@ func TestCredentialEmailIsIgnoredAndLaterMailRoutes(t *testing.T) {
 }
 
 func TestCredentialQueuedRunFailsAndNextRunStarts(t *testing.T) {
+	t.Parallel()
 	for _, source := range []string{"legacy input", "project instructions", "orchestrator instructions"} {
 		t.Run(source, func(t *testing.T) {
 			db := dbtest.New(t)
@@ -87,6 +89,7 @@ func TestCredentialQueuedRunFailsAndNextRunStarts(t *testing.T) {
 }
 
 func TestCredentialStartRetryFailsAndNextRunStarts(t *testing.T) {
+	t.Parallel()
 	for _, fixed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "finder", true: "orchestrator"}[fixed], func(t *testing.T) {
 			db := dbtest.New(t)
@@ -127,6 +130,7 @@ func TestCredentialStartRetryFailsAndNextRunStarts(t *testing.T) {
 }
 
 func TestCredentialFinderHandoffIsARefusal(t *testing.T) {
+	t.Parallel()
 	h, db := dbServer(t)
 	b := sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
@@ -146,6 +150,7 @@ func TestCredentialFinderHandoffIsARefusal(t *testing.T) {
 }
 
 func TestCredentialVoiceMemoIsIgnoredAndLaterMemoStarts(t *testing.T) {
+	t.Parallel()
 	db := dbtest.New(t)
 	h := newServer(t, db, db.Owner, "v")
 	sendReport(t, h, wfReport())

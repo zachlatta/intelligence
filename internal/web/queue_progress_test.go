@@ -50,6 +50,7 @@ func peakHistory(t *testing.T, h http.Handler, d dbtest.DB, repo string, peaks [
 // One unusually heavy run must not make every later run of its repository reserve its peak, or
 // a nearly idle host holds its queue behind estimates its runs never reach. The estimate is what nine runs in ten stayed under.
 func TestOneHeavyRunDoesNotSizeEveryRunOfItsRepository(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	b := sendReport(t, h, wfReport())
 	peaks := []int64{6 << 30}
@@ -78,6 +79,7 @@ func TestOneHeavyRunDoesNotSizeEveryRunOfItsRepository(t *testing.T) {
 // A run waiting for Zach's reply can wait for days with its agents idle. It must not hold its
 // memory estimate against the queue meanwhile.
 func TestAWaitingRunHoldsNoMemoryForTheQueue(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	b := sendReport(t, h, wfReport())
 	wf := fixedWorkflow(t, h) // no history: 4 GiB estimate
@@ -102,6 +104,7 @@ func TestAWaitingRunHoldsNoMemoryForTheQueue(t *testing.T) {
 // Start now starts a run whatever its host's load. A run that finds its project first must not
 // then fall back behind the queue it was started ahead of.
 func TestStartNowCarriesThroughProjectSelection(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
 	b := sendReport(t, h, wfReport())
@@ -131,6 +134,7 @@ func TestStartNowCarriesThroughProjectSelection(t *testing.T) {
 // A run started by hand whose start fails retries as soon as its host is ready, not after the
 // queue it was started ahead of: only a free queue head would otherwise let it through.
 func TestARetryOfAHandStartedRunSkipsTheQueue(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	clock := &fakeClock{t: time.Now().UTC()}
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour; c.Now = clock.Now })
@@ -164,6 +168,7 @@ func TestARetryOfAHandStartedRunSkipsTheQueue(t *testing.T) {
 // the queue. Marked started by hand, it starts on the next
 // pass of the queue, ahead of older runs and whatever the load.
 func TestARequeuedHandStartedRunStartsOnTheNextPass(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
 	b := sendReport(t, h, wfReport())
@@ -186,6 +191,7 @@ func TestARequeuedHandStartedRunStartsOnTheNextPass(t *testing.T) {
 // The solo exit keeps the peak ceiling even with no other active run. It progresses
 // automatically once the host has enough measured room for that bounded estimate.
 func TestTheQueueHeadStartsOnAnIdleHost(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	b := sendReport(t, h, wfReport())
 	wf := repositoryHistory(t, h, d, "/w/app") // 8 GiB estimate
@@ -213,6 +219,7 @@ func TestTheQueueHeadStartsOnAnIdleHost(t *testing.T) {
 // A run the queue started that then chooses its project still waits behind an older run that went
 // back into the queue when it chose its own.
 func TestProjectSelectionCannotSkipAnOlderRequeuedRun(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	clock := &fakeClock{t: time.Now().UTC()}
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour; c.Now = clock.Now })
@@ -246,6 +253,7 @@ func TestProjectSelectionCannotSkipAnOlderRequeuedRun(t *testing.T) {
 // A run still choosing its project reserves 1 GiB, not 4: its finder is small, and the project's
 // own estimate is checked again once it is chosen.
 func TestAFinderReservesLittle(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	id := startRun(t, h, createWorkflow(t, h, workflow.Starting), "find it")
@@ -276,6 +284,7 @@ func otherRunActive(t *testing.T, h http.Handler, d dbtest.DB, b *rawHost) strin
 // The upgrade lowers the estimate of runs still finding their project, stored as 4 GiB before,
 // to what a finder now reserves; finished runs keep theirs.
 func TestQueueProgressUpgradeReestimatesFinders(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	b := sendReport(t, h, wfReport())
 	finding := startRun(t, h, createWorkflow(t, h, workflow.Starting), "still finding")

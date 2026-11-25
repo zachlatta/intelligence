@@ -15,6 +15,7 @@ import (
 )
 
 func TestStartRetryRebuildsInputAndResolvesImages(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		name         string
 		fixed, image bool
@@ -104,6 +105,7 @@ func TestStartRetryRebuildsInputAndResolvesImages(t *testing.T) {
 }
 
 func TestOfflineStartupCommandsExpireAndReachDeadline(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{"queued", "sent", "running"} {
 		t.Run(status, func(t *testing.T) {
 			h, db := dbServer(t)
@@ -142,6 +144,7 @@ func TestOfflineStartupCommandsExpireAndReachDeadline(t *testing.T) {
 }
 
 func TestOfflineHostDoesNotConsumeRetryOrLookReady(t *testing.T) {
+	t.Parallel()
 	for _, stale := range []bool{false, true} {
 		t.Run(map[bool]string{false: "no stream", true: "stale heartbeat"}[stale], func(t *testing.T) {
 			h, db := dbServer(t)

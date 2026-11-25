@@ -14,6 +14,7 @@ import (
 // minute first. After the task box come the runs waiting on a reply (with the question itself),
 // then every live run with its step, then the history table, and the workflow definitions last.
 func TestWorkflowsPageLeadsWithWhatNeedsYouAndWhatIsRunning(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
 	sendReport(t, h, wfReport())
@@ -117,6 +118,7 @@ func TestWorkflowsPageLeadsWithWhatNeedsYouAndWhatIsRunning(t *testing.T) {
 // TestRunsTableFoldsHostAndProjectIntoWhat: the history table keeps What readable: the host and
 // project are a line under the summary, not two columns of their own.
 func TestRunsTableFoldsHostAndProjectIntoWhat(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
 	sendReport(t, h, wfReport())
@@ -136,6 +138,7 @@ func TestRunsTableFoldsHostAndProjectIntoWhat(t *testing.T) {
 }
 
 func TestNoteExcerpt(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ in, want string }{
 		{"", ""},
 		{"## Which one?\n\n- **A** or `B`", "Which one? A or B"},
@@ -150,6 +153,7 @@ func TestNoteExcerpt(t *testing.T) {
 }
 
 func TestWaitedFor(t *testing.T) {
+	t.Parallel()
 	for d, want := range map[time.Duration]string{
 		30 * time.Second:           "under a minute",
 		5 * time.Minute:            "5m",

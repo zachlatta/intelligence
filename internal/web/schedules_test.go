@@ -32,6 +32,7 @@ func sendSchedules(t *testing.T, h http.Handler, rep hostclient.ScheduleReport) 
 }
 
 func TestStreamStoresSchedules(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	b := openStream(t, h, "host-1") // before the host's first report: schedules do not wait for it
 	rep := sampleSchedules
@@ -49,6 +50,7 @@ func TestStreamStoresSchedules(t *testing.T) {
 }
 
 func TestSchedulesPageListsEverySchedule(t *testing.T) {
+	t.Parallel()
 	h := reported(t)
 	if body := get(t, h, "/schedules", nil).Body.String(); !strings.Contains(body, "No schedules") {
 		t.Errorf("empty schedules page: %s", body)
@@ -76,6 +78,7 @@ func TestSchedulesPageListsEverySchedule(t *testing.T) {
 }
 
 func TestSchedulePageShowsItsRunsAndEditForm(t *testing.T) {
+	t.Parallel()
 	h := reported(t)
 	sendSchedules(t, h, sampleSchedules)
 	rec := get(t, h, "/hosts/host-1/schedules/sch-nightly", nil)
@@ -98,6 +101,7 @@ func TestSchedulePageShowsItsRunsAndEditForm(t *testing.T) {
 }
 
 func TestNewSchedulePage(t *testing.T) {
+	t.Parallel()
 	h := reported(t)
 	rec := get(t, h, "/hosts/host-1/schedules/new", nil)
 	if rec.Code != http.StatusOK {
@@ -116,6 +120,7 @@ func TestNewSchedulePage(t *testing.T) {
 }
 
 func TestScheduleCommandsGoThroughTheCommandsAPI(t *testing.T) {
+	t.Parallel()
 	h := reported(t)
 	for body, want := range map[string]int{
 		`{"kind":"create_schedule","args":{"prompt":"go","cron":"0 7 * * *","agent":{"provider":"claude","cwd":"/w/app"}}}`: http.StatusAccepted,
@@ -131,6 +136,7 @@ func TestScheduleCommandsGoThroughTheCommandsAPI(t *testing.T) {
 }
 
 func TestAnotherAccountSeesNoSchedules(t *testing.T) {
+	t.Parallel()
 	h := reported(t)
 	sendSchedules(t, h, sampleSchedules)
 	ts := h.(*testServer)
@@ -154,6 +160,7 @@ func TestAnotherAccountSeesNoSchedules(t *testing.T) {
 }
 
 func TestDescribeCadence(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		s    hostclient.Schedule
 		want string

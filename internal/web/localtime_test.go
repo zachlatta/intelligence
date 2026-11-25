@@ -15,6 +15,7 @@ import (
 // A time the server shows is a <time> the browser rewrites in its own zone and locale (localtime.js),
 // with the instant in UTC as its fallback text for a browser that runs no script.
 func TestLocalTimeMarkup(t *testing.T) {
+	t.Parallel()
 	at := time.Date(2026, 11, 11, 23, 57, 5, 0, time.UTC)
 	for _, tc := range []struct{ format, want string }{
 		{"time", `<time datetime="2026-11-11T23:57:05Z" data-format="time" title="2026-11-11T23:57:05Z">23:57 UTC</time>`},
@@ -48,6 +49,7 @@ func TestLocalTimeMarkup(t *testing.T) {
 
 // Text the server stored with an instant in it (a queued run's reason) shows the instant locally.
 func TestLocalTextWrapsInstants(t *testing.T) {
+	t.Parallel()
 	got := localText(`host-1 <a> has no room yet (last measured 2026-11-11T23:57:00Z)`)
 	want := template.HTML(`host-1 &lt;a&gt; has no room yet (last measured <time datetime="2026-11-11T23:57:00Z" data-format="short" title="2026-11-11T23:57:00Z">Nov 11 23:57 UTC</time>)`)
 	if got != want {
@@ -58,6 +60,7 @@ func TestLocalTextWrapsInstants(t *testing.T) {
 // A run event's Markdown (a queued run's reason) shows its instants locally too, but never inside a
 // tag's attributes.
 func TestLocalMarkdownWrapsInstantsInText(t *testing.T) {
+	t.Parallel()
 	got := string(localMarkdown("Queued: waiting (last measured 2026-11-11T23:57:00Z), see [log](https://example.com/?at=2026-11-11T23:57:00Z)"))
 	if !strings.Contains(got, `(last measured <time datetime="2026-11-11T23:57:00Z" data-format="short"`) {
 		t.Errorf("instant in text not local: %s", got)
@@ -69,6 +72,7 @@ func TestLocalMarkdownWrapsInstantsInText(t *testing.T) {
 
 // Chart axes label their ends with times the browser localizes too (an SVG <text>, which takes no <time>).
 func TestChartLabelsAreLocal(t *testing.T) {
+	t.Parallel()
 	from := time.Date(2026, 11, 4, 3, 0, 0, 0, time.UTC)
 	svg := string(usageChart(nil, from, from.Add(7*24*time.Hour)))
 	if !strings.Contains(svg, `data-datetime="2026-11-04T03:00:00Z" data-format="day"`) {
@@ -81,6 +85,7 @@ func TestChartLabelsAreLocal(t *testing.T) {
 // an instant in RFC 3339, UTC, which localText shows locally. A new template, handler or package
 // that formats a clock time fails here.
 func TestNoServerFormattedClockTimes(t *testing.T) {
+	t.Parallel()
 	clock := regexp.MustCompile(`15:04|"Mon Jan|"Jan 2|\bMST\b|time\.(DateTime|Kitchen|Stamp\w*|ANSIC|UnixDate|RubyDate|RFC822\w*|RFC850|RFC1123\w*)\b|` +
 		`toISOString\(\)\.replace\("T"|toISOString\(\)\.slice\(0, 16\)`)
 	// what is never shown on a page: localtime.go holds the fallback layouts, and the host client's
@@ -123,6 +128,7 @@ func TestNoServerFormattedClockTimes(t *testing.T) {
 
 // Every page loads localtime.js, and the server serves it.
 func TestPagesLoadLocalTimeScript(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	for _, path := range []string{"/", "/workflows", "/schedules", "/usage", "/resources", "/whats-new", "/account", "/workflow-proposals"} {
 		page := get(t, h, path, nil)
@@ -157,6 +163,7 @@ console.log(JSON.stringify(els.map((e) => [e.textContent, e.title])));
 // localtime.js shows each time in the browser's own zone: the same instant reads differently in
 // New York and Tokyo, a relative time keeps its words, and a date alone is left as written.
 func TestLocalTimeScriptUsesBrowserZone(t *testing.T) {
+	t.Parallel()
 	node := requireNode(t)
 	spec := `[["time",{"datetime":"2026-11-11T18:57:05Z","data-format":"time"},"18:57 UTC"],
 		["time",{"datetime":"2026-11-11T18:57:05Z","data-format":"short"},"Nov 11 18:57 UTC"],

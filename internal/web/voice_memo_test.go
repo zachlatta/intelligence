@@ -16,6 +16,7 @@ import (
 )
 
 func TestVoiceMemoAPIStartsOnceAndIsAccountScoped(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v")
 	sendReport(t, h, wfReport())
@@ -143,6 +144,7 @@ func TestVoiceMemoAPIStartsOnceAndIsAccountScoped(t *testing.T) {
 }
 
 func TestVoiceMemoRefusalDoesNotBlockLaterRecordings(t *testing.T) {
+	t.Parallel()
 	for _, removed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "unreported host", true: "removed host"}[removed], func(t *testing.T) {
 			d := dbtest.New(t)
@@ -213,6 +215,7 @@ func TestVoiceMemoRefusalDoesNotBlockLaterRecordings(t *testing.T) {
 type voiceMemoFailTransport struct{}
 
 func TestProposalsShowVoiceMemoFilterChanges(t *testing.T) {
+	t.Parallel()
 	for _, filters := range [][2]*workflow.VoiceMemoFilter{
 		{nil, {Title: "Ideas"}},
 		{{Title: "Ideas"}, {Title: "Projects", Words: "workshop", Without: "private"}},
@@ -228,6 +231,7 @@ func TestProposalsShowVoiceMemoFilterChanges(t *testing.T) {
 }
 
 func TestVoiceMemoRunsUseTheHostCapacityQueue(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v")
 	sendReport(t, h, wfReport())
@@ -273,6 +277,7 @@ func TestVoiceMemoRunsUseTheHostCapacityQueue(t *testing.T) {
 // A recording PDW sends with no transcript yet must not wedge the feed: it gets an ignored
 // receipt, and the recordings after it are still read.
 func TestVoiceMemoEmptyTranscriptIsIgnoredNotRetried(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v")
 	sendReport(t, h, wfReport())
@@ -310,6 +315,7 @@ func TestVoiceMemoEmptyTranscriptIsIgnoredNotRetried(t *testing.T) {
 }
 
 func TestVoiceMemoUnexpectedStartFailureRemainsRetryable(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v")
 	sendReport(t, h, wfReport())
@@ -370,6 +376,7 @@ func TestVoiceMemoUnexpectedStartFailureRemainsRetryable(t *testing.T) {
 // server instance does not double the load) and backs off after failures instead of retrying
 // every second.
 func TestVoiceMemoPollingIsDueEverySecondAndBacksOffOnFailure(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v")
 	var mu sync.Mutex

@@ -11,6 +11,7 @@ import (
 )
 
 func TestRunActivityAPIAndDisplay(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
 	sendReport(t, h, wfReport())
@@ -96,6 +97,7 @@ func TestRunActivityAPIAndDisplay(t *testing.T) {
 }
 
 func TestActivityStaleBoundary(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	for _, age := range []time.Duration{0, 30 * time.Minute, 30*time.Minute + time.Second} {
 		at := now.Add(-age)
@@ -109,6 +111,7 @@ func TestActivityStaleBoundary(t *testing.T) {
 }
 
 func TestActivityHistoryEstimates(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
 	sendReport(t, h, wfReport())
@@ -246,6 +249,7 @@ func TestActivityHistoryEstimates(t *testing.T) {
 }
 
 func TestLegacyActivityEvent(t *testing.T) {
+	t.Parallel()
 	got := (runEvent{Kind: "status", Text: "Building since 23:00 EST · ETA unknown"}).Line()
 	if got != "Activity: Building · ETA unknown" {
 		t.Fatal(got)

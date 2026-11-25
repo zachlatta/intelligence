@@ -28,6 +28,7 @@ func get(t *testing.T, h http.Handler, path string, header map[string]string) *h
 }
 
 func TestHealthzReportsOKAndVersion(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServerVersion(t, "abc123")
 	rec := get(t, h, "/healthz", nil)
 	if rec.Code != http.StatusOK {
@@ -49,6 +50,7 @@ func TestHealthzReportsOKAndVersion(t *testing.T) {
 }
 
 func TestIndexShowsNameAndVersion(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServerVersion(t, "abc123")
 	rec := get(t, h, "/", nil)
 	if rec.Code != http.StatusOK {
@@ -65,6 +67,7 @@ func TestIndexShowsNameAndVersion(t *testing.T) {
 }
 
 func TestIndexHasNoGreeting(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	page := get(t, h, "/", map[string]string{"Tailscale-User-Name": "Some One"}).Body.String()
 	if strings.Contains(page, "Hi") || strings.Contains(page, "Some One") {
@@ -73,6 +76,7 @@ func TestIndexHasNoGreeting(t *testing.T) {
 }
 
 func TestUnknownPathIs404(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	if rec := get(t, h, "/nope", nil); rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
@@ -80,6 +84,7 @@ func TestUnknownPathIs404(t *testing.T) {
 }
 
 func TestOnlyGETAndHEAD(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	rec := httptest.NewRecorder()
@@ -90,6 +95,7 @@ func TestOnlyGETAndHEAD(t *testing.T) {
 }
 
 func TestIndexShowsShortVersionWithFullInTooltip(t *testing.T) {
+	t.Parallel()
 	full := "8a578ee431111bbfa263522b95cae4a9c95ee5e2"
 	h, _ := dbServerVersion(t, full)
 	want := `<footer title="` + full + `">version 8a578ee43111</footer>`
@@ -102,6 +108,7 @@ func TestIndexShowsShortVersionWithFullInTooltip(t *testing.T) {
 }
 
 func TestShortVersionLeavesShortValuesAlone(t *testing.T) {
+	t.Parallel()
 	if got := short("dev"); got != "dev" {
 		t.Fatalf("short(dev) = %q", got)
 	}
@@ -165,6 +172,7 @@ var sampleReport = hostclient.Report{Name: "host-1", CollectedAt: t0, Version: "
 }}
 
 func TestReportedHostIsListedInTheAPIAndOnTheHomePage(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, sampleReport)
 
@@ -191,6 +199,7 @@ func TestReportedHostIsListedInTheAPIAndOnTheHomePage(t *testing.T) {
 }
 
 func TestHomePageShowsSilentHostOffline(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	keyOf(t, h, "host-1") // the account's
 	if err := fleet.New(d.Owner).Record(t.Context(), sampleReport, time.Now().Add(-5*time.Minute)); err != nil {
@@ -203,6 +212,7 @@ func TestHomePageShowsSilentHostOffline(t *testing.T) {
 }
 
 func TestHomePageSaysWhenNoHostHasReported(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	if page := get(t, h, "/", nil).Body.String(); !strings.Contains(page, "No hosts yet") {
 		t.Errorf("empty fleet message missing")
@@ -210,6 +220,7 @@ func TestHomePageSaysWhenNoHostHasReported(t *testing.T) {
 }
 
 func TestHomePageFlagsAHostNotOnTheServersVersion(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServerVersion(t, "0123456789abcdef")
 	rep := sampleReport
 	rep.Version = "fedcba9876543210"
@@ -226,6 +237,7 @@ func TestHomePageFlagsAHostNotOnTheServersVersion(t *testing.T) {
 }
 
 func TestHomePageNestsAgentsInTheirWorkspaces(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, sampleReport)
 	page := get(t, h, "/", nil).Body.String()
@@ -240,6 +252,7 @@ func TestHomePageNestsAgentsInTheirWorkspaces(t *testing.T) {
 }
 
 func TestHomePageFoldsWorkspacesWithoutAgents(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, sampleReport)
 	page := get(t, h, "/", nil).Body.String()
@@ -250,6 +263,7 @@ func TestHomePageFoldsWorkspacesWithoutAgents(t *testing.T) {
 }
 
 func TestHomePageShowsADisconnectedHost(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, hostclient.Report{Name: "host-2", Paseo: hostclient.PaseoStatus{Error: "connect ws://127.0.0.1:6767/ws: refused"}})
 	page := get(t, h, "/", nil).Body.String()
@@ -276,6 +290,7 @@ func detailsTag(page, id string) string {
 }
 
 func TestHomePageIsATreeOfHostsWorkspacesAndAgents(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, sampleReport)
 	page := get(t, h, "/", nil).Body.String()
@@ -306,6 +321,7 @@ func TestHomePageIsATreeOfHostsWorkspacesAndAgents(t *testing.T) {
 }
 
 func TestHomePageRefreshesWithoutResettingTheTree(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	page := get(t, h, "/", nil).Body.String()
 	if strings.Contains(page, `http-equiv="refresh"`) {
@@ -317,6 +333,7 @@ func TestHomePageRefreshesWithoutResettingTheTree(t *testing.T) {
 }
 
 func TestHomePageShowsWorkspaceTags(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	rep := sampleReport
 	rep.Paseo.Workspaces = slices.Clone(sampleReport.Paseo.Workspaces)
@@ -339,6 +356,7 @@ func TestHomePageShowsWorkspaceTags(t *testing.T) {
 }
 
 func TestHomePageSurfacesBranchDiffAndSubAgents(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	rep := sampleReport
 	rep.Paseo.Agents = slices.Clone(sampleReport.Paseo.Agents)
@@ -359,6 +377,7 @@ func TestHomePageSurfacesBranchDiffAndSubAgents(t *testing.T) {
 
 // TestDurationsReadAlike: a step's time, a schedule run's and an agent's CPU read the same way.
 func TestDurationsReadAlike(t *testing.T) {
+	t.Parallel()
 	for d, want := range map[time.Duration]string{
 		0: "0s", 400 * time.Millisecond: "0s", 42 * time.Second: "42s", 5 * time.Minute: "5m 0s",
 		2*time.Minute + 15*time.Second: "2m 15s", time.Hour + 4*time.Minute + 59*time.Second: "1h 4m", 30 * time.Hour: "30h 0m",

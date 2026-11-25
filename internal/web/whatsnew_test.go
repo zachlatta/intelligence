@@ -29,6 +29,7 @@ func unseenIDs(t *testing.T, h http.Handler, cookies ...*http.Cookie) []string {
 }
 
 func TestWhatsNew(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	if err := whatsnew.Sync(context.Background(), d.Owner, []whatsnew.Entry{
 		{ID: "newer", Released: "2026-11-02", Title: "A newer thing", Summary: "It does <b>more</b>.", Media: "whats-new.gif", MediaAlt: "the newer thing"},

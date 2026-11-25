@@ -69,6 +69,7 @@ func leadingStringLiteral(e ast.Expr) string {
 }
 
 func TestWriteRoutesAreUnderAPIOrMCP(t *testing.T) {
+	t.Parallel()
 	b, err := os.ReadFile("server.go")
 	if err != nil {
 		t.Fatal(err)
@@ -126,6 +127,7 @@ func checkHandlersUseSharedRequireJSON(filename, src string) []string {
 }
 
 func TestHandlersUseSharedRequireJSON(t *testing.T) {
+	t.Parallel()
 	files, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
@@ -177,6 +179,7 @@ func checkProposalHelpCoversType(help string, typ reflect.Type) []string {
 }
 
 func TestMCPProposalHelpCoversWorkflowFields(t *testing.T) {
+	t.Parallel()
 	for _, typ := range []reflect.Type{
 		reflect.TypeFor[workflow.Definition](),
 		reflect.TypeFor[workflow.Orchestrator](),

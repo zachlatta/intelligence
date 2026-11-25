@@ -26,6 +26,7 @@ func binServer(t *testing.T) (http.Handler, string) {
 }
 
 func TestEveryResponseNamesTheServerVersion(t *testing.T) {
+	t.Parallel()
 	h, _ := binServer(t)
 	for _, path := range []string{"/", "/healthz", "/api/hosts", "/api/sql?q=select+1", "/nope"} {
 		if got := get(t, h, path, nil).Header().Get(hostclient.VersionHeader); got != "c0ffee" {
@@ -38,6 +39,7 @@ func TestEveryResponseNamesTheServerVersion(t *testing.T) {
 }
 
 func TestServesTheHostBinaryWithVersionAndChecksum(t *testing.T) {
+	t.Parallel()
 	h, _ := binServer(t)
 	rec := get(t, h, hostclient.BinaryPath("linux", "amd64"), nil)
 	if rec.Code != http.StatusOK || rec.Body.String() != "ELF fake" {
@@ -53,6 +55,7 @@ func TestServesTheHostBinaryWithVersionAndChecksum(t *testing.T) {
 }
 
 func TestUnknownPlatformsAndOddPathsAre404(t *testing.T) {
+	t.Parallel()
 	h, _ := binServer(t)
 	for _, path := range []string{
 		hostclient.BinaryPath("plan9", "amd64"),
@@ -68,6 +71,7 @@ func TestUnknownPlatformsAndOddPathsAre404(t *testing.T) {
 
 // A host client from before dev boxes were called hosts downloads its update from the old path.
 func TestServesTheHostBinaryOnItsPathFromBeforeTheRename(t *testing.T) {
+	t.Parallel()
 	h, _ := binServer(t)
 	rec := get(t, h, "/api/devbox/binary/linux/amd64", nil)
 	if rec.Code != http.StatusOK || rec.Body.String() != "ELF fake" {

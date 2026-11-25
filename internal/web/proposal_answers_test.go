@@ -21,6 +21,7 @@ import (
 )
 
 func TestProposalQuestionCapAndOfflineHint(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	id := proposalForQuestion(t, h)
@@ -128,6 +129,7 @@ func askProposal(t *testing.T, h http.Handler, id, text string) int64 {
 // Exercise the actual dispatch transport and host executor against the fake Paseo
 // daemon. Only the model's answer is simulated: it uses the production CLI and API.
 func TestProposalQuestionDispatchAndAnswer(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	id := proposalForQuestion(t, h)
@@ -221,6 +223,7 @@ func TestProposalQuestionDispatchAndAnswer(t *testing.T) {
 }
 
 func TestProposalQuestionFailureRetryAndIsolation(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	id := proposalForQuestion(t, h)

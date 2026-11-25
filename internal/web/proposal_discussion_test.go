@@ -11,6 +11,7 @@ import (
 )
 
 func TestProposalDiscussion(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	fixed := time.Date(2026, 4, 5, 6, 7, 8, 0, time.UTC)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.Now = func() time.Time { return fixed } })
@@ -91,6 +92,7 @@ func TestProposalDiscussion(t *testing.T) {
 }
 
 func TestProposalSummaryFallback(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	r := call(t, anon(h), "POST", "/api/workflow-proposals", `{"operation":"create","summary":"Legacy","workflow":`+wfBody(t, "New", workflow.Starting)+`}`, map[string]string{"Authorization": "Bearer " + keyOf(t, h, "host-1")})
@@ -113,6 +115,7 @@ func TestProposalSummaryFallback(t *testing.T) {
 }
 
 func TestProposalInlineDiff(t *testing.T) {
+	t.Parallel()
 	got := string(proposalInlineDiff("Keep the text.", "Keep the new text."))
 	if !strings.Contains(got, "<ins>new </ins>") || strings.Contains(got, "<del>Keep") {
 		t.Fatal(got)

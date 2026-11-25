@@ -19,6 +19,7 @@ func sampleDiff() hostclient.WorkspaceDiff {
 }
 
 func TestStreamStoresWorkspaceDiffs(t *testing.T) {
+	t.Parallel()
 	h := reported(t)
 	b := openStream(t, h, "host-1")
 	d := sampleDiff()
@@ -36,6 +37,7 @@ func TestStreamStoresWorkspaceDiffs(t *testing.T) {
 
 // The agent page has a sidebar of the agents in its workspace and a diff panel, each folding away.
 func TestTranscriptPageHasTheWorkspacesAgentsAndItsDiff(t *testing.T) {
+	t.Parallel()
 	h := reported(t)
 	page := get(t, h, "/hosts/host-1/agents/"+agentA1, nil).Body.String()
 
@@ -90,6 +92,7 @@ func TestTranscriptPageHasTheWorkspacesAgentsAndItsDiff(t *testing.T) {
 
 // A directory outside git has no diff panel to open.
 func TestTranscriptPageOfAPlainDirectoryHasNoDiff(t *testing.T) {
+	t.Parallel()
 	h := reported(t)
 	page := get(t, h, "/hosts/host-1/agents/a2000000-0000-4000-8000-000000000002", nil).Body.String()
 	if strings.Contains(page, `<aside id="diff"`) || strings.Contains(page, `data-panel="diff"`) {

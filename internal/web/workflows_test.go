@@ -121,6 +121,7 @@ func commandsByKind(t *testing.T, b *rawHost, n int) map[string]hostclient.Comma
 }
 
 func TestAWorkflowStartsItsCodexAgentsAtTheirServiceTier(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
@@ -157,6 +158,7 @@ func TestAWorkflowStartsItsCodexAgentsAtTheirServiceTier(t *testing.T) {
 }
 
 func TestServiceTierChangeAppearsInProposalReview(t *testing.T) {
+	t.Parallel()
 	a := &workflow.WorkflowState{Definition: workflow.Definition{Orchestrator: workflow.Orchestrator{Provider: "codex"}}}
 	b := &workflow.WorkflowState{Definition: workflow.Definition{Orchestrator: workflow.Orchestrator{Provider: "codex", ServiceTier: "ultrafast"}}}
 	changes := proposalChanges(a, b)
@@ -166,6 +168,7 @@ func TestServiceTierChangeAppearsInProposalReview(t *testing.T) {
 }
 
 func TestWorkflowFindsAProjectWithoutAWorkspace(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	rep := wfReport()
 	b, _ := json.Marshal(rep)
@@ -176,6 +179,8 @@ func TestWorkflowFindsAProjectWithoutAWorkspace(t *testing.T) {
 		map[string]any{"id": "p-dir", "name": "folder", "kind": "non_git", "directory": "/w/folder"},
 	}
 	b, _ = json.Marshal(raw)
+	// Decode into a new report: rep shares slices with sampleReport, which other tests read.
+	rep = hostclient.Report{}
 	json.Unmarshal(b, &rep)
 	sendReport(t, h, rep)
 	key := keyOf(t, h, "host-1")
@@ -207,6 +212,7 @@ func TestWorkflowFindsAProjectWithoutAWorkspace(t *testing.T) {
 }
 
 func TestAWorkflowRunFindsItsProjectThenTheOrchestratorMovesItThroughTheSteps(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
@@ -364,6 +370,7 @@ func TestAWorkflowRunFindsItsProjectThenTheOrchestratorMovesItThroughTheSteps(t 
 }
 
 func TestAFixedProjectStartsTheOrchestratorAtOnce(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	b := openStream(t, h, "host-1")
@@ -393,6 +400,7 @@ func TestAFixedProjectStartsTheOrchestratorAtOnce(t *testing.T) {
 }
 
 func TestWorktreeBaseFallbackIsRecordedOnce(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{hostclient.CommandSucceeded, hostclient.CommandFailed} {
 		t.Run(status, func(t *testing.T) {
 			h, _ := dbServer(t)
@@ -424,6 +432,7 @@ func TestWorktreeBaseFallbackIsRecordedOnce(t *testing.T) {
 // TestARunFromBeforeCleanTitlesIsNamedFromItsTask: a run started before titles were the cleaned
 // task (its title the input's first line) and still finding its project is named from its task.
 func TestARunFromBeforeCleanTitlesIsNamedFromItsTask(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
@@ -450,6 +459,7 @@ func TestARunFromBeforeCleanTitlesIsNamedFromItsTask(t *testing.T) {
 }
 
 func TestNoProjectRunsTheOrchestratorInTheHomeDirectory(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
@@ -469,6 +479,7 @@ func TestNoProjectRunsTheOrchestratorInTheHomeDirectory(t *testing.T) {
 }
 
 func TestAFailedStartFailsTheRun(t *testing.T) {
+	t.Parallel()
 	h, db := dbServer(t)
 	sendReport(t, h, wfReport())
 	b := openStream(t, h, "host-1")
@@ -487,6 +498,7 @@ func TestAFailedStartFailsTheRun(t *testing.T) {
 }
 
 func TestCancellingARunStopsItsOrchestrator(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
@@ -507,6 +519,7 @@ func TestCancellingARunStopsItsOrchestrator(t *testing.T) {
 }
 
 func TestWorkflowsAreTheAccountsOwn(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	ts := h.(*testServer)
 	sendReport(t, h, wfReport())
@@ -547,6 +560,7 @@ func TestWorkflowsAreTheAccountsOwn(t *testing.T) {
 }
 
 func TestAWorkflowThatCannotRunIsRefused(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	d := workflow.Starting
 	d.Steps = nil
@@ -573,6 +587,7 @@ func TestAWorkflowThatCannotRunIsRefused(t *testing.T) {
 }
 
 func TestWorkflowPages(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	list := get(t, h, "/workflows", nil)
@@ -619,6 +634,7 @@ func TestWorkflowPages(t *testing.T) {
 }
 
 func TestWorkflowNotesAndStepReportsShowHostedFiles(t *testing.T) {
+	t.Parallel()
 	image := "https://files.zachlatta.com/random-namespace/shot.png"
 	report := "https://files.zachlatta.com/random-namespace/report.md"
 	text := "![Screenshot](" + image + ") [Report](" + report + ")\n\n<script>unsafe()</script>"
@@ -648,6 +664,7 @@ func TestWorkflowNotesAndStepReportsShowHostedFiles(t *testing.T) {
 // TestAWorkflowSavedWithoutAHostAsksForOne: workflows saved before they named their host do not run
 // until it is set in the editor.
 func TestAWorkflowSavedWithoutAHostAsksForOne(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	wf := createWorkflow(t, h, workflow.Starting)
@@ -662,6 +679,7 @@ func TestAWorkflowSavedWithoutAHostAsksForOne(t *testing.T) {
 }
 
 func TestDefaultWorkflowIsFirstAndSelectedForTasks(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	first := createWorkflow(t, h, workflow.Starting)
@@ -750,6 +768,7 @@ func TestDefaultWorkflowIsFirstAndSelectedForTasks(t *testing.T) {
 }
 
 func TestDefaultWorkflowRespectsAccountAndRequestBoundaries(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	ts := h.(*testServer)
 	sendReport(t, h, wfReport())
@@ -798,6 +817,7 @@ func (c *fakeClock) Add(d time.Duration) { c.mu.Lock(); defer c.mu.Unlock(); c.t
 // TestARunShowsHowLongEachStepTook: each step's visits are readable with SQL, and the run page
 // shows the time spent on each step, summed over its visits, with the current step's time so far.
 func TestARunShowsHowLongEachStepTook(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	clock := &fakeClock{t: time.Date(2026, 11, 9, 9, 0, 0, 0, time.UTC)}
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.Now = clock.Now })
@@ -865,6 +885,7 @@ func TestARunShowsHowLongEachStepTook(t *testing.T) {
 }
 
 func TestFinishedWorkflowQueuesArchiveAndKeepsArchiveFailureSeparate(t *testing.T) {
+	t.Parallel()
 	for _, ending := range []string{"next", "skip", "done"} {
 		t.Run(ending, func(t *testing.T) {
 			h, _ := dbServer(t)
@@ -917,6 +938,7 @@ func TestFinishedWorkflowQueuesArchiveAndKeepsArchiveFailureSeparate(t *testing.
 }
 
 func TestFailedOrchestratorStartArchivesItsPartialWorkspace(t *testing.T) {
+	t.Parallel()
 	h, db := dbServer(t)
 	sendReport(t, h, wfReport())
 	b := openStream(t, h, "host-1")
@@ -945,6 +967,7 @@ func TestFailedOrchestratorStartArchivesItsPartialWorkspace(t *testing.T) {
 }
 
 func TestFailedWorkflowLeavesWorkspaceAndExplainsExternalCleanup(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, wfReport())
 	b := openStream(t, h, "host-1")
@@ -963,6 +986,7 @@ func TestFailedWorkflowLeavesWorkspaceAndExplainsExternalCleanup(t *testing.T) {
 }
 
 func TestFinishedWorkflowRetainsAgentsTranscriptsAndDiffAfterArchiveReport(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	rep := wfReport()
 	sendReport(t, h, rep)
@@ -1074,6 +1098,7 @@ func TestFinishedWorkflowRetainsAgentsTranscriptsAndDiffAfterArchiveReport(t *te
 }
 
 func TestEndedWorkflowStopsCapturingHistory(t *testing.T) {
+	t.Parallel()
 	for _, ending := range []string{"fail", "done"} {
 		t.Run(ending, func(t *testing.T) {
 			h, d := dbServer(t)
@@ -1117,6 +1142,7 @@ func TestEndedWorkflowStopsCapturingHistory(t *testing.T) {
 }
 
 func TestArchiveStatusUsesNeutralStyleUnlessFailed(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{"queued", "sent", "running", "succeeded", "failed", "expired"} {
 		rec := httptest.NewRecorder()
 		renderWorkflows(rec, "run", map[string]any{"Run": runRow{Status: "succeeded"}, "Now": t0, "ArchiveStatus": status, "Agents": []agentRow{}})
@@ -1131,6 +1157,7 @@ func TestArchiveStatusUsesNeutralStyleUnlessFailed(t *testing.T) {
 }
 
 func TestLegacyFinishedRunKeepsLiveAgentLinksAndBackfillsHistory(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{"succeeded", "failed", "canceled"} {
 		t.Run(status, func(t *testing.T) {
 			h, d := dbServer(t)
@@ -1189,6 +1216,7 @@ func TestLegacyFinishedRunKeepsLiveAgentLinksAndBackfillsHistory(t *testing.T) {
 }
 
 func TestDaemonGapDoesNotMakeWorkflowAgentsReadOnly(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	rep := wfReport()
 	sendReport(t, h, rep)
@@ -1233,6 +1261,7 @@ func TestDaemonGapDoesNotMakeWorkflowAgentsReadOnly(t *testing.T) {
 }
 
 func TestSuccessfulArchiveStaysReadOnlyBeforeNextConnectedReport(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	rep := wfReport()
 	sendReport(t, h, rep)
@@ -1265,6 +1294,7 @@ func TestSuccessfulArchiveStaysReadOnlyBeforeNextConnectedReport(t *testing.T) {
 // picker, and cannot be edited, chosen or run; its finished runs stay readable. A workflow with a
 // run still going is not deleted until that run ends.
 func TestDeletingAWorkflowKeepsItsRuns(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	ts := h.(*testServer)
 	sendReport(t, h, wfReport())
@@ -1357,6 +1387,7 @@ func TestDeletingAWorkflowKeepsItsRuns(t *testing.T) {
 }
 
 func TestMoveRepliesControlTurnLifetime(t *testing.T) {
+	t.Parallel()
 	for _, ending := range []string{"next", "skip", "done", "fail", "ask"} {
 		t.Run(ending, func(t *testing.T) {
 			h, _ := dbServer(t)
@@ -1383,6 +1414,7 @@ func TestMoveRepliesControlTurnLifetime(t *testing.T) {
 }
 
 func TestWorkflowsPageStylesWaitingCalloutAndStickyInspector(t *testing.T) {
+	t.Parallel()
 	run := runRow{ID: "r1", Status: "waiting", Workflow: "Task", Title: "Approve deploy", CreatedAt: t0, Version: 1, Host: "host-1", Repo: "acme/app"}
 	rec := httptest.NewRecorder()
 	renderWorkflows(rec, "list", map[string]any{

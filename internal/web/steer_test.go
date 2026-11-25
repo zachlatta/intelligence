@@ -32,6 +32,7 @@ func startedOrchestrator(t *testing.T, b *rawHost, agent string) string {
 // and two minutes later a voice memo asks for quote slides in the same deck. The second run must
 // find the first and steer into it, not rebuild and republish the deck in parallel.
 func TestASecondRunOnTheSameDeliverableSteersIntoTheFirst(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
@@ -150,6 +151,7 @@ func TestASecondRunOnTheSameDeliverableSteersIntoTheFirst(t *testing.T) {
 // A run steered into another hands over its thread: a later email in that thread goes to the run
 // it steered into while that run is live.
 func TestAReplyInASteeredRunsThreadGoesToTheRunItSteeredInto(t *testing.T) {
+	t.Parallel()
 	h, fake := emailServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
@@ -193,6 +195,7 @@ func TestAReplyInASteeredRunsThreadGoesToTheRunItSteeredInto(t *testing.T) {
 // says why. An answer the target sent before the steer (the 2026-11-12 shape) answers only the
 // target's own request. Steering into a run that itself steered goes on to the live run.
 func TestASteeredRunIsAnsweredOnlyThroughItsTarget(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")
@@ -311,6 +314,7 @@ func TestASteeredRunIsAnsweredOnlyThroughItsTarget(t *testing.T) {
 // A claim is checked against every live run's claims, not only the runs an orchestrator's prompt
 // lists, and two runs claiming one deliverable at once cannot both get it.
 func TestClaimsHoldAcrossEveryLiveRunAndAtOnce(t *testing.T) {
+	t.Parallel()
 	h, d := dbServer(t)
 	sendReport(t, h, wfReport())
 	key := keyOf(t, h, "host-1")

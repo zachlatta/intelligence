@@ -7,6 +7,7 @@ import (
 )
 
 func TestTranscriptPageHasAChatBox(t *testing.T) {
+	t.Parallel()
 	h, _ := cmdServer(t)
 	page := get(t, h, "/hosts/host-1/agents/"+agentA1, nil).Body.String()
 	for _, want := range []string{`id="chat"`, `data-commands="/api/hosts/host-1/commands"`, `data-agent="` + agentA1 + `"`,
@@ -18,6 +19,7 @@ func TestTranscriptPageHasAChatBox(t *testing.T) {
 }
 
 func TestChatMessagesGoThroughTheCommandsAPIAndReadBackThroughSQL(t *testing.T) {
+	t.Parallel()
 	h, _ := cmdServer(t)
 	for _, b := range []string{"steer", "interrupt", "queue"} {
 		body := `{"kind":"send_message","args":{"agentId":"` + agentA1 + `","text":"` + b + ` me","behavior":"` + b + `"},"ttl":"24h"}`

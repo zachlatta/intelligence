@@ -28,6 +28,7 @@ func reported(t *testing.T) http.Handler {
 }
 
 func TestTranscriptPageShowsEntriesEscaped(t *testing.T) {
+	t.Parallel()
 	h := reported(t)
 	sendBatch(t, h, batch(true, "ep1",
 		tentry(1, `{"type":"user_message","text":"fix the <b>login</b>"}`),
@@ -54,6 +55,7 @@ func TestTranscriptPageShowsEntriesEscaped(t *testing.T) {
 }
 
 func TestTranscriptPageSaysWhyThereIsNone(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	rep := sampleReport
 	rep.Paseo.Agents = append([]hostclient.Agent(nil), rep.Paseo.Agents...)
@@ -72,6 +74,7 @@ func TestTranscriptPageSaysWhyThereIsNone(t *testing.T) {
 }
 
 func TestHomePageLinksAgentsToTranscripts(t *testing.T) {
+	t.Parallel()
 	h := reported(t)
 	sendBatch(t, h, batch(true, "ep1", tentry(1, `{"type":"user_message","text":"hi"}`)))
 	page := get(t, h, "/", nil).Body.String()
@@ -81,6 +84,7 @@ func TestHomePageLinksAgentsToTranscripts(t *testing.T) {
 }
 
 func TestTranscriptPageShowsWhenTheAgentIsWorking(t *testing.T) {
+	t.Parallel()
 	h, _ := dbServer(t)
 	rep := sampleReport
 	rep.Paseo.Agents = append([]hostclient.Agent(nil), rep.Paseo.Agents...)
@@ -103,6 +107,7 @@ func TestTranscriptPageShowsWhenTheAgentIsWorking(t *testing.T) {
 
 // A page link from before dev boxes were called hosts goes to the same page under /hosts.
 func TestDevboxPagesMovedToHosts(t *testing.T) {
+	t.Parallel()
 	h := reported(t)
 	rec := get(t, h, "/devboxes/host-1/agents/"+agentA1+"?x=1", nil)
 	if rec.Code != http.StatusMovedPermanently || rec.Header().Get("Location") != "/hosts/host-1/agents/"+agentA1+"?x=1" {

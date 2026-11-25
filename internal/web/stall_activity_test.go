@@ -13,6 +13,7 @@ import (
 )
 
 func TestRecoveryResolvesSavedModelTokensWithoutExpandingInput(t *testing.T) {
+	t.Parallel()
 	f := newStallFixture(t)
 	b := f.reset(t)
 	d, clock, h := f.d, f.clock, f.h
@@ -68,6 +69,7 @@ func TestRecoveryResolvesSavedModelTokensWithoutExpandingInput(t *testing.T) {
 }
 
 func TestStalledRunAcceptsValidMovesAndRejectsInvalidOnesAtomically(t *testing.T) {
+	t.Parallel()
 	f := newStallFixture(t)
 	for _, kind := range []string{"next", "skip", "back", "ask", "done", "fail", "summarize", "invalid"} {
 		t.Run(kind, func(t *testing.T) {
@@ -133,6 +135,7 @@ func TestStalledRunAcceptsValidMovesAndRejectsInvalidOnesAtomically(t *testing.T
 }
 
 func TestInputResumesStalledRunWithoutExtraWakeup(t *testing.T) {
+	t.Parallel()
 	f := newStallFixture(t)
 	for _, kind := range []string{"reply", "message"} {
 		t.Run(kind, func(t *testing.T) {
@@ -178,6 +181,7 @@ func TestInputResumesStalledRunWithoutExtraWakeup(t *testing.T) {
 }
 
 func TestInitializingWorkerBlocksRecoveryAndResume(t *testing.T) {
+	t.Parallel()
 	f := newStallFixture(t)
 	b := f.reset(t)
 	d, clock, h := f.d, f.clock, f.h
@@ -215,6 +219,7 @@ func TestInitializingWorkerBlocksRecoveryAndResume(t *testing.T) {
 }
 
 func TestContinuationWakeupsResetIdleClockButKeepAttemptBudget(t *testing.T) {
+	t.Parallel()
 	f := newStallFixture(t)
 	b := f.reset(t)
 	d, clock, h := f.d, f.clock, f.h

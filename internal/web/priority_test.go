@@ -14,6 +14,7 @@ import (
 )
 
 func TestWorkflowPriorityAPIAndQueue(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
 	sendReport(t, h, wfReport())
@@ -59,6 +60,7 @@ func TestWorkflowPriorityAPIAndQueue(t *testing.T) {
 }
 
 func TestPriorityChangeAppearsInProposalReview(t *testing.T) {
+	t.Parallel()
 	a := &workflow.WorkflowState{Definition: workflow.Definition{Priority: workflow.PriorityNormal}}
 	b := &workflow.WorkflowState{Definition: workflow.Definition{Priority: workflow.PriorityImmediate}}
 	changes := proposalChanges(a, b)
@@ -68,6 +70,7 @@ func TestPriorityChangeAppearsInProposalReview(t *testing.T) {
 }
 
 func TestImmediateRetryPassesOlderNormalRun(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	clock := &fakeClock{t: time.Now().UTC()}
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.Now = clock.Now; c.QueueInterval = time.Hour })
@@ -99,6 +102,7 @@ func TestImmediateRetryPassesOlderNormalRun(t *testing.T) {
 }
 
 func TestEmailAndVoiceMemoPriorityDefaultsStartImmediately(t *testing.T) {
+	t.Parallel()
 	for _, trigger := range []string{workflow.TriggerEmail, workflow.TriggerVoiceMemo} {
 		t.Run(trigger, func(t *testing.T) {
 			d := dbtest.New(t)
@@ -113,6 +117,8 @@ func TestEmailAndVoiceMemoPriorityDefaultsStartImmediately(t *testing.T) {
 			if err := d.Owner.QueryRow(t.Context(), `SELECT v.definition FROM workflows w JOIN workflow_versions v ON v.workflow_id=w.id AND v.version=w.version WHERE w.id=$1`, wf).Scan(&saved); err != nil {
 				t.Fatal(err)
 			}
+			// Decode into a new definition: def shares slices with workflow.Starting.
+			def = workflow.Definition{}
 			if err := json.Unmarshal(saved, &def); err != nil {
 				t.Fatal(err)
 			}
@@ -152,6 +158,7 @@ func TestEmailAndVoiceMemoPriorityDefaultsStartImmediately(t *testing.T) {
 // An immediate run that finds its project starts its orchestrator as soon as the project is
 // chosen, like a run started by hand, rather than queueing behind the older runs it skipped.
 func TestImmediateRunSkipsTheQueueAtProjectSelection(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) { c.QueueInterval = time.Hour })
 	b := sendReport(t, h, wfReport())
