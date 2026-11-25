@@ -123,7 +123,8 @@ func TestMCPProtocolErrorsAndOrigin(t *testing.T) {
 func TestMCPPagingAndTimeout(t *testing.T) {
 	t.Parallel()
 	d := dbtest.New(t)
-	h := newServer(t, d, d.Owner, "test", func(c *Config) { c.SQLTimeout = 50 * time.Millisecond })
+	// Long enough for this test's other queries on a busy host, far short of pg_sleep(5).
+	h := newServer(t, d, d.Owner, "test", func(c *Config) { c.SQLTimeout = time.Second })
 	sendReport(t, h, sampleReport)
 	sendBatch(t, h, batch(true, "epoch-1", tentry(0, `{"type":"user_message","text":"first"}`), tentry(1, `{"type":"assistant_message","text":"second"}`)))
 	_, token := mintMCP(t, h)
