@@ -180,7 +180,7 @@ func (a *app) startRun(v viewer) http.HandlerFunc {
 		if !decodeJSON(w, r, &req) {
 			return
 		}
-		id, err := a.wf.StartRunOn(r.Context(), v.acct.ID, req.WorkflowID, req.Input, strings.TrimSpace(req.Host))
+		id, err := a.wf.StartRun(r.Context(), v.acct.ID, req.WorkflowID, req.Input, strings.TrimSpace(req.Host))
 		if err != nil {
 			workflowError(w, err)
 			return

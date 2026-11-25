@@ -439,14 +439,10 @@ func (e *Engine) event(ctx context.Context, tx pgx.Tx, r run, kind string, step,
 
 func ptr(i int) *int { return &i }
 
-// StartRun starts account's workflow with input, on the host its definition names, and returns
-// the run's id. A matched project starts its finder agent; a fixed one, the orchestrator.
-func (e *Engine) StartRun(ctx context.Context, account int64, workflowID, input string) (string, error) {
-	return e.StartRunOn(ctx, account, workflowID, input, "")
-}
-
-// StartRunOn is StartRun on host, one of the account's, instead of the workflow's ("": the workflow's).
-func (e *Engine) StartRunOn(ctx context.Context, account int64, workflowID, input, host string) (string, error) {
+// StartRun starts account's workflow with input on host, one of the account's ("": the host its
+// definition names), and returns the run's id. A matched project starts its finder agent; a fixed
+// one, the orchestrator.
+func (e *Engine) StartRun(ctx context.Context, account int64, workflowID, input, host string) (string, error) {
 	ctx, flushPushes := e.CollectPushes(ctx)
 	var id string
 	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
@@ -461,7 +457,7 @@ func (e *Engine) StartRunOn(ctx context.Context, account int64, workflowID, inpu
 	return id, err
 }
 
-// StartRunTx is StartRun in tx, for a request sent at requestedAt (zero: now).
+// StartRunTx is StartRun in tx on the workflow's host, for a request sent at requestedAt (zero: now).
 func (e *Engine) StartRunTx(ctx context.Context, tx pgx.Tx, account int64, workflowID, input string, requestedAt time.Time) (string, error) {
 	return e.startRunTx(ctx, tx, account, workflowID, input, "", requestedAt)
 }
