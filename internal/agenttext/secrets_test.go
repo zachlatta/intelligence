@@ -15,6 +15,7 @@ func TestCredentialPatternsAndSafeReferences(t *testing.T) {
 		{"PDW maximum ID", "pdw_" + strings.Repeat("z", 24) + "_" + strings.Repeat("X_-", 20), true},
 		{"host key", "ibk_" + strings.Repeat("a", 43), true},
 		{"MCP key", "imcp_" + strings.Repeat("b", 43), true},
+		{"workflow API key", "iwfk_" + strings.Repeat("c", 43), true},
 		{"short non-key", "pdw_" + strings.Repeat("a", 11) + "_" + strings.Repeat("x", 30), false},
 		{"env reference", "Read PDW_TOKEN_FILE from your environment", false},
 		{"file reference", "Use the 0600 file .factory-scratch/access-key", false},

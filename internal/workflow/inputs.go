@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/zachlatta/intelligence/internal/fleet"
 )
 
 // An input is Zach's input to a run's orchestrator: his reply to its ask, or more input (an email in
@@ -50,6 +52,9 @@ func (e *Engine) recordInput(ctx context.Context, tx pgx.Tx, r run, kind string,
 	var event int64
 	if err := tx.QueryRow(ctx, `INSERT INTO workflow_run_events (run_id, account_id, at, kind, step, text)
 		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`, r.ID, r.Account, e.Now(), kind, step, eventText).Scan(&event); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, fleet.NotifySQL, fleet.WorkflowRunTopic(r.ID)); err != nil {
 		return err
 	}
 	return e.carried(ctx, tx, r, []input{{Event: event}}, "original", &commandID)

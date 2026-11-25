@@ -262,6 +262,10 @@ func (e *Engine) applyWorkflowState(ctx context.Context, tx pgx.Tx, account int6
 		s.Deleted = true
 		s.IsDefault = false
 		_, err := tx.Exec(ctx, "UPDATE workflows SET deleted_at=$2,is_default=false,updated_at=$2 WHERE id=$1", id, at)
+		if err != nil {
+			return "", nil, err
+		}
+		_, err = tx.Exec(ctx, fleet.NotifySQL, fleet.WorkflowTopic(id))
 		return id, &s, err
 	}
 	name, err := checkName(s.Name)
@@ -313,6 +317,9 @@ func (e *Engine) applyWorkflowState(ctx context.Context, tx pgx.Tx, account int6
 	}
 	if current != nil {
 		if err := e.retryFailedRunsForWorkflow(ctx, tx, account, id, s.Version, s.Definition.Host); err != nil {
+			return "", nil, err
+		}
+		if _, err := tx.Exec(ctx, fleet.NotifySQL, fleet.WorkflowTopic(id)); err != nil {
 			return "", nil, err
 		}
 	}
@@ -431,9 +438,14 @@ func scanRun(row pgx.Row) (run, error) {
 }
 
 func (e *Engine) event(ctx context.Context, tx pgx.Tx, r run, kind string, step, to *int, text string) error {
-	_, err := tx.Exec(ctx, `INSERT INTO workflow_run_events (run_id, account_id, at, kind, step, to_step, text)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`, r.ID, r.Account, e.Now(), kind, step, to, text)
-	return err
+	if _, err := tx.Exec(ctx, `INSERT INTO workflow_run_events (run_id, account_id, at, kind, step, to_step, text)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`, r.ID, r.Account, e.Now(), kind, step, to, text); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, fleet.NotifySQL, fleet.WorkflowRunTopic(r.ID)); err != nil {
+		return err
+	}
+	return nil
 }
 
 func ptr(i int) *int { return &i }
@@ -766,8 +778,11 @@ func (e *Engine) CommandUpdated(ctx context.Context, commandID string) error {
 			return e.archiveRun(ctx, tx, r)
 		}
 		if r.Status == FindingProject {
-			_, err := tx.Exec(ctx, "UPDATE workflow_runs SET project_agent_id = $2, pending_command = NULL, error='', start_retries=0, start_retry_at=NULL, start_retry_queued=false, updated_at = $3 WHERE id = $1",
-				r.ID, res.AgentID, at)
+			if _, err := tx.Exec(ctx, "UPDATE workflow_runs SET project_agent_id = $2, pending_command = NULL, error='', start_retries=0, start_retry_at=NULL, start_retry_queued=false, updated_at = $3 WHERE id = $1",
+				r.ID, res.AgentID, at); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, fleet.NotifySQL, fleet.WorkflowRunTopic(r.ID))
 			return err
 		}
 		if err := e.event(ctx, tx, r, "workspace", nil, nil, res.AgentID); err != nil {

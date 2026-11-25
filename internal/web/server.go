@@ -68,14 +68,15 @@ type Config struct {
 }
 
 type app struct {
-	cfg     Config
-	routes  *http.ServeMux
-	store   *accounts.Store
-	reg     *fleet.Registry // as the owner: for the host streams and for writes
-	changes *fleet.Changes
-	wf      *workflow.Engine // as the owner: workflows and their runs
-	mail    *email.Service   // reads connected mailboxes; nil when email triggers are off
-	push    *webpush.Store   // nil when VAPID is unset
+	cfg          Config
+	routes       *http.ServeMux
+	store        *accounts.Store
+	reg          *fleet.Registry // as the owner: for the host streams and for writes
+	changes      *fleet.Changes
+	wf           *workflow.Engine // as the owner: workflows and their runs
+	mail         *email.Service   // reads connected mailboxes; nil when email triggers are off
+	push         *webpush.Store   // nil when VAPID is unset
+	sseKeepalive time.Duration    // override for tests; default defaultSSEInterval
 }
 
 //go:embed index.html
@@ -283,6 +284,22 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	mux.HandleFunc("PUT /api/workflows/{id}", a.write(a.updateWorkflow))
 	mux.HandleFunc("PUT /api/workflows/{id}/default", a.write(a.setDefaultWorkflow))
 	mux.HandleFunc("DELETE /api/workflows/{id}", a.write(a.deleteWorkflow))
+	mux.HandleFunc("POST /api/workflows/{id}/api-keys", a.write(a.createWorkflowAPIKey))
+	mux.HandleFunc("DELETE /api/workflows/{id}/api-keys/{keyId}", a.write(a.revokeWorkflowAPIKey))
+	// scoped workflow API-key routes (never accept browser cookies, host keys or MCP tokens)
+	mux.HandleFunc("GET /api/workflow-api/workflow", a.workflowAPI(a.apiGetWorkflow))
+	mux.HandleFunc("POST /api/workflow-api/runs", a.workflowAPIWrite(a.apiTriggerRun))
+	mux.HandleFunc("GET /api/workflow-api/runs", a.workflowAPI(a.apiListRuns))
+	mux.HandleFunc("GET /api/workflow-api/runs/{id}", a.workflowAPI(a.apiGetRun))
+	mux.HandleFunc("GET /api/workflow-api/runs/{id}/transcripts", a.workflowAPI(a.apiListRunTranscripts))
+	mux.HandleFunc("GET /api/workflow-api/runs/{id}/transcripts/{agentId}", a.workflowAPI(a.apiGetRunTranscript))
+	mux.HandleFunc("GET /api/workflow-api/runs/{id}/stream", a.workflowAPI(a.apiStreamRun))
+	mux.HandleFunc("POST /api/workflow-api/runs/{id}/cancel", a.workflowAPIWrite(a.apiCancelRun))
+	mux.HandleFunc("POST /api/workflow-api/runs/{id}/reply", a.workflowAPIWrite(a.apiReplyToRun))
+	mux.HandleFunc("POST /api/workflow-api/runs/{id}/input", a.workflowAPIWrite(a.apiAddRunInput))
+	mux.HandleFunc("POST /api/workflow-api/runs/{id}/retry", a.workflowAPIWrite(a.apiRetryRun))
+	mux.HandleFunc("POST /api/workflow-api/runs/{id}/resume", a.workflowAPIWrite(a.apiResumeRun))
+	mux.HandleFunc("POST /api/workflow-api/runs/{id}/start", a.workflowAPIWrite(a.apiStartQueuedRun))
 	mux.HandleFunc("POST /api/workflow-runs", a.write(a.startRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/reply", a.write(a.replyToRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/input", a.write(a.addRunInput))

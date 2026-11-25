@@ -74,7 +74,11 @@ func (r *Registry) StoreTranscript(ctx context.Context, b hostclient.TranscriptB
 				return err
 			}
 		}
-		return recordInterruptions(ctx, tx, b.Host, b.AgentID, b.Entries, at)
+		if err := recordInterruptions(ctx, tx, b.Host, b.AgentID, b.Entries, at); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, notifySQL, TranscriptTopic(b.Host, b.AgentID))
+		return err
 	})
 }
 

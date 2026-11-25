@@ -144,3 +144,15 @@ const NotifySQL = notifySQL
 
 // EnrollmentTopic: the host enrollment with id was claimed.
 func EnrollmentTopic(id string) string { return "enrollment:" + id }
+
+// WorkflowTopic: workflow id changed (definition updated, deleted, or a run changed).
+func WorkflowTopic(id string) string { return "wf:" + id }
+
+// WorkflowRunTopic: workflow run id changed (event, status, step, activity, or agents).
+func WorkflowRunTopic(id string) string { return "wfrun:" + id }
+
+// WorkflowKeyTopic: workflow API key id was revoked.
+func WorkflowKeyTopic(id string) string { return "wfkey:" + id }
+
+// TranscriptTopic: agent's transcript on host received new or updated entries.
+func TranscriptTopic(host, agentID string) string { return "transcript:" + host + ":" + agentID }

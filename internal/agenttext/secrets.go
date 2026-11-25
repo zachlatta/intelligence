@@ -6,9 +6,9 @@ import (
 	"regexp"
 )
 
-// PDW access keys, Intelligence host keys and Intelligence MCP keys. The latter
-// two contain 32 random bytes encoded as unpadded URL-safe base64 (43 characters).
-var secret = regexp.MustCompile(`pdw_[a-z0-9]{12,24}_[A-Za-z0-9_-]{30,}|(?:ibk_|imcp_)[A-Za-z0-9_-]{43,}`)
+// PDW access keys, Intelligence host keys, MCP keys and workflow API keys. The
+// Intelligence keys contain 32 random bytes encoded as unpadded URL-safe base64 (43 characters).
+var secret = regexp.MustCompile(`pdw_[a-z0-9]{12,24}_[A-Za-z0-9_-]{30,}|(?:ibk_|imcp_|iwfk_)[A-Za-z0-9_-]{43,}`)
 
 // ErrCredential identifies a permanent refusal without exposing the matched text.
 var ErrCredential = errors.New("refusing agent text containing a credential; pass an environment variable name or a 0600 file path instead")

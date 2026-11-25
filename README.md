@@ -104,7 +104,10 @@ The hierarchy is hosts > workspaces > agents:
 - `accounts` (username, argon2id password hash, its role), `sessions` (signed-in browsers; a hash
   of each cookie's token), `host_keys` (each host's account and a hash of its key) and
   `host_enrollments` (hosts waiting for their code to be entered). An account reads only its own.
-- `workflows`, `workflow_versions` (every saved definition), `workflow_runs` and
+- `workflows`, `workflow_versions` (every saved definition), `workflow_api_keys` (scoped API keys
+  for API-triggered workflows: name, prefix, SHA-256 hash, creation, last-used and revocation
+  times; account-isolated by RLS), `workflow_runs` (including `api_key_id`, `idempotency_key` and
+  `idempotency_hash` for API-triggered runs) and
   `workflow_run_events` (what happened in each run, in order), with the views
   `workflow_run_step_visits` (each time a run was on a step, from its moves) and
   `workflow_run_step_times` (each step's visits and time spent, the current one to now): Workflows, below.
@@ -1966,6 +1969,32 @@ origin (another site's request is refused with 403), and those with a body must 
   and its senders are free for another workflow.
 - `PUT /api/workflows/{id}/default` with `{"default": true}` (or `false` to clear):
   chooses the account's default task workflow (204); 404 for another account's workflow.
+- `POST /api/workflows/{id}/api-keys` with `{"name"}`: issues a scoped API key (`iwfk_...`) for
+  workflow `{id}` (201 `{"id", "workflowId", "name", "prefix", "key", "createdAt"}`, `Cache-Control: no-store`).
+  The secret is shown once; only its SHA-256 hash is stored. Requires a same-origin browser session.
+- `DELETE /api/workflows/{id}/api-keys/{keyId}`: revokes key `{keyId}` for workflow `{id}` (204, or
+  404 if absent) and immediately disconnects any active SSE streams using it. Requires a same-origin
+  browser session.
+- Scoped workflow API-key routes (all require `Authorization: Bearer iwfk_...` for a workflow whose
+  current saved trigger is `api`; browser cookies, host keys and MCP tokens are not accepted, and
+  workflow API keys are never accepted on `/api/sql` or any other route):
+  - `GET /api/workflow-api/workflow`: metadata and steps of the key's workflow.
+  - `POST /api/workflow-api/runs` with `{"input", "attachments"?: [{"name", "data"}], "idempotencyKey"?}`
+    and optional `Idempotency-Key` header: triggers a run through the normal queue and startup path
+    (201, or 200 with `Idempotency-Replayed: true` on an exact idempotent retry, 409 on a mismatched
+    idempotency payload).
+  - `GET /api/workflow-api/runs?status=&limit=&cursor=`: lists runs of this workflow, newest first.
+  - `GET /api/workflow-api/runs/{id}`: one run's state, steps, events and agents (404 outside this workflow).
+  - `GET /api/workflow-api/runs/{id}/transcripts`: the run's agents and their transcript metadata.
+  - `GET /api/workflow-api/runs/{id}/transcripts/{agentId}?from_seq=&after_seq=&limit=`: one agent's
+    synced transcript entries (404 if the agent does not belong to this run).
+  - `GET /api/workflow-api/runs/{id}/stream` (optional `Last-Event-ID` header, `?after_event_id=`,
+    `?include_transcripts=true|false`): resumable Server-Sent Events stream of `run`, `run_event`,
+    `transcript`, `done` and `error` events; closes promptly if the key is revoked or the API trigger
+    is disabled.
+  - `POST /api/workflow-api/runs/{id}/cancel`, `/retry`, `/resume`, `/start` (body `{}`), and
+    `/reply`, `/input` (body `{"text", "attachments"?}`): control a run of this workflow using the
+    same engine methods as the web UI.
 - `GET /workflows/{id}`: the editor: the host and trigger, how the project is found, the orchestrator, and
   the steps (add, reorder, edit, remove), or the definition as JSON. Saving makes a new version.
   A project that is always the same repository is picked from those the workflow's host reported
@@ -2083,6 +2112,79 @@ needed. The directory must already exist. `INTELLIGENCE_TEST_CAPACITY_HELD` is a
 for nested entry points; do not set it yourself.
 
 ## Configuration
+
+### API-triggered workflows
+
+Set a workflow's trigger to **An API request arrives** (`"trigger": "api"`) in its editor (or via
+`POST /api/workflows` / `PUT /api/workflows/{id}`) to allow external repositories and services to
+start, monitor and control runs of that workflow with a scoped API key.
+
+- **Scoped keys.** Issue keys in the workflow editor's Trigger panel (`POST /api/workflows/{id}/api-keys`,
+  requiring a normal browser session) and revoke them there (`DELETE /api/workflows/{id}/api-keys/{keyId}`).
+  Each key (`iwfk_...`) has 256 bits of random entropy, is shown once at creation, and is stored only
+  as its SHA-256 hash in `workflow_api_keys` (account-isolated by RLS). Switching the workflow's trigger
+  away from `api` disables API access (403) without losing the key audit trail; revoking a key returns
+  401 and immediately closes any active SSE stream using it.
+- **Why scoped read routes exist alongside `/api/sql`.** Intelligence's general read contract is
+  account-scoped read-only SQL (`/api/sql`). A workflow API key is strictly narrower than an account:
+  it may only touch runs and transcripts of its single workflow, never other workflows, hosts, or
+  account tables. All state still lives in `public` tables (`workflow_api_keys`, `workflow_runs`,
+  `workflow_run_events`, `transcripts`, `transcript_entries`) and every `/api/workflow-api/*` read
+  queries through the account's read-only Postgres role (RLS) plus an explicit `workflow_id` filter.
+- **Network reachability.** Intelligence runs in Coolify on the tailnet (no separate browser login
+  proxy sits in front of `/api/workflow-api/*`, matching `/mcp`), so any host or CI runner on the
+  tailnet can call it directly with `Authorization: Bearer $WORKFLOW_API_KEY`. Callers outside the
+  tailnet would need tailnet access or an authenticated ingress configured outside this repository.
+
+#### Example: trigger, stream and control a workflow
+
+```sh
+export INTELLIGENCE_URL="https://intelligence.example.com"
+export WORKFLOW_API_KEY="iwfk_..."
+
+# Trigger a run idempotently (retrying with the same Idempotency-Key returns the same run)
+RUN_ID=$(curl -fsS -X POST "$INTELLIGENCE_URL/api/workflow-api/runs" \
+  -H "Authorization: Bearer $WORKFLOW_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: contract-123-v1" \
+  -d '{"input":"Check Acme MSA for unlimited liability and auto-renewal clauses."}' \
+  | jq -r '.id')
+
+# Stream live run events and agent transcripts (resumable with Last-Event-ID)
+curl -N "$INTELLIGENCE_URL/api/workflow-api/runs/$RUN_ID/stream" \
+  -H "Authorization: Bearer $WORKFLOW_API_KEY"
+
+# List active runs of this workflow
+curl -fsS "$INTELLIGENCE_URL/api/workflow-api/runs?status=active&limit=20" \
+  -H "Authorization: Bearer $WORKFLOW_API_KEY"
+
+# Answer an open ask, send additional input, cancel or retry
+curl -fsS -X POST "$INTELLIGENCE_URL/api/workflow-api/runs/$RUN_ID/reply" \
+  -H "Authorization: Bearer $WORKFLOW_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Proceed with the 2x liability cap exception."}'
+```
+
+#### Small integration example (Node / TypeScript)
+
+```ts
+const base = process.env.INTELLIGENCE_URL!;
+const headers = {
+  Authorization: `Bearer ${process.env.WORKFLOW_API_KEY!}`,
+  "Content-Type": "application/json",
+};
+
+const res = await fetch(`${base}/api/workflow-api/runs`, {
+  method: "POST",
+  headers: { ...headers, "Idempotency-Key": `contract-${contractId}` },
+  body: JSON.stringify({ input: `Review contract ${contractId}` }),
+});
+const run = await res.json();
+
+// Monitor status and transcripts until finished
+const detail = await fetch(`${base}/api/workflow-api/runs/${run.id}`, { headers }).then((r) => r.json());
+const transcripts = await fetch(`${base}/api/workflow-api/runs/${run.id}/transcripts`, { headers }).then((r) => r.json());
+```
 
 ### Voice memo workflow triggers
 

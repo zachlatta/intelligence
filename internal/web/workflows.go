@@ -377,6 +377,7 @@ type runRow struct {
 	StartRetryAt                                                         *time.Time
 	HostOnline, DaemonConnected, RetryKeys                               bool
 	RetriedFrom, RetriedTo                                               string
+	APIKeyID, APIKeyName                                                 string
 }
 
 const runRowSelect = `SELECT r.id::text, coalesce(nullif(r.task_summary, ''), r.title), r.input, r.status, r.host, r.repo, r.branch, w.name, r.workflow_id::text, r.workspace_id, r.workspace_title,
@@ -390,17 +391,20 @@ const runRowSelect = `SELECT r.id::text, coalesce(nullif(r.task_summary, ''), r.
  (SELECT min(sent_at) FROM workflow_run_answers WHERE run_id=r.id AND NOT checked),
  (SELECT coalesce(jsonb_agg(jsonb_build_object('Channel',channel,'MessageID',message_id,'ThreadID',thread_id,'SentAt',sent_at,'Checked',checked) ORDER BY sent_at,id),'[]'::jsonb) FROM workflow_run_answers WHERE run_id=r.id), r.current_activity, r.activity_updated_at, activity.activity_eta, activity.activity_eta_estimated, activity.activity_waiting_on,
  coalesce(r.retried_from_run_id::text, ''),
- coalesce((SELECT r2.id::text FROM workflow_runs r2 WHERE r2.retried_from_run_id = r.id ORDER BY r2.created_at DESC LIMIT 1), '')
+ coalesce((SELECT r2.id::text FROM workflow_runs r2 WHERE r2.retried_from_run_id = r.id ORDER BY r2.created_at DESC LIMIT 1), ''),
+ coalesce(r.api_key_id::text, ''),
+ coalesce(ak.name, '')
 	FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id JOIN workflow_versions v ON v.workflow_id = r.workflow_id AND v.version = r.version
  JOIN workflow_run_activity activity ON activity.run_id=r.id
-	LEFT JOIN workflow_run_queue q ON q.run_id = r.id LEFT JOIN workflow_run_answer_status st ON st.id = r.id `
+	LEFT JOIN workflow_run_queue q ON q.run_id = r.id LEFT JOIN workflow_run_answer_status st ON st.id = r.id
+	LEFT JOIN workflow_api_keys ak ON ak.id = r.api_key_id `
 
 func scanRunRow(row pgx.CollectableRow) (runRow, error) {
 	var r runRow
 	var steps, answers []byte
 	err := row.Scan(&r.ID, &r.Title, &r.Input, &r.Status, &r.Host, &r.Repo, &r.Branch, &r.Workflow, &r.WorkflowID, &r.WorkspaceID, &r.WorkspaceTitle,
 		&r.Orchestrator, &r.ProjectAgent, &r.Note, &r.Error, &r.Step, &r.Version, &steps, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt, &r.WorkflowDeleted,
-		&r.StartRetries, &r.StartRetryAt, &r.HostOnline, &r.DaemonConnected, &r.RetryKeys, &r.QueueReason, &r.Position, &r.EstimatedMemory, &r.ProjectSelected, &r.QueuedAtCreation, &r.RequestedAt, &r.AnswerExpected, &r.AnsweredAt, &r.AnsweredVia, &r.Resolution, &r.SteeredTo, &r.ResolutionReason, &r.SteerLive, &r.FirstUncheckedAt, &answers, &r.CurrentActivity, &r.ActivityUpdatedAt, &r.ActivityETA, &r.ActivityETAEstimated, &r.ActivityWaitingOn, &r.RetriedFrom, &r.RetriedTo)
+		&r.StartRetries, &r.StartRetryAt, &r.HostOnline, &r.DaemonConnected, &r.RetryKeys, &r.QueueReason, &r.Position, &r.EstimatedMemory, &r.ProjectSelected, &r.QueuedAtCreation, &r.RequestedAt, &r.AnswerExpected, &r.AnsweredAt, &r.AnsweredVia, &r.Resolution, &r.SteeredTo, &r.ResolutionReason, &r.SteerLive, &r.FirstUncheckedAt, &answers, &r.CurrentActivity, &r.ActivityUpdatedAt, &r.ActivityETA, &r.ActivityETAEstimated, &r.ActivityWaitingOn, &r.RetriedFrom, &r.RetriedTo, &r.APIKeyID, &r.APIKeyName)
 	if err == nil {
 		r.CurrentActivity = workflow.CleanActivity(r.CurrentActivity)
 		err = json.Unmarshal(steps, &r.Steps)
@@ -933,9 +937,14 @@ func workflowPage(cfg Config, a *app, v viewer) http.HandlerFunc {
 				providers = append(providers, provider)
 			}
 		}
+		apiKeys, err := readWorkflowAPIKeys(r.Context(), v.pool, id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		renderWorkflows(w, "editor", map[string]any{"Version": cfg.Version, "Workflow": wfs[0], "Hosts": hosts, "Repos": repos,
 			"VoiceStatus": voiceStatus, "EmailOn": a.mail != nil, "Mailbox": mb.Address, "Emails": previews(emails), "Others": others,
-			"Dictation": dictationPath(cfg), "Providers": providers})
+			"Dictation": dictationPath(cfg), "Providers": providers, "APIKeys": apiKeys})
 	}
 }
 

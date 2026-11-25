@@ -26,7 +26,7 @@ import (
 type Definition struct {
 	Priority     string           `json:"priority,omitempty"`  // empty is Automatic, resolved from Trigger when each run starts
 	Host         string           `json:"host"`                // the account's host every run happens on
-	Trigger      string           `json:"trigger"`             // task (submitted on the Workflows page), manual, email or voice_memo
+	Trigger      string           `json:"trigger"`             // task (submitted on the Workflows page), manual, email, voice_memo or api
 	Email        *EmailFilter     `json:"email,omitempty"`     // email: which email starts a run
 	VoiceMemo    *VoiceMemoFilter `json:"voiceMemo,omitempty"` // voice_memo: which new PDW recording starts a run
 	Project      Project          `json:"project"`
@@ -92,6 +92,7 @@ const (
 	TriggerManual     = "manual"
 	TriggerEmail      = "email"      // an email to the account's connected Gmail matches Email
 	TriggerVoiceMemo  = "voice_memo" // a new PDW voice memo recording matches VoiceMemo
+	TriggerAPI        = "api"        // an authenticated API request starts a run
 	ProjectMatch      = "match"
 	ProjectFixed      = "fixed"
 	KindStep          = "step"
@@ -142,8 +143,8 @@ func (d Definition) Validate() error {
 		return errors.New("a workflow needs a host to run on")
 	case !hostclient.ValidName(d.Host):
 		return fmt.Errorf("host %q is not a host's name", d.Host)
-	case d.Trigger != TriggerTask && d.Trigger != TriggerManual && d.Trigger != TriggerEmail && d.Trigger != TriggerVoiceMemo:
-		return fmt.Errorf("trigger %q: want %s, %s, %s or %s", d.Trigger, TriggerTask, TriggerManual, TriggerEmail, TriggerVoiceMemo)
+	case d.Trigger != TriggerTask && d.Trigger != TriggerManual && d.Trigger != TriggerEmail && d.Trigger != TriggerVoiceMemo && d.Trigger != TriggerAPI:
+		return fmt.Errorf("trigger %q: want %s, %s, %s, %s or %s", d.Trigger, TriggerTask, TriggerManual, TriggerEmail, TriggerVoiceMemo, TriggerAPI)
 	case d.Trigger == TriggerVoiceMemo && d.VoiceMemo == nil:
 		return errors.New("a voice memo trigger needs a voiceMemo filter (use {} for all recordings)")
 	case d.Trigger != TriggerVoiceMemo && d.VoiceMemo != nil:
