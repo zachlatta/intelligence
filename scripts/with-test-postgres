@@ -8,8 +8,12 @@ fi
 name="intelligence-test-pg-$$"
 # The cluster is discarded after the run. Keep its data on tmpfs to avoid competing
 # for disk I/O with other suites while Postgres retains its normal commit settings.
+# Logins still use SCRAM-SHA-256 with real passwords, but with one hash iteration instead of
+# 4096: every test pool connection otherwise spends most of its setup in PBKDF2 under -race.
+# initdb needs the setting too, for the superuser's password.
 docker run -d --rm --name "$name" --tmpfs /var/lib/postgresql \
-  -e POSTGRES_PASSWORD=test -p 127.0.0.1::5432 postgres:18-alpine -c max_connections=500 >/dev/null
+  -e POSTGRES_PASSWORD=test -e POSTGRES_INITDB_ARGS="-c scram_iterations=1" \
+  -p 127.0.0.1::5432 postgres:18-alpine -c max_connections=500 -c scram_iterations=1 >/dev/null
 trap 'docker stop "$name" >/dev/null 2>&1 || true' EXIT
 for _ in $(seq 1 60); do
   docker exec "$name" pg_isready -U postgres -h 127.0.0.1 >/dev/null 2>&1 && break
