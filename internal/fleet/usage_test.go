@@ -68,6 +68,7 @@ func runs(t *testing.T, r *Registry, account string) []run {
 }
 
 func TestUsageStoresARunPerValue(t *testing.T) {
+	t.Parallel()
 	r := usageRig(t)
 	reset := t1.Add(72 * time.Hour)
 	recordUsage(t, r, "host-1", claudeRead(t1, ada(true, week(10, reset))))
@@ -90,6 +91,7 @@ func TestUsageStoresARunPerValue(t *testing.T) {
 }
 
 func TestUsageIgnoresAReadingOlderThanTheNewest(t *testing.T) {
+	t.Parallel()
 	r := usageRig(t)
 	reset := t1.Add(72 * time.Hour)
 	recordUsage(t, r, "host-1", claudeRead(t1.Add(10*time.Minute), ada(true, week(20, reset))))
@@ -103,6 +105,7 @@ func TestUsageIgnoresAReadingOlderThanTheNewest(t *testing.T) {
 }
 
 func TestUsageOfOneLoginFromTwoHostsIsOneLogin(t *testing.T) {
+	t.Parallel()
 	r := usageRig(t)
 	reset := t1.Add(72 * time.Hour)
 	recordUsage(t, r, "host-1", claudeRead(t1, ada(true, week(10, reset))))
@@ -117,6 +120,7 @@ func TestUsageOfOneLoginFromTwoHostsIsOneLogin(t *testing.T) {
 }
 
 func TestUsageAWindowNotYetStartedIsOneRun(t *testing.T) {
+	t.Parallel()
 	r := usageRig(t)
 	// an unused pool's reset is always a week from now
 	for i := range 3 {
@@ -130,6 +134,7 @@ func TestUsageAWindowNotYetStartedIsOneRun(t *testing.T) {
 }
 
 func TestUsageRecordsWhichLoginEachHostUses(t *testing.T) {
+	t.Parallel()
 	r := usageRig(t)
 	reset := t1.Add(72 * time.Hour)
 	recordUsage(t, r, "host-1", claudeRead(t1, ada(true, week(1, reset)), grace(false, week(1, reset))))
@@ -160,6 +165,7 @@ func TestUsageRecordsWhichLoginEachHostUses(t *testing.T) {
 }
 
 func TestUsageFailuresAreRecordedButNeverRead(t *testing.T) {
+	t.Parallel()
 	r := usageRig(t)
 	reset := t1.Add(72 * time.Hour)
 	recordUsage(t, r, "host-1", claudeRead(t1, ada(true, week(10, reset))))
@@ -206,6 +212,7 @@ func TestUsageFailuresAreRecordedButNeverRead(t *testing.T) {
 }
 
 func TestUsageViews(t *testing.T) {
+	t.Parallel()
 	r := usageRig(t)
 	now := time.Now().UTC().Truncate(time.Minute)
 	// ada: 30% used with half the week to go (ahead by 20); grace: read 20 minutes ago (stale);
@@ -270,6 +277,7 @@ func TestUsageViews(t *testing.T) {
 }
 
 func TestPlansShowEachLoginsWindowsWhereItIsActiveAndItsProblems(t *testing.T) {
+	t.Parallel()
 	r := usageRig(t)
 	if _, err := r.p.Exec(ctx, `UPDATE provider_plan_settings SET enabled=true WHERE provider='muse'`); err != nil {
 		t.Fatal(err)
@@ -320,6 +328,7 @@ func TestPlansShowEachLoginsWindowsWhereItIsActiveAndItsProblems(t *testing.T) {
 }
 
 func TestUsageHistoryAndWeeklyPeaks(t *testing.T) {
+	t.Parallel()
 	r := usageRig(t)
 	now := time.Now().UTC().Truncate(time.Second)
 	reset1, reset2 := now.Add(-48*time.Hour), now.Add(5*24*time.Hour)
@@ -355,6 +364,7 @@ func TestUsageHistoryAndWeeklyPeaks(t *testing.T) {
 }
 
 func TestMultiHostPlanAuthKeepsPerHostSlotsAndStatus(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	r := New(d.Owner)
 	now := time.Now().UTC().Truncate(time.Second)

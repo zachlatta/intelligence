@@ -9,6 +9,7 @@ import (
 )
 
 func TestCarbonMediumMigrationRemovesOnlyFrontierMember(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	_, ann, bob := twoAccounts(t, d)
 	exec := func(q string) {

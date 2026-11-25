@@ -15,6 +15,7 @@ import (
 )
 
 func TestPixelDetection(t *testing.T) {
+	t.Parallel()
 	for _, markup := range []string{
 		`<img width="1" height="1" style="height:1px !important;width:1px !important;border-width:0 !important;margin-top:0 !important;margin-bottom:0 !important;margin-right:0 !important;margin-left:0 !important;padding-top:0 !important;padding-bottom:0 !important;padding-right:0 !important;padding-left:0 !important;" src="https://example.com/p">`,
 		`<img style="display:none !important" src="https://example.com/p">`,
@@ -53,6 +54,7 @@ func TestPixelDetection(t *testing.T) {
 }
 
 func TestQuotedPixelsAreSkipped(t *testing.T) {
+	t.Parallel()
 	pixel := `<img width=1 height=1 src="https://example.com/quoted">`
 	for _, quoted := range []string{
 		"<blockquote>" + pixel + "</blockquote>",
@@ -72,6 +74,7 @@ func TestQuotedPixelsAreSkipped(t *testing.T) {
 }
 
 func TestPixelPorts(t *testing.T) {
+	t.Parallel()
 	for raw, want := range map[string]bool{"http://example.com": true, "https://example.com": true, "http://example.com:80/p": true, "https://example.com:443/p": true, "http://example.com:8080/p": false, "https://example.com:8443/p": false, "http://example.com:443/p": false} {
 		u, err := url.Parse(raw)
 		if err != nil {
@@ -84,6 +87,7 @@ func TestPixelPorts(t *testing.T) {
 }
 
 func TestPixelAddressGuard(t *testing.T) {
+	t.Parallel()
 	for _, addr := range []string{"127.0.0.1", "::1", "0.0.0.0", "10.0" + ".0.1", "169.254" + ".169.254", "100.64" + ".0.1", "fc00::1", "fe80::1", "224.0.0.1", "::ffff:127.0.0.1", "2002::1", "64:ff9b::1"} {
 		if publicPixelIP(netip.MustParseAddr(addr)) {
 			t.Errorf("allowed %s", addr)
@@ -95,6 +99,7 @@ func TestPixelAddressGuard(t *testing.T) {
 }
 
 func TestPixelFetchHasNoCredentialsAndChecksRedirects(t *testing.T) {
+	t.Parallel()
 	hits := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++
@@ -163,6 +168,7 @@ func TestPixelFetchHasNoCredentialsAndChecksRedirects(t *testing.T) {
 }
 
 func TestPixelLimits(t *testing.T) {
+	t.Parallel()
 	var markup strings.Builder
 	for i := 0; i < 20; i++ {
 		markup.WriteString(`<img src="https://example.com/` + strings.Repeat("x", i) + `" width=1 height=1>`)

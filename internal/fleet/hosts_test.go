@@ -27,6 +27,7 @@ func hostReport(m time.Time) resources.Report {
 }
 
 func TestRecordHostStoresMinutesAgentsKillsAndTheProbe(t *testing.T) {
+	t.Parallel()
 	r := New(dbtestOwner(t))
 	now := time.Now().UTC().Truncate(time.Minute)
 	rep := hostReport(now.Add(-time.Minute))
@@ -85,6 +86,7 @@ func TestRecordHostStoresMinutesAgentsKillsAndTheProbe(t *testing.T) {
 }
 
 func TestPruneHostHistory(t *testing.T) {
+	t.Parallel()
 	r := New(dbtestOwner(t))
 	now := time.Now().UTC().Truncate(time.Minute)
 	if err := r.RecordHost(ctx, "host-1", hostReport(now.Add(-100*24*time.Hour)), now); err != nil {
@@ -108,6 +110,7 @@ func TestPruneHostHistory(t *testing.T) {
 func dbtestOwner(t *testing.T) *pgxpool.Pool { return dbtest.New(t).Owner }
 
 func TestRecordHostStoresDiskIOLoadAndFilesystems(t *testing.T) {
+	t.Parallel()
 	r := New(dbtestOwner(t))
 	now := time.Now().UTC().Truncate(time.Minute)
 	first := hostReport(now.Add(-2 * time.Minute))

@@ -48,6 +48,7 @@ func drain(ch <-chan struct{}) {
 }
 
 func TestChangesWakeTheirTopicsSubscribersOnEveryInstance(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	r := New(d.Owner)
 	record(t, r, full(), t1)
@@ -79,6 +80,7 @@ func TestChangesWakeTheirTopicsSubscribersOnEveryInstance(t *testing.T) {
 }
 
 func TestChangesWakeEveryoneWhenTheyStartListening(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	c := NewChanges(d.Owner)
 	wake, stop := c.Subscribe(CommandsTopic("host-1"))
@@ -88,6 +90,7 @@ func TestChangesWakeEveryoneWhenTheyStartListening(t *testing.T) {
 }
 
 func TestAStreamOwnsItsHostUntilAnotherAttaches(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	r := New(d.Owner)
 	ch := changes(t, d.Owner)
@@ -133,6 +136,7 @@ func TestAStreamOwnsItsHostUntilAnotherAttaches(t *testing.T) {
 }
 
 func TestAStreamNotSeenForAMinuteIsOffline(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	r := New(d.Owner)
 	old := time.Now().Add(-2 * time.Minute) // a server that died with the stream open

@@ -29,6 +29,7 @@ func (s *spyPush) SendAccount(_ context.Context, _ int64, msg webpush.Message) (
 }
 
 func TestEmailDisabledProviderSendsOneWebPush(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	ctx := context.Background()
 	roles := db.NewAccountRoles(d.Owner, d.Readonly)

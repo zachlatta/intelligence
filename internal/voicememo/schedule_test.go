@@ -10,6 +10,7 @@ import (
 // account, a database outage) is logged once a minute, not every second; a new error, or the
 // same one after a recovery, is logged at once.
 func TestRepeatedErrorsAreLoggedOnceAMinute(t *testing.T) {
+	t.Parallel()
 	start := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
 	missing, down := errors.New("missing account"), errors.New("database down")
 	var l errorLog
@@ -34,6 +35,7 @@ func TestRepeatedErrorsAreLoggedOnceAMinute(t *testing.T) {
 }
 
 func TestNextPollIsEverySecondWithSlackAndBacksOff(t *testing.T) {
+	t.Parallel()
 	start := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
 	for _, tt := range []struct {
 		name     string

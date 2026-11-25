@@ -18,6 +18,7 @@ import (
 )
 
 func TestProcessingOpensPixelsOnceAfterCommitWithoutWaiting(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	ctx := context.Background()
 	roles := db.NewAccountRoles(d.Owner, d.Readonly)

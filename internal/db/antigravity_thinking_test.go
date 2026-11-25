@@ -8,6 +8,7 @@ import (
 )
 
 func TestClearAntigravityWorkflowThinkingMigration(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	_, ann, _ := twoAccounts(t, d)
 	exec := func(q string, args ...any) {

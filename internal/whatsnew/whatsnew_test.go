@@ -16,6 +16,7 @@ import (
 // Every release that ships something people can see adds an entry to entries.json: this keeps the
 // file one a page can show.
 func TestEntriesAreValid(t *testing.T) {
+	t.Parallel()
 	entries, err := Entries()
 	if err != nil {
 		t.Fatal(err)
@@ -77,6 +78,7 @@ const maxMedia = 1536 << 10
 
 // Every file in media/ is shown by some entry: an unused one is dead weight in the binary.
 func TestMediaIsUsed(t *testing.T) {
+	t.Parallel()
 	entries, err := Entries()
 	if err != nil {
 		t.Fatal(err)
@@ -97,6 +99,7 @@ func TestMediaIsUsed(t *testing.T) {
 }
 
 func TestSync(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	ctx := context.Background()
 	v1 := []Entry{
@@ -129,6 +132,7 @@ func TestSync(t *testing.T) {
 
 // The embedded entries sync into a fresh database.
 func TestSyncEmbedded(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	entries, err := Entries()
 	if err != nil {

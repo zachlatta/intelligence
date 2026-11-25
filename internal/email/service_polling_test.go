@@ -15,6 +15,7 @@ import (
 )
 
 func TestRunKeepsPollingWhileAnotherMailboxIsSlow(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	key := testKey(t)
 	for _, host := range []string{"slow", "fast"} {
@@ -67,6 +68,7 @@ func TestRunKeepsPollingWhileAnotherMailboxIsSlow(t *testing.T) {
 }
 
 func TestPollingDeadlinesSurviveAnotherServerAndKeepHistoryOnFailure(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	reader := dbtest.Reader(t, d, "test-host")
 	ctx := t.Context()
@@ -156,6 +158,7 @@ func TestPollingDeadlinesSurviveAnotherServerAndKeepHistoryOnFailure(t *testing.
 }
 
 func TestLatePollAcrossSecondBoundaryDoesNotSkipNextTick(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	_ = dbtest.Reader(t, d, "cadence")
 	var account int64
@@ -206,6 +209,7 @@ func TestLatePollAcrossSecondBoundaryDoesNotSkipNextTick(t *testing.T) {
 }
 
 func TestRetryDoesNotRefetchMessagesSavedBeforeRateLimit(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	_ = dbtest.Reader(t, d, "partial-batch")
 	var account int64

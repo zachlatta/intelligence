@@ -10,6 +10,7 @@ import (
 )
 
 func TestRateLimitErrors(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		status      int
 		body, retry string
@@ -44,6 +45,7 @@ func TestRateLimitErrors(t *testing.T) {
 }
 
 func TestQuotaPacingAndCancellation(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	p := pacer{Next: now}
 	if err := p.Wait(t.Context(), 60); err != nil {
@@ -66,6 +68,7 @@ func TestQuotaPacingAndCancellation(t *testing.T) {
 // TestQuotaPacingAtAConfiguredRate: a service given its own rate (a test's fake Gmail) charges
 // each request's units at that rate instead of QuotaRate.
 func TestQuotaPacingAtAConfiguredRate(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	p := pacer{Next: now, Rate: 6000}
 	if err := p.Wait(t.Context(), 60); err != nil {
@@ -80,6 +83,7 @@ func TestQuotaPacingAtAConfiguredRate(t *testing.T) {
 }
 
 func TestRetryAfterAndBackoff(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC().Truncate(time.Second)
 	if got := retryAfter(now.Add(time.Minute).Format(http.TimeFormat), now); got != time.Minute {
 		t.Fatal(got)
@@ -100,6 +104,7 @@ func TestRetryAfterAndBackoff(t *testing.T) {
 }
 
 func TestHistoryPollUsesOnlyIncrementalPagesAndDeduplicatesMessages(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -138,6 +143,7 @@ func TestHistoryPollUsesOnlyIncrementalPagesAndDeduplicatesMessages(t *testing.T
 }
 
 func TestBackfillYieldsBetweenMessages(t *testing.T) {
+	t.Parallel()
 	gets := []string{}
 	searches := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

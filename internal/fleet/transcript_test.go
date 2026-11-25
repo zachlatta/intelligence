@@ -28,6 +28,7 @@ func storeT(t *testing.T, r *Registry, b hostclient.TranscriptBatch) {
 }
 
 func TestTranscriptStoresEntriesWithReadableColumns(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	r := New(d.Owner)
 	record(t, r, full(), time.Now())
@@ -56,6 +57,7 @@ func TestTranscriptStoresEntriesWithReadableColumns(t *testing.T) {
 }
 
 func TestTranscriptAppendsReplacesTheLastEntryAndResets(t *testing.T) {
+	t.Parallel()
 	r := New(dbtest.New(t).Owner)
 	record(t, r, full(), time.Now())
 	storeT(t, r, hostclient.TranscriptBatch{Host: "host-1", AgentID: "a1", Epoch: "ep1", Replace: true,
@@ -84,6 +86,7 @@ func TestTranscriptAppendsReplacesTheLastEntryAndResets(t *testing.T) {
 }
 
 func TestTranscriptAppendFromAnotherEpochIsRefused(t *testing.T) {
+	t.Parallel()
 	r := New(dbtest.New(t).Owner)
 	record(t, r, full(), time.Now())
 	storeT(t, r, hostclient.TranscriptBatch{Host: "host-1", AgentID: "a1", Epoch: "ep1", Replace: true, Entries: []hostclient.TranscriptEntry{entry(1, 1, userMsg)}})
@@ -99,6 +102,7 @@ func TestTranscriptAppendFromAnotherEpochIsRefused(t *testing.T) {
 }
 
 func TestTranscriptOfAnAgentNotOnTheHostIsRefused(t *testing.T) {
+	t.Parallel()
 	r := New(dbtest.New(t).Owner)
 	record(t, r, full(), time.Now())
 	err := r.StoreTranscript(ctx, hostclient.TranscriptBatch{Host: "host-1", AgentID: "ghost", Epoch: "ep1", Replace: true,
@@ -109,6 +113,7 @@ func TestTranscriptOfAnAgentNotOnTheHostIsRefused(t *testing.T) {
 }
 
 func TestTranscriptsOutliveADisconnectButNotTheirAgent(t *testing.T) {
+	t.Parallel()
 	r := New(dbtest.New(t).Owner)
 	record(t, r, full(), time.Now())
 	storeT(t, r, hostclient.TranscriptBatch{Host: "host-1", AgentID: "a1", Epoch: "ep1", Replace: true, Entries: []hostclient.TranscriptEntry{entry(1, 1, userMsg)}})
@@ -127,6 +132,7 @@ func TestTranscriptsOutliveADisconnectButNotTheirAgent(t *testing.T) {
 }
 
 func TestListCountsEachAgentsTranscript(t *testing.T) {
+	t.Parallel()
 	r := New(dbtest.New(t).Owner)
 	record(t, r, full(), time.Now())
 	storeT(t, r, hostclient.TranscriptBatch{Host: "host-1", AgentID: "a1", Epoch: "ep1", Replace: true,
@@ -141,6 +147,7 @@ func TestListCountsEachAgentsTranscript(t *testing.T) {
 }
 
 func TestTranscriptStoresTextWithNULCharacters(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	r := New(d.Owner)
 	record(t, r, full(), time.Now())

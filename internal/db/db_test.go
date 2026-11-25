@@ -16,6 +16,7 @@ import (
 var ctx = context.Background()
 
 func TestMigrateIsIdempotent(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	if err := db.Migrate(ctx, d.Owner); err != nil {
 		t.Fatalf("second migrate: %v", err)
@@ -27,6 +28,7 @@ func TestMigrateIsIdempotent(t *testing.T) {
 }
 
 func TestEnsureReadonlyRoleIsIdempotent(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	if err := db.EnsureReadonlyRole(ctx, d.Owner, d.Role, "another-password"); err != nil {
 		t.Fatalf("second ensure: %v", err)
@@ -34,6 +36,7 @@ func TestEnsureReadonlyRoleIsIdempotent(t *testing.T) {
 }
 
 func TestContractHoldsOnAFreshDatabase(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	if err := db.CheckContract(ctx, d.Owner, d.Readonly); err != nil {
 		t.Fatalf("contract: %v", err)
@@ -41,6 +44,7 @@ func TestContractHoldsOnAFreshDatabase(t *testing.T) {
 }
 
 func TestReadonlyRoleCannotWrite(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	for _, q := range []string{
 		"INSERT INTO schema_migrations (version) VALUES ('x')",
@@ -55,6 +59,7 @@ func TestReadonlyRoleCannotWrite(t *testing.T) {
 }
 
 func TestContractFailsForATableTheReadonlyRoleCannotRead(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	if _, err := d.Owner.Exec(ctx, "CREATE TABLE hidden (x int); REVOKE SELECT ON hidden FROM "+d.Role); err != nil {
 		t.Fatal(err)
@@ -66,6 +71,7 @@ func TestContractFailsForATableTheReadonlyRoleCannotRead(t *testing.T) {
 }
 
 func TestContractFailsForStateOutsideThePublicSchema(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	if _, err := d.Owner.Exec(ctx, "CREATE SCHEMA side; CREATE TABLE side.stash (x int)"); err != nil {
 		t.Fatal(err)
@@ -77,6 +83,7 @@ func TestContractFailsForStateOutsideThePublicSchema(t *testing.T) {
 }
 
 func TestContractFailsWhenTheReadonlyRoleCanWrite(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	if _, err := d.Owner.Exec(ctx, "ALTER ROLE "+d.Role+" SET default_transaction_read_only = off; GRANT INSERT ON schema_migrations TO "+d.Role); err != nil {
 		t.Fatal(err)
@@ -144,6 +151,7 @@ func strings1(t *testing.T, p *pgxpool.Pool, q string) []string {
 }
 
 func TestAnAccountReadsOnlyItsOwnRows(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	_, ann, bob := twoAccounts(t, d)
 	for q, want := range map[string]string{
@@ -179,6 +187,7 @@ func TestAnAccountReadsOnlyItsOwnRows(t *testing.T) {
 // TestAnAccountCannotReadAsAnother: the SQL API runs whatever an account sends, so nothing it can
 // say in SQL reads another account's rows or writes.
 func TestAnAccountCannotReadAsAnother(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	_, ann, _ := twoAccounts(t, d)
 	for _, q := range []string{
@@ -215,6 +224,7 @@ func TestAnAccountCannotReadAsAnother(t *testing.T) {
 }
 
 func TestAccountRolesAreIdempotentAndFollowTheReadonlyPassword(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	roles, _, _ := twoAccounts(t, d)
 	role, _ := roles.RoleName(1)
@@ -237,6 +247,7 @@ func TestAccountRolesAreIdempotentAndFollowTheReadonlyPassword(t *testing.T) {
 }
 
 func TestContractFailsForATableWithoutRowLevelSecurity(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	if _, err := d.Owner.Exec(ctx, "CREATE TABLE open_to_all (x int)"); err != nil {
 		t.Fatal(err)
@@ -248,6 +259,7 @@ func TestContractFailsForATableWithoutRowLevelSecurity(t *testing.T) {
 }
 
 func TestContractFailsForAViewThatReadsAsItsOwner(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	if _, err := d.Owner.Exec(ctx, "CREATE VIEW every_host AS SELECT name FROM hosts"); err != nil {
 		t.Fatal(err)
@@ -259,6 +271,7 @@ func TestContractFailsForAViewThatReadsAsItsOwner(t *testing.T) {
 }
 
 func TestContractFailsForAnAccountRoleThatCanWrite(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	roles, _, _ := twoAccounts(t, d)
 	role, _ := roles.RoleName(2)
@@ -275,6 +288,7 @@ func TestContractFailsForAnAccountRoleThatCanWrite(t *testing.T) {
 // setting defaults. Through the SQL API (one statement, in a read-only transaction) an account
 // must do neither: a role made writable by default would stop the server at its next start.
 func TestAnAccountCannotChangeItsOwnRole(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	roles, ann, _ := twoAccounts(t, d)
 	role, _ := roles.RoleName(1)
@@ -308,6 +322,7 @@ func TestAnAccountCannotChangeItsOwnRole(t *testing.T) {
 
 // Dev boxes are hosts: no table, view, column, constraint, index or policy says devbox or box.
 func TestTheSchemaSaysHostNotBox(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	rows, err := d.Owner.Query(ctx, `
 		SELECT 'relation ' || relname FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relname ~ 'box'
@@ -331,6 +346,7 @@ func TestTheSchemaSaysHostNotBox(t *testing.T) {
 }
 
 func TestPermissionAuditIsAccountScopedAndReadOnly(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	_, ann, bob := twoAccounts(t, d)
 	for _, host := range []string{"ann-host", "bob-host"} {

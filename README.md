@@ -1764,11 +1764,12 @@ calls `dbtest.RunWithTemplate` (a `dbtest` test fails when one does not): it mig
 database once and clones it for each test, instead of migrating every test database; each clone
 still gets its own read-only role.
 
-Every test in `internal/web` starts with `t.Parallel()`, since each has its own database and
-server; `TestEveryTestRunsInParallel` fails on one that does not, unless a line of its doc comment
-starts with "Not parallel:" and says why. Parallel tests must not write into shared fixtures such
-as `sampleReport` or `workflow.Starting`: copy them, and decode JSON into a new value, not a copy
-that shares their slices. The race detector fails such a test.
+Every test in those packages starts with `t.Parallel()`, since each has its own database;
+`TestEveryDatabasePackageTestRunsInParallel` (in `internal/dbtest`) fails on one that does not,
+unless a line of its doc comment starts with "Not parallel:" and says why. Parallel tests must
+not write into shared fixtures such as `sampleReport` or `workflow.Starting`: copy them, and
+decode JSON into a new value, not a copy that shares their slices. The race detector fails such a
+test.
 
 ### Public repository
 

@@ -14,6 +14,7 @@ import (
 // 0050 landed on main under a four-digit name while the timestamp scheme was in review, so it is
 // the last legacy file; production records it by that name, so it is never renamed.
 func TestShippedMigrationsAreWellNamed(t *testing.T) {
+	t.Parallel()
 	names, err := db.ShippedMigrations()
 	if err != nil {
 		t.Fatalf("shipped migrations: %v", err)
@@ -33,6 +34,7 @@ func TestShippedMigrationsAreWellNamed(t *testing.T) {
 }
 
 func TestMigrationOrderPutsLegacyFirstThenTimestamps(t *testing.T) {
+	t.Parallel()
 	got, err := db.MigrationOrder([]string{
 		"20261113T0930_b.sql",
 		"0049_voice_memo_poll_schedule.sql",
@@ -58,6 +60,7 @@ func TestMigrationOrderPutsLegacyFirstThenTimestamps(t *testing.T) {
 }
 
 func TestMigrationOrderRejectsBadNames(t *testing.T) {
+	t.Parallel()
 	for name, wantErr := range map[string]string{
 		"0051_new_thing.sql":       "timestamp",    // above the legacy range: use a timestamp
 		"0100_new_thing.sql":       "timestamp",    // likewise
@@ -84,6 +87,7 @@ func TestMigrationOrderRejectsBadNames(t *testing.T) {
 }
 
 func TestMigrationOrderRejectsDuplicateLegacyNumbers(t *testing.T) {
+	t.Parallel()
 	_, err := db.MigrationOrder([]string{"0040_a.sql", "0040_b.sql"})
 	if err == nil || !strings.Contains(err.Error(), "same number") {
 		t.Errorf("err = %v, want a duplicate-number error", err)
@@ -92,6 +96,7 @@ func TestMigrationOrderRejectsDuplicateLegacyNumbers(t *testing.T) {
 
 // Two branches can write a migration in the same UTC minute: both are kept, ordered by full name.
 func TestMigrationOrderAllowsEqualTimestamps(t *testing.T) {
+	t.Parallel()
 	got, err := db.MigrationOrder([]string{"20261113T0930_b.sql", "20261113T0930_a.sql", "0049_x.sql"})
 	if err != nil {
 		t.Fatal(err)
@@ -105,6 +110,7 @@ func TestMigrationOrderAllowsEqualTimestamps(t *testing.T) {
 // Production has recorded the legacy names (0001_... to 0049_...) as versions. After the deploy that
 // brings the timestamp scheme, those rows still match, nothing re-runs, and only new files apply.
 func TestLegacyRecordsUpgradeToTheTimestampScheme(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	if _, err := d.Owner.Exec(ctx, "DROP TABLE schema_migrations"); err != nil {
 		t.Fatal(err)
@@ -134,6 +140,7 @@ func TestLegacyRecordsUpgradeToTheTimestampScheme(t *testing.T) {
 // Two branches each add a migration. Branch B lands and deploys first; branch A's migration has the
 // older timestamp. When A merges, neither file is renamed, and the next deploy applies A's.
 func TestMigrationsFromParallelBranchesMergeWithoutRenaming(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	if _, err := d.Owner.Exec(ctx, "DROP TABLE schema_migrations"); err != nil {
 		t.Fatal(err)
@@ -172,6 +179,7 @@ func TestMigrationsFromParallelBranchesMergeWithoutRenaming(t *testing.T) {
 
 // Two branches that each add a migration in the same UTC minute merge without renaming either.
 func TestSameMinuteMigrationsFromParallelBranchesMergeWithoutRenaming(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	if _, err := d.Owner.Exec(ctx, "DROP TABLE schema_migrations"); err != nil {
 		t.Fatal(err)
@@ -202,6 +210,7 @@ func TestSameMinuteMigrationsFromParallelBranchesMergeWithoutRenaming(t *testing
 // Every file in the migrations directory must be a migration: a stray x.SQL or x.sql.orig would
 // otherwise be skipped without a word.
 func TestMigrateRefusesFilesThatAreNotMigrations(t *testing.T) {
+	t.Parallel()
 	for _, stray := range []string{"20261113T0930_x.SQL", "20261113T0930_x.sql.orig", "notes.txt"} {
 		d := dbtest.New(t)
 		err := db.MigrateFrom(ctx, d.Owner, fstest.MapFS{
@@ -216,6 +225,7 @@ func TestMigrateRefusesFilesThatAreNotMigrations(t *testing.T) {
 
 // A badly named file stops the migration before anything runs.
 func TestMigrateRefusesBadlyNamedFiles(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	err := db.MigrateFrom(ctx, d.Owner, fstest.MapFS{
 		"0051_too_new.sql": {Data: []byte("CREATE TABLE mig_too_new (id int)")},
