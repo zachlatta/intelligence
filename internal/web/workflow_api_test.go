@@ -91,6 +91,7 @@ func assertJSONError(t *testing.T, rec *httptest.ResponseRecorder, wantCode int)
 }
 
 func TestWorkflowAPIKeyScopingAuthAndControl(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "test")
 	reg := fleet.New(d.Owner)
@@ -452,6 +453,7 @@ func TestWorkflowAPIKeyScopingAuthAndControl(t *testing.T) {
 }
 
 func TestWorkflowAPIInputValidationAndSizeLimits(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "test")
 	reg := fleet.New(d.Owner)
@@ -555,6 +557,7 @@ func readSSE(r *bufio.Reader) (sseMessage, error) {
 
 // TestWorkflowAPIStreamLiveAgentsWorkersGraceAndResume covers M2a, M2b, M2c, M2d, and key revocation.
 func TestWorkflowAPIStreamLiveAgentsWorkersGraceAndResume(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -746,6 +749,7 @@ func TestWorkflowAPIStreamLiveAgentsWorkersGraceAndResume(t *testing.T) {
 // (whose start command is refused with fleet.BadCommandError) ahead of an ordinary run. Once the
 // host frees, the bad run must fail permanently and the ordinary run behind it must start.
 func TestWorkflowAPIQueuedBadCommandDoesNotBlockQueue(t *testing.T) {
+	t.Parallel()
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "test")
 	reg := fleet.New(d.Owner)

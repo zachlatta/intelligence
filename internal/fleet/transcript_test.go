@@ -59,6 +59,7 @@ func TestTranscriptStoresEntriesWithReadableColumns(t *testing.T) {
 }
 
 func TestTranscriptPageReadsAtMostLimitEntriesFromSeq(t *testing.T) {
+	t.Parallel()
 	r := New(dbtest.New(t).Owner)
 	record(t, r, full(), time.Now())
 	storeT(t, r, hostclient.TranscriptBatch{Host: "host-1", AgentID: "a1", Epoch: "ep1", Replace: true,
