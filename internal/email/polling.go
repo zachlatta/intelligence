@@ -18,7 +18,13 @@ import (
 // pacing is per mailbox, not a shared project quota allocation. Other apps or
 // server instances sharing the project/user still require reactive backoff.
 // Deadlines are kept in gmail_connections under its existing row lock.
-type pacer struct{ Next time.Time }
+type pacer struct {
+	Next time.Time
+	Rate int // units per second; 0 is QuotaRate
+}
+
+// QuotaRate is the Gmail quota units each mailbox's requests are charged at, per second.
+const QuotaRate = 50
 
 func (p *pacer) Wait(ctx context.Context, units int) error {
 	t := time.NewTimer(max(time.Until(p.Next), 0))
@@ -28,7 +34,11 @@ func (p *pacer) Wait(ctx context.Context, units int) error {
 		return ctx.Err()
 	case <-t.C:
 	}
-	p.Next = time.Now().Add(time.Duration(units) * time.Second / 50)
+	rate := p.Rate
+	if rate <= 0 {
+		rate = QuotaRate
+	}
+	p.Next = time.Now().Add(time.Duration(units) * time.Second / time.Duration(rate))
 	return nil
 }
 

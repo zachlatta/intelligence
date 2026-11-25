@@ -46,12 +46,16 @@ func emailKey(t *testing.T) *email.Keyring {
 
 // emailServer is a server whose account can connect the fake mailbox, which it reads every few
 // milliseconds.
+// fakeGmailQuotaRate paces requests to the fake Gmail: 60-unit reads wait 1ms, not Gmail's 1.2s.
+const fakeGmailQuotaRate = 60000
+
 func emailServer(t *testing.T) (*testServer, *gmailfake.Server) {
 	t.Helper()
 	fake := gmailfake.New(t, "bot@example.com")
 	d := dbtest.New(t)
 	h := newServer(t, d, d.Owner, "v", func(c *Config) {
 		c.Google, c.EmailKey, c.EmailInterval = fake.Google(), emailKey(t), 20*time.Millisecond
+		c.EmailQuotaRate = fakeGmailQuotaRate
 	})
 	return h, fake
 }
@@ -335,7 +339,7 @@ func TestADeletedEmailWorkflowStartsNothingAndFreesItsSender(t *testing.T) {
 	clock := &fakeClock{t: time.Now().UTC()}
 	key := emailKey(t)
 	h := newStallServer(t, d, d.Owner, "v", func(c *Config) {
-		c.Google, c.EmailKey, c.Now = fake.Google(), key, clock.Now
+		c.Google, c.EmailKey, c.Now, c.EmailQuotaRate = fake.Google(), key, clock.Now, fakeGmailQuotaRate
 	})
 	stallReport(t, h, wfReport())
 	wf := christina(t, h)
@@ -343,7 +347,7 @@ func TestADeletedEmailWorkflowStartsNothingAndFreesItsSender(t *testing.T) {
 
 	// The routing assertions need a completed poll, independent of the background
 	// poller's scheduling and the time it takes Gmail to pace message reads.
-	mail := email.Service{DB: d.Owner, Engine: h.local.wf, Google: fake.Google(), Key: key, Now: clock.Now}
+	mail := email.Service{DB: d.Owner, Engine: h.local.wf, Google: fake.Google(), Key: key, Now: clock.Now, QuotaRate: fakeGmailQuotaRate}
 	deliver := func(msg email.GmailMessage) map[string]any {
 		t.Helper()
 		clock.Add(email.Interval)
