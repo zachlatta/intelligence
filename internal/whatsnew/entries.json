@@ -1,5 +1,13 @@
 [
   {
+    "id": "task-composer-host-picker",
+    "released": "2026-11-25",
+    "title": "Pick the host a new task runs on",
+    "summary": "The New task box on the Workflows page now has a Host menu beside Workflow. Leave it on Workflow's host to run where the workflow says, as before, or pick any of your online hosts to run this one task there. Offline hosts show but cannot be picked. A workflow that always works in one repository needs that repository on the host you pick. Retrying a failed run keeps the host it ran on.",
+    "media": "task-composer-host-picker.png",
+    "mediaAlt": "The New task box on the Workflows page in a local demo: a task typed, the Workflow menu on its workflow's host example-host-1, and the new Host menu set to example-host-2 beside Submit task."
+  },
+  {
     "id": "workflows-needs-you-in-progress",
     "released": "2026-11-25",
     "title": "Workflows shows what needs you and what is running first",

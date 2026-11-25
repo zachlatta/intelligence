@@ -83,6 +83,7 @@
   .composer .composer-toolbar { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; padding: .7rem 1rem; border-top: 1px solid var(--line); background: var(--bg-subtle); border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
   .composer .pick { display: flex; min-width: 0; align-items: center; gap: .5rem; margin-left: auto; }
   .composer .pick select { width: auto; max-width: 22rem; min-width: 0; }
+  .composer .pick + .pick { margin-left: 0; }
   .composer .pick label { margin: 0; font-size: 12.5px; color: var(--muted); font-weight: 500; }
   .composer .task-actions[hidden] { display: none; }
   #task-dictation .dictation { padding: .7rem 1rem; border-top: 1px solid var(--line); }
@@ -232,7 +233,9 @@
     <div class="composer-toolbar task-actions">
       <span id="task-attach-action"></span>{{if .Dictation}}{{template "dictationbutton"}}{{end}}
       <div class="pick"><label for="task-workflow">Workflow</label>
-        <select id="task-workflow">{{range .Tasks}}<option value="{{.ID}}"{{if .IsDefault}} selected{{end}}>{{.Name}}{{with .Definition.Host}} · {{.}}{{end}}</option>{{end}}</select></div>
+        <select id="task-workflow">{{range .Tasks}}<option value="{{.ID}}"{{if .IsDefault}} selected{{end}} data-host="{{.Definition.Host}}">{{.Name}}{{with .Definition.Host}} · {{.}}{{end}}</option>{{end}}</select></div>
+      <div class="pick"><label for="task-host">Host</label>
+        <select id="task-host"><option value="">Workflow’s host</option>{{range .TaskHosts}}{{if .Online}}<option value="{{.Name}}">{{.Name}}</option>{{else}}<option value="{{.Name}}" disabled>{{.Name}} · offline</option>{{end}}{{end}}</select></div>
       <button class="btn primary" id="submit-task" disabled title="⌘/Ctrl Enter">Submit task</button>
     </div>
   </section>
@@ -351,6 +354,14 @@ document.getElementById("new-workflow")?.addEventListener("click", () => addWork
 // Task composer submission: hold the draft steady through uploads and the API call.
 const taskText = document.getElementById("task"), taskSubmit = document.getElementById("submit-task");
 const taskBox = document.getElementById("task-dictation"), taskWorkflow = document.getElementById("task-workflow");
+const taskHost = document.getElementById("task-host");
+// the default host option names the chosen workflow's host
+const taskHostDefault = () => {
+  const host = taskWorkflow?.selectedOptions?.[0]?.dataset.host, first = taskHost?.options?.[0];
+  if (first) first.textContent = host ? `Workflow’s host (${host})` : "Workflow’s host";
+};
+taskWorkflow?.addEventListener("change", taskHostDefault);
+taskHostDefault();
 const taskError = document.getElementById("task-error"), taskStatus = document.getElementById("task-status");
 const taskImages = taskText ? imageAttachments(taskText, taskBox, {
   panel: document.getElementById("task-attachments"), action: document.getElementById("task-attach-action")
@@ -364,16 +375,16 @@ taskSubmit?.addEventListener("click", async () => {
   const input = taskText.value.trim();
   if (taskSending || !input || taskText.readOnly) return;
   taskSending = true; taskReady(); taskWarning("");
-  taskText.readOnly = true; taskWorkflow.disabled = true; taskImages.setDisabled(true);
+  taskText.readOnly = true; taskWorkflow.disabled = true; taskHost.disabled = true; taskImages.setDisabled(true);
   taskBox.setAttribute("aria-busy", "true");
   taskSubmit.textContent = "Submitting…"; taskStatus.textContent = "Submitting your task…";
   const mic = document.getElementById("dictate"); if (mic) mic.disabled = true;
   try {
-    const r = await api("POST", "/api/workflow-runs", { workflowId: taskWorkflow.value, input: await taskImages.prompt(input) });
+    const r = await api("POST", "/api/workflow-runs", { workflowId: taskWorkflow.value, "host": taskHost.value, input: await taskImages.prompt(input) });
     location.href = "/workflow-runs/" + r.id;
   } catch (e) {
     taskWarning(e.message); taskStatus.textContent = "";
-    taskSending = false; taskText.readOnly = false; taskWorkflow.disabled = false; taskImages.setDisabled(false);
+    taskSending = false; taskText.readOnly = false; taskWorkflow.disabled = false; taskHost.disabled = false; taskImages.setDisabled(false);
     if (mic) mic.disabled = false;
     taskBox.setAttribute("aria-busy", "false"); taskSubmit.textContent = "Submit task"; taskReady();
   }
