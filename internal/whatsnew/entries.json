@@ -1,5 +1,13 @@
 [
   {
+    "id": "workflow-project-map",
+    "released": "2026-11-26",
+    "title": "Deterministic key-to-repository routing for workflows",
+    "summary": "Workflows can now set Find the project to Mapped from input keys (deterministic) with a reviewed list of routes (repository directory, optional label, and keys). Before creating a run or starting any agent, Intelligence parses leading YAML frontmatter (contract_ids with optional contract_ancestors, or keys with key_ancestors), walks each key's ancestors most-specific-first, checks host_repositories, and fails closed (HTTP 400) if a key is unmapped, a batch spans multiple repositories, or the input attempts to specify a repository directly.",
+    "media": "workflow-project-map.png",
+    "mediaAlt": "The Intelligence workflow editor in a local demo showing Find the project set to Mapped from input keys (deterministic) with reviewed repository routes for demo/billing-api and demo/infra-ops."
+  },
+  {
     "id": "workflow-typed-signoff",
     "released": "2026-11-26",
     "title": "Require explicit browser approval on workflow sign-off steps",
