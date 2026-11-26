@@ -30,8 +30,6 @@ type Engine struct {
 	Now func() time.Time
 	// Changes wakes synchronous host reads (such as Git outline verification for project.mode="map").
 	Changes *fleet.Changes
-	// ReadGitFile, when set (tests), overrides dispatching read_git_file through the host stream.
-	ReadGitFile func(ctx context.Context, host, dir, commit, filePath string) (string, error)
 	// Limits are when a host is too busy to start another run: a new run queues (queue.go).
 	Limits Limits
 	// Notify, when set, sends phone notifications through PDW for runs belonging to NotifyAccount:
@@ -560,9 +558,6 @@ func (e *Engine) prepareVerifiedTree(ctx context.Context, account int64, workflo
 }
 
 func (e *Engine) fetchGitFileFromHost(ctx context.Context, host, dir, commit, filePath string) (string, error) {
-	if e.ReadGitFile != nil {
-		return e.ReadGitFile(ctx, host, dir, commit, filePath)
-	}
 	args, err := json.Marshal(hostclient.ReadGitFileArgs{
 		Directory: dir,
 		Commit:    commit,

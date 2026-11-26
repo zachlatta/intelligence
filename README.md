@@ -562,6 +562,12 @@ against its daemon and reports `running`, then `succeeded` with a result (`{"wor
 - `switch_login`: `provider` (only `claude`), `login`, and optionally `from` and `why` for the
   record. The host switches every Claude agent on it to that cswap login (Model groups, below);
   the result is `{"login","slot"}`.
+- `read_git_file`: `directory` (a clean absolute path to a Git repository on the host), `commit`
+  (40 hex characters) and `path` (clean and relative to the repository). The host fetches
+  origin's default branch into its tracking ref, without changing the checkout, index or local
+  branches. It refuses a commit that is not on that branch, or whose blob at `path` differs from
+  the blob at the branch's tip. The result is `{"content"}`, the blob as UTF-8 text, up to 512 KiB.
+  A mapped project with `treeSource` (Workflows, below) sends it before a run starts.
 - `create_schedule`: `prompt`, a cadence (`every`, a duration of at least `1m` such as `30m` or
   `1h30m`; or `cron`, five fields, with an optional `timezone`), and `agent`: `provider`, `cwd`, and
   optionally `model`, `thinking`, `mode`, `title`, `isolation` (`worktree`, a new git worktree each
