@@ -38,7 +38,7 @@
 
 {{define "workflow-state"}}{{if .}}<h3>{{.Name}} <span class="badge">v{{.Version}}</span></h3><p>{{.Description}}</p>
 {{if .Deleted}}<p>Workflow deleted</p>{{end}}<p class="meta">Host: {{.Definition.Host}} · Trigger: {{.Definition.Trigger}} · Default: {{.IsDefault}}</p>
-<h4>Project</h4><p class="meta">{{.Definition.Project.Mode}} · {{.Definition.Project.Directory}} · {{.Definition.Project.Provider}} · {{.Definition.Project.Model}} · {{.Definition.Project.Thinking}}{{with .Definition.Project.ServiceTier}} · {{.}}{{end}}</p><pre class="review-text">{{.Definition.Project.Instructions}}</pre>
+<h4>Project</h4><p class="meta">{{.Definition.Project.Mode}}{{with .Definition.Project.Directory}} · {{.}}{{end}}{{with .Definition.Project.Provider}} · {{.}}{{end}}{{with .Definition.Project.Model}} · {{.}}{{end}}{{with .Definition.Project.Thinking}} · {{.}}{{end}}{{with .Definition.Project.ServiceTier}} · {{.}}{{end}}</p>{{if .Definition.Project.Routes}}<ul>{{range .Definition.Project.Routes}}<li><code>{{.Directory}}</code>{{with .Slug}} ({{.}}){{end}}: {{range $i, $k := .Keys}}{{if $i}}, {{end}}<code>{{$k}}</code>{{end}}</li>{{end}}</ul>{{end}}{{with .Definition.Project.Instructions}}<pre class="review-text">{{.}}</pre>{{end}}
 <h4>Orchestrator</h4><p class="meta">{{.Definition.Orchestrator.Provider}} · {{.Definition.Orchestrator.Model}} · {{.Definition.Orchestrator.Thinking}}{{with .Definition.Orchestrator.ServiceTier}} · {{.}}{{end}}</p><pre class="review-text">{{.Definition.Orchestrator.Instructions}}</pre>
 {{range .Definition.Steps}}<section class="review-step"><h4>{{.Title}}</h4><p class="meta">{{.Kind}} · {{.ID}}</p><pre class="review-text">{{.Instructions}}</pre></section>{{end}}
 {{else}}<p>No workflow yet.</p>{{end}}{{end}}

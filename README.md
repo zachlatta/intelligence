@@ -744,7 +744,14 @@ version it started with. A run:
 1. **Finds its project.** Before anything runs in a worktree, an agent (the definition's project
    finder, started in the host's home directory, `~`) is told the task and the host's repositories
    (its workspaces' `project_root`s) and answers with `intelligence workflow project --run <id>
-   <directory>|none`. A definition can name its repository instead (`"mode": "fixed"`).
+   <directory>|none`. A definition can instead name one repository (`"mode": "fixed"`) or map
+   structured input keys deterministically (`"mode": "map"` with `"routes": [{"keys": [...],
+   "directory": "...", "slug": "..."}]`). Mapped projects parse leading YAML frontmatter
+   (`contract_ids` with optional `contract_ancestors`, or `keys` with optional `key_ancestors`),
+   walk each key's ancestor chain most-specific-first, verify the resolved directory is reported in
+   `host_repositories`, and fail closed (HTTP 400 before creating a run) if a key is unmapped, a
+   batch spans multiple repositories, an ancestor chain is inconsistent, or the input attempts to
+   supply a repository or directory field directly.
    Matching chooses by the requested work product: one-off reports, analyses, decks, emails and
    research go to `desk` when it is available, even when their data comes from a warehouse.
    Code changes and investigations of a repository's behavior go to that repository. An explicit

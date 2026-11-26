@@ -65,6 +65,7 @@ func proposalChanges(a, b *workflow.WorkflowState) []proposalChange {
 	add("Voice memo filter", prettyProposal(x.VoiceMemo), prettyProposal(y.VoiceMemo))
 	add("Project mode", x.Project.Mode, y.Project.Mode)
 	add("Project directory", x.Project.Directory, y.Project.Directory)
+	add("Project routes", prettyProposal(x.Project.Routes), prettyProposal(y.Project.Routes))
 	add("Project provider", x.Project.Provider, y.Project.Provider)
 	add("Project model", x.Project.Model, y.Project.Model)
 	add("Project thinking", x.Project.Thinking, y.Project.Thinking)

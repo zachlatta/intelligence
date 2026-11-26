@@ -539,13 +539,29 @@ func (e *Engine) startRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 				return bad("this workflow always works in %s, which host %s has not reported: run it on %s, or pick a host with that repository", d.Project.Directory, host, d.Host)
 			}
 		}
+		repo := ""
+		selected := false
+		switch d.Project.Mode {
+		case ProjectFixed:
+			selected = true
+			repo = d.Project.Directory
+		case ProjectMap:
+			route, err := ResolveProjectRoute(d.Project.Routes, input)
+			if err != nil {
+				return err
+			}
+			var has bool
+			if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM host_repositories WHERE host = $1 AND directory = $2)", host, route.Directory).Scan(&has); err != nil {
+				return err
+			}
+			if !has {
+				return bad("mapped repository %s is not reported on host %s", route.Directory, host)
+			}
+			selected = true
+			repo = route.Directory
+		}
 		if err := lockQueue(ctx, tx, host); err != nil {
 			return err
-		}
-		repo := ""
-		selected := d.Project.Mode == ProjectFixed
-		if selected {
-			repo = d.Project.Directory
 		}
 		estimate, err := repositoryMemory(ctx, tx, account, host, workflowID, repo, selected)
 		if err != nil {

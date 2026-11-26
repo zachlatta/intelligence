@@ -36,15 +36,25 @@ type Definition struct {
 }
 
 // Project is how a run's project is found, before the orchestrator starts in its worktree: an
-// agent picks one of the host's repositories (match), or it is always Directory (fixed).
+// agent picks one of the host's repositories (match), it is always Directory (fixed), or it is
+// resolved deterministically from structured input keys using reviewed Routes (map).
 type Project struct {
-	Mode         string `json:"mode"`
-	Directory    string `json:"directory,omitempty"` // fixed: the repository's main checkout on the host
-	Provider     string `json:"provider,omitempty"`  // match: the finder agent
-	Model        string `json:"model,omitempty"`
-	Thinking     string `json:"thinking,omitempty"`
-	ServiceTier  string `json:"serviceTier,omitempty"` // codex speed, as for the orchestrator
-	Instructions string `json:"instructions,omitempty"`
+	Mode         string         `json:"mode"`
+	Directory    string         `json:"directory,omitempty"` // fixed: the repository's main checkout on the host
+	Routes       []ProjectRoute `json:"routes,omitempty"`    // map: reviewed key -> repository directory mappings
+	Provider     string         `json:"provider,omitempty"`  // match: the finder agent
+	Model        string         `json:"model,omitempty"`
+	Thinking     string         `json:"thinking,omitempty"`
+	ServiceTier  string         `json:"serviceTier,omitempty"` // codex speed, as for the orchestrator
+	Instructions string         `json:"instructions,omitempty"`
+}
+
+// ProjectRoute maps one or more normalized input keys (such as contract UUIDs) to a repository
+// directory on the workflow's host. Slug is an optional human-readable label (e.g. owner/repo).
+type ProjectRoute struct {
+	Keys      []string `json:"keys"`
+	Directory string   `json:"directory"`
+	Slug      string   `json:"slug,omitempty"`
 }
 
 // Orchestrator is the agent that runs the steps, and its standing instructions.
@@ -96,6 +106,7 @@ const (
 	TriggerVoiceMemo  = "voice_memo" // a new PDW voice memo recording matches VoiceMemo
 	ProjectMatch      = "match"
 	ProjectFixed      = "fixed"
+	ProjectMap        = "map"
 	KindStep          = "step"
 	KindGate          = "gate"
 	KindSignoff       = "signoff"
@@ -119,6 +130,31 @@ func Parse(b []byte) (Definition, error) {
 func (d Definition) normalized() Definition {
 	if d.Project.Mode == ProjectFixed && d.Project.Directory != "" {
 		d.Project.Directory = path.Clean(d.Project.Directory)
+	}
+	if d.Project.Mode == ProjectMap && len(d.Project.Routes) > 0 {
+		routes := make([]ProjectRoute, len(d.Project.Routes))
+		for i, rt := range d.Project.Routes {
+			dir := strings.TrimSpace(rt.Directory)
+			if dir != "" {
+				dir = path.Clean(dir)
+			}
+			keys := make([]string, 0, len(rt.Keys))
+			seen := map[string]bool{}
+			for _, raw := range rt.Keys {
+				k := strings.ToLower(strings.TrimSpace(raw))
+				if k == "" || seen[k] {
+					continue
+				}
+				seen[k] = true
+				keys = append(keys, k)
+			}
+			routes[i] = ProjectRoute{
+				Keys:      keys,
+				Directory: dir,
+				Slug:      strings.TrimSpace(rt.Slug),
+			}
+		}
+		d.Project.Routes = routes
 	}
 	return d
 }
@@ -162,8 +198,14 @@ func (d Definition) Validate() error {
 		return errors.New("project finder: antigravity selects thinking level through the model ID; leave thinking empty")
 	case d.Project.Mode == ProjectMatch && blank(d.Project.Instructions):
 		return errors.New("the project finder needs instructions")
-	case d.Project.Mode != ProjectMatch && d.Project.Mode != ProjectFixed:
-		return fmt.Errorf("project mode %q: want %s or %s", d.Project.Mode, ProjectMatch, ProjectFixed)
+	case d.Project.Mode != ProjectMatch && d.Project.Mode != ProjectFixed && d.Project.Mode != ProjectMap:
+		return fmt.Errorf("project mode %q: want %s, %s or %s", d.Project.Mode, ProjectMatch, ProjectFixed, ProjectMap)
+	case d.Project.Mode != ProjectMap && len(d.Project.Routes) > 0:
+		return errors.New("project routes are only valid when project mode is map")
+	case d.Project.Mode == ProjectMap && len(d.Project.Routes) == 0:
+		return errors.New("a mapped project needs at least one route")
+	case d.Project.Mode == ProjectMap && (!blank(d.Project.Directory) || !blank(d.Project.Provider) || !blank(d.Project.Model) || !blank(d.Project.Thinking) || !blank(d.Project.ServiceTier) || !blank(d.Project.Instructions)):
+		return errors.New("a mapped project must not set fixed directory or finder agent fields")
 	case blank(d.Orchestrator.Provider):
 		return errors.New("the orchestrator needs a provider")
 	case strings.TrimSpace(d.Orchestrator.Provider) == "antigravity" && !blank(d.Orchestrator.Thinking):
@@ -175,6 +217,11 @@ func (d Definition) Validate() error {
 	}
 	if d.Project.Mode == ProjectMatch {
 		if err := checkServiceTier("project finder", d.Project.Provider, d.Project.ServiceTier); err != nil {
+			return err
+		}
+	}
+	if d.Project.Mode == ProjectMap {
+		if err := validateProjectRoutes(d.Project.Routes); err != nil {
 			return err
 		}
 	}

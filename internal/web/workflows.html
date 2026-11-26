@@ -508,6 +508,7 @@ function fixedCards() {
       ` Runs on <b class="mono">${esc(d.host || "no host yet")}</b>. Priority: <b>${esc(d.priority || ("automatic (" + ((d.trigger === "email" || d.trigger === "voice_memo") ? "immediate" : "normal") + ")"))}</b>.`) +
     `<div class="link"></div>` +
     card("__project", "Before the orchestrator", "Find the project", p.mode === "fixed" ? `Always ${esc(allRepos.find((r) => r.directory === p.directory)?.project || "")} <span class="mono">${esc(p.directory)}</span>.` :
+      p.mode === "map" ? `Mapped from input keys (${(p.routes || []).length} ${(p.routes || []).length === 1 ? "route" : "routes"}). Fails closed on unmapped or mixed keys.` :
       `An agent (${esc(p.provider)}${p.model ? " · " + esc(p.model) : ""}) picks one of the host's repositories, or none. Then the worktree is made.`) +
     `<div class="link"></div>` +
     card("__orch", "In the worktree", "Orchestrator", `${esc(o.provider)}${o.model ? " · " + esc(o.model) : ""}${o.thinking ? " · " + esc(o.thinking) : ""}${o.serviceTier ? " · " + esc(o.serviceTier) : ""}. ` +
@@ -538,6 +539,29 @@ function repoPicker(p) {
       ${opts(options, other ? "" : p.directory)}<option value="__other"${other ? " selected" : ""}>Another directory…</option></select>
     ${other ? `<label>Its main checkout on the host</label><input data-p="directory" value="${esc(p.directory)}" placeholder="/path/to/the/repository">` : ""}
     <p class="hint">The repositories ${esc(def().host)} reported. Each run makes a worktree of it there.</p>`;
+}
+
+// projectRoutesPanel edits project.routes for mode: "map" (deterministic key -> repository routing).
+function projectRoutesPanel(p) {
+  const routes = Array.isArray(p.routes) ? p.routes : [];
+  const hostRepos = allRepos.filter((r) => r.hosts.includes(def().host));
+  const dl = `<datalist id="host-repos-list">${hostRepos.map((r) => `<option value="${esc(r.directory)}">${esc(repoLabel(r))}</option>`).join("")}</datalist>`;
+  const rows = routes.map((rt, i) => `<div style="border:1px solid var(--line);border-radius:var(--radius);padding:.6rem .7rem;margin-top:.55rem;background:var(--bg-subtle)" data-route-card="${i}">
+      <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.35rem">
+        <b style="font-size:12.5px">Route ${i + 1}</b>
+        <span class="grow"></span>
+        <button type="button" class="btn ghost sm" data-route-del="${i}" title="Remove route">✕</button>
+      </div>
+      <label style="margin-top:.2rem">Repository label (optional)</label>
+      <input data-route-i="${i}" data-route-f="slug" value="${esc(rt.slug || "")}" placeholder="org/repo">
+      <label>Repository directory on host</label>
+      <input class="mono" data-route-i="${i}" data-route-f="directory" value="${esc(rt.directory || "")}" placeholder="/path/to/repo" list="host-repos-list">
+      <label>Keys (comma or newline separated)</label>
+      <textarea class="mono" data-route-i="${i}" data-route-f="keys" style="min-height:4rem;font-size:12px" placeholder="key-uuid-1, key-uuid-2">${esc((rt.keys || []).join(", "))}</textarea>
+    </div>`).join("");
+  return `${dl}${rows || `<p class="hint">No routes yet. Add at least one route below.</p>`}
+    <div style="margin-top:.6rem"><button type="button" class="btn sm" id="add-project-route">+ Add route</button></div>
+    <p class="hint">Reads leading YAML frontmatter (<code>contract_ids</code> + <code>contract_ancestors</code>, or <code>keys</code> + <code>key_ancestors</code>) most-specific-first. Refuses unmapped keys, multi-repository batches, and caller-supplied repository fields (HTTP 400) before starting any agent.</p>`;
 }
 
 // --- email triggers: the filter (as workflow.EmailFilter), and a preview against recent email ---
@@ -687,8 +711,9 @@ function inspector() {
   if (sel === "__project") {
     const p = d.project;
     return panel("Find the project", "Runs before the orchestrator, which lives in the worktree", `<label>The project is</label>
-      <select data-p="mode">${opts([["match", "Picked by an agent (or none)"], ["fixed", "Always one repository"]], p.mode)}</select>
+      <select data-p="mode">${opts([["match", "Picked by an agent (or none)"], ["fixed", "Always one repository"], ["map", "Mapped from input keys (deterministic)"]], p.mode)}</select>
       ${p.mode === "fixed" ? repoPicker(p)
+        : p.mode === "map" ? projectRoutesPanel(p)
         : `${agentFields(p, "p")}<label>What the agent is told</label><textarea data-p="instructions" class="prompt">${esc(p.instructions)}</textarea>
            <p class="hint">It also gets the task, the host's repositories, and how to answer.</p>`}
       <p class="hint">Then Intelligence makes a git worktree of the repository (or uses the home directory, for none) and starts the orchestrator in it.</p>`);
@@ -829,6 +854,22 @@ function bind() {
         target()[el.dataset[attr]] = el.value;
       }
       if (el.dataset[attr] === "kind" && el.value !== "signoff") delete target().requireHumanSignoff;
+      if (attr === "p" && el.dataset[attr] === "mode") {
+        const p = target();
+        if (el.value === "map") {
+          delete p.directory; delete p.provider; delete p.model; delete p.thinking; delete p.serviceTier; delete p.instructions;
+          if (!Array.isArray(p.routes) || !p.routes.length) p.routes = [{ slug: "", directory: "", keys: [] }];
+        } else {
+          delete p.routes;
+          if (el.value === "fixed") {
+            delete p.provider; delete p.model; delete p.thinking; delete p.serviceTier; delete p.instructions;
+          } else {
+            delete p.directory;
+            if (!p.provider) p.provider = starting.project?.provider || "claude";
+            if (!p.instructions) p.instructions = starting.project?.instructions || "";
+          }
+        }
+      }
       if (el.dataset[attr] === "serviceTier" && !el.value) delete target().serviceTier;
       if (el.dataset[attr] === "provider") {
         const tierEl = $(`#inspector [data-${attr}="serviceTier"]`);
@@ -857,6 +898,37 @@ function bind() {
     def().project.directory = typingDir ? (allRepos.some((r) => r.directory === def().project.directory) ? "" : def().project.directory) : pick.value;
     markDirty(true);
   };
+  const addRouteBtn = $("#add-project-route");
+  if (addRouteBtn) addRouteBtn.onclick = () => {
+    const p = def().project;
+    if (!Array.isArray(p.routes)) p.routes = [];
+    p.routes.push({ slug: "", directory: "", keys: [] });
+    markDirty(true);
+  };
+  $$("#inspector [data-route-del]").forEach((btn) => btn.onclick = () => {
+    const idx = Number(btn.dataset.routeDel);
+    if (Array.isArray(def().project.routes)) def().project.routes.splice(idx, 1);
+    markDirty(true);
+  });
+  $$("#inspector [data-route-i]").forEach((el) => el.addEventListener("input", () => {
+    const idx = Number(el.dataset.routeI), field = el.dataset.routeF;
+    const rt = def().project.routes?.[idx];
+    if (!rt) return;
+    if (field === "keys") {
+      rt.keys = el.value.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+    } else if (field === "slug") {
+      const v = el.value.trim();
+      if (v) rt.slug = v; else delete rt.slug;
+    } else {
+      rt[field] = el.value;
+    }
+    markDirty(false);
+    const card = $(`#pipe .node[data-id="__project"] .nb`);
+    if (card) {
+      const n = (def().project.routes || []).length;
+      card.textContent = `Mapped from input keys (${n} ${n === 1 ? "route" : "routes"}). Fails closed on unmapped or mixed keys.`;
+    }
+  }));
   $$("#inspector [data-e]").forEach((el) => el.addEventListener(el.type === "checkbox" || el.tagName === "SELECT" ? "change" : "input", () => {
     const f = def().email, k = el.dataset.e;
     f[k] = k === "from" ? el.value.split(",").map((s) => s.trim()).filter(Boolean) : el.type === "checkbox" ? el.checked : el.value;
