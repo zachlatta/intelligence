@@ -411,9 +411,16 @@ func TestWorkflowsLandWithoutPullRequests(t *testing.T) {
 			t.Errorf("no-pull-request rule misses %q", want)
 		}
 	}
+	// When Zach does ask for a pull request, nothing may contradict it, and the push wording
+	// belongs to landing only, so no earlier step reads it as permission to push.
+	for _, want := range []string{"Unless Zach's request asks for a pull request, when landing code, push"} {
+		if !strings.Contains(NoPullRequestRule, want) {
+			t.Errorf("no-pull-request rule misses %q", want)
+		}
+	}
 	land := Starting.Steps[Starting.Index("land")].Instructions
-	if !strings.Contains(land, "without a pull request") {
-		t.Errorf("starting landing step does not say to land without a pull request: %q", land)
+	if !strings.Contains(land, "without a pull request (unless Zach's request asks for one)") {
+		t.Errorf("starting landing step does not keep the exception for a requested pull request: %q", land)
 	}
 }
 

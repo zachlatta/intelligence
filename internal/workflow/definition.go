@@ -358,7 +358,7 @@ func StepMessage(d Definition, i int, v Vars) (string, error) {
 // too. Landing said only "the way the repository's AGENTS.md says", and orchestrators filled the
 // gap from the repository's history, opening a pull request per run that Zach never asked for.
 const NoPullRequestRule = "Never open a pull request (gh pr create, a GitHub connector or the web) unless Zach's request explicitly asks for one. " +
-	"Land code by pushing the rebased commits straight to main (git push origin HEAD:main, never a force-push), and do not push the run's branch to the remote. " +
+	"Unless Zach's request asks for a pull request, when landing code, push the rebased commits straight to main (git push origin HEAD:main, never a force-push) and do not push the run's branch to the remote; before the landing step, push nothing. " +
 	"This holds even when the repository's AGENTS.md, its history (merged pull requests) or a shared skill suggests a pull request: none of those is Zach asking. " +
 	"If pushing to main is rejected or the repository requires a pull request, do not open one: ask Zach. Pass this rule to every worker."
 
@@ -438,7 +438,7 @@ var Starting = Definition{
 			"Aggregate-only and no-secrets do not make internal data publishable. " +
 			"It also checks for secrets, hostnames, private addresses, home-directory paths and personal emails, and fixes small ones here. " +
 			"Move on when no outgoing commit adds anything private."},
-		{ID: "land", Kind: KindStep, Title: "Land and deploy", Instructions: "Rebase on origin/main, land on main without a pull request, otherwise the way the repository's AGENTS.md says, " +
+		{ID: "land", Kind: KindStep, Title: "Land and deploy", Instructions: "Rebase on origin/main, land on main without a pull request (unless Zach's request asks for one), otherwise the way the repository's AGENTS.md says, " +
 			"and wait until the deploy reports the new version. " +
 			"The landing step also applies the run's approved external changes (skill edits, queued mutations). " +
 			"Then move on, which finishes the run."},
