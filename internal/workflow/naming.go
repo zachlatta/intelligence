@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -32,19 +33,35 @@ import (
 // <run> is the run id's first 12 hex digits (48 random bits of a version 4 UUID) in both, so
 // two runs sharing a name is vanishingly unlikely.
 const (
-	titleWords  = 8  // the task's words in a title, at most
-	titleMax    = 60 // and its characters
-	workflowMax = 24 // a branch's slug of the workflow's name, at most
-	taskMax     = 40 // and of the task
+	titleWords      = 8  // the task's words in a title, at most
+	titleMax        = 60 // and its characters
+	workflowMax     = 24 // a branch's slug of the workflow's name, at most
+	taskMax         = 40 // and of the task
+	worktreeSlugMax = 50 // Paseo daemon MAX_SLUG_LENGTH: slugs longer than 50 chars are truncated at a hyphen
 )
 
 // taskName is the name of input's task, the run's title (workflow_runs.title), from which every
 // other name of the run is made: its words (taskWords), with a first word of plain letters
-// capitalised; or, with none, the input's first line. Image attachment references
-// ([attachment:<uuid>]) name nothing and are left out; an input of images alone is named
-// "Attached image" or "<n> attached images".
+// capitalised; or, with none, the input's first line. Leading YAML frontmatter (--- ... ---) is
+// stripped so machine headers like a schema line never become the title; an explicit
+// title or subject field in frontmatter wins, and structured Contract Check/Fix bodies derive a
+// concise readable title. Image attachment references ([attachment:<uuid>]) name nothing and are
+// left out; an input of images alone is named "Attached image" or "<n> attached images".
 func taskName(input string) string {
 	input = voiceMemoTaskInput(input)
+	if fm, body, ok := splitYAMLFrontmatter(input); ok {
+		if t := frontmatterTitle(fm); t != "" {
+			input = t
+		} else if t := contractOpsTitle(body); t != "" {
+			return t
+		} else if strings.TrimSpace(body) != "" {
+			input = body
+		} else if t := frontmatterFallbackTitle(fm); t != "" {
+			input = t
+		} else {
+			return "API run"
+		}
+	}
 	images := len(attachment.Reference.FindAllString(input, -1))
 	input = attachment.Reference.ReplaceAllString(input, "")
 	words := taskWords(input)
@@ -64,6 +81,147 @@ func taskName(input string) string {
 		task = string(unicode.ToUpper(r)) + task[n:]
 	}
 	return task
+}
+
+var (
+	contractCheckBodyRe = regexp.MustCompile(`(?i)^run\s+(?:a\s+)?(?:strictly\s+read-only\s+)?contract\s+check\s+on\s+(\d+)\s+contract(?:\(s\)|s)?\s+under\s+"([^"]+)"`)
+	contractFixBodyRe   = regexp.MustCompile(`(?i)^fix\s+(\d+)\s+contract(?:\(s\)|s)?\b`)
+	contractHeadingRe   = regexp.MustCompile(`(?m)^###\s+"([^"]+)"`)
+)
+
+// splitYAMLFrontmatter splits leading "---\n...\n---" frontmatter from the body.
+// The closing "---" must appear at column 0 so indented "---" lines inside block
+// scalars cannot terminate frontmatter early.
+func splitYAMLFrontmatter(input string) (frontmatter []string, body string, ok bool) {
+	norm := strings.ReplaceAll(input, "\r\n", "\n")
+	trimmed := strings.TrimLeft(norm, "\n")
+	if !strings.HasPrefix(trimmed, "---\n") {
+		return nil, "", false
+	}
+	rest := trimmed[4:]
+	lines := strings.Split(rest, "\n")
+	for i, line := range lines {
+		if line == "---" {
+			return lines[:i], strings.Join(lines[i+1:], "\n"), true
+		}
+	}
+	return nil, "", false
+}
+
+func frontmatterScalars(lines []string) map[string]string {
+	out := make(map[string]string)
+	for _, raw := range lines {
+		if len(raw) == 0 || raw[0] == ' ' || raw[0] == '\t' || raw[0] == '#' {
+			continue
+		}
+		key, val, ok := strings.Cut(raw, ":")
+		if !ok {
+			continue
+		}
+		k := strings.ToLower(strings.Trim(strings.TrimSpace(key), `"'`))
+		v := strings.TrimSpace(val)
+		if v == "" || v == "|" || v == ">" || v == "|-" || v == ">-" || v == "null" || v == "~" || v == "[]" || v == "{}" {
+			continue
+		}
+		v = strings.TrimSpace(strings.Trim(v, `"'`))
+		if v == "" {
+			continue
+		}
+		if _, exists := out[k]; !exists {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+func frontmatterTitle(lines []string) string {
+	fields := frontmatterScalars(lines)
+	for _, k := range []string{"title", "subject"} {
+		if v := fields[k]; v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func frontmatterFallbackTitle(lines []string) string {
+	fields := frontmatterScalars(lines)
+	for _, k := range []string{"name", "summary", "description", "target", "workflow_kind"} {
+		if v := fields[k]; v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func contractOpsTitle(body string) string {
+	first := ""
+	for line := range strings.Lines(body) {
+		if t := strings.TrimSpace(line); t != "" {
+			first = t
+			break
+		}
+	}
+	if first == "" {
+		return ""
+	}
+	if m := contractCheckBodyRe.FindStringSubmatch(first); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		subject := strings.TrimSpace(strings.TrimRight(m[2], "."))
+		if subject == "" {
+			return ""
+		}
+		suffix := ""
+		if n > 1 {
+			suffix = fmt.Sprintf(" (%d contracts)", n)
+		}
+		return formatQuotedTitle("Check", subject, suffix)
+	}
+	if m := contractFixBodyRe.FindStringSubmatch(first); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		if hm := contractHeadingRe.FindStringSubmatch(body); hm != nil {
+			subject := strings.TrimSpace(strings.TrimRight(hm[1], "."))
+			if subject != "" {
+				suffix := ""
+				if n > 1 {
+					suffix = fmt.Sprintf(" (+%d more)", n-1)
+				}
+				return formatQuotedTitle("Fix", subject, suffix)
+			}
+		}
+	}
+	return ""
+}
+
+func formatQuotedTitle(verb, subject, suffix string) string {
+	prefix := verb + ` "`
+	closeQuote := `"` + suffix
+	budget := titleMax - utf8.RuneCountInString(prefix) - utf8.RuneCountInString(closeQuote)
+	if budget < 4 {
+		return verb
+	}
+	if utf8.RuneCountInString(subject) <= budget {
+		return prefix + subject + closeQuote
+	}
+	words := strings.Fields(subject)
+	var kept []string
+	n := 0
+	for _, w := range words {
+		size := utf8.RuneCountInString(w)
+		if len(kept) > 0 {
+			size++
+		}
+		if n+size > budget-1 {
+			break
+		}
+		kept = append(kept, w)
+		n += size
+	}
+	if len(kept) == 0 {
+		r := []rune(subject)
+		return prefix + string(r[:budget-1]) + "…" + closeQuote
+	}
+	return prefix + strings.Join(kept, " ") + "…" + closeQuote
 }
 
 func firstLine(input string) string {
@@ -96,6 +254,70 @@ func runNames(id, workflow, task string) (wsTitle, branch string) {
 		}
 	}
 	return wsTitle, branch
+}
+
+// worktreeSlug is a run's Paseo worktree directory slug: <= worktreeSlugMax (50) bytes so Paseo's
+// slugify() never truncates off the 12-hex run id suffix. When attempt > 0 (a retry after a failed
+// git worktree add), it appends "-r<attempt>" so retries never collide with a leftover directory.
+func worktreeSlug(id, workflow, task string, attempt int) string {
+	hex := strings.ReplaceAll(id, "-", "")
+	if len(hex) > 12 {
+		hex = hex[:12]
+	}
+	suffix := hex
+	if attempt > 0 {
+		suffix = fmt.Sprintf("%s-r%d", hex, attempt)
+	}
+	// Budget inside worktreeSlugMax: "wf-" + <optional middle> + "-" + suffix.
+	rem := worktreeSlugMax - len("wf") - 1 - len(suffix)
+	wfSlug := ""
+	if rem > 1 {
+		wfSlug = slug(strings.Fields(workflow), min(16, rem-1))
+	}
+	taskBudget := rem - 1
+	if wfSlug != "" {
+		taskBudget = rem - len(wfSlug) - 2
+	}
+	taskSlug := ""
+	if taskBudget > 0 && taskLine(task) != "" {
+		taskSlug = slug(strings.Fields(task), taskBudget)
+	}
+	out := "wf"
+	for _, s := range []string{wfSlug, taskSlug, suffix} {
+		if s != "" {
+			out += "-" + s
+		}
+	}
+	return out
+}
+
+// retryBranch returns a fresh branch name for retry attempt (> 0) of a run whose previous
+// git worktree add failed, appending "-r<attempt>" after the run id suffix.
+func retryBranch(id, workflow, task string, attempt int) string {
+	_, base := runNames(id, workflow, task)
+	if attempt <= 0 {
+		return base
+	}
+	return fmt.Sprintf("%s-r%d", base, attempt)
+}
+
+// worktreeAttemptFromBranch extracts the retry attempt number from a branch ending in
+// "-<hex[:12]>-r<n>", returning 0 for initial attempts.
+func worktreeAttemptFromBranch(branch, id string) int {
+	hex := strings.ReplaceAll(id, "-", "")
+	if len(hex) > 12 {
+		hex = hex[:12]
+	}
+	marker := "-" + hex + "-r"
+	idx := strings.LastIndex(branch, marker)
+	if idx < 0 {
+		return 0
+	}
+	n, err := strconv.Atoi(branch[idx+len(marker):])
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
 }
 
 // agentTitle is the title of a run's agent: its role, the workflow's name and the run's title.
@@ -225,13 +447,15 @@ var (
 	label = regexp.MustCompile(`(?i)^(?:task|tasks|goal|request|ask|todo|to-do|context|summary|description|title|prompt|issue|problem|objective|background|details|note|subject)\b(?:\s*\([^)]*\))?\s*(?::\s*|$)`)
 	// header is an email header line, as an email's run input has under its subject (Mail.Input).
 	header = regexp.MustCompile(`(?i)^(?:from|to|cc|bcc|date|sent|attachments):\s`)
+	// schemaHeader is a machine schema identifier line (e.g. "schema: example_v1"), not a task.
+	schemaHeader = regexp.MustCompile(`(?i)^schema:\s*[a-z0-9_./-]+\s*$`)
 )
 
 // taskLine is line without Markdown markers or a generic label; "" when nothing else is on it,
-// or when it is an email header ("From: …").
+// or when it is an email header ("From: …") or a machine schema line.
 func taskLine(line string) string {
 	line = strings.TrimSpace(line)
-	if header.MatchString(line) {
+	if header.MatchString(line) || schemaHeader.MatchString(line) {
 		return ""
 	}
 	for {

@@ -29,12 +29,12 @@ func TestCreateWorkspaceAsAWorktree(t *testing.T) {
 	f := paseotest.New(t, token)
 	c := dial(t, f)
 	if _, err := c.CreateWorkspace(ctx5(t), CreateWorkspace{Cwd: "/w/app", Worktree: true, Branch: "fix-login", Base: "main",
-		IdempotencyKey: "cmd-2"}); err != nil {
+		WorktreeSlug: "wf-fix-login-123456789abc", IdempotencyKey: "cmd-2"}); err != nil {
 		t.Fatal(err)
 	}
 	src := f.Requests("workspace.create.request")[0]["source"].(map[string]any)
 	if src["kind"] != "worktree" || src["cwd"] != "/w/app" || src["action"] != "branch-off" || src["branchName"] != "fix-login" ||
-		src["baseBranch"] != "main" {
+		src["baseBranch"] != "main" || src["worktreeSlug"] != "wf-fix-login-123456789abc" {
 		t.Errorf("source = %v", src)
 	}
 }

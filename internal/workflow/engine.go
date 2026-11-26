@@ -754,10 +754,14 @@ func (e *Engine) startRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 		if why != "" {
 			status = Queued
 		}
+		title := explicitTitleFrom(ctx)
+		if title == "" {
+			title = taskName(input)
+		}
 		answerExpected := apiActorFrom(ctx).KeyID == "" && (d.Trigger == TriggerEmail || d.Trigger == TriggerVoiceMemo)
 		if err := tx.QueryRow(ctx, `INSERT INTO workflow_runs (account_id, workflow_id, version, host, title, input, status, queue_reason, created_at, updated_at,
 			repo, project_selected, estimated_memory_bytes, queued_at_creation, requested_at, answer_expected, priority, host_chosen)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING id::text`, account, workflowID, version, host, taskName(input), input,
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING id::text`, account, workflowID, version, host, title, input,
 			status, why, e.Now(), repo, selected, estimate, why != "", requestedAt, answerExpected, priority, hostChosen).Scan(&id); err != nil { // now, holding the lock: the queue's order is the order decided
 			return err
 		}
@@ -889,7 +893,9 @@ func (e *Engine) orchestratorStartArgs(ctx context.Context, tx pgx.Tx, r run) (j
 		Labels: map[string]string{"intelligence.run": r.ID, "intelligence.role": "orchestrator"}}
 	ws := hostclient.CreateWorkspaceArgs{Cwd: "~", Title: wsTitle, Agent: agent}
 	if r.Repo != "" {
-		ws = hostclient.CreateWorkspaceArgs{Cwd: r.Repo, Worktree: true, Branch: r.Branch, Title: wsTitle, Agent: agent}
+		attempt := worktreeAttemptFromBranch(r.Branch, r.ID)
+		slug := worktreeSlug(r.ID, r.Name, r.Title, attempt)
+		ws = hostclient.CreateWorkspaceArgs{Cwd: r.Repo, Worktree: true, Branch: r.Branch, WorktreeSlug: slug, Title: wsTitle, Agent: agent}
 	}
 	return json.Marshal(ws)
 }
@@ -898,8 +904,11 @@ func (e *Engine) orchestratorStartArgs(ctx context.Context, tx pgx.Tx, r run) (j
 // orchestrator in it: a worktree of repo on the run's branch, or the home directory.
 func (e *Engine) startOrchestrator(ctx context.Context, tx pgx.Tx, r run, repo string) error {
 	r.Repo = repo
-	// the title again from the input: a run started before titles were the task has its first line
-	r.Title = taskName(r.Input)
+	// A run started before clean titles has its raw first line; upgrade that to taskName while
+	// preserving an explicit title (such as one supplied via POST /api/workflow-api/runs).
+	if r.Title == "" || r.Title == firstLine(r.Input) {
+		r.Title = taskName(r.Input)
+	}
 	wsTitle, branch := runNames(r.ID, r.Name, r.Title)
 	if repo != "" {
 		r.Branch = branch

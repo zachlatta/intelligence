@@ -1,5 +1,13 @@
 [
   {
+    "id": "workflow-api-readable-titles",
+    "released": "2026-11-26",
+    "title": "Readable titles for API-triggered workflow runs",
+    "summary": "Runs started through the workflow API now show readable titles on the Workflows page instead of a YAML frontmatter schema line. Intelligence strips leading YAML frontmatter automatically, extracts concise titles for structured Contract Check and Contract Fix runs, and lets API callers pass an explicit one-line title field on POST /api/workflow-api/runs.",
+    "media": "workflow-api-readable-titles-v2.png",
+    "mediaAlt": "The Workflows page in a local demo showing API-triggered Contract Check and Contract Fix runs with readable titles instead of a YAML frontmatter schema line."
+  },
+  {
     "id": "workflow-project-map",
     "released": "2026-11-26",
     "title": "Deterministic key-to-repository routing for workflows",

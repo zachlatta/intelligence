@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -52,9 +53,37 @@ type APIAttachment struct {
 
 // APIRunRequest is what an API-key caller sends to trigger a workflow run.
 type APIRunRequest struct {
+	Title          string          `json:"title,omitempty"`
 	Input          string          `json:"input"`
 	Attachments    []APIAttachment `json:"attachments,omitempty"`
 	IdempotencyKey string          `json:"idempotencyKey,omitempty"`
+}
+
+type explicitTitleKey struct{}
+
+func withExplicitTitle(ctx context.Context, title string) context.Context {
+	if title == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, explicitTitleKey{}, title)
+}
+
+func explicitTitleFrom(ctx context.Context) string {
+	t, _ := ctx.Value(explicitTitleKey{}).(string)
+	return t
+}
+
+func cleanAPITitle(raw string) (string, error) {
+	title := strings.TrimSpace(raw)
+	if title == "" {
+		return "", nil
+	}
+	if utf8.RuneCountInString(title) > 80 || strings.ContainsFunc(raw, func(r rune) bool {
+		return unicode.IsControl(r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r) || unicode.Is(unicode.Cf, r)
+	}) {
+		return "", bad("title must be one line of 1–80 characters")
+	}
+	return title, nil
 }
 
 // APIRunResult distinguishes a newly started run from an idempotent replay (Replayed=true).
@@ -81,7 +110,7 @@ func cleanIdempotencyKey(key string) (string, error) {
 	return key, nil
 }
 
-func apiRequestHash(input string, atts []APIAttachment) string {
+func apiRequestHash(title, input string, atts []APIAttachment) string {
 	h := sha256.New()
 	_, _ = h.Write([]byte(input))
 	_, _ = h.Write([]byte{0})
@@ -89,6 +118,12 @@ func apiRequestHash(input string, atts []APIAttachment) string {
 		_, _ = h.Write([]byte(strings.TrimSpace(a.Name)))
 		_, _ = h.Write([]byte{0})
 		_, _ = h.Write(a.Data)
+		_, _ = h.Write([]byte{0})
+	}
+	if title != "" {
+		_, _ = h.Write([]byte("title"))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write([]byte(title))
 		_, _ = h.Write([]byte{0})
 	}
 	return hex.EncodeToString(h.Sum(nil))
@@ -136,6 +171,10 @@ func AppendAttachments(ctx context.Context, tx pgx.Tx, account int64, text strin
 // that the workflow's apiTrigger setting is enabled, stores optional attachments in the
 // same transaction, records api_key_id, and supports idempotent retries via idempotencyKey.
 func (e *Engine) StartAPIRun(ctx context.Context, account int64, workflowID, keyID string, req APIRunRequest) (APIRunResult, error) {
+	title, err := cleanAPITitle(req.Title)
+	if err != nil {
+		return APIRunResult{}, err
+	}
 	idemKey, err := cleanIdempotencyKey(req.IdempotencyKey)
 	if err != nil {
 		return APIRunResult{}, err
@@ -167,7 +206,7 @@ func (e *Engine) StartAPIRun(ctx context.Context, account int64, workflowID, key
 	}
 	reqHash := ""
 	if idemKey != "" {
-		reqHash = apiRequestHash(req.Input, req.Attachments)
+		reqHash = apiRequestHash(title, req.Input, req.Attachments)
 		var existingID, existingHash string
 		if qerr := e.p.QueryRow(ctx, `SELECT id::text, idempotency_hash FROM workflow_runs
 			WHERE workflow_id = $1 AND idempotency_key = $2`, workflowID, idemKey).Scan(&existingID, &existingHash); qerr == nil {
@@ -217,7 +256,7 @@ func (e *Engine) StartAPIRun(ctx context.Context, account int64, workflowID, key
 		if err != nil {
 			return err
 		}
-		runID, err := e.StartRunTx(ctx, tx, account, workflowID, fullInput, time.Time{})
+		runID, err := e.StartRunTx(withExplicitTitle(ctx, title), tx, account, workflowID, fullInput, time.Time{})
 		if err != nil {
 			return err
 		}

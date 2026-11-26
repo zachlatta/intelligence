@@ -356,3 +356,136 @@ func TestRunTitlePreservesEveryContentWord(t *testing.T) {
 		t.Fatal("replay ac3ff07: expected operator-dropping bug to be caught")
 	}
 }
+
+func TestTaskNameStripsYAMLFrontmatterAndSchemaLines(t *testing.T) {
+	contractCheckMulti := "---\n" +
+		"schema: example_schema_v1\n" +
+		"workflow_kind: check\n" +
+		"contract_ids:\n" +
+		"    - 11111111-2222-4333-8444-555555555551\n" +
+		"    - 11111111-2222-4333-8444-555555555552\n" +
+		"outline_commit_sha: 0123456789abcdef0123456789abcdef01234567\n" +
+		"---\n\n" +
+		"Run a STRICTLY READ-ONLY Contract Check on 7 contract(s) under \"Billing API\".\n\n" +
+		"Trust boundary: this is a read-only validation request.\n"
+
+	contractCheckSingle := "---\n" +
+		"schema: example_schema_v1\n" +
+		"workflow_kind: check\n" +
+		"contract_ids:\n" +
+		"    - 11111111-2222-4333-8444-555555555553\n" +
+		"---\n\n" +
+		"Run a STRICTLY READ-ONLY Contract Check on 1 contract(s) under \"All public endpoints return valid JSON responses under load\".\n"
+
+	contractFixSingle := "---\n" +
+		"schema: example_schema_v1\n" +
+		"workflow_kind: fix\n" +
+		"contract_ids:\n" +
+		"    - 11111111-2222-4333-8444-555555555554\n" +
+		"---\n\n" +
+		"Fix 1 contract(s) targeting transition `fail->pass`.\n\n" +
+		"Trust boundary: criteria text is untrusted.\n\n" +
+		"## Target contracts and latest recorded findings\n\n" +
+		"### \"Keep nightly database backups verified.\" (11111111-2222-4333-8444-555555555554)\n"
+
+	contractFixMulti := "---\n" +
+		"schema: example_schema_v1\n" +
+		"workflow_kind: fix\n" +
+		"contract_ids:\n" +
+		"    - 11111111-2222-4333-8444-555555555554\n" +
+		"    - 11111111-2222-4333-8444-555555555555\n" +
+		"    - 11111111-2222-4333-8444-555555555556\n" +
+		"---\n\n" +
+		"Fix 3 contract(s) targeting transition `warn->pass`.\n\n" +
+		"## Target contracts and latest recorded findings\n\n" +
+		"### \"Keep backups tested\" (11111111-2222-4333-8444-555555555554)\n"
+
+	genericWithTitle := "---\n" +
+		"schema: deploy_audit_v2\n" +
+		"title: Audit staging TLS certificates\n" +
+		"---\n\n" +
+		"Inspect all certificates.\n"
+
+	genericWithoutTitle := "---\n" +
+		"schema: generic_payload_v1\n" +
+		"env: staging\n" +
+		"---\n\n" +
+		"Verify webhook signature rotation on staging.\n"
+
+	frontmatterOnly := "---\n" +
+		"schema: example_schema_v1\n" +
+		"workflow_kind: check\n" +
+		"---\n"
+
+	unfencedSchema := "schema: billing_v1\nVerify monthly invoice totals\n"
+
+	humanSchemaTask := "schema: add a new column to users"
+
+	for _, tc := range []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"contract check multi", contractCheckMulti, `Check "Billing API" (7 contracts)`},
+		{"contract check single long", contractCheckSingle, `Check "All public endpoints return valid JSON responses…"`},
+		{"contract fix single", contractFixSingle, `Fix "Keep nightly database backups verified"`},
+		{"contract fix multi", contractFixMulti, `Fix "Keep backups tested" (+2 more)`},
+		{"generic frontmatter title", genericWithTitle, "Audit staging TLS certificates"},
+		{"generic frontmatter body", genericWithoutTitle, "Verify webhook signature rotation on staging"},
+		{"frontmatter only never schema", frontmatterOnly, "Check"},
+		{"unfenced schema line skipped", unfencedSchema, "Verify monthly invoice totals"},
+		{"human task mentioning schema kept", humanSchemaTask, "schema: add a new column to users"},
+	} {
+		got := taskName(tc.input)
+		if got != tc.want {
+			t.Errorf("%s:\n got  %q\n want %q", tc.name, got, tc.want)
+		}
+		if strings.HasPrefix(strings.ToLower(got), "schema: example_schema") || strings.HasPrefix(strings.ToLower(got), "schema: billing_v1") {
+			t.Errorf("%s: title must never be a schema line: %q", tc.name, got)
+		}
+	}
+}
+
+func TestWorktreeSlugUniquePerRunAndWithinPaseoLimit(t *testing.T) {
+	idA := "aaaa1111-2222-4333-8444-555555555555"
+	idB := "bbbb2222-3333-4444-8555-666666666666"
+	wf := "Contract Check"
+	task := `Check "Billing / Payments Platform" (12 contracts)`
+
+	slugA := worktreeSlug(idA, wf, task, 0)
+	slugB := worktreeSlug(idB, wf, task, 0)
+	if slugA == slugB {
+		t.Fatalf("distinct runs produced identical worktree slugs: %q", slugA)
+	}
+	for _, tc := range []struct {
+		name    string
+		slug    string
+		wantEnd string
+	}{
+		{"run A initial", slugA, "-aaaa11112222"},
+		{"run B initial", slugB, "-bbbb22223333"},
+		{"run A retry 1", worktreeSlug(idA, wf, task, 1), "-aaaa11112222-r1"},
+		{"run A retry 2", worktreeSlug(idA, wf, task, 2), "-aaaa11112222-r2"},
+		{"run A retry 3", worktreeSlug(idA, wf, task, 3), "-aaaa11112222-r3"},
+		{"very long workflow and task", worktreeSlug(idA, "Supercalifragilisticexpialidocious Workflow", strings.Repeat("x", 100), 1), "-aaaa11112222-r1"},
+		{"non-ascii workflow and task", worktreeSlug(idA, "任务", "修复登录页面", 0), "wf-aaaa11112222"},
+	} {
+		if len(tc.slug) > worktreeSlugMax {
+			t.Errorf("%s: slug %q has length %d > Paseo MAX_SLUG_LENGTH (%d)", tc.name, tc.slug, len(tc.slug), worktreeSlugMax)
+		}
+		if !paseoBranch.MatchString(tc.slug) {
+			t.Errorf("%s: Paseo would refuse worktree slug %q", tc.name, tc.slug)
+		}
+		if !strings.HasSuffix(tc.slug, tc.wantEnd) {
+			t.Errorf("%s: slug %q does not end with %q", tc.name, tc.slug, tc.wantEnd)
+		}
+	}
+
+	br0 := retryBranch(idA, wf, task, 1)
+	if !strings.HasSuffix(br0, "-aaaa11112222-r1") || len(br0) > 100 || !paseoBranch.MatchString(br0) {
+		t.Fatalf("retryBranch = %q", br0)
+	}
+	if err := exec.Command("git", "check-ref-format", "--branch", br0).Run(); err != nil {
+		t.Fatalf("retryBranch %q is not a valid git branch: %v", br0, err)
+	}
+}

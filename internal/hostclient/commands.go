@@ -104,12 +104,13 @@ type ContinueEmailArgs struct {
 // Cwd on a new Branch from Base. With Agent, an agent is then started in it (Agent names no
 // workspace or directory of its own).
 type CreateWorkspaceArgs struct {
-	Cwd      string           `json:"cwd"`
-	Worktree bool             `json:"worktree,omitempty"`
-	Branch   string           `json:"branch,omitempty"`
-	Base     string           `json:"base,omitempty"`
-	Title    string           `json:"title,omitempty"`
-	Agent    *CreateAgentArgs `json:"agent,omitempty"`
+	Cwd          string           `json:"cwd"`
+	Worktree     bool             `json:"worktree,omitempty"`
+	Branch       string           `json:"branch,omitempty"`
+	Base         string           `json:"base,omitempty"`
+	WorktreeSlug string           `json:"worktreeSlug,omitempty"`
+	Title        string           `json:"title,omitempty"`
+	Agent        *CreateAgentArgs `json:"agent,omitempty"`
 }
 
 // CreateAgentArgs: an agent in WorkspaceID (its directory unless Cwd is given), or in Cwd.
@@ -223,8 +224,8 @@ func ParseCommand(kind string, args json.RawMessage) (any, error) {
 		if a.Cwd == "" {
 			return nil, errors.New("create_workspace needs cwd")
 		}
-		if !a.Worktree && (a.Branch != "" || a.Base != "") {
-			return nil, errors.New("create_workspace: branch and base are for a worktree")
+		if !a.Worktree && (a.Branch != "" || a.Base != "" || a.WorktreeSlug != "") {
+			return nil, errors.New("create_workspace: branch, base and worktreeSlug are for a worktree")
 		}
 		if a.Agent != nil && a.Agent.Provider == "" {
 			return nil, errors.New("create_workspace: its agent needs a provider")
@@ -425,7 +426,7 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 		}
 		fallback := workflowBase && a.Base == ""
 		request := paseo.CreateWorkspace{Cwd: a.Cwd, Worktree: a.Worktree, Branch: a.Branch, Base: a.Base,
-			Title: a.Title, IdempotencyKey: key}
+			WorktreeSlug: a.WorktreeSlug, Title: a.Title, IdempotencyKey: key}
 		ws, err := c.CreateWorkspace(ctx, request)
 		if workflowBase && a.Base != "" && errors.Is(err, paseo.ErrWorkspaceCreationKeyConflict) {
 			// An earlier delivery may have fallen back. Replay that exact
