@@ -810,6 +810,11 @@ version it started with. A run:
    commit is still published, so such commits are rewritten. The starting workflow
    (`workflow.Starting`) also has a Public repo check gate before landing that reads every outgoing
    commit the same way and sends such files back to Do the work.
+   Every step also carries `workflow.NoPullRequestRule`, so saved workflows get it too: never open
+   a pull request unless Zach's request explicitly asks for one, whatever the repository's
+   AGENTS.md, its merged pull requests or a shared skill suggest. Unless he asks for one, landing
+   pushes the rebased commits straight to `main`; if that is rejected, the run asks Zach instead
+   of opening one.
 3. **The orchestrator moves through the steps.** It never does the work itself: it starts
    sub-agents for it (`paseo run` in its workspace, so they are its sub-agents), and decides when a
    step is done. Every agent of a run works unattended, so each starts in its provider's mode that
