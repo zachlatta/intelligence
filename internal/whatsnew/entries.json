@@ -3,7 +3,7 @@
     "id": "workflow-project-map",
     "released": "2026-11-26",
     "title": "Deterministic key-to-repository routing for workflows",
-    "summary": "Workflows can now set Find the project to Mapped from input keys (deterministic) with reviewed repository routes and an optional Git treeSource (repository directory and outline path). Without treeSource, only direct keys in routes match. With treeSource, Intelligence verifies contract_tree against Git at outline_commit_sha on origin's default branch via a read-only host read_git_file command before creating a run, failing closed (HTTP 400) on tree mismatches, off-main commits, unmapped keys, multi-repo batches, or caller-supplied repository fields.",
+    "summary": "Workflows can now set Find the project to Mapped from input keys (deterministic) with reviewed routes and an optional Git treeSource (repository directory and outline path). Without treeSource, only direct keys match. With treeSource, Intelligence verifies via host read_git_file (doesn't change the checkout; refreshes the origin tracking ref) that outline_commit_sha is on origin's default branch, its outline matches the current tip, and every contract_tree edge matches Git before creating a run—failing closed (HTTP 400) on stale/changed outlines, spoofs, unmapped keys, or mixed repos.",
     "media": "workflow-project-map.png",
     "mediaAlt": "The Intelligence workflow editor in a local demo showing Find the project set to Mapped from input keys (deterministic) with reviewed repository routes and Git tree verification configured for demo-contracts."
   },

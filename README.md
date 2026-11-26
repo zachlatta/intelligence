@@ -753,11 +753,13 @@ version it started with. A run:
    repository/directory fields. Without `treeSource`, only direct exact keys in `contract_ids` or
    `keys` match `routes` (no caller-supplied hierarchy is trusted). With `treeSource`, the input
    must supply `contract_tree` and a 40-hex `outline_commit_sha`; Intelligence dispatches a
-   read-only `read_git_file` host command that fetches `origin`'s default branch in
-   `treeSource.directory`, verifies `outline_commit_sha` is an ancestor of that remote default
-   branch, reads `treeSource.path` from Git's object database, and verifies every node and
-   parent-child edge in `contract_tree` against that Git outline before walking the verified tree
-   most-specific-first against `routes`.
+   `read_git_file` host command (doesn't change the checkout; refreshes the origin tracking ref)
+   that fetches `origin`'s default branch in `treeSource.directory`, verifies `outline_commit_sha`
+   is an ancestor of that remote default branch, confirms its `treeSource.path` blob still matches
+   the current tip of `origin`'s default branch (refusing stale/changed outlines with
+   `"outline changed since <commit>; reload and retry"`), reads `treeSource.path` from Git's
+   object database, and verifies every node and parent-child edge in `contract_tree` against that
+   Git outline before walking the verified tree most-specific-first against `routes`.
    Matching chooses by the requested work product: one-off reports, analyses, decks, emails and
    research go to `desk` when it is available, even when their data comes from a warehouse.
    Code changes and investigations of a repository's behavior go to that repository. An explicit

@@ -566,7 +566,7 @@ function projectRoutesPanel(p) {
       <input class="mono" data-ts="directory" value="${esc(ts.directory || "")}" placeholder="/path/to/demo-contracts" list="host-repos-list">
       <label>Outline file path (repo-relative)</label>
       <input class="mono" data-ts="path" value="${esc(ts.path || "")}" placeholder="outliner/outline.md">
-      <p class="hint">When set, runs must include <code>contract_tree</code> and <code>outline_commit_sha</code>; Intelligence reads this file from Git on origin's default branch via the host and verifies every node and parent link before routing. When unset, only direct keys in <code>routes</code> match (no hierarchy is trusted).</p>
+      <p class="hint">When set, runs must include <code>contract_tree</code> and <code>outline_commit_sha</code>; Intelligence checks via the host (without changing the checkout; refreshes the origin tracking ref) that the outline at <code>outline_commit_sha</code> matches the current tip of origin's default branch and verifies every node and parent link before routing. When unset, only direct keys in <code>routes</code> match (no hierarchy is trusted).</p>
     </div>`;
   return `${dl}${rows || `<p class="hint">No routes yet. Add at least one route below.</p>`}
     <div style="margin-top:.6rem"><button type="button" class="btn sm" id="add-project-route">+ Add route</button></div>
