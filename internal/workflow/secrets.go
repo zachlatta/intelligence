@@ -12,8 +12,6 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/zachlatta/intelligence/internal/agenttext"
-	"github.com/zachlatta/intelligence/internal/fleet"
-	"github.com/zachlatta/intelligence/internal/hostclient"
 	"github.com/zachlatta/intelligence/internal/vaultwarden"
 )
 
@@ -306,41 +304,7 @@ func (e *Engine) SubmitSecretsFromBrowser(ctx context.Context, account int64, ac
 				return err
 			}
 		}
-		heading := "Zach replied to your note:"
-		signoffNote := ""
-		if approve {
-			heading = "Zach explicitly approved this sign-off step in Intelligence:"
-		} else if stepRequiresHumanSignoff(r) {
-			heading = "Zach replied to your note (WITHOUT approving sign-off):"
-			signoffNote = "\n\nNote: Zach sent a reply without clicking Approve sign-off. Do NOT advance past this sign-off step; apply requested changes (back), re-ask, or fail/cancel as instructed."
-		}
-		lost, err := undeliveredInputs(ctx, tx, r.ID, now)
-		if err != nil {
-			return err
-		}
-		fullMsg := fmt.Sprintf("%s\n\n%s%s\n\nDecide what it means for the run, then move it with intelligence workflow (next, back, skip, ask or fail) --run %s.",
-			heading, msgBody.String(), signoffNote, r.ID)
-		args, _ := json.Marshal(hostclient.AgentArgs{AgentID: r.Orchestrator, Text: withRedelivery(lost, fullMsg)})
-		c, err := fleet.EnqueueTx(ctx, tx, r.Host, hostclient.SendMessageKind, args, replyTTL, now)
-		if err != nil {
-			return err
-		}
-		if err := e.carried(ctx, tx, r, lost, "redelivery", &c.ID); err != nil {
-			return err
-		}
-		if err := e.recordInput(ctx, tx, r, "reply", ptr(r.Step), eventSummary, c.ID); err != nil {
-			return err
-		}
-		if approve {
-			if err := e.event(ctx, tx, r, "signoff_approved", ptr(r.Step), nil, eventSummary); err != nil {
-				return err
-			}
-		}
-		if _, err := tx.Exec(ctx, "UPDATE workflow_runs SET status = $2, note = '', updated_at = $3 WHERE id = $1", r.ID, Running, now); err != nil {
-			return err
-		}
-		r.Status = Running
-		return e.refreshActivity(ctx, tx, r)
+		return e.replyTxRecording(ctx, tx, account, runID, msgBody.String(), eventSummary, true, approve)
 	})
 }
 

@@ -449,15 +449,22 @@ func scanRun(row pgx.Row) (run, error) {
 }
 
 func (e *Engine) event(ctx context.Context, tx pgx.Tx, r run, kind string, step, to *int, text string) error {
+	_, err := e.eventID(ctx, tx, r, kind, step, to, text)
+	return err
+}
+
+// eventID is event, returning the new event's id (an ask's secret requests point at it).
+func (e *Engine) eventID(ctx context.Context, tx pgx.Tx, r run, kind string, step, to *int, text string) (int64, error) {
 	actor := apiActorFrom(ctx)
-	if _, err := tx.Exec(ctx, `INSERT INTO workflow_run_events (run_id, account_id, at, kind, step, to_step, text, api_key_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, r.ID, r.Account, e.Now(), kind, step, to, text, nullUUID(actor.KeyID)); err != nil {
-		return err
+	var id int64
+	if err := tx.QueryRow(ctx, `INSERT INTO workflow_run_events (run_id, account_id, at, kind, step, to_step, text, api_key_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`, r.ID, r.Account, e.Now(), kind, step, to, text, nullUUID(actor.KeyID)).Scan(&id); err != nil {
+		return 0, err
 	}
 	if _, err := tx.Exec(ctx, fleet.NotifySQL, fleet.WorkflowRunTopic(r.ID)); err != nil {
-		return err
+		return 0, err
 	}
-	return nil
+	return id, nil
 }
 
 func ptr(i int) *int { return &i }
@@ -1411,12 +1418,8 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 				return "", forbidden("Vaultwarden secret storage is not enabled for this account")
 			}
 		}
-		var askEventID int64
-		if err := tx.QueryRow(ctx, `INSERT INTO workflow_run_events (run_id, account_id, at, kind, step, to_step, text)
-			VALUES ($1, $2, $3, 'ask', $4, NULL, $5) RETURNING id`, r.ID, r.Account, e.Now(), ptr(r.Step), m.Note).Scan(&askEventID); err != nil {
-			return "", err
-		}
-		if _, err := tx.Exec(ctx, fleet.NotifySQL, fleet.WorkflowRunTopic(r.ID)); err != nil {
+		askEventID, err := e.eventID(ctx, tx, r, "ask", ptr(r.Step), nil, m.Note)
+		if err != nil {
 			return "", err
 		}
 		if err := e.insertSecretRequests(ctx, tx, r, askEventID, m.Secrets); err != nil {
@@ -1494,6 +1497,12 @@ func (e *Engine) ReplyTx(ctx context.Context, tx pgx.Tx, account int64, runID, t
 }
 
 func (e *Engine) replyTx(ctx context.Context, tx pgx.Tx, account int64, runID, text string, fromBrowser, approve bool) error {
+	return e.replyTxRecording(ctx, tx, account, runID, text, "", fromBrowser, approve)
+}
+
+// replyTxRecording is replyTx where the run's events keep recorded instead of text when it is set
+// (a secret reply keeps its summary, not the orchestrator's fetch instructions).
+func (e *Engine) replyTxRecording(ctx context.Context, tx pgx.Tx, account int64, runID, text, recorded string, fromBrowser, approve bool) error {
 	actor := apiActorFrom(ctx)
 	if approve && (!fromBrowser || actor.KeyID != "") {
 		return forbidden("explicit sign-off approval requires an authenticated human browser session in Intelligence")
@@ -1520,6 +1529,9 @@ func (e *Engine) replyTx(ctx context.Context, tx pgx.Tx, account int64, runID, t
 	}
 	if strings.TrimSpace(text) == "" {
 		return bad("a reply needs text")
+	}
+	if recorded == "" {
+		recorded = text
 	}
 	if stepRequiresHumanSignoff(r) {
 		if actor.KeyID != "" {
@@ -1570,11 +1582,11 @@ func (e *Engine) replyTx(ctx context.Context, tx pgx.Tx, account int64, runID, t
 	if err := e.carried(ctx, tx, r, lost, "redelivery", &c.ID); err != nil {
 		return err
 	}
-	if err := e.recordInput(ctx, tx, r, "reply", ptr(r.Step), text, c.ID); err != nil {
+	if err := e.recordInput(ctx, tx, r, "reply", ptr(r.Step), recorded, c.ID); err != nil {
 		return err
 	}
 	if approve {
-		if err := e.event(ctx, tx, r, "signoff_approved", ptr(r.Step), nil, text); err != nil {
+		if err := e.event(ctx, tx, r, "signoff_approved", ptr(r.Step), nil, recorded); err != nil {
 			return err
 		}
 	}

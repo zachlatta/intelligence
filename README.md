@@ -2102,8 +2102,9 @@ origin (another site's request is refused with 403), and those with a body must 
   same-origin browser session only (`Cache-Control: no-store`). Stores each submitted secret value
   directly in Vaultwarden, records only non-secret item references in `workflow_run_secret_requests`
   and `workflow_run_events`, and resumes the orchestrator with Vaultwarden fetch commands (never the
-  value). Returns 503 when Vaultwarden is not configured, 502 on an upstream Vaultwarden error, and
-  400 if a secret value is also pasted into `text`.
+  value). Returns 503 when Vaultwarden is not configured, 403 for any account other than
+  `VAULTWARDEN_ACCOUNT`, 502 on an upstream Vaultwarden error, and 400 if a secret value is also
+  pasted into `text`.
 - `POST /api/workflow-runs/{id}/cancel` with `{}`: ends the run and
   stops its orchestrator (204).
 - `POST /api/workflow-runs/{id}/moves` with `{"move", "directory", "step", "summary", "why",

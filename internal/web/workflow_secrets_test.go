@@ -60,13 +60,18 @@ func dbServerWithSecrets(t *testing.T, store workflow.SecretStore) (http.Handler
 
 func setupRunningWorkflow(t *testing.T, h http.Handler, d dbtest.DB) (hostKey, runID string) {
 	t.Helper()
+	return setupRunningWorkflowWith(t, h, d, workflow.Step{ID: "do", Kind: workflow.KindStep, Title: "Do the work", Instructions: "work"})
+}
+
+func setupRunningWorkflowWith(t *testing.T, h http.Handler, d dbtest.DB, step workflow.Step) (hostKey, runID string) {
+	t.Helper()
 	sendReport(t, h, wfReport())
 	hostKey = keyOf(t, h, "host-1")
 	def := workflow.Starting
 	def.Trigger = workflow.TriggerManual
 	def.Host = "host-1"
 	def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
-	def.Steps = []workflow.Step{{ID: "do", Kind: workflow.KindStep, Title: "Do the work", Instructions: "work"}}
+	def.Steps = []workflow.Step{step}
 	wfID := createWorkflow(t, h, def)
 	runID = startRun(t, h, wfID, "Configure billing integration")
 	if _, err := d.Owner.Exec(context.Background(), `UPDATE workflow_runs SET status = 'running', step = 0, orchestrator_id = 'orch-1', workspace_id = 'ws-1' WHERE id = $1`, runID); err != nil {
@@ -459,5 +464,44 @@ func TestWorkflowSecretsRestrictedToConfiguredAccount(t *testing.T) {
 	// Confirm the fake Vaultwarden store received ZERO writes.
 	if len(store.stored) != 0 {
 		t.Fatalf("expected 0 Vaultwarden writes for non-configured account, got %d: %+v", len(store.stored), store.stored)
+	}
+}
+
+// Storing secrets on a human sign-off step goes through the same reply path as a plain reply:
+// "approve" records signoff_approved, and the run's reply event keeps the summary, not the fetch commands.
+func TestWorkflowSecretSubmitApprovesSignoff(t *testing.T) {
+	t.Parallel()
+	store := &fakeSecretStore{}
+	h, d := dbServerWithSecrets(t, store)
+	hostKey, runID := setupRunningWorkflowWith(t, h, d, workflow.Step{ID: "signoff", Kind: workflow.KindSignoff,
+		Title: "Human sign-off", Instructions: "Ask for approval.", RequireHumanSignoff: true})
+	ctx := context.Background()
+	if code, msg := moveAny(t, h, hostKey, runID, map[string]any{"move": "ask", "note": "Approve and give me the deploy token.",
+		"secrets": []map[string]string{{"name": "Deploy token"}}}); code != http.StatusOK {
+		t.Fatalf("ask move = %d %q", code, msg)
+	}
+	var id string
+	if err := d.Owner.QueryRow(ctx, `SELECT id::text FROM workflow_run_secret_requests WHERE run_id = $1`, runID).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]any{"secrets": []map[string]string{{"id": id, "value": "tok_NEVER_LEAK_SIGNOFF"}}, "approve": true})
+	if rec := call(t, h, http.MethodPost, "/api/workflow-runs/"+runID+"/secrets", string(body), sameOriginFetch); rec.Code != http.StatusNoContent {
+		t.Fatalf("POST /secrets approve = %d %s", rec.Code, rec.Body.String())
+	}
+	var approved, reply, cmdText string
+	if err := d.Owner.QueryRow(ctx, `SELECT text FROM workflow_run_events WHERE run_id = $1 AND kind = 'signoff_approved'`, runID).Scan(&approved); err != nil {
+		t.Fatalf("no signoff_approved event: %v", err)
+	}
+	if err := d.Owner.QueryRow(ctx, `SELECT text FROM workflow_run_events WHERE run_id = $1 AND kind = 'reply'`, runID).Scan(&reply); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(reply, "Stored 1 secret(s) in Vaultwarden") || strings.Contains(reply, "vaultwarden-agent") || approved != reply {
+		t.Errorf("reply event %q, signoff_approved %q: want the stored summary", reply, approved)
+	}
+	if err := d.Owner.QueryRow(ctx, `SELECT args->>'text' FROM commands WHERE kind = 'send_message' ORDER BY created_at DESC LIMIT 1`).Scan(&cmdText); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(cmdText, "explicitly approved") || !strings.Contains(cmdText, "vaultwarden-agent get password") || strings.Contains(cmdText, "tok_NEVER_LEAK_SIGNOFF") {
+		t.Errorf("orchestrator message = %q", cmdText)
 	}
 }

@@ -7,7 +7,9 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hkdf"
 	"crypto/hmac"
+	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
@@ -24,8 +26,6 @@ import (
 	"time"
 
 	"golang.org/x/crypto/argon2"
-	"golang.org/x/crypto/hkdf"
-	"golang.org/x/crypto/pbkdf2"
 )
 
 const (
@@ -381,7 +381,7 @@ func deriveMasterKey(password, email string, kdf, iterations, memoryMiB, paralle
 		if iterations <= 0 {
 			iterations = 600000
 		}
-		return pbkdf2.Key([]byte(password), []byte(saltStr), iterations, 32, sha256.New), nil
+		return pbkdf2.Key(sha256.New, password, []byte(saltStr), iterations, 32)
 	case 1: // Argon2id
 		if iterations <= 0 || memoryMiB <= 0 || parallelism <= 0 {
 			return nil, errors.New("vaultwarden invalid argon2id parameters")
@@ -394,12 +394,10 @@ func deriveMasterKey(password, email string, kdf, iterations, memoryMiB, paralle
 }
 
 func stretchKey(masterKey []byte) (encKey, macKey []byte, err error) {
-	encKey = make([]byte, 32)
-	macKey = make([]byte, 32)
-	if _, err := io.ReadFull(hkdf.Expand(sha256.New, masterKey, []byte("enc")), encKey); err != nil {
+	if encKey, err = hkdf.Expand(sha256.New, masterKey, "enc", 32); err != nil {
 		return nil, nil, err
 	}
-	if _, err := io.ReadFull(hkdf.Expand(sha256.New, masterKey, []byte("mac")), macKey); err != nil {
+	if macKey, err = hkdf.Expand(sha256.New, masterKey, "mac", 32); err != nil {
 		return nil, nil, err
 	}
 	return encKey, macKey, nil
