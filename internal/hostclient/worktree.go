@@ -13,9 +13,10 @@ import (
 // MaxReadGitFileBytes caps read_git_file blob responses so they stay well within WebSocket frame limits.
 const MaxReadGitFileBytes = 512 * 1024
 
-// ReadGitFile refreshes origin's default branch in a.Directory, verifies a.Commit is an ancestor
-// of that fetched origin default branch (e.g. origin/main), and reads a.Path directly from Git's
-// object database without modifying the checkout or local branches.
+// ReadGitFile refreshes origin's default branch tracking ref in a.Directory without changing the
+// checkout, index, HEAD, or local branches. It verifies a.Commit is an ancestor of that remote
+// default branch and that a.Path at a.Commit has the exact same Git blob as the current tip of
+// origin's default branch (refusing stale/replayed outlines), then returns the UTF-8 blob contents.
 func ReadGitFile(ctx context.Context, a ReadGitFileArgs) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -37,6 +38,15 @@ func ReadGitFile(ctx context.Context, a ReadGitFileArgs) (string, error) {
 		return "", fmt.Errorf("commit %s is not on %s", a.Commit, base)
 	}
 	spec := a.Commit + ":" + a.Path
+	commitObj, err := git("rev-parse", "--verify", "--quiet", spec)
+	if err != nil {
+		return "", fmt.Errorf("file %s not found at commit %s", a.Path, a.Commit)
+	}
+	tipSpec := trackingRef + ":" + a.Path
+	tipObj, err := git("rev-parse", "--verify", "--quiet", tipSpec)
+	if err != nil || strings.TrimSpace(string(commitObj)) != strings.TrimSpace(string(tipObj)) {
+		return "", fmt.Errorf("outline changed since %s; reload and retry", a.Commit)
+	}
 	sizeOut, err := git("cat-file", "-s", spec)
 	if err != nil {
 		return "", fmt.Errorf("file %s not found at commit %s", a.Path, a.Commit)

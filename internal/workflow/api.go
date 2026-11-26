@@ -149,6 +149,22 @@ func (e *Engine) StartAPIRun(ctx context.Context, account int64, workflowID, key
 	if strings.TrimSpace(req.Input) == "" {
 		return APIRunResult{}, bad("a run needs input: what should be done")
 	}
+	if !uuidRe.MatchString(workflowID) {
+		return APIRunResult{}, ErrNotFound
+	}
+	var apiEnabledPre bool
+	if err := e.p.QueryRow(ctx, `SELECT coalesce((v.definition->>'apiTrigger')::boolean, false)
+		FROM workflows w JOIN workflow_versions v ON v.workflow_id = w.id AND v.version = w.version
+		WHERE w.id = $1 AND w.account_id = $2 AND w.deleted_at IS NULL`,
+		workflowID, account).Scan(&apiEnabledPre); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return APIRunResult{}, ErrNotFound
+		}
+		return APIRunResult{}, err
+	}
+	if !apiEnabledPre {
+		return APIRunResult{}, conflict("API trigger is disabled for this workflow")
+	}
 	reqHash := ""
 	if idemKey != "" {
 		reqHash = apiRequestHash(req.Input, req.Attachments)

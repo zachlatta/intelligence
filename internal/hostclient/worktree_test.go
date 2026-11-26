@@ -204,10 +204,13 @@ func TestReadGitFileEnforcesOriginDefaultBranch(t *testing.T) {
 	worktreeGit(t, upstream, "push", origin, "main")
 	worktreeGit(t, dir, "clone", origin, checkout)
 
-	// Push a second commit to origin/main that checkout has not fetched yet; ReadGitFile must fetch and verify it.
+	// Push a second commit changing outliner/outline.md, then a third commit touching only an
+	// unrelated file so mainSHA2 is an older commit whose outline still matches the origin/main tip.
 	const wantOutline2 = wantOutline + "    - Leaf <!-- id:10000000-0000-4000-8000-000000000011 -->\n"
 	writeFile(upstream, "outliner/outline.md", wantOutline2)
-	mainSHA2 := commitFile(upstream, "second main")
+	mainSHA2 := commitFile(upstream, "second main (outline changed)")
+	writeFile(upstream, "notes.txt", "unrelated change\n")
+	mainSHA3 := commitFile(upstream, "third main (outline unchanged)")
 	worktreeGit(t, upstream, "push", origin, "main")
 
 	// Create an unmerged commit on a side branch in checkout (never pushed to origin/main).
@@ -215,19 +218,19 @@ func TestReadGitFileEnforcesOriginDefaultBranch(t *testing.T) {
 	writeFile(checkout, "outliner/outline.md", "- Fake <!-- id:99999999-0000-4000-8000-000000000001 -->\n")
 	spoofSHA := commitFile(checkout, "spoof local branch")
 
-	// Valid main commits succeed and return exact blob contents.
-	for _, tc := range []struct {
-		sha, want string
-	}{
-		{mainSHA, wantOutline},
-		{mainSHA2, wantOutline2},
-	} {
-		got, err := ReadGitFile(t.Context(), ReadGitFileArgs{Directory: checkout, Commit: tc.sha, Path: "outliner/outline.md"})
+	// Older commit whose outline changed since (mainSHA) MUST be refused (stale replay protection).
+	if _, err := ReadGitFile(t.Context(), ReadGitFileArgs{Directory: checkout, Commit: mainSHA, Path: "outliner/outline.md"}); err == nil || !strings.Contains(err.Error(), "outline changed since "+mainSHA+"; reload and retry") {
+		t.Fatalf("ReadGitFile(stale mainSHA) = %v, want 'outline changed since ...; reload and retry'", err)
+	}
+
+	// Both an older commit with unchanged outline (mainSHA2) and the current tip (mainSHA3) succeed.
+	for _, sha := range []string{mainSHA2, mainSHA3} {
+		got, err := ReadGitFile(t.Context(), ReadGitFileArgs{Directory: checkout, Commit: sha, Path: "outliner/outline.md"})
 		if err != nil {
-			t.Fatalf("ReadGitFile(%s) failed: %v", tc.sha, err)
+			t.Fatalf("ReadGitFile(%s) failed: %v", sha, err)
 		}
-		if got != tc.want {
-			t.Fatalf("ReadGitFile(%s) = %q, want %q", tc.sha, got, tc.want)
+		if got != wantOutline2 {
+			t.Fatalf("ReadGitFile(%s) = %q, want %q", sha, got, wantOutline2)
 		}
 	}
 
@@ -237,7 +240,7 @@ func TestReadGitFileEnforcesOriginDefaultBranch(t *testing.T) {
 	}
 
 	// Missing file at valid commit MUST be refused.
-	if _, err := ReadGitFile(t.Context(), ReadGitFileArgs{Directory: checkout, Commit: mainSHA2, Path: "outliner/missing.md"}); err == nil || !strings.Contains(err.Error(), "not found") {
+	if _, err := ReadGitFile(t.Context(), ReadGitFileArgs{Directory: checkout, Commit: mainSHA3, Path: "outliner/missing.md"}); err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("ReadGitFile(missing) = %v, want 'not found'", err)
 	}
 

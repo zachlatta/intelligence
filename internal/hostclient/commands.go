@@ -70,7 +70,8 @@ const (
 )
 
 // ReadGitFileArgs reads a single UTF-8 file from a verified commit on origin's default branch
-// in an enrolled Git repository on the host (read-only object database read).
+// (whose file blob matches the current origin default tip) in an enrolled Git repository on the
+// host. It refreshes the origin tracking ref without changing the checkout.
 type ReadGitFileArgs struct {
 	Directory string `json:"directory"`
 	Commit    string `json:"commit"`
