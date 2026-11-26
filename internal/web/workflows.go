@@ -68,6 +68,8 @@ func workflowError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, workflow.ErrNotFound):
 		http.Error(w, "no such workflow or run in this account", http.StatusNotFound)
+	case errors.As(err, &ref) && ref.Forbidden:
+		http.Error(w, ref.Msg, http.StatusForbidden)
 	case errors.As(err, &ref) && ref.Conflict:
 		http.Error(w, ref.Msg, http.StatusConflict)
 	case errors.As(err, &ref):
@@ -298,6 +300,8 @@ func workflowResult(w http.ResponseWriter, msg string, err error) {
 		switch {
 		case errors.Is(err, workflow.ErrNotFound):
 			code, msg = http.StatusNotFound, "no such run on this host"
+		case errors.As(err, &ref) && ref.Forbidden:
+			code, msg = http.StatusForbidden, ref.Msg
 		case errors.As(err, &ref) && ref.Conflict:
 			code, msg = http.StatusConflict, ref.Msg
 		case errors.As(err, &ref):

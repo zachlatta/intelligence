@@ -49,16 +49,22 @@ func NewEngine(p *pgxpool.Pool, now func() time.Time) *Engine {
 // ErrNotFound: no such workflow or run in the account (or for the host).
 var ErrNotFound = errors.New("not found")
 
-// Refusal is a request that cannot be done as asked. Conflict: not in the run's present state
-// (else the request itself is wrong). Msg is meant for whoever asked, an agent or a person.
+// Refusal is a request that cannot be done as asked. Conflict: not in the run's present state;
+// Forbidden: caller is not authorized for this action (else the request itself is wrong). Msg is
+// meant for whoever asked, an agent or a person.
 type Refusal struct {
-	Conflict bool
-	Msg      string
+	Conflict  bool
+	Forbidden bool
+	Msg       string
 }
 
 func (r *Refusal) Error() string { return r.Msg }
 
 func bad(format string, a ...any) error { return &Refusal{Msg: fmt.Sprintf(format, a...)} }
+
+func forbidden(format string, a ...any) error {
+	return &Refusal{Forbidden: true, Msg: fmt.Sprintf(format, a...)}
+}
 
 // Credential errors are permanent input refusals, including when wrapped by
 // fleet command validation. Leave infrastructure errors retryable.
@@ -1113,6 +1119,18 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		return "Steered: run " + into + " has this request now, and it delivers and answers it. This run is finished: send nothing more for it. " +
 			"Archive any sub-agents you started outside this workspace, then end your turn.", set(Succeeded, r.Step, "")
 	case "next", "skip", "done":
+		if stepRequiresHumanSignoff(r) {
+			if m.Move == "skip" {
+				return "", conflict("this sign-off step requires an authenticated human reply in Intelligence and cannot be skipped")
+			}
+			approved, err := hasHumanSignoffReply(ctx, tx, r.ID, r.Step)
+			if err != nil {
+				return "", err
+			}
+			if !approved {
+				return "", conflict("this sign-off step requires an ask and an authenticated human reply in Intelligence before advancing")
+			}
+		}
 		text := m.Summary
 		if m.Move == "skip" {
 			text = m.Why
@@ -1263,6 +1281,9 @@ func (e *Engine) ReplyTx(ctx context.Context, tx pgx.Tx, account int64, runID, t
 		return conflict("this run is not waiting for a reply (%s)", r.Status)
 	}
 	actor := apiActorFrom(ctx)
+	if actor.KeyID != "" && stepRequiresHumanSignoff(r) {
+		return forbidden("this sign-off step requires an authenticated human reply in Intelligence; API-key replies are refused")
+	}
 	heading := "Zach replied to your note:"
 	signoffNote := ""
 	if actor.KeyID != "" {
@@ -1392,6 +1413,9 @@ func (e *Engine) addInputLocked(ctx context.Context, tx pgx.Tx, account int64, r
 		return err
 	}
 	actor := apiActorFrom(ctx)
+	if actor.KeyID != "" && stepRequiresHumanSignoff(r) {
+		return forbidden("API-key steering input is refused during human sign-off; reply in Intelligence")
+	}
 	heading := "Additional input for this run:"
 	if actor.KeyID != "" {
 		heading = fmt.Sprintf("Additional input from API key %q for this run:", actor.KeyName)
@@ -1439,6 +1463,38 @@ func (e *Engine) lockRun(ctx context.Context, tx pgx.Tx, account int64, runID st
 		return run{}, ErrNotFound
 	}
 	return scanRun(tx.QueryRow(ctx, runSelect+"WHERE r.id = $1 AND r.account_id = $2 FOR UPDATE OF r", runID, account))
+}
+
+func stepRequiresHumanSignoff(r run) bool {
+	return r.Step >= 0 && r.Step < len(r.Def.Steps) &&
+		r.Def.Steps[r.Step].Kind == KindSignoff &&
+		r.Def.Steps[r.Step].RequireHumanSignoff
+}
+
+// hasHumanSignoffReply reports whether the current visit to step has an ask followed by a
+// non-API (authenticated human session, api_key_id IS NULL) reply. Returning to this step after
+// a send-back starts a new visit, so earlier approvals cannot be replayed.
+func hasHumanSignoffReply(ctx context.Context, tx pgx.Tx, runID string, step int) (bool, error) {
+	var visitStart int64
+	if err := tx.QueryRow(ctx, `SELECT coalesce(max(id), 0) FROM workflow_run_events
+		WHERE run_id = $1 AND to_step = $2`, runID, step).Scan(&visitStart); err != nil {
+		return false, err
+	}
+	var askID int64
+	if err := tx.QueryRow(ctx, `SELECT coalesce(max(id), 0) FROM workflow_run_events
+		WHERE run_id = $1 AND kind = 'ask' AND step = $2 AND id > $3`, runID, step, visitStart).Scan(&askID); err != nil {
+		return false, err
+	}
+	if askID == 0 {
+		return false, nil
+	}
+	var replied bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workflow_run_events
+		WHERE run_id = $1 AND kind = 'reply' AND step = $2 AND api_key_id IS NULL AND id > $3)`,
+		runID, step, askID).Scan(&replied); err != nil {
+		return false, err
+	}
+	return replied, nil
 }
 
 // Cancel ends account's run and stops its agent (the orchestrator, or the project finder).

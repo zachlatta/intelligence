@@ -79,10 +79,11 @@ func checkServiceTier(who, provider, tier string) error {
 // Step is instructions to the orchestrator. Its kind changes only how it reads: a step does work,
 // a gate decides whether to move on or send work back, and a sign-off may ask Zach.
 type Step struct {
-	ID           string `json:"id"`
-	Kind         string `json:"kind"`
-	Title        string `json:"title"`
-	Instructions string `json:"instructions"`
+	ID                  string `json:"id"`
+	Kind                string `json:"kind"`
+	Title               string `json:"title"`
+	Instructions        string `json:"instructions"`
+	RequireHumanSignoff bool   `json:"requireHumanSignoff,omitempty"`
 }
 
 // Triggers, project modes and step kinds.
@@ -195,6 +196,8 @@ func (d Definition) Validate() error {
 			return fmt.Errorf("step %d: id %q is used twice", n, s.ID)
 		case s.Kind != KindStep && s.Kind != KindGate && s.Kind != KindSignoff:
 			return fmt.Errorf("step %d: kind %q: want step, gate or signoff", n, s.Kind)
+		case s.RequireHumanSignoff && s.Kind != KindSignoff:
+			return fmt.Errorf("step %d (%s): requireHumanSignoff is only valid on a signoff step", n, s.Title)
 		case blank(s.Title):
 			return fmt.Errorf("step %d needs a title", n)
 		case blank(s.Instructions):

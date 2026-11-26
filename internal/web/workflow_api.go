@@ -130,6 +130,8 @@ func apiWorkflowError(w http.ResponseWriter, err error) {
 		apiError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, workflow.ErrNotFound):
 		apiError(w, http.StatusNotFound, "no such run in this workflow")
+	case errors.As(err, &ref) && ref.Forbidden:
+		apiError(w, http.StatusForbidden, ref.Msg)
 	case errors.As(err, &ref) && ref.Conflict:
 		apiError(w, http.StatusConflict, ref.Msg)
 	case errors.As(err, &ref):
@@ -257,14 +259,15 @@ type apiRunSummary struct {
 }
 
 type apiStepState struct {
-	Index        int     `json:"index"`
-	ID           string  `json:"id"`
-	Kind         string  `json:"kind"`
-	Title        string  `json:"title"`
-	State        string  `json:"state"`
-	Label        string  `json:"label"`
-	SpentSeconds float64 `json:"spentSeconds"`
-	Visits       int     `json:"visits"`
+	Index               int     `json:"index"`
+	ID                  string  `json:"id"`
+	Kind                string  `json:"kind"`
+	Title               string  `json:"title"`
+	RequireHumanSignoff bool    `json:"requireHumanSignoff,omitempty"`
+	State               string  `json:"state"`
+	Label               string  `json:"label"`
+	SpentSeconds        float64 `json:"spentSeconds"`
+	Visits              int     `json:"visits"`
 }
 
 type apiRunEvent struct {
@@ -442,13 +445,14 @@ func (a *app) apiGetWorkflow(c apiCaller) http.HandlerFunc {
 		}
 		wf := wfs[0]
 		type stepInfo struct {
-			ID    string `json:"id"`
-			Kind  string `json:"kind"`
-			Title string `json:"title"`
+			ID                  string `json:"id"`
+			Kind                string `json:"kind"`
+			Title               string `json:"title"`
+			RequireHumanSignoff bool   `json:"requireHumanSignoff,omitempty"`
 		}
 		steps := make([]stepInfo, len(wf.Definition.Steps))
 		for i, s := range wf.Definition.Steps {
-			steps[i] = stepInfo{ID: s.ID, Kind: s.Kind, Title: s.Title}
+			steps[i] = stepInfo{ID: s.ID, Kind: s.Kind, Title: s.Title, RequireHumanSignoff: s.RequireHumanSignoff}
 		}
 		writeJSON(w, map[string]any{
 			"id":          wf.ID,
@@ -670,15 +674,17 @@ func (a *app) apiGetRun(c apiCaller) http.HandlerFunc {
 		svs := stepViews(row, viewEvents, visits, a.cfg.Now())
 		steps := make([]apiStepState, len(svs))
 		for i, sv := range svs {
+			reqHuman := i < len(row.Steps) && row.Steps[i].RequireHumanSignoff
 			steps[i] = apiStepState{
-				Index:        i,
-				ID:           sv.ID,
-				Kind:         sv.Kind,
-				Title:        sv.Title,
-				State:        sv.State,
-				Label:        sv.Label,
-				SpentSeconds: sv.Spent.Seconds(),
-				Visits:       len(sv.Visits),
+				Index:               i,
+				ID:                  sv.ID,
+				Kind:                sv.Kind,
+				Title:               sv.Title,
+				RequireHumanSignoff: reqHuman,
+				State:               sv.State,
+				Label:               sv.Label,
+				SpentSeconds:        sv.Spent.Seconds(),
+				Visits:              len(sv.Visits),
 			}
 		}
 		agentRows, err := runAgents(ctx, c.pool, row)
