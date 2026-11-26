@@ -2046,11 +2046,12 @@ origin (another site's request is refused with 403), and those with a body must 
   host keys and MCP tokens are not accepted, and workflow API keys are never accepted on `/api/sql`
   or any other route. All errors are JSON; text fields are capped at 1 MiB and bodies at 16 MiB):
   - `GET /api/workflow-api/workflow`: metadata (`trigger`, `apiTrigger`, `steps`, `priority`) of the key's workflow.
-  - `POST /api/workflow-api/runs` with `{"input", "attachments"?: [{"name", "data"}], "idempotencyKey"?}`
+  - `POST /api/workflow-api/runs` with `{"input", "title"?, "attachments"?: [{"name", "data"}], "idempotencyKey"?}`
     and optional `Idempotency-Key` header: requires `apiTrigger: true` (else 403); triggers a run
     through the normal queue and startup path (201, or 200 with `Idempotency-Replayed: true` on an
     exact idempotent retry, 409 on a mismatched idempotency payload, 413 if `input` exceeds 1 MiB
-    or body exceeds 16 MiB).
+    or body exceeds 16 MiB). Optional `title` is a single line of 1–80 characters; when omitted,
+    Intelligence derives a readable title after stripping any leading YAML frontmatter.
   - `GET /api/workflow-api/runs?status=&limit=&cursor=`: lists runs of this workflow, newest first.
   - `GET /api/workflow-api/runs/{id}`: one run's state, steps, events (including `apiKeyId` / `apiKeyName`) and agents (404 outside this workflow).
   - `GET /api/workflow-api/runs/{id}/transcripts`: the run's agents and their transcript metadata.

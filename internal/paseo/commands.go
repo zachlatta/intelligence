@@ -17,6 +17,7 @@ type CreateWorkspace struct {
 	Worktree       bool   // a new git worktree on a new Branch, instead of the directory itself
 	Branch         string // the worktree's new branch; "" lets the daemon name it
 	Base           string // the ref the branch starts from; "" is the repository's default
+	WorktreeSlug   string // the worktree's managed directory slug (<=50 chars); "" lets the daemon derive it from Branch
 	Title          string
 	IdempotencyKey string
 }
@@ -36,6 +37,9 @@ func (c *Client) CreateWorkspace(ctx context.Context, w CreateWorkspace) (Worksp
 		}
 		if w.Base != "" {
 			src["baseBranch"] = w.Base
+		}
+		if w.WorktreeSlug != "" {
+			src["worktreeSlug"] = w.WorktreeSlug
 		}
 	}
 	req := map[string]any{"type": "workspace.create.request", "source": src}

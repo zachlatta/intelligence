@@ -836,3 +836,62 @@ func TestWorkflowAPIQueuedBadCommandDoesNotBlockQueue(t *testing.T) {
 		t.Fatalf("good run behind bad run = %q, want %q", goodStatus, workflow.StartingOrchestrator)
 	}
 }
+
+func TestWorkflowAPIRunTitlesExplicitAndDerived(t *testing.T) {
+	t.Parallel()
+	d := dbtest.New(t)
+	h := newServer(t, d, d.Owner, "test")
+	reg := fleet.New(d.Owner)
+	ctx := context.Background()
+	keyOf(t, h, "host-1")
+	if err := reg.Record(ctx, wfReport(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	wfID := createWorkflow(t, h, apiWorkflowDef("host-1"))
+	_, key := issueAPIKey(t, h, wfID, "demo-client")
+
+	// 1. Explicit title is accepted, stored, and preserved in the orchestrator start command.
+	contractInput := "---\nschema: example_schema_v1\nworkflow_kind: check\ncontract_ids:\n    - 11111111-2222-4333-8444-555555555551\n---\n\nRun a STRICTLY READ-ONLY Contract Check on 7 contract(s) under \"Billing API\".\n"
+	explicitReq, _ := json.Marshal(map[string]any{
+		"title": "Billing API checks (nightly)",
+		"input": contractInput,
+	})
+	rec := callAPI(t, h, http.MethodPost, "/api/workflow-api/runs", key, string(explicitReq), map[string]string{"Idempotency-Key": "title-explicit"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST explicit title = %d %s", rec.Code, rec.Body)
+	}
+	var r1 apiRunSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &r1); err != nil {
+		t.Fatal(err)
+	}
+	if r1.Title != "Billing API checks (nightly)" {
+		t.Fatalf("explicit title = %q, want %q", r1.Title, "Billing API checks (nightly)")
+	}
+	// Same idempotency key with a different title conflicts (409).
+	diffTitleReq, _ := json.Marshal(map[string]any{
+		"title": "Different title",
+		"input": contractInput,
+	})
+	assertJSONError(t, callAPI(t, h, http.MethodPost, "/api/workflow-api/runs", key, string(diffTitleReq), map[string]string{"Idempotency-Key": "title-explicit"}), http.StatusConflict)
+
+	// 2. Invalid titles (multiline or > 80 runes) are rejected with 400.
+	for _, badTitle := range []string{"line1\nline2", strings.Repeat("a", 81)} {
+		badReq, _ := json.Marshal(map[string]any{"title": badTitle, "input": "Check something"})
+		assertJSONError(t, callAPI(t, h, http.MethodPost, "/api/workflow-api/runs", key, string(badReq)), http.StatusBadRequest)
+	}
+
+	// 3. Omitting title derives a readable title from the body instead of the schema line.
+	derivedReq, _ := json.Marshal(map[string]any{"input": contractInput})
+	rec2 := callAPI(t, h, http.MethodPost, "/api/workflow-api/runs", key, string(derivedReq))
+	if rec2.Code != http.StatusCreated {
+		t.Fatalf("POST derived title = %d %s", rec2.Code, rec2.Body)
+	}
+	var r2 apiRunSummary
+	if err := json.Unmarshal(rec2.Body.Bytes(), &r2); err != nil {
+		t.Fatal(err)
+	}
+	if r2.Title != `Check "Billing API" (7 contracts)` {
+		t.Fatalf("derived title = %q, want %q", r2.Title, `Check "Billing API" (7 contracts)`)
+	}
+}

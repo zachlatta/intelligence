@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -139,12 +140,19 @@ func (e *Engine) dequeueRetry(ctx context.Context, tx pgx.Tx, r run, why string)
 	return started || terminal, err
 }
 
+func isWorktreeCreateFailure(errMsg string) bool {
+	lower := strings.ToLower(errMsg)
+	return strings.Contains(lower, "git worktree add") ||
+		(strings.Contains(lower, "worktree") && strings.Contains(lower, "already exists")) ||
+		(strings.Contains(lower, "git command failed") && strings.Contains(lower, "already exists"))
+}
+
 func (e *Engine) launchRetry(ctx context.Context, tx pgx.Tx, r run, why string) (bool, error) {
 	var previous fleet.Command
-	err := tx.QueryRow(ctx, `SELECT c.id::text, c.kind, c.idempotency_key
+	err := tx.QueryRow(ctx, `SELECT c.id::text, c.kind, c.status, c.error, c.idempotency_key
 		FROM commands c JOIN workflow_runs r ON r.pending_command=c.id
 		WHERE r.id=$1 AND c.status IN ('failed','expired') FOR UPDATE OF c`, r.ID).
-		Scan(&previous.ID, &previous.Kind, &previous.IdempotencyKey)
+		Scan(&previous.ID, &previous.Kind, &previous.Status, &previous.Error, &previous.IdempotencyKey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil // reconciliation handles a result that won the race
 	}
@@ -153,6 +161,18 @@ func (e *Engine) launchRetry(ctx context.Context, tx pgx.Tx, r run, why string) 
 	}
 	if err := checkWorkflowProviders(ctx, tx, r.Def); err != nil {
 		return false, err
+	}
+	// If git worktree add itself failed (no workspace created), give the retry a fresh branch,
+	// worktree slug and creation key so Paseo neither replays the cached failed creation nor
+	// collides with a leftover directory or branch.
+	freshWorktree := r.Status == StartingOrchestrator &&
+		previous.Kind == hostclient.CreateWorkspaceKind &&
+		previous.Status == hostclient.CommandFailed &&
+		r.WorkspaceID == "" &&
+		r.Repo != "" &&
+		isWorktreeCreateFailure(previous.Error)
+	if freshWorktree {
+		r.Branch = retryBranch(r.ID, r.Name, r.Title, r.StartRetries+1)
 	}
 	// Reuse Paseo's creation key, but give this delivery a new ID: the host caches completed
 	// deliveries, including failures.
@@ -170,12 +190,14 @@ func (e *Engine) launchRetry(ctx context.Context, tx pgx.Tx, r run, why string) 
 	if err != nil {
 		return false, credentialRefusal(err)
 	}
-	key := previous.IdempotencyKey
-	if key == "" {
-		key = previous.ID
-	}
-	if _, err := tx.Exec(ctx, "UPDATE commands SET idempotency_key=$2 WHERE id=$1", next.ID, key); err != nil {
-		return false, err
+	if !freshWorktree {
+		key := previous.IdempotencyKey
+		if key == "" {
+			key = previous.ID
+		}
+		if _, err := tx.Exec(ctx, "UPDATE commands SET idempotency_key=$2 WHERE id=$1", next.ID, key); err != nil {
+			return false, err
+		}
 	}
 	if err := e.recordDequeue(ctx, tx, r, why); err != nil {
 		return false, err
@@ -183,9 +205,9 @@ func (e *Engine) launchRetry(ctx context.Context, tx pgx.Tx, r run, why string) 
 	if err := e.event(ctx, tx, r, "start_retry_sent", nil, nil, fmt.Sprintf("Retry %d of %d", r.StartRetries+1, StartRetryLimit)); err != nil {
 		return false, err
 	}
-	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET pending_command=$2, launch_command=$2, launched_at=$3,
+	_, err = tx.Exec(ctx, `UPDATE workflow_runs SET pending_command=$2, launch_command=$2, launched_at=$3, branch=$4,
 		start_retries=start_retries+1, start_retry_at=NULL, start_retry_queued=false,
-		project_command=CASE WHEN status='finding_project' THEN $2 ELSE project_command END, updated_at=$3 WHERE id=$1`, r.ID, next.ID, at)
+		project_command=CASE WHEN status='finding_project' THEN $2 ELSE project_command END, updated_at=$3 WHERE id=$1`, r.ID, next.ID, at, r.Branch)
 	return err == nil, err
 }
 

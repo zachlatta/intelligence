@@ -170,3 +170,63 @@ func TestWorkflowStartRetriesDurably(t *testing.T) {
 		})
 	}
 }
+
+func TestStartRetryAfterWorktreeAddFailureUsesFreshSlugBranchAndKey(t *testing.T) {
+	t.Parallel()
+	h, db := dbServer(t)
+	rep := wfReport()
+	rep.StartRetryKeys = true
+	b := sendReport(t, h, rep)
+	def := workflow.Starting
+	def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+	run := startRun(t, h, createWorkflow(t, h, def), "Check Billing API contracts")
+	hex := strings.ReplaceAll(run, "-", "")[:12]
+
+	cmd := b.command()
+	var args0 hostclient.CreateWorkspaceArgs
+	if err := json.Unmarshal(cmd.Args, &args0); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(args0.WorktreeSlug, "-"+hex) || len(args0.WorktreeSlug) > 50 {
+		t.Fatalf("initial WorktreeSlug = %q (len %d), want <=50 ending in -%s", args0.WorktreeSlug, len(args0.WorktreeSlug), hex)
+	}
+
+	// Simulate Paseo failing git worktree add with a path collision.
+	worktreeErr := "workspace.create.request: Git command failed: git worktree add /srv/paseo/worktrees/abcd1234/wf-example-6 -b " + args0.Branch + " --no-track refs/remotes/origin/main (exit code: 128, signal: none)\nfatal: '/srv/paseo/worktrees/abcd1234/wf-example-6' already exists"
+	if ack := b.call(hostclient.Frame{Type: hostclient.CommandUpdateFrame, Update: &hostclient.CommandUpdate{
+		ID: cmd.ID, Status: hostclient.CommandFailed, Error: worktreeErr,
+	}}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+
+	var due time.Time
+	if err := db.Owner.QueryRow(t.Context(), "SELECT start_retry_at FROM workflow_runs WHERE id=$1", run).Scan(&due); err != nil {
+		t.Fatal(err)
+	}
+	if err := workflow.NewEngine(db.Owner, func() time.Time { return due }).RetryStarts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	retry1 := b.command()
+	if retry1.IdempotencyKey == cmd.ID || (cmd.IdempotencyKey != "" && retry1.IdempotencyKey == cmd.IdempotencyKey) {
+		t.Fatalf("worktree add failure retry reused failed idempotency key: retry1=%+v prev=%+v", retry1, cmd)
+	}
+	var args1 hostclient.CreateWorkspaceArgs
+	if err := json.Unmarshal(retry1.Args, &args1); err != nil {
+		t.Fatal(err)
+	}
+	if args1.WorktreeSlug == args0.WorktreeSlug || !strings.HasSuffix(args1.WorktreeSlug, "-"+hex+"-r1") || len(args1.WorktreeSlug) > 50 {
+		t.Fatalf("retry1 WorktreeSlug = %q, want distinct <=50 ending in -%s-r1", args1.WorktreeSlug, hex)
+	}
+	if args1.Branch == args0.Branch || !strings.HasSuffix(args1.Branch, "-"+hex+"-r1") {
+		t.Fatalf("retry1 Branch = %q, want distinct ending in -%s-r1", args1.Branch, hex)
+	}
+	if got := readRun(t, h, run)["branch"]; got != args1.Branch {
+		t.Fatalf("workflow_runs.branch = %q, want %q", got, args1.Branch)
+	}
+
+	succeed(t, b, retry1, `{"workspaceId":"recovered-wt","agentId":"orch-wt"}`)
+	if r := readRun(t, h, run); r["status"] != "running" || r["orchestrator_id"] != "orch-wt" || r["branch"] != args1.Branch {
+		t.Fatalf("run after worktree retry recovery = %v", r)
+	}
+}
