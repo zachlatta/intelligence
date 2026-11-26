@@ -383,6 +383,40 @@ func TestLandingOwnsApprovedExternalChanges(t *testing.T) {
 	}
 }
 
+// Zach does not want pull requests unless he asks for one. Orchestrators copied them from a
+// repository's history ("merge it as this repo does: past PRs #119 and #120"), so every run,
+// saved definitions included, is told to land straight on main.
+func TestWorkflowsLandWithoutPullRequests(t *testing.T) {
+	saved := clone(Starting)
+	saved.Orchestrator.Instructions = "Coordinate this task."
+	for i := range saved.Steps {
+		saved.Steps[i].Instructions = "Do the authorized step."
+	}
+	for name, d := range map[string]Definition{"starting": Starting, "saved": saved} {
+		t.Run(name, func(t *testing.T) {
+			prompts := []string{mustOrchestratorPrompt(t, "task", d, Vars{Run: "r"})}
+			for i := range d.Steps {
+				prompts = append(prompts, mustStepMessage(t, d, i, Vars{Run: "r"}))
+			}
+			for i, p := range prompts {
+				if n := strings.Count(p, NoPullRequestRule); n != 1 {
+					t.Errorf("prompt %d has the no-pull-request rule %d times, want once", i, n)
+				}
+			}
+		})
+	}
+	for _, want := range []string{"Never open a pull request", "gh pr create", "unless Zach's request explicitly asks for one",
+		"straight to main", "AGENTS.md", "history", "ask Zach", "Pass this rule to every worker"} {
+		if !strings.Contains(NoPullRequestRule, want) {
+			t.Errorf("no-pull-request rule misses %q", want)
+		}
+	}
+	land := Starting.Steps[Starting.Index("land")].Instructions
+	if !strings.Contains(land, "without a pull request") {
+		t.Errorf("starting landing step does not say to land without a pull request: %q", land)
+	}
+}
+
 func TestWorkflowCredentialHandoffRule(t *testing.T) {
 	for _, p := range []string{mustOrchestratorPrompt(t, "Saved", Starting, Vars{}), mustStepMessage(t, Starting, 0, Vars{})} {
 		for _, want := range []string{"Never paste credentials", "environment variable", "0600"} {
