@@ -25,7 +25,7 @@ type SecretStore interface {
 
 // ErrSecretsNotConfigured is returned when a user tries to submit a secret on a server
 // without Vaultwarden configured.
-var ErrSecretsNotConfigured = errors.New("Vaultwarden is not configured on this server; set VAULTWARDEN_URL, VAULTWARDEN_CLIENT_ID, VAULTWARDEN_CLIENT_SECRET and VAULTWARDEN_MASTER_PASSWORD")
+var ErrSecretsNotConfigured = errors.New("Vaultwarden is not configured on this server; set VAULTWARDEN_URL, VAULTWARDEN_CLIENT_ID, VAULTWARDEN_CLIENT_SECRET, VAULTWARDEN_MASTER_PASSWORD and VAULTWARDEN_ACCOUNT")
 
 // ErrSecretStoreFailed wraps an upstream Vaultwarden write failure (never containing secret values).
 var ErrSecretStoreFailed = errors.New("could not store secret in Vaultwarden")
@@ -134,15 +134,29 @@ type pendingSecretRow struct {
 	Username   string
 }
 
-// SubmitSecretsFromBrowser stores Zach's submitted secret values in Vaultwarden and resumes
-// the waiting run with only non-secret item references. Secret values never enter Postgres,
-// workflow_run_events, commands, logs, or error messages.
+func (e *Engine) secretsAllowedForAccount(ctx context.Context, tx pgx.Tx, accountID int64) (bool, error) {
+	if e.Secrets == nil || strings.TrimSpace(e.SecretsAccount) == "" {
+		return false, nil
+	}
+	var username string
+	if err := tx.QueryRow(ctx, `SELECT username FROM accounts WHERE id = $1`, accountID).Scan(&username); err != nil {
+		return false, err
+	}
+	return username == strings.TrimSpace(e.SecretsAccount), nil
+}
+
+// SubmitSecretsFromBrowser stores submitted secret values in Vaultwarden for the configured
+// account and resumes the waiting run with only non-secret item references. Secret values never
+// enter Postgres, workflow_run_events, commands, logs, or error messages.
 func (e *Engine) SubmitSecretsFromBrowser(ctx context.Context, account int64, actorUsername, runID string, submissions []SecretSubmission, note string, approve bool) error {
 	if !uuidRe.MatchString(runID) {
 		return ErrNotFound
 	}
 	if e.Secrets == nil {
 		return ErrSecretsNotConfigured
+	}
+	if strings.TrimSpace(e.SecretsAccount) == "" || actorUsername != strings.TrimSpace(e.SecretsAccount) {
+		return forbidden("Vaultwarden secret storage is not enabled for this account")
 	}
 	if len(submissions) == 0 {
 		return bad("at least one secret value is required")
@@ -254,10 +268,10 @@ func (e *Engine) SubmitSecretsFromBrowser(ctx context.Context, account int64, ac
 	}
 
 	var msgBody strings.Builder
-	fmt.Fprintf(&msgBody, "Zach stored the requested secret(s) in Vaultwarden (%s):\n%s\n\nNever print, log, or paste secret values into chat, events, or transcripts.",
+	fmt.Fprintf(&msgBody, "The requested secret(s) were stored in Vaultwarden (%s):\n%s\n\nNever print, log, or paste secret values into chat, events, or transcripts.",
 		collection, strings.Join(msgLines, "\n"))
 	if noteTrimmed != "" {
-		fmt.Fprintf(&msgBody, "\n\nZach's note:\n\n%s", noteTrimmed)
+		fmt.Fprintf(&msgBody, "\n\nAdditional note:\n\n%s", noteTrimmed)
 	}
 
 	// Defense-in-depth: guarantee no submitted secret value ever appears in eventSummary or msgBody.

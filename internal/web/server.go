@@ -68,9 +68,11 @@ type Config struct {
 	// Unset turns Web Push off cleanly. PushHTTP overrides the HTTP client used to post pushes (tests).
 	VAPID    *webpush.VAPID
 	PushHTTP *http.Client
-	// Secrets stores secret values submitted on workflow asks directly in Vaultwarden.
+	// Secrets stores secret values submitted on workflow asks directly in Vaultwarden,
+	// scoped exclusively to the single account named by SecretsAccount.
 	// Nil disables secret submission cleanly (returns 503 without persisting values).
-	Secrets workflow.SecretStore
+	Secrets        workflow.SecretStore
+	SecretsAccount string
 }
 
 type app struct {
@@ -143,6 +145,7 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	a.wf.Notify = cfg.HostAlerts
 	a.wf.NotifyAccount = cfg.PDWAccount
 	a.wf.Secrets = cfg.Secrets
+	a.wf.SecretsAccount = cfg.SecretsAccount
 	if cfg.QueueLimits != nil {
 		a.wf.Limits = *cfg.QueueLimits
 	}

@@ -415,16 +415,23 @@ func TestVaultwardenConfig(t *testing.T) {
 	base["VAULTWARDEN_CLIENT_ID"] = "user.demo"
 	base["VAULTWARDEN_CLIENT_SECRET"] = "secret"
 	base["VAULTWARDEN_MASTER_PASSWORD"] = "master"
+	base["VAULTWARDEN_ACCOUNT"] = "owner"
 	if _, err := serverConfig(env(base)); err == nil {
 		t.Fatal("non-HTTPS Vaultwarden URL accepted")
 	}
-	// Complete config accepted.
+	// Missing VAULTWARDEN_ACCOUNT refused.
 	base["VAULTWARDEN_URL"] = "https://vault.example.com"
+	delete(base, "VAULTWARDEN_ACCOUNT")
+	if _, err := serverConfig(env(base)); err == nil {
+		t.Fatal("Vaultwarden config without VAULTWARDEN_ACCOUNT accepted")
+	}
+	// Complete config accepted.
+	base["VAULTWARDEN_ACCOUNT"] = "owner"
 	base["VAULTWARDEN_ORGANIZATION"] = "Custom Org"
 	base["VAULTWARDEN_COLLECTION"] = "Custom Collection"
 	c, err = serverConfig(env(base))
-	if err != nil || c.Vaultwarden == nil || secretStore(c) == nil {
-		t.Fatalf("complete config failed: %+v %v", c.Vaultwarden, err)
+	if err != nil || c.Vaultwarden == nil || secretStore(c) == nil || c.VaultwardenAccount != "owner" {
+		t.Fatalf("complete config failed: %+v %q %v", c.Vaultwarden, c.VaultwardenAccount, err)
 	}
 	if c.Vaultwarden.Organization != "Custom Org" || c.Vaultwarden.Collection != "Custom Collection" {
 		t.Fatalf("unexpected org/collection: %+v", c.Vaultwarden)

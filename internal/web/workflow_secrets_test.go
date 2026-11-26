@@ -48,7 +48,14 @@ func (f *fakeSecretStore) StoreSecret(_ context.Context, req vaultwarden.StoreRe
 func dbServerWithSecrets(t *testing.T, store workflow.SecretStore) (http.Handler, dbtest.DB) {
 	t.Helper()
 	d := dbtest.New(t)
-	return newServer(t, d, d.Owner, "test", func(c *Config) { c.Secrets = store }), d
+	acct := ""
+	if store != nil {
+		acct = "someone"
+	}
+	return newServer(t, d, d.Owner, "test", func(c *Config) {
+		c.Secrets = store
+		c.SecretsAccount = acct
+	}), d
 }
 
 func setupRunningWorkflow(t *testing.T, h http.Handler, d dbtest.DB) (hostKey, runID string) {
@@ -327,5 +334,130 @@ func TestWorkflowSecretUnconfiguredAndUpstreamFailure(t *testing.T) {
 	}
 	if strings.Contains(rec2.Body.String(), badVal) {
 		t.Fatalf("502 response leaked secret value: %s", rec2.Body.String())
+	}
+}
+
+func TestWorkflowSecretsRestrictedToConfiguredAccount(t *testing.T) {
+	t.Parallel()
+	store := &fakeSecretStore{}
+	h, d := dbServerWithSecrets(t, store) // configured exclusively for "someone"
+
+	// Create a second account "other" with its own host, workflow, and running run.
+	signUpRec := call(t, anon(h), http.MethodPost, "/api/accounts", `{"username":"other","password":"correct-horse-battery"}`, sameOriginFetch)
+	if signUpRec.Code != http.StatusCreated {
+		t.Fatalf("signup other = %d %s", signUpRec.Code, signUpRec.Body.String())
+	}
+	otherCookie := signUpRec.Result().Cookies()[0]
+	otherHeaders := map[string]string{
+		"Origin": "http://example.com",
+		"Cookie": otherCookie.Name + "=" + otherCookie.Value,
+	}
+
+	// Enroll a host for "other" and report it online.
+	enrRec := call(t, anon(h), http.MethodPost, "/api/host-enrollments", `{"host":"other-host"}`, nil)
+	if enrRec.Code != http.StatusCreated {
+		t.Fatalf("enroll other-host = %d %s", enrRec.Code, enrRec.Body.String())
+	}
+	var enr struct {
+		ID     string `json:"id"`
+		Code   string `json:"code"`
+		Secret string `json:"secret"`
+	}
+	_ = json.Unmarshal(enrRec.Body.Bytes(), &enr)
+	claimRec := call(t, anon(h), http.MethodPost, "/api/host-enrollments/claim", fmt.Sprintf(`{"code":%q}`, enr.Code), otherHeaders)
+	if claimRec.Code != http.StatusOK {
+		t.Fatalf("claim other-host = %d %s", claimRec.Code, claimRec.Body.String())
+	}
+	keyRec := call(t, anon(h), http.MethodPost, "/api/host-enrollments/"+enr.ID+"/key", `{}`, map[string]string{"Authorization": "Bearer " + enr.Secret})
+	if keyRec.Code != http.StatusOK {
+		t.Fatalf("collect key other-host = %d %s", keyRec.Code, keyRec.Body.String())
+	}
+	var keyOut struct {
+		Key string `json:"key"`
+	}
+	_ = json.Unmarshal(keyRec.Body.Bytes(), &keyOut)
+	if _, err := d.Owner.Exec(context.Background(), `INSERT INTO hosts (name, connected, last_seen) VALUES ('other-host', true, now())`); err != nil {
+		t.Fatal(err)
+	}
+
+	def := workflow.Starting
+	def.Trigger = workflow.TriggerManual
+	def.Host = "other-host"
+	def.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+	def.Steps = []workflow.Step{{ID: "do", Kind: workflow.KindStep, Title: "Do work", Instructions: "work"}}
+	wfRec := call(t, anon(h), http.MethodPost, "/api/workflows", wfBody(t, "Other WF", def), otherHeaders)
+	if wfRec.Code != http.StatusCreated {
+		t.Fatalf("create wf for other = %d %s", wfRec.Code, wfRec.Body.String())
+	}
+	var wfOut struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(wfRec.Body.Bytes(), &wfOut)
+	runRec := call(t, anon(h), http.MethodPost, "/api/workflow-runs", fmt.Sprintf(`{"workflowId":%q,"input":"Test run"}`, wfOut.ID), otherHeaders)
+	if runRec.Code != http.StatusCreated {
+		t.Fatalf("start run for other = %d %s", runRec.Code, runRec.Body.String())
+	}
+	var runOut struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(runRec.Body.Bytes(), &runOut)
+	if _, err := d.Owner.Exec(context.Background(), `UPDATE workflow_runs SET status = 'running', step = 0, orchestrator_id = 'orch-other', workspace_id = 'ws-other' WHERE id = $1`, runOut.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Moves API refuses --secret ask from non-configured account with 403.
+	code, msg := moveAny(t, h, keyOut.Key, runOut.ID, map[string]any{
+		"move":    "ask",
+		"note":    "Give me a secret",
+		"secrets": []map[string]string{{"name": "Injected item", "purpose": "Should be refused"}},
+	})
+	if code != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-configured account ask --secret, got %d %q", code, msg)
+	}
+	var reqCount int
+	if err := d.Owner.QueryRow(context.Background(), `SELECT count(*) FROM workflow_run_secret_requests WHERE run_id = $1`, runOut.ID).Scan(&reqCount); err != nil {
+		t.Fatal(err)
+	}
+	if reqCount != 0 {
+		t.Fatalf("expected 0 secret request rows for refused account, got %d", reqCount)
+	}
+
+	// 2. Defense-in-depth: even if a waiting ask + pending secret request existed for "other",
+	// its run page shows NO password fields and POST /secrets returns 403 with 0 Vaultwarden writes.
+	code, _ = moveAny(t, h, keyOut.Key, runOut.ID, map[string]any{
+		"move": "ask",
+		"note": "Normal question",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("plain ask for other failed: %d", code)
+	}
+	var syntheticReqID string
+	if err := d.Owner.QueryRow(context.Background(), `INSERT INTO workflow_run_secret_requests (run_id, account_id, ask_event_id, position, name, purpose, target_collection)
+		SELECT r.id, r.account_id, (SELECT max(id) FROM workflow_run_events WHERE run_id = r.id AND kind = 'ask'), 0, 'Injected', 'Test', 'AI Agents Shared Passwords'
+		FROM workflow_runs r WHERE r.id = $1 RETURNING id::text`, runOut.ID).Scan(&syntheticReqID); err != nil {
+		t.Fatal(err)
+	}
+
+	otherPage := call(t, anon(h), http.MethodGet, "/workflow-runs/"+runOut.ID, "", map[string]string{
+		"Cookie": otherCookie.Name + "=" + otherCookie.Value,
+	})
+	if otherPage.Code != http.StatusOK {
+		t.Fatalf("GET other run page = %d", otherPage.Code)
+	}
+	if strings.Contains(otherPage.Body.String(), `id="secret-box"`) || strings.Contains(otherPage.Body.String(), `type="password"`) || strings.Contains(otherPage.Body.String(), `id="store-secrets"`) {
+		t.Fatal("non-configured account run page rendered secret password fields")
+	}
+
+	subBody, _ := json.Marshal(map[string]any{
+		"secrets": []map[string]string{{"id": syntheticReqID, "value": "should-never-reach-vaultwarden"}},
+	})
+	subRec := call(t, anon(h), http.MethodPost, "/api/workflow-runs/"+runOut.ID+"/secrets", string(subBody), otherHeaders)
+	if subRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 on POST /secrets for non-configured account, got %d %s", subRec.Code, subRec.Body.String())
+	}
+
+	// Confirm the fake Vaultwarden store received ZERO writes.
+	if len(store.stored) != 0 {
+		t.Fatalf("expected 0 Vaultwarden writes for non-configured account, got %d: %+v", len(store.stored), store.stored)
 	}
 }

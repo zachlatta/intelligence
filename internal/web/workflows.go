@@ -1108,8 +1108,9 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), 500)
 			return
 		}
+		secretsEnabled := cfg.Secrets != nil && strings.TrimSpace(cfg.SecretsAccount) != "" && v.acct.Username == strings.TrimSpace(cfg.SecretsAccount)
 		var pendingSecrets []pendingSecretView
-		if run.Status == workflow.Waiting {
+		if run.Status == workflow.Waiting && (cfg.Secrets == nil || secretsEnabled) {
 			pendingSecrets, err = readPendingSecrets(ctx, v.pool, id)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1119,7 +1120,7 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 		slices.Reverse(emails) // oldest first, as a thread reads
 		renderWorkflows(w, "run", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Run": run, "Steps": stepViews(run, events, visits, cfg.Now()),
 			"Agents": agents, "Before": before, "Events": events, "Emails": emails, "VoiceMemos": voiceMemos, "ArchiveStatus": archiveStatus, "ArchiveError": archiveError, "Dictation": dictationPath(cfg),
-			"PendingSecrets": pendingSecrets, "VaultwardenConfigured": cfg.Secrets != nil})
+			"PendingSecrets": pendingSecrets, "VaultwardenConfigured": secretsEnabled})
 	}
 }
 

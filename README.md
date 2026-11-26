@@ -2383,10 +2383,12 @@ Server:
   subscription (existing rows can no longer be unsealed and the push service rejects the old key),
   so devices must re-enable notifications on `/account`. Subscriptions that return 404 or 410 from
   the push service are removed automatically.
-- `VAULTWARDEN_URL`, `VAULTWARDEN_CLIENT_ID`, `VAULTWARDEN_CLIENT_SECRET` and
-  `VAULTWARDEN_MASTER_PASSWORD`: optional, together; enable password fields on workflow asks that
-  store submitted secrets directly in Vaultwarden without keeping values in Postgres, run events or
-  transcripts. `VAULTWARDEN_URL` is Vaultwarden's HTTPS origin (e.g. `https://vault.example.com`).
+- `VAULTWARDEN_URL`, `VAULTWARDEN_CLIENT_ID`, `VAULTWARDEN_CLIENT_SECRET`,
+  `VAULTWARDEN_MASTER_PASSWORD` and `VAULTWARDEN_ACCOUNT`: optional, together; enable password
+  fields on workflow asks for the single Intelligence username named by `VAULTWARDEN_ACCOUNT`
+  (every other account is refused with 403 and sees no secret fields). Submitted values are stored
+  directly in Vaultwarden without keeping values in Postgres, run events or transcripts.
+  `VAULTWARDEN_URL` is Vaultwarden's HTTPS origin (e.g. `https://vault.example.com`).
   Optional `VAULTWARDEN_ORGANIZATION` (default `AI Agents`) and `VAULTWARDEN_COLLECTION` (default
   `AI Agents Shared Passwords`) select the target organization and collection by name or UUID.
   Unset, secret asks show a clear notice and `POST /api/workflow-runs/{id}/secrets` returns 503

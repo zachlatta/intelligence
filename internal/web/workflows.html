@@ -1103,7 +1103,7 @@ render();
         <span class="meta">Stored directly in Vaultwarden; never saved in run events or transcripts.</span>
       </div>
       {{if not $.VaultwardenConfigured}}
-      <p class="banner" role="alert">Vaultwarden is not configured on this server. Set <code>VAULTWARDEN_URL</code>, <code>VAULTWARDEN_CLIENT_ID</code>, <code>VAULTWARDEN_CLIENT_SECRET</code> and <code>VAULTWARDEN_MASTER_PASSWORD</code> to store secrets.</p>
+      <p class="banner" role="alert">Vaultwarden is not configured on this server. Set <code>VAULTWARDEN_URL</code>, <code>VAULTWARDEN_CLIENT_ID</code>, <code>VAULTWARDEN_CLIENT_SECRET</code>, <code>VAULTWARDEN_MASTER_PASSWORD</code> and <code>VAULTWARDEN_ACCOUNT</code> to store secrets.</p>
       {{end}}
       {{range $.PendingSecrets}}
       <div class="secret-field">

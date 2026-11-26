@@ -39,6 +39,7 @@ type Engine struct {
 	NotifyAccount        string
 	Push                 webpush.Sender
 	Secrets              SecretStore
+	SecretsAccount       string
 	ModelQuotaAlertAfter time.Duration
 }
 
@@ -1399,6 +1400,15 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 					return "", err
 				}
 				return fmt.Sprintf("Not asked: this run is waiting on model quota for %s. Do not ask Zach and do not launch a worker without an eligible suggestion. Poll %s every minute, or end your turn and Intelligence will resume this run automatically when an eligible model returns.", token, suggestPollCommand(r.ID, token, exclude)), nil
+			}
+		}
+		if len(m.Secrets) > 0 && e.Secrets != nil {
+			allowed, err := e.secretsAllowedForAccount(ctx, tx, r.Account)
+			if err != nil {
+				return "", err
+			}
+			if !allowed {
+				return "", forbidden("Vaultwarden secret storage is not enabled for this account")
 			}
 		}
 		var askEventID int64
