@@ -68,6 +68,9 @@ type Config struct {
 	// Unset turns Web Push off cleanly. PushHTTP overrides the HTTP client used to post pushes (tests).
 	VAPID    *webpush.VAPID
 	PushHTTP *http.Client
+	// Secrets stores secret values submitted on workflow asks directly in Vaultwarden.
+	// Nil disables secret submission cleanly (returns 503 without persisting values).
+	Secrets workflow.SecretStore
 }
 
 type app struct {
@@ -139,6 +142,7 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	}
 	a.wf.Notify = cfg.HostAlerts
 	a.wf.NotifyAccount = cfg.PDWAccount
+	a.wf.Secrets = cfg.Secrets
 	if cfg.QueueLimits != nil {
 		a.wf.Limits = *cfg.QueueLimits
 	}
@@ -307,6 +311,7 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	mux.HandleFunc("POST /api/workflow-api/runs/{id}/start", a.workflowAPIWrite(a.apiStartQueuedRun))
 	mux.HandleFunc("POST /api/workflow-runs", a.write(a.startRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/reply", a.write(a.replyToRun))
+	mux.HandleFunc("POST /api/workflow-runs/{id}/secrets", a.write(a.submitRunSecrets))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/input", a.write(a.addRunInput))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/cancel", a.write(a.cancelRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/start", a.write(a.startQueuedRun))

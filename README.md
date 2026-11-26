@@ -109,7 +109,9 @@ The hierarchy is hosts > workspaces > agents:
   times; account-isolated by RLS), `workflow_runs` (including `api_key_id`, `idempotency_key` and
   `idempotency_hash` for API-triggered runs) and
   `workflow_run_events` (what happened in each run, in order, including `api_key_id` when an API key
-  acted), with the views
+  acted), `workflow_run_secret_requests` (non-secret metadata for secrets requested on an `ask`:
+  item name, purpose, target Vaultwarden collection, status, and the stored Vaultwarden item ID and
+  who/when — secret values are never stored in Postgres), with the views
   `workflow_run_step_visits` (each time a run was on a step, from its moves) and
   `workflow_run_step_times` (each step's visits and time spent, the current one to now): Workflows, below.
 - `gmail_connections` (the account's Gmail mailbox: its address, the account holder's own
@@ -866,9 +868,15 @@ version it started with. A run:
      step's instructions (after the last step, the run is finished).
    - `back --run <id> <step id> --why "..."`: back to an earlier step, with what is missing.
    - `skip --run <id> --why "..."`, `done --run <id>` and `fail --run <id> --why "..."`.
-   - `ask --run <id> --note note.md`: the run waits, showing Zach the note (Markdown) on its page.
-     His reply (typed or dictated there) goes to the orchestrator as a message, which decides what
-     it means and moves on.
+   - `ask --run <id> --note note.md [--secret "<name>[: <purpose>]"]...`: the run waits, showing
+     Zach the note (Markdown) on its page. His reply (typed or dictated there) goes to the
+     orchestrator as a message, which decides what it means and moves on. Repeating `--secret`
+     (either `"Name: Purpose"` or a JSON object `{"name","purpose","username"}`) adds a password
+     field (`type="password"`, `autocomplete="off"`) on the ask card; submitting posts JSON to
+     `POST /api/workflow-runs/{id}/secrets`, writes the value directly to Vaultwarden's shared
+     agent collection, records only the non-secret item reference in `workflow_run_secret_requests`
+     and `workflow_run_events`, and resumes the orchestrator with `vaultwarden-agent get password <id>`
+     instructions (never the secret value).
 
 Workflow prompts tell orchestrators to pass credentials by environment variable name or a
 0600 file path on the worker's host, never by value. Intelligence does not issue PDW credentials.
@@ -2089,7 +2097,14 @@ origin (another site's request is refused with 403), and those with a body must 
   has no active orchestrator). Requires a same-origin browser session.
 - `POST /api/workflow-runs/{id}/reply` with `{"text", "approve"?}`: answers the note the run waits on (204;
   409 when it waits on none). `"approve": true` is valid only on a sign-off step and also records a
-  `signoff_approved` event (empty text becomes “Approved”). `POST /api/workflow-runs/{id}/cancel` with `{}`: ends the run and
+  `signoff_approved` event (empty text becomes “Approved”).
+- `POST /api/workflow-runs/{id}/secrets` with `{"secrets": [{"id", "value"}], "text"?, "approve"?}`:
+  same-origin browser session only (`Cache-Control: no-store`). Stores each submitted secret value
+  directly in Vaultwarden, records only non-secret item references in `workflow_run_secret_requests`
+  and `workflow_run_events`, and resumes the orchestrator with Vaultwarden fetch commands (never the
+  value). Returns 503 when Vaultwarden is not configured, 502 on an upstream Vaultwarden error, and
+  400 if a secret value is also pasted into `text`.
+- `POST /api/workflow-runs/{id}/cancel` with `{}`: ends the run and
   stops its orchestrator (204).
 - `POST /api/workflow-runs/{id}/moves` with `{"move", "directory", "step", "summary", "why",
   "note", "deliverable", "into"}` and `Authorization: Bearer <the run's host's key>`: `intelligence workflow`. Answers
@@ -2368,6 +2383,14 @@ Server:
   subscription (existing rows can no longer be unsealed and the push service rejects the old key),
   so devices must re-enable notifications on `/account`. Subscriptions that return 404 or 410 from
   the push service are removed automatically.
+- `VAULTWARDEN_URL`, `VAULTWARDEN_CLIENT_ID`, `VAULTWARDEN_CLIENT_SECRET` and
+  `VAULTWARDEN_MASTER_PASSWORD`: optional, together; enable password fields on workflow asks that
+  store submitted secrets directly in Vaultwarden without keeping values in Postgres, run events or
+  transcripts. `VAULTWARDEN_URL` is Vaultwarden's HTTPS origin (e.g. `https://vault.example.com`).
+  Optional `VAULTWARDEN_ORGANIZATION` (default `AI Agents`) and `VAULTWARDEN_COLLECTION` (default
+  `AI Agents Shared Passwords`) select the target organization and collection by name or UUID.
+  Unset, secret asks show a clear notice and `POST /api/workflow-runs/{id}/secrets` returns 503
+  without persisting any value.
 - `WORKFLOW_QUEUE_CPU_PCT`, `WORKFLOW_QUEUE_MEM_PCT`, `WORKFLOW_QUEUE_MEM_PEAK_PCT`,
   `WORKFLOW_QUEUE_LOAD_PER_CPU`: optional; when a host is near capacity, so a new workflow run
   queues (The run queue, above). Defaults 85, 80, 95 and 1.5; `0` or `off` turns one off.

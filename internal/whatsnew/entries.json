@@ -1,5 +1,13 @@
 [
   {
+    "id": "workflow-secret-asks",
+    "released": "2026-11-26",
+    "title": "Password fields on workflow asks stored directly in Vaultwarden",
+    "summary": "When a workflow run needs a password, API key or token from you, the orchestrator can now declare requested secrets on its ask (--secret). The run page shows a masked password input (with Show/Hide) for each secret and stores submitted values directly in Vaultwarden's shared agent collection. Only non-secret item references are recorded in Postgres, run events and the orchestrator's resumed message; secret values never enter events or transcripts.",
+    "media": "workflow-secret-asks.png",
+    "mediaAlt": "A waiting workflow run's ask card in a local demo showing Requested secrets stored in Vaultwarden (AI Agents Shared Passwords), with masked password fields for Stripe API key and Stripe webhook signing secret, Show buttons, and Store secrets & reply."
+  },
+  {
     "id": "workflow-project-map",
     "released": "2026-11-26",
     "title": "Deterministic key-to-repository routing for workflows",

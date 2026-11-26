@@ -38,6 +38,7 @@ type Engine struct {
 	Notify               hostwatch.Notifier
 	NotifyAccount        string
 	Push                 webpush.Sender
+	Secrets              SecretStore
 	ModelQuotaAlertAfter time.Duration
 }
 
@@ -1043,8 +1044,9 @@ type Move struct {
 	WaitingOn string `json:"waitingOn,omitempty"`
 	ETA       string `json:"eta,omitempty"` // status: RFC3339 estimated completion, "" for unknown
 	// claim: what the run will change or publish; steer: optionally, what the two runs share
-	Deliverable string `json:"deliverable,omitempty"`
-	Into        string `json:"into,omitempty"` // steer: the live run on the same deliverable
+	Deliverable string          `json:"deliverable,omitempty"`
+	Into        string          `json:"into,omitempty"`    // steer: the live run on the same deliverable
+	Secrets     []SecretRequest `json:"secrets,omitempty"` // ask: secrets requested from Zach (stored in Vaultwarden)
 }
 
 // MoveRun makes m on run, for host (whose key the caller checked): the run must be on host. It
@@ -1055,6 +1057,11 @@ func (e *Engine) MoveRun(ctx context.Context, host, runID string, m Move) (strin
 		if err := agenttext.Validate(text); err != nil {
 			return "", bad("%s", err)
 		}
+	}
+	if secrets, serr := validateSecretRequests(m.Move, m.Secrets); serr != nil {
+		return "", serr
+	} else {
+		m.Secrets = secrets
 	}
 	if !uuidRe.MatchString(runID) {
 		return "", ErrNotFound
@@ -1394,7 +1401,15 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 				return fmt.Sprintf("Not asked: this run is waiting on model quota for %s. Do not ask Zach and do not launch a worker without an eligible suggestion. Poll %s every minute, or end your turn and Intelligence will resume this run automatically when an eligible model returns.", token, suggestPollCommand(r.ID, token, exclude)), nil
 			}
 		}
-		if err := e.event(ctx, tx, r, "ask", ptr(r.Step), nil, m.Note); err != nil {
+		var askEventID int64
+		if err := tx.QueryRow(ctx, `INSERT INTO workflow_run_events (run_id, account_id, at, kind, step, to_step, text)
+			VALUES ($1, $2, $3, 'ask', $4, NULL, $5) RETURNING id`, r.ID, r.Account, e.Now(), ptr(r.Step), m.Note).Scan(&askEventID); err != nil {
+			return "", err
+		}
+		if _, err := tx.Exec(ctx, fleet.NotifySQL, fleet.WorkflowRunTopic(r.ID)); err != nil {
+			return "", err
+		}
+		if err := e.insertSecretRequests(ctx, tx, r, askEventID, m.Secrets); err != nil {
 			return "", err
 		}
 		return "Asked Zach. End your turn now: his reply comes as your next message.", set(Waiting, r.Step, m.Note)
@@ -1552,6 +1567,9 @@ func (e *Engine) replyTx(ctx context.Context, tx pgx.Tx, account int64, runID, t
 		if err := e.event(ctx, tx, r, "signoff_approved", ptr(r.Step), nil, text); err != nil {
 			return err
 		}
+	}
+	if err := e.dismissPendingSecrets(ctx, tx, r.ID); err != nil {
+		return err
 	}
 	if _, err = tx.Exec(ctx, "UPDATE workflow_runs SET status = $2, note = '', updated_at = $3 WHERE id = $1", r.ID, Running, e.Now()); err != nil {
 		return err

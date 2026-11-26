@@ -30,7 +30,8 @@ The agents of a workflow run move it with these, on the run's host:
   next      --run <id> [--summary <text>]  this step is done; prints the next step (after the last, finishes the run)
   back      --run <id> <step id> --why <text>
   skip      --run <id> --why <text>
-  ask       --run <id> --note <file>|-     ask Zach (Markdown); his reply comes as your next message
+  ask       --run <id> --note <file>|- [--secret "<name>[: <purpose>]"]...
+                                       ask Zach (Markdown); --secret shows a password field stored in Vaultwarden, never in events/transcripts
   done      --run <id> [--summary <text>]  finish the run now
   fail      --run <id> --why <text>
   suggest   --run <id> <group_token> [--exclude <provider/model>]  record a fresh suggestion without moving
@@ -209,6 +210,8 @@ func parseCLI(args []string, stdin io.Reader) (Move, string, error) {
 	fs.StringVar(&m.Exclude, "exclude", "", "comma-separated provider/model routes to skip")
 	fs.StringVar(&m.Into, "into", "", "steer: the live run on the same deliverable")
 	fs.StringVar(&m.Deliverable, "deliverable", "", "steer: what the two runs share")
+	var secretFlags secretFlagSlice
+	fs.Var(&secretFlags, "secret", "ask: request a secret (\"Name: Purpose\" or JSON); repeatable")
 	note := fs.String("note", "", "")
 	var pos []string
 	rest := args[1:]
@@ -266,10 +269,33 @@ func parseCLI(args []string, stdin io.Reader) (Move, string, error) {
 	default:
 		err = fmt.Errorf("unknown move %q", m.Move)
 	}
+	if err == nil && len(secretFlags) > 0 {
+		m.Secrets = make([]SecretRequest, 0, len(secretFlags))
+		for _, raw := range secretFlags {
+			sr, serr := parseSecretFlag(raw)
+			if serr != nil {
+				err = serr
+				break
+			}
+			m.Secrets = append(m.Secrets, sr)
+		}
+		if err == nil {
+			m.Secrets, err = validateSecretRequests(m.Move, m.Secrets)
+		}
+	}
 	if err == nil && len(pos) > 0 && m.Move != "project" && m.Move != "back" && m.Move != "suggest" && m.Move != "claim" {
 		err = fmt.Errorf("%s takes no argument %q", m.Move, pos[0])
 	}
 	return m, *run, err
+}
+
+type secretFlagSlice []string
+
+func (s *secretFlagSlice) String() string { return strings.Join(*s, ", ") }
+
+func (s *secretFlagSlice) Set(v string) error {
+	*s = append(*s, v)
+	return nil
 }
 
 // hostConfig is the server and this host's key, as the host client has them: HOST_SERVER and

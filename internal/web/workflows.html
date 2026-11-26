@@ -91,6 +91,16 @@
   .composer .composer-help { display: flex; flex-wrap: wrap; gap: .3rem 1rem; margin: 0; padding: 0 1rem .65rem; font-size: 12px; color: var(--muted); }
   .composer .banner { margin: .5rem 1rem; }
   .composer #task-status:empty { display: none; }
+  .secret-box { margin: .9rem 0 .8rem; padding: .85rem 1rem; border: 1px solid var(--orange-line); border-radius: var(--radius-lg); background: var(--panel); }
+  .secret-box-head { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; margin-bottom: .65rem; }
+  .secret-box-head h3 { margin: 0; font-size: .9rem; }
+  .secret-field { margin-top: .7rem; }
+  .secret-field:first-of-type { margin-top: 0; }
+  .secret-field label { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: 0 0 .25rem; font-weight: 600; font-size: 13px; }
+  .secret-field .secret-purpose { margin: 0 0 .35rem; font-size: 12.5px; color: var(--muted); }
+  .secret-input-row { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+  .secret-input-row input { flex: 1; min-width: 0; font-family: var(--mono); }
+  .secret-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-top: .85rem; }
   @media (max-width: 40rem) {
     .runs-table, .runs-table tbody, .runs-table tr, .runs-table td { display: block; width: auto; }
     .runs-table thead { display: none; }
@@ -1085,9 +1095,39 @@ render();
 {{$cur := index .Run.Steps .Run.Step}}
 <section class="card note"><div class="card-head"><h2>The orchestrator is asking you</h2><span class="meta grow">at {{$cur.Title}}</span></div>
   <div class="card-body"><div class="md" id="note">{{markdown .Run.Note}}</div>
+    {{if $.PendingSecrets}}
+    <div class="secret-box" id="secret-box">
+      <div class="secret-box-head">
+        <h3>Requested {{if eq (len $.PendingSecrets) 1}}secret{{else}}secrets{{end}}</h3>
+        <span class="badge">Vaultwarden{{with (index $.PendingSecrets 0).TargetCollection}} · {{.}}{{end}}</span>
+        <span class="meta">Stored directly in Vaultwarden; never saved in run events or transcripts.</span>
+      </div>
+      {{if not $.VaultwardenConfigured}}
+      <p class="banner" role="alert">Vaultwarden is not configured on this server. Set <code>VAULTWARDEN_URL</code>, <code>VAULTWARDEN_CLIENT_ID</code>, <code>VAULTWARDEN_CLIENT_SECRET</code> and <code>VAULTWARDEN_MASTER_PASSWORD</code> to store secrets.</p>
+      {{end}}
+      {{range $.PendingSecrets}}
+      <div class="secret-field">
+        <label for="secret-{{.ID}}">{{.Name}}{{if .Username}} <span class="meta">(username: <span class="mono">{{.Username}}</span>)</span>{{end}}</label>
+        {{if .Purpose}}<p class="secret-purpose">{{.Purpose}}</p>{{end}}
+        <div class="secret-input-row">
+          <input type="password" id="secret-{{.ID}}" data-secret-id="{{.ID}}" autocomplete="off" spellcheck="false" placeholder="Enter secret value"{{if not $.VaultwardenConfigured}} disabled{{end}}>
+          <button type="button" class="btn sm ghost" data-toggle-secret="secret-{{.ID}}"{{if not $.VaultwardenConfigured}} disabled{{end}}>Show</button>
+        </div>
+      </div>
+      {{end}}
+      <div class="secret-actions">
+        {{if $cur.RequireHumanSignoff}}
+        <button type="button" class="btn primary sm" id="store-secrets-approve" data-secret-approve="true"{{if not $.VaultwardenConfigured}} disabled{{end}}>Store {{if eq (len $.PendingSecrets) 1}}secret{{else}}secrets{{end}} &amp; approve sign-off</button>
+        <button type="button" class="btn sm" id="store-secrets"{{if not $.VaultwardenConfigured}} disabled{{end}}>Store {{if eq (len $.PendingSecrets) 1}}secret{{else}}secrets{{end}} &amp; reply</button>
+        {{else}}
+        <button type="button" class="btn primary sm" id="store-secrets"{{if not $.VaultwardenConfigured}} disabled{{end}}>Store {{if eq (len $.PendingSecrets) 1}}secret{{else}}secrets{{end}} &amp; reply</button>
+        {{end}}
+      </div>
+    </div>
+    {{end}}
     {{if $cur.RequireHumanSignoff}}<p class="hint" style="margin:.6rem 0 0">Explicit browser approval is required to advance past this sign-off step. Plain replies or rejections are sent to the orchestrator without authorizing landing.</p>{{end}}
-    <div class="reply-host" data-submit="#send"{{if $.Dictation}} data-dictation="{{$.Dictation}}"{{end}}><textarea id="reply" placeholder="{{if $cur.RequireHumanSignoff}}Optional note with approval, or type requested changes / rejection and click Send reply.{{else}}Reply in your own words. The orchestrator reads it and decides what to do.{{end}}"></textarea>
-      <div class="side">{{if $cur.RequireHumanSignoff}}<button class="btn primary sm" id="approve-signoff" data-run-action="reply" data-approve="true">Approve sign-off</button><button class="btn sm" id="send" data-run-action="reply" title="⌘/Ctrl Enter (reply without approving)">Send reply</button>{{else}}<button class="btn primary sm" id="send" data-run-action="reply" title="⌘/Ctrl Enter">Send</button>{{end}}{{if $.Dictation}}{{template "dictationbutton"}}{{end}}</div></div>
+    <div class="reply-host" data-submit="#send"{{if $.Dictation}} data-dictation="{{$.Dictation}}"{{end}}><textarea id="reply" placeholder="{{if $.PendingSecrets}}Optional non-secret note (never paste secret values here), or send a plain reply without storing a secret.{{else if $cur.RequireHumanSignoff}}Optional note with approval, or type requested changes / rejection and click Send reply.{{else}}Reply in your own words. The orchestrator reads it and decides what to do.{{end}}"></textarea>
+      <div class="side">{{if $cur.RequireHumanSignoff}}<button class="btn {{if not $.PendingSecrets}}primary {{end}}sm" id="approve-signoff" data-run-action="reply" data-approve="true">Approve sign-off</button><button class="btn sm" id="send" data-run-action="reply" title="⌘/Ctrl Enter (reply without approving)">Send reply</button>{{else}}<button class="btn {{if not $.PendingSecrets}}primary {{end}}sm" id="send" data-run-action="reply" title="⌘/Ctrl Enter">{{if $.PendingSecrets}}Send plain reply{{else}}Send{{end}}</button>{{end}}{{if $.Dictation}}{{template "dictationbutton"}}{{end}}</div></div>
     <div id="reply-attachments"></div>
   </div></section>
 {{else if and (eq .Run.Status "running" "stalled") .Run.Orchestrator}}
@@ -1205,6 +1245,60 @@ function bind() {
   };
   send.onclick = () => submitReply(false);
   if (approveBtn) approveBtn.onclick = () => submitReply(true);
+  (document.querySelectorAll?.("[data-toggle-secret]") || []).forEach((btn) => {
+    btn.onclick = () => {
+      const inp = document.getElementById(btn.dataset.toggleSecret);
+      if (!inp) return;
+      const show = inp.type === "password";
+      inp.type = show ? "text" : "password";
+      btn.textContent = show ? "Hide" : "Show";
+    };
+  });
+  const secretInputs = () => [...(document.querySelectorAll?.("#ask input[data-secret-id]") || [])];
+  const storeBtn = $("#store-secrets"), storeApproveBtn = $("#store-secrets-approve");
+  const submitSecrets = async (approve) => {
+    if (sending) return;
+    const inputs = secretInputs();
+    if (!inputs.length) return;
+    const secrets = [];
+    for (const inp of inputs) {
+      if (!inp.value) {
+        err("Enter a value for every requested secret before storing.");
+        inp.focus();
+        return;
+      }
+      secrets.push({ id: inp.dataset.secretId, value: inp.value });
+    }
+    const raw = reply.value.trim();
+    err("");
+    $("#input-saved").hidden = true;
+    sending = send.disabled = reply.readOnly = true;
+    if (approveBtn) approveBtn.disabled = true;
+    if (storeBtn) storeBtn.disabled = true;
+    if (storeApproveBtn) storeApproveBtn.disabled = true;
+    inputs.forEach((i) => { i.readOnly = true; });
+    replyAttachments?.setDisabled(true);
+    try {
+      const text = raw && replyAttachments ? await replyAttachments.prompt(raw) : raw;
+      const body = approve ? { secrets, text, approve: true } : { secrets, text };
+      await post(`/api/workflow-runs/${run}/secrets`, body);
+      inputs.forEach((i) => { i.value = ""; });
+      reply.value = "";
+      replyAttachments?.clear();
+      await refresh(true);
+    } catch (e) {
+      err(e.message);
+    } finally {
+      sending = send.disabled = reply.readOnly = false;
+      if (approveBtn) approveBtn.disabled = false;
+      if (storeBtn) storeBtn.disabled = false;
+      if (storeApproveBtn) storeApproveBtn.disabled = false;
+      inputs.forEach((i) => { i.readOnly = false; });
+      replyAttachments?.setDisabled(false);
+    }
+  };
+  if (storeBtn) storeBtn.onclick = () => submitSecrets(false);
+  if (storeApproveBtn) storeApproveBtn.onclick = () => submitSecrets(true);
   // dictation into the reply, once for each reply box (a refresh can bring a new one); a replaced
   // box's shortcuts stop acting once it leaves the page
   if (window.dictation && !reply.dataset.dictating) {
@@ -1228,11 +1322,12 @@ async function refresh(all) {
     const reply = $("#ask textarea"), nextReply = next.getElementById("ask")?.querySelector("textarea");
     const listening = reply && reply.classList.contains("listening");
     const hasFiles = Boolean(replyAttachments?.hasFiles());
-    const writing = reply && (reply.value || hasFiles || document.activeElement === reply);
+    const hasSecretInput = [...(document.querySelectorAll?.("#ask input[data-secret-id]") || [])].some((i) => i.value || document.activeElement === i);
+    const writing = hasSecretInput || (reply && (reply.value || hasFiles || document.activeElement === reply));
     const sameAsk = reply && nextReply && reply.id === nextReply.id &&
       ($("#note")?.innerHTML ?? "") === (next.getElementById("note")?.innerHTML ?? "") &&
       ($("#ask .card-head")?.innerHTML ?? "") === (next.querySelector("#ask .card-head")?.innerHTML ?? "");
-    const keep = listening || (sameAsk && !all) || (reply?.id === nextReply?.id && writing && !all);
+    const keep = listening || (hasSecretInput && !all) || (sameAsk && !all) || (reply?.id === nextReply?.id && writing && !all);
     for (const id of ["live", "steps"].concat(keep ? [] : ["ask"])) {
       const n = next.getElementById(id), cur = document.getElementById(id);
       if (n && cur && n.innerHTML !== cur.innerHTML) {

@@ -398,3 +398,35 @@ func TestEmailPollInterval(t *testing.T) {
 		}
 	}
 }
+
+func TestVaultwardenConfig(t *testing.T) {
+	base := map[string]string{"DATABASE_URL": "postgres://app:p@db/app", "READONLY_DATABASE_URL": "postgres://ro:p@db/app"}
+	c, err := serverConfig(env(base))
+	if err != nil || c.Vaultwarden != nil || secretStore(c) != nil {
+		t.Fatalf("off by default: %+v %v", c.Vaultwarden, err)
+	}
+	// Partial config refused.
+	base["VAULTWARDEN_URL"] = "https://vault.example.com"
+	if _, err := serverConfig(env(base)); err == nil {
+		t.Fatal("partial Vaultwarden config accepted")
+	}
+	// Non-HTTPS URL refused.
+	base["VAULTWARDEN_URL"] = "http://vault.example.com"
+	base["VAULTWARDEN_CLIENT_ID"] = "user.demo"
+	base["VAULTWARDEN_CLIENT_SECRET"] = "secret"
+	base["VAULTWARDEN_MASTER_PASSWORD"] = "master"
+	if _, err := serverConfig(env(base)); err == nil {
+		t.Fatal("non-HTTPS Vaultwarden URL accepted")
+	}
+	// Complete config accepted.
+	base["VAULTWARDEN_URL"] = "https://vault.example.com"
+	base["VAULTWARDEN_ORGANIZATION"] = "Custom Org"
+	base["VAULTWARDEN_COLLECTION"] = "Custom Collection"
+	c, err = serverConfig(env(base))
+	if err != nil || c.Vaultwarden == nil || secretStore(c) == nil {
+		t.Fatalf("complete config failed: %+v %v", c.Vaultwarden, err)
+	}
+	if c.Vaultwarden.Organization != "Custom Org" || c.Vaultwarden.Collection != "Custom Collection" {
+		t.Fatalf("unexpected org/collection: %+v", c.Vaultwarden)
+	}
+}

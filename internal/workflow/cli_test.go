@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -163,7 +164,7 @@ func TestTheCLISendsEachMoveWithTheBoxsKey(t *testing.T) {
 			continue
 		}
 		r, m := (*reqs)[len(*reqs)-1], (*moves)[len(*moves)-1]
-		if r.URL.Path != "/api/workflow-runs/r1/moves" || r.Header.Get("Authorization") != "Bearer host-key" || m != c.want {
+		if r.URL.Path != "/api/workflow-runs/r1/moves" || r.Header.Get("Authorization") != "Bearer host-key" || !reflect.DeepEqual(m, c.want) {
 			t.Errorf("%v: sent %s %s %+v, want %+v", c.args, r.URL.Path, r.Header.Get("Authorization"), m, c.want)
 		}
 	}

@@ -68,6 +68,10 @@ func workflowError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, workflow.ErrNotFound):
 		http.Error(w, "no such workflow or run in this account", http.StatusNotFound)
+	case errors.Is(err, workflow.ErrSecretsNotConfigured):
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+	case errors.Is(err, workflow.ErrSecretStoreFailed):
+		http.Error(w, err.Error(), http.StatusBadGateway)
 	case errors.As(err, &ref) && ref.Forbidden:
 		http.Error(w, ref.Msg, http.StatusForbidden)
 	case errors.As(err, &ref) && ref.Conflict:
@@ -205,6 +209,27 @@ func (a *app) replyToRun(v viewer) http.HandlerFunc {
 			return
 		}
 		if err := a.wf.ReplyFromBrowser(r.Context(), v.acct.ID, r.PathValue("id"), req.Text, req.Approve); err != nil {
+			workflowError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// submitRunSecrets: POST /api/workflow-runs/{id}/secrets {"secrets": [{"id","value"}], "text", "approve"}:
+// stores submitted secret values directly in Vaultwarden and resumes the waiting run with only non-secret references.
+func (a *app) submitRunSecrets(v viewer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		var req struct {
+			Secrets []workflow.SecretSubmission `json:"secrets"`
+			Text    string                      `json:"text,omitempty"`
+			Approve bool                        `json:"approve,omitempty"`
+		}
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+		if err := a.wf.SubmitSecretsFromBrowser(r.Context(), v.acct.ID, v.acct.Username, r.PathValue("id"), req.Secrets, req.Text, req.Approve); err != nil {
 			workflowError(w, err)
 			return
 		}
@@ -1083,10 +1108,43 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), 500)
 			return
 		}
+		var pendingSecrets []pendingSecretView
+		if run.Status == workflow.Waiting {
+			pendingSecrets, err = readPendingSecrets(ctx, v.pool, id)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
 		slices.Reverse(emails) // oldest first, as a thread reads
 		renderWorkflows(w, "run", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Run": run, "Steps": stepViews(run, events, visits, cfg.Now()),
-			"Agents": agents, "Before": before, "Events": events, "Emails": emails, "VoiceMemos": voiceMemos, "ArchiveStatus": archiveStatus, "ArchiveError": archiveError, "Dictation": dictationPath(cfg)})
+			"Agents": agents, "Before": before, "Events": events, "Emails": emails, "VoiceMemos": voiceMemos, "ArchiveStatus": archiveStatus, "ArchiveError": archiveError, "Dictation": dictationPath(cfg),
+			"PendingSecrets": pendingSecrets, "VaultwardenConfigured": cfg.Secrets != nil})
 	}
+}
+
+type pendingSecretView struct {
+	ID               string
+	Name             string
+	Purpose          string
+	Username         string
+	TargetCollection string
+}
+
+func readPendingSecrets(ctx context.Context, p *pgxpool.Pool, runID string) ([]pendingSecretView, error) {
+	rows, err := p.Query(ctx, `SELECT id::text, name, purpose, username, target_collection
+		FROM workflow_run_secret_requests
+		WHERE run_id = $1 AND status = 'pending'
+		  AND ask_event_id = (SELECT coalesce(max(id), 0) FROM workflow_run_events WHERE run_id = $1 AND kind = 'ask')
+		ORDER BY position, id`, runID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (pendingSecretView, error) {
+		var s pendingSecretView
+		err := row.Scan(&s.ID, &s.Name, &s.Purpose, &s.Username, &s.TargetCollection)
+		return s, err
+	})
 }
 
 // modelSuggestionLine uses the saved choice, including labels that may have changed since.
@@ -1190,7 +1248,7 @@ func (e runEvent) Line() string {
 		return "Claimed " + e.Text
 	case "steer", "steer_unanswered", "email_continuation_requested", "email_continued", "email_cold_start", "retried", "retry_of":
 		return linkRuns(e.Text)
-	case "error", "stalled", "continuation", "resume", "interrupted", "login_recovery", "worktree_base_fallback":
+	case "error", "stalled", "continuation", "resume", "interrupted", "login_recovery", "worktree_base_fallback", "secret_stored":
 		return e.Text
 	case "start_retry":
 		return "Start failed; retry queued: " + e.Text
