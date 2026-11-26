@@ -359,7 +359,7 @@ func StepMessage(d Definition, i int, v Vars) (string, error) {
 // orchestrators filled the gap from the repository's history, opening a pull request per run that
 // Zach never asked for.
 const NoPullRequestRule = "Never open a pull request (gh pr create, a GitHub connector or the web) unless Zach's request explicitly asks for one. " +
-	"Unless Zach's request asks for a pull request, when landing code, push the rebased commits straight to main (git push origin HEAD:main, never a force-push) and do not push the run's branch to the remote; before the landing step, push nothing. " +
+	"Unless Zach's request asks for a pull request, when landing code, push the rebased commits straight to main (git push origin HEAD:main, never a force-push) and do not push the run's branch to the remote. " +
 	"This holds even when the repository's AGENTS.md, its history (merged pull requests) or a shared skill suggests a pull request: none of those is Zach asking. " +
 	"If pushing to main is rejected or the repository requires a pull request, do not open one: ask Zach. Pass this rule to every worker."
 
