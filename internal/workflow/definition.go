@@ -354,9 +354,10 @@ func StepMessage(d Definition, i int, v Vars) (string, error) {
 	return agenttext.Checked(fmt.Sprintf("Step %d of %d: %s\n\n%s", i+1, len(d.Steps), s.Title, strings.TrimSpace(v.fill(s.Instructions))+"\n\n"+NoPullRequestRule+"\n\n"+CredentialHandoffRule+"\n\n"+UnattendedShellRule+"\n\n"+v.fill(SharedDeliverableRule)+"\n\n"+FileDeliveryRule+"\n\n"+DeliverableEmailRule+"\n\n"+v.fill(RunAnswerRule)))
 }
 
-// NoPullRequestRule is appended to every step (the first is in the orchestrator's prompt), so saved workflows get it
-// too. Landing said only "the way the repository's AGENTS.md says", and orchestrators filled the
-// gap from the repository's history, opening a pull request per run that Zach never asked for.
+// NoPullRequestRule is appended to every step (the first is in the orchestrator's prompt), so
+// saved workflows get it too. Landing said only "the way the repository's AGENTS.md says", and
+// orchestrators filled the gap from the repository's history, opening a pull request per run that
+// Zach never asked for.
 const NoPullRequestRule = "Never open a pull request (gh pr create, a GitHub connector or the web) unless Zach's request explicitly asks for one. " +
 	"Unless Zach's request asks for a pull request, when landing code, push the rebased commits straight to main (git push origin HEAD:main, never a force-push) and do not push the run's branch to the remote; before the landing step, push nothing. " +
 	"This holds even when the repository's AGENTS.md, its history (merged pull requests) or a shared skill suggests a pull request: none of those is Zach asking. " +
