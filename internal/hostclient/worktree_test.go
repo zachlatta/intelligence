@@ -173,3 +173,84 @@ exec "$WORKTREE_TEST_GIT" "$@"
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
+
+func TestReadGitFileEnforcesOriginDefaultBranch(t *testing.T) {
+	dir := t.TempDir()
+	origin := filepath.Join(dir, "origin.git")
+	upstream := filepath.Join(dir, "upstream")
+	checkout := filepath.Join(dir, "checkout")
+	worktreeGit(t, dir, "init", "--bare", "--initial-branch=main", origin)
+	worktreeGit(t, dir, "init", "--initial-branch=main", upstream)
+
+	writeFile := func(repo, rel, body string) {
+		p := filepath.Join(repo, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commitFile := func(repo, msg string) string {
+		worktreeGit(t, repo, "add", "-A")
+		worktreeGit(t, repo, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+			"-c", "commit.gpgSign=false", "commit", "-m", msg)
+		return worktreeGit(t, repo, "rev-parse", "HEAD")
+	}
+
+	const wantOutline = "- Root <!-- id:10000000-0000-4000-8000-000000000001 -->\n  - Alpha <!-- id:10000000-0000-4000-8000-000000000010 -->\n"
+	writeFile(upstream, "outliner/outline.md", wantOutline)
+	mainSHA := commitFile(upstream, "initial main")
+	worktreeGit(t, upstream, "push", origin, "main")
+	worktreeGit(t, dir, "clone", origin, checkout)
+
+	// Push a second commit to origin/main that checkout has not fetched yet; ReadGitFile must fetch and verify it.
+	const wantOutline2 = wantOutline + "    - Leaf <!-- id:10000000-0000-4000-8000-000000000011 -->\n"
+	writeFile(upstream, "outliner/outline.md", wantOutline2)
+	mainSHA2 := commitFile(upstream, "second main")
+	worktreeGit(t, upstream, "push", origin, "main")
+
+	// Create an unmerged commit on a side branch in checkout (never pushed to origin/main).
+	worktreeGit(t, checkout, "checkout", "-b", "spoof-branch")
+	writeFile(checkout, "outliner/outline.md", "- Fake <!-- id:99999999-0000-4000-8000-000000000001 -->\n")
+	spoofSHA := commitFile(checkout, "spoof local branch")
+
+	// Valid main commits succeed and return exact blob contents.
+	for _, tc := range []struct {
+		sha, want string
+	}{
+		{mainSHA, wantOutline},
+		{mainSHA2, wantOutline2},
+	} {
+		got, err := ReadGitFile(t.Context(), ReadGitFileArgs{Directory: checkout, Commit: tc.sha, Path: "outliner/outline.md"})
+		if err != nil {
+			t.Fatalf("ReadGitFile(%s) failed: %v", tc.sha, err)
+		}
+		if got != tc.want {
+			t.Fatalf("ReadGitFile(%s) = %q, want %q", tc.sha, got, tc.want)
+		}
+	}
+
+	// Unmerged local branch commit MUST be refused (not on origin/main).
+	if _, err := ReadGitFile(t.Context(), ReadGitFileArgs{Directory: checkout, Commit: spoofSHA, Path: "outliner/outline.md"}); err == nil || !strings.Contains(err.Error(), "not on") {
+		t.Fatalf("ReadGitFile(off-main) = %v, want 'not on'", err)
+	}
+
+	// Missing file at valid commit MUST be refused.
+	if _, err := ReadGitFile(t.Context(), ReadGitFileArgs{Directory: checkout, Commit: mainSHA2, Path: "outliner/missing.md"}); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("ReadGitFile(missing) = %v, want 'not found'", err)
+	}
+
+	// ParseCommand refuses unsafe arguments.
+	for _, raw := range []string{
+		`{"directory":"relative","commit":"` + mainSHA + `","path":"outliner/outline.md"}`,
+		`{"directory":"/srv/../etc","commit":"` + mainSHA + `","path":"outliner/outline.md"}`,
+		`{"directory":"/srv/repo","commit":"main","path":"outliner/outline.md"}`,
+		`{"directory":"/srv/repo","commit":"` + mainSHA + `","path":"../secret"}`,
+		`{"directory":"/srv/repo","commit":"` + mainSHA + `","path":"HEAD:outliner/outline.md"}`,
+	} {
+		if _, err := ParseCommand(ReadGitFileKind, json.RawMessage(raw)); err == nil {
+			t.Fatalf("ParseCommand accepted unsafe read_git_file args: %s", raw)
+		}
+	}
+}

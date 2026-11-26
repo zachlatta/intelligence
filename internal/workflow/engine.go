@@ -28,6 +28,10 @@ type Engine struct {
 	p   *pgxpool.Pool
 	reg *fleet.Registry
 	Now func() time.Time
+	// Changes wakes synchronous host reads (such as Git outline verification for project.mode="map").
+	Changes *fleet.Changes
+	// ReadGitFile, when set (tests), overrides dispatching read_git_file through the host stream.
+	ReadGitFile func(ctx context.Context, host, dir, commit, filePath string) (string, error)
 	// Limits are when a host is too busy to start another run: a new run queues (queue.go).
 	Limits Limits
 	// Notify, when set, sends phone notifications through PDW for runs belonging to NotifyAccount:
@@ -458,13 +462,173 @@ func (e *Engine) event(ctx context.Context, tx pgx.Tx, r run, kind string, step,
 
 func ptr(i int) *int { return &i }
 
+type verifiedTreeKey struct{}
+
+type verifiedTreeData struct {
+	host    string
+	dir     string
+	path    string
+	commit  string
+	content string
+}
+
+func withVerifiedTree(ctx context.Context, vt *verifiedTreeData) context.Context {
+	if vt == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, verifiedTreeKey{}, vt)
+}
+
+func verifiedTreeFrom(ctx context.Context) *verifiedTreeData {
+	vt, _ := ctx.Value(verifiedTreeKey{}).(*verifiedTreeData)
+	return vt
+}
+
+const gitTreeReadTimeout = 15 * time.Second
+
+// prepareVerifiedTree fetches the authoritative Git outline file from the workflow's host before
+// opening the run-creation transaction so no database locks are held during the host round-trip.
+// It returns a Refusal (400) if the workflow uses project.treeSource and the input's commit/tree
+// cannot be verified against Git on origin's default branch.
+func (e *Engine) prepareVerifiedTree(ctx context.Context, account int64, workflowID, input, chosen string) (context.Context, error) {
+	if !uuidRe.MatchString(workflowID) {
+		return ctx, nil // let startRunTx return ErrNotFound
+	}
+	if chosen != "" && !hostclient.ValidName(chosen) {
+		return ctx, bad("%q is not a host's name", chosen)
+	}
+	var defBytes []byte
+	err := e.p.QueryRow(ctx, `SELECT v.definition FROM workflows w JOIN workflow_versions v ON v.workflow_id = w.id AND v.version = w.version
+		WHERE w.id = $1 AND w.account_id = $2 AND w.deleted_at IS NULL`, workflowID, account).Scan(&defBytes)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ctx, nil // let startRunTx return ErrNotFound
+	}
+	if err != nil {
+		return ctx, err
+	}
+	var d Definition
+	if err := json.Unmarshal(defBytes, &d); err != nil {
+		return ctx, err
+	}
+	d = d.normalized()
+	if d.Project.Mode != ProjectMap || d.Project.TreeSource == nil {
+		return ctx, nil
+	}
+	// Fast local validation before touching the host.
+	hdr, err := parseRoutingHeader(input)
+	if err != nil {
+		return ctx, err
+	}
+	if !hdr.hasTree || len(hdr.tree) == 0 {
+		return ctx, bad("mapped workflow with treeSource requires contract_tree in leading YAML frontmatter")
+	}
+	if !gitCommitSHARe.MatchString(hdr.commitSHA) {
+		return ctx, bad("mapped workflow with treeSource requires a 40-character hex outline_commit_sha in leading YAML frontmatter")
+	}
+	host := d.Host
+	if chosen != "" && chosen != d.Host {
+		host = chosen
+	}
+	if host == "" {
+		return ctx, bad("this workflow does not say which host it runs on: pick one in its editor, and save")
+	}
+	var owns bool
+	if err := e.p.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM host_keys WHERE host = $1 AND account_id = $2)", host, account).Scan(&owns); err != nil {
+		return ctx, err
+	}
+	if !owns {
+		return ctx, bad("host %s is not one of this account's hosts", host)
+	}
+	var hasRepo bool
+	if err := e.p.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM host_repositories WHERE host = $1 AND directory = $2)", host, d.Project.TreeSource.Directory).Scan(&hasRepo); err != nil {
+		return ctx, err
+	}
+	if !hasRepo {
+		return ctx, bad("treeSource repository %s is not reported on host %s", d.Project.TreeSource.Directory, host)
+	}
+	content, err := e.fetchGitFileFromHost(ctx, host, d.Project.TreeSource.Directory, hdr.commitSHA, d.Project.TreeSource.Path)
+	if err != nil {
+		return ctx, bad("could not verify contract_tree against Git (%s@%s): %s", d.Project.TreeSource.Path, hdr.commitSHA, err)
+	}
+	return withVerifiedTree(ctx, &verifiedTreeData{
+		host:    host,
+		dir:     d.Project.TreeSource.Directory,
+		path:    d.Project.TreeSource.Path,
+		commit:  hdr.commitSHA,
+		content: content,
+	}), nil
+}
+
+func (e *Engine) fetchGitFileFromHost(ctx context.Context, host, dir, commit, filePath string) (string, error) {
+	if e.ReadGitFile != nil {
+		return e.ReadGitFile(ctx, host, dir, commit, filePath)
+	}
+	args, err := json.Marshal(hostclient.ReadGitFileArgs{
+		Directory: dir,
+		Commit:    commit,
+		Path:      filePath,
+	})
+	if err != nil {
+		return "", err
+	}
+	cmd, err := e.reg.Enqueue(ctx, host, hostclient.ReadGitFileKind, args, 30*time.Second, e.Now())
+	if err != nil {
+		if errors.Is(err, fleet.ErrUnknownHost) {
+			return "", fmt.Errorf("host %s has not reported yet", host)
+		}
+		return "", err
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, gitTreeReadTimeout)
+	defer cancel()
+
+	var changed <-chan struct{}
+	if e.Changes != nil {
+		var stop func()
+		changed, stop = e.Changes.Subscribe(fleet.CommandTopic(cmd.ID))
+		defer stop()
+	}
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		cur, err := e.reg.Command(ctx, cmd.ID)
+		if err != nil {
+			return "", err
+		}
+		if cur.Finished() {
+			if cur.Status != hostclient.CommandSucceeded {
+				msg := strings.TrimSpace(cur.Error)
+				if msg == "" {
+					msg = cur.Status
+				}
+				return "", errors.New(msg)
+			}
+			var res hostclient.CommandResult
+			if err := json.Unmarshal(cur.Result, &res); err != nil {
+				return "", fmt.Errorf("invalid host result: %w", err)
+			}
+			return res.Content, nil
+		}
+		select {
+		case <-waitCtx.Done():
+			return "", fmt.Errorf("timed out waiting for host %s to read Git outline", host)
+		case <-changed:
+		case <-ticker.C:
+		}
+	}
+}
+
 // StartRun starts account's workflow with input on host, one of the account's ("": the host its
 // definition names), and returns the run's id. A matched project starts its finder agent; a fixed
-// one, the orchestrator.
+// or mapped one, the orchestrator.
 func (e *Engine) StartRun(ctx context.Context, account int64, workflowID, input, host string) (string, error) {
+	ctx, err := e.prepareVerifiedTree(ctx, account, workflowID, input, host)
+	if err != nil {
+		return "", err
+	}
 	ctx, flushPushes := e.CollectPushes(ctx)
 	var id string
-	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
+	err = pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
 		var err error
 		id, err = e.startRunTx(ctx, tx, account, workflowID, input, host, time.Time{})
 		return err
@@ -546,7 +710,23 @@ func (e *Engine) startRunTx(ctx context.Context, tx pgx.Tx, account int64, workf
 			selected = true
 			repo = d.Project.Directory
 		case ProjectMap:
-			route, err := ResolveProjectRoute(d.Project.Routes, input)
+			var verifiedOutline, verifiedCommit string
+			if d.Project.TreeSource != nil {
+				var hasTreeRepo bool
+				if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM host_repositories WHERE host = $1 AND directory = $2)", host, d.Project.TreeSource.Directory).Scan(&hasTreeRepo); err != nil {
+					return err
+				}
+				if !hasTreeRepo {
+					return bad("treeSource repository %s is not reported on host %s", d.Project.TreeSource.Directory, host)
+				}
+				vt := verifiedTreeFrom(ctx)
+				if vt == nil || vt.host != host || vt.dir != d.Project.TreeSource.Directory || vt.path != d.Project.TreeSource.Path {
+					return bad("verified Git outline is required for mapped workflow treeSource")
+				}
+				verifiedOutline = vt.content
+				verifiedCommit = vt.commit
+			}
+			route, err := ResolveProjectRoute(d.Project.Routes, d.Project.TreeSource, input, verifiedOutline, verifiedCommit)
 			if err != nil {
 				return err
 			}

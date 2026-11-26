@@ -746,12 +746,18 @@ version it started with. A run:
    (its workspaces' `project_root`s) and answers with `intelligence workflow project --run <id>
    <directory>|none`. A definition can instead name one repository (`"mode": "fixed"`) or map
    structured input keys deterministically (`"mode": "map"` with `"routes": [{"keys": [...],
-   "directory": "...", "slug": "..."}]`). Mapped projects parse leading YAML frontmatter
-   (`contract_ids` with optional `contract_ancestors`, or `keys` with optional `key_ancestors`),
-   walk each key's ancestor chain most-specific-first, verify the resolved directory is reported in
-   `host_repositories`, and fail closed (HTTP 400 before creating a run) if a key is unmapped, a
-   batch spans multiple repositories, an ancestor chain is inconsistent, or the input attempts to
-   supply a repository or directory field directly.
+   "directory": "...", "slug": "..."}]` and optional `"treeSource": {"directory": "...", "path":
+   "..."}`). Mapped projects parse leading YAML frontmatter (closing `---` at column 0; normalized
+   keys) and fail closed (HTTP 400 before creating a run) on unmapped keys, multi-repository
+   batches, unverified ancestor chains, unreported `host_repositories`, or caller-supplied
+   repository/directory fields. Without `treeSource`, only direct exact keys in `contract_ids` or
+   `keys` match `routes` (no caller-supplied hierarchy is trusted). With `treeSource`, the input
+   must supply `contract_tree` and a 40-hex `outline_commit_sha`; Intelligence dispatches a
+   read-only `read_git_file` host command that fetches `origin`'s default branch in
+   `treeSource.directory`, verifies `outline_commit_sha` is an ancestor of that remote default
+   branch, reads `treeSource.path` from Git's object database, and verifies every node and
+   parent-child edge in `contract_tree` against that Git outline before walking the verified tree
+   most-specific-first against `routes`.
    Matching chooses by the requested work product: one-off reports, analyses, decks, emails and
    research go to `desk` when it is available, even when their data comes from a warehouse.
    Code changes and investigations of a repository's behavior go to that repository. An explicit

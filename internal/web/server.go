@@ -128,6 +128,7 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	context.AfterFunc(cfg.Context, roles.Close)
 	store := accounts.New(cfg.DB, roles)
 	a := &app{cfg: cfg, routes: http.NewServeMux(), store: store, reg: reg, changes: changes, wf: workflow.NewEngine(cfg.DB, cfg.Now)}
+	a.wf.Changes = changes
 	if cfg.VAPID != nil {
 		a.push = &webpush.Store{
 			DB:     cfg.DB,

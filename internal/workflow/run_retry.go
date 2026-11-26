@@ -24,6 +24,18 @@ func (e *Engine) RetryRun(ctx context.Context, account int64, runID string) (str
 	if !uuidRe.MatchString(runID) {
 		return "", ErrNotFound
 	}
+	var preWF, preInput, preHost string
+	var preHostChosen bool
+	if err := e.p.QueryRow(ctx, `SELECT workflow_id::text, input, host, host_chosen FROM workflow_runs WHERE id = $1 AND account_id = $2`, runID, account).Scan(&preWF, &preInput, &preHost, &preHostChosen); err == nil {
+		chosen := ""
+		if preHostChosen {
+			chosen = preHost
+		}
+		ctx, err = e.prepareVerifiedTree(ctx, account, preWF, preInput, chosen)
+		if err != nil {
+			return "", err
+		}
+	}
 	ctx, flushPushes := e.CollectPushes(ctx)
 	var newID string
 	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {

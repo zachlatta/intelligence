@@ -508,7 +508,7 @@ function fixedCards() {
       ` Runs on <b class="mono">${esc(d.host || "no host yet")}</b>. Priority: <b>${esc(d.priority || ("automatic (" + ((d.trigger === "email" || d.trigger === "voice_memo") ? "immediate" : "normal") + ")"))}</b>.`) +
     `<div class="link"></div>` +
     card("__project", "Before the orchestrator", "Find the project", p.mode === "fixed" ? `Always ${esc(allRepos.find((r) => r.directory === p.directory)?.project || "")} <span class="mono">${esc(p.directory)}</span>.` :
-      p.mode === "map" ? `Mapped from input keys (${(p.routes || []).length} ${(p.routes || []).length === 1 ? "route" : "routes"}). Fails closed on unmapped or mixed keys.` :
+      p.mode === "map" ? `Mapped from input keys (${(p.routes || []).length} ${(p.routes || []).length === 1 ? "route" : "routes"}${p.treeSource?.directory ? " · Git-verified tree" : ""}). Fails closed on unmapped or mixed keys.` :
       `An agent (${esc(p.provider)}${p.model ? " · " + esc(p.model) : ""}) picks one of the host's repositories, or none. Then the worktree is made.`) +
     `<div class="link"></div>` +
     card("__orch", "In the worktree", "Orchestrator", `${esc(o.provider)}${o.model ? " · " + esc(o.model) : ""}${o.thinking ? " · " + esc(o.thinking) : ""}${o.serviceTier ? " · " + esc(o.serviceTier) : ""}. ` +
@@ -541,9 +541,10 @@ function repoPicker(p) {
     <p class="hint">The repositories ${esc(def().host)} reported. Each run makes a worktree of it there.</p>`;
 }
 
-// projectRoutesPanel edits project.routes for mode: "map" (deterministic key -> repository routing).
+// projectRoutesPanel edits project.routes and optional Git treeSource for mode: "map".
 function projectRoutesPanel(p) {
   const routes = Array.isArray(p.routes) ? p.routes : [];
+  const ts = p.treeSource || {};
   const hostRepos = allRepos.filter((r) => r.hosts.includes(def().host));
   const dl = `<datalist id="host-repos-list">${hostRepos.map((r) => `<option value="${esc(r.directory)}">${esc(repoLabel(r))}</option>`).join("")}</datalist>`;
   const rows = routes.map((rt, i) => `<div style="border:1px solid var(--line);border-radius:var(--radius);padding:.6rem .7rem;margin-top:.55rem;background:var(--bg-subtle)" data-route-card="${i}">
@@ -559,9 +560,18 @@ function projectRoutesPanel(p) {
       <label>Keys (comma or newline separated)</label>
       <textarea class="mono" data-route-i="${i}" data-route-f="keys" style="min-height:4rem;font-size:12px" placeholder="key-uuid-1, key-uuid-2">${esc((rt.keys || []).join(", "))}</textarea>
     </div>`).join("");
+  const treeBox = `<div style="border:1px solid var(--line);border-radius:var(--radius);padding:.6rem .7rem;margin-top:.7rem;background:var(--bg-subtle)" id="tree-source-box">
+      <b style="font-size:12.5px">Git tree verification (optional)</b>
+      <label style="margin-top:.35rem">Outline repository directory on host</label>
+      <input class="mono" data-ts="directory" value="${esc(ts.directory || "")}" placeholder="/path/to/demo-contracts" list="host-repos-list">
+      <label>Outline file path (repo-relative)</label>
+      <input class="mono" data-ts="path" value="${esc(ts.path || "")}" placeholder="outliner/outline.md">
+      <p class="hint">When set, runs must include <code>contract_tree</code> and <code>outline_commit_sha</code>; Intelligence reads this file from Git on origin's default branch via the host and verifies every node and parent link before routing. When unset, only direct keys in <code>routes</code> match (no hierarchy is trusted).</p>
+    </div>`;
   return `${dl}${rows || `<p class="hint">No routes yet. Add at least one route below.</p>`}
     <div style="margin-top:.6rem"><button type="button" class="btn sm" id="add-project-route">+ Add route</button></div>
-    <p class="hint">Reads leading YAML frontmatter (<code>contract_ids</code> + <code>contract_ancestors</code>, or <code>keys</code> + <code>key_ancestors</code>) most-specific-first. Refuses unmapped keys, multi-repository batches, and caller-supplied repository fields (HTTP 400) before starting any agent.</p>`;
+    ${treeBox}
+    <p class="hint">Refuses unmapped keys, multi-repository batches, unverified ancestor chains, and caller-supplied repository fields (HTTP 400) before creating a run.</p>`;
 }
 
 // --- email triggers: the filter (as workflow.EmailFilter), and a preview against recent email ---
@@ -860,7 +870,7 @@ function bind() {
           delete p.directory; delete p.provider; delete p.model; delete p.thinking; delete p.serviceTier; delete p.instructions;
           if (!Array.isArray(p.routes) || !p.routes.length) p.routes = [{ slug: "", directory: "", keys: [] }];
         } else {
-          delete p.routes;
+          delete p.routes; delete p.treeSource;
           if (el.value === "fixed") {
             delete p.provider; delete p.model; delete p.thinking; delete p.serviceTier; delete p.instructions;
           } else {
@@ -925,8 +935,21 @@ function bind() {
     markDirty(false);
     const card = $(`#pipe .node[data-id="__project"] .nb`);
     if (card) {
-      const n = (def().project.routes || []).length;
-      card.textContent = `Mapped from input keys (${n} ${n === 1 ? "route" : "routes"}). Fails closed on unmapped or mixed keys.`;
+      const p = def().project, n = (p.routes || []).length;
+      card.textContent = `Mapped from input keys (${n} ${n === 1 ? "route" : "routes"}${p.treeSource?.directory ? " · Git-verified tree" : ""}). Fails closed on unmapped or mixed keys.`;
+    }
+  }));
+  $$("#inspector [data-ts]").forEach((el) => el.addEventListener("input", () => {
+    const p = def().project;
+    const dir = $("#inspector [data-ts='directory']")?.value.trim() || "";
+    const rel = $("#inspector [data-ts='path']")?.value.trim() || "";
+    if (!dir && !rel) delete p.treeSource;
+    else p.treeSource = { directory: dir, path: rel };
+    markDirty(false);
+    const card = $(`#pipe .node[data-id="__project"] .nb`);
+    if (card) {
+      const n = (p.routes || []).length;
+      card.textContent = `Mapped from input keys (${n} ${n === 1 ? "route" : "routes"}${p.treeSource?.directory ? " · Git-verified tree" : ""}). Fails closed on unmapped or mixed keys.`;
     }
   }));
   $$("#inspector [data-e]").forEach((el) => el.addEventListener(el.type === "checkbox" || el.tagName === "SELECT" ? "change" : "input", () => {

@@ -39,14 +39,24 @@ type Definition struct {
 // agent picks one of the host's repositories (match), it is always Directory (fixed), or it is
 // resolved deterministically from structured input keys using reviewed Routes (map).
 type Project struct {
-	Mode         string         `json:"mode"`
-	Directory    string         `json:"directory,omitempty"` // fixed: the repository's main checkout on the host
-	Routes       []ProjectRoute `json:"routes,omitempty"`    // map: reviewed key -> repository directory mappings
-	Provider     string         `json:"provider,omitempty"`  // match: the finder agent
-	Model        string         `json:"model,omitempty"`
-	Thinking     string         `json:"thinking,omitempty"`
-	ServiceTier  string         `json:"serviceTier,omitempty"` // codex speed, as for the orchestrator
-	Instructions string         `json:"instructions,omitempty"`
+	Mode         string             `json:"mode"`
+	Directory    string             `json:"directory,omitempty"`  // fixed: the repository's main checkout on the host
+	Routes       []ProjectRoute     `json:"routes,omitempty"`     // map: reviewed key -> repository directory mappings
+	TreeSource   *ProjectTreeSource `json:"treeSource,omitempty"` // map: optional Git file on host that verifies caller-supplied contract_tree
+	Provider     string             `json:"provider,omitempty"`   // match: the finder agent
+	Model        string             `json:"model,omitempty"`
+	Thinking     string             `json:"thinking,omitempty"`
+	ServiceTier  string             `json:"serviceTier,omitempty"` // codex speed, as for the orchestrator
+	Instructions string             `json:"instructions,omitempty"`
+}
+
+// ProjectTreeSource names a Git repository on the workflow host and a repo-relative outline file
+// (such as outliner/outline.md). When configured on a mapped project, Intelligence reads that file
+// at the run's outline_commit_sha (verified to be on origin's default branch) and checks that the
+// caller-supplied contract_tree matches the Git outline before resolving parent routes.
+type ProjectTreeSource struct {
+	Directory string `json:"directory"`
+	Path      string `json:"path"`
 }
 
 // ProjectRoute maps one or more normalized input keys (such as contract UUIDs) to a repository
@@ -156,6 +166,12 @@ func (d Definition) normalized() Definition {
 		}
 		d.Project.Routes = routes
 	}
+	if d.Project.Mode == ProjectMap && d.Project.TreeSource != nil {
+		ts := *d.Project.TreeSource
+		ts.Directory = path.Clean(strings.TrimSpace(ts.Directory))
+		ts.Path = path.Clean(strings.TrimSpace(ts.Path))
+		d.Project.TreeSource = &ts
+	}
 	return d
 }
 
@@ -202,6 +218,8 @@ func (d Definition) Validate() error {
 		return fmt.Errorf("project mode %q: want %s, %s or %s", d.Project.Mode, ProjectMatch, ProjectFixed, ProjectMap)
 	case d.Project.Mode != ProjectMap && len(d.Project.Routes) > 0:
 		return errors.New("project routes are only valid when project mode is map")
+	case d.Project.Mode != ProjectMap && d.Project.TreeSource != nil:
+		return errors.New("project treeSource is only valid when project mode is map")
 	case d.Project.Mode == ProjectMap && len(d.Project.Routes) == 0:
 		return errors.New("a mapped project needs at least one route")
 	case d.Project.Mode == ProjectMap && (!blank(d.Project.Directory) || !blank(d.Project.Provider) || !blank(d.Project.Model) || !blank(d.Project.Thinking) || !blank(d.Project.ServiceTier) || !blank(d.Project.Instructions)):
@@ -223,6 +241,11 @@ func (d Definition) Validate() error {
 	if d.Project.Mode == ProjectMap {
 		if err := validateProjectRoutes(d.Project.Routes); err != nil {
 			return err
+		}
+		if d.Project.TreeSource != nil {
+			if err := validateProjectTreeSource(*d.Project.TreeSource); err != nil {
+				return err
+			}
 		}
 	}
 	if err := checkServiceTier("orchestrator", d.Orchestrator.Provider, d.Orchestrator.ServiceTier); err != nil {

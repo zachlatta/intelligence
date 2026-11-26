@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -64,7 +66,18 @@ const (
 	CancelAgentKind      = "cancel_agent"
 	ContinueEmailKind    = "continue_email"
 	SwitchLoginKind      = "switch_login"
+	ReadGitFileKind      = "read_git_file"
 )
+
+// ReadGitFileArgs reads a single UTF-8 file from a verified commit on origin's default branch
+// in an enrolled Git repository on the host (read-only object database read).
+type ReadGitFileArgs struct {
+	Directory string `json:"directory"`
+	Commit    string `json:"commit"`
+	Path      string `json:"path"`
+}
+
+var gitCommitSHARe = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 // SwitchLoginArgs: make Login the login the host's Provider tool uses, for every agent of that
 // provider on the host. Only Claude, through cswap, can switch. The host finds the login's cswap
@@ -161,8 +174,9 @@ type CommandResult struct {
 	RunID                string `json:"runId,omitempty"`          // run_schedule: the run it started
 	ArchivedAgents       int    `json:"archivedAgents,omitempty"` // archive_workspace: how many agents went with it
 	WorktreeBaseFallback bool   `json:"worktreeBaseFallback,omitempty"`
-	Login                string `json:"login,omitempty"` // switch_login: the login now active
-	Slot                 int    `json:"slot,omitempty"`  // switch_login: its cswap slot when switched
+	Login                string `json:"login,omitempty"`   // switch_login: the login now active
+	Slot                 int    `json:"slot,omitempty"`    // switch_login: its cswap slot when switched
+	Content              string `json:"content,omitempty"` // read_git_file: UTF-8 blob contents at commit
 }
 
 // ParseCommand decodes args for kind strictly (no unknown fields) and checks what it needs. The
@@ -275,6 +289,27 @@ func ParseCommand(kind string, args json.RawMessage) (any, error) {
 			return nil, errors.New("switch_login needs provider claude and a login")
 		}
 		return a, nil
+	case ReadGitFileKind:
+		var a ReadGitFileArgs
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		dir := strings.TrimSpace(a.Directory)
+		if dir == "" || !path.IsAbs(dir) || slices.Contains(strings.Split(dir, "/"), "..") {
+			return nil, errors.New("read_git_file needs a clean absolute repository directory")
+		}
+		commit := strings.ToLower(strings.TrimSpace(a.Commit))
+		if !gitCommitSHARe.MatchString(commit) {
+			return nil, errors.New("read_git_file needs a 40-character hex commit SHA")
+		}
+		rel := strings.TrimSpace(a.Path)
+		if rel == "" || path.IsAbs(rel) || strings.Contains(rel, ":") || slices.Contains(strings.Split(rel, "/"), "..") || path.Clean(rel) != rel || rel == "." {
+			return nil, errors.New("read_git_file needs a clean repo-relative file path")
+		}
+		a.Directory = path.Clean(dir)
+		a.Commit = commit
+		a.Path = rel
+		return a, nil
 	case CreateScheduleKind, UpdateScheduleKind, PauseScheduleKind, ResumeScheduleKind, DeleteScheduleKind, RunScheduleKind:
 		return parseSchedule(kind, decode) // schedules.go
 	}
@@ -308,6 +343,10 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 	parsed, err := ParseCommand(cmd.Kind, cmd.Args)
 	if err != nil {
 		return CommandResult{}, err
+	}
+	if a, ok := parsed.(ReadGitFileArgs); ok {
+		content, err := ReadGitFile(ctx, a)
+		return CommandResult{Content: content}, err
 	}
 	if a, ok := parsed.(WorkspaceArgs); ok && cmd.Kind == ArchiveWorkspaceKind && a.WaitForAgent != "" {
 		return w.archiveAfterTurn(ctx, a)

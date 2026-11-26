@@ -152,6 +152,18 @@ func (e *Engine) StartAPIRun(ctx context.Context, account int64, workflowID, key
 	reqHash := ""
 	if idemKey != "" {
 		reqHash = apiRequestHash(req.Input, req.Attachments)
+		var existingID, existingHash string
+		if qerr := e.p.QueryRow(ctx, `SELECT id::text, idempotency_hash FROM workflow_runs
+			WHERE workflow_id = $1 AND idempotency_key = $2`, workflowID, idemKey).Scan(&existingID, &existingHash); qerr == nil {
+			if existingHash != reqHash {
+				return APIRunResult{}, conflict("idempotency key already used with different request parameters")
+			}
+			return APIRunResult{RunID: existingID, Replayed: true}, nil
+		}
+	}
+	ctx, err = e.prepareVerifiedTree(ctx, account, workflowID, req.Input, "")
+	if err != nil {
+		return APIRunResult{}, err
 	}
 	ctx, flushPushes := e.CollectPushes(ctx)
 	var out APIRunResult

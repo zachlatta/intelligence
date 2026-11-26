@@ -1,8 +1,11 @@
 package workflow
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"path"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -17,6 +20,18 @@ var forbiddenMapHeaderKeys = map[string]bool{
 	"directory":           true,
 	"project_directory":   true,
 	"workspace_directory": true,
+}
+
+var (
+	gitCommitSHARe  = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	outlineBulletRe = regexp.MustCompile(`^( *)[-*+](?: (.*))?$`)
+	outlineMetaIDRe = regexp.MustCompile(` ?<!-- id:([0-9a-fA-F-]{36})( collapsed)?(?: pending:(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ))? -->$`)
+)
+
+// ContractTreeNode is one node in a caller-supplied contract tree.
+type ContractTreeNode struct {
+	ID       string             `json:"id"`
+	Children []ContractTreeNode `json:"children,omitempty"`
 }
 
 func validateProjectRoutes(routes []ProjectRoute) error {
@@ -56,23 +71,49 @@ func validateProjectRoutes(routes []ProjectRoute) error {
 	return nil
 }
 
+func validateProjectTreeSource(ts ProjectTreeSource) error {
+	dir := strings.TrimSpace(ts.Directory)
+	if dir == "" || !path.IsAbs(dir) || slices.Contains(strings.Split(dir, "/"), "..") {
+		return fmt.Errorf("project treeSource needs a clean absolute repository directory on the host")
+	}
+	rel := strings.TrimSpace(ts.Path)
+	if rel == "" || path.IsAbs(rel) || strings.Contains(rel, ":") || slices.Contains(strings.Split(rel, "/"), "..") || path.Clean(rel) != rel || rel == "." {
+		return fmt.Errorf("project treeSource needs a clean repo-relative file path")
+	}
+	return nil
+}
+
 type parsedRoutingHeader struct {
 	ids       []string
-	ancestors map[string][]string
+	tree      []ContractTreeNode
+	hasTree   bool
+	commitSHA string
 }
 
 // ResolveProjectRoute deterministically resolves a mapped workflow's single target repository from
-// structured YAML frontmatter at the top of input. It fails closed with a Refusal when input lacks
-// routing keys, supplies forbidden repository fields, spoofs an ancestor chain, includes an unmapped
-// key, or spans more than one repository.
-func ResolveProjectRoute(routes []ProjectRoute, input string) (ProjectRoute, error) {
+// structured YAML frontmatter at the top of input.
+//
+// When treeSource is configured, input must supply contract_tree and a 40-hex outline_commit_sha;
+// Intelligence verifies every node and parent-child edge in contract_tree against verifiedOutline
+// (independently read from Git at verifiedCommit on origin's default branch) before walking the
+// verified tree most-specific-first against routes.
+//
+// When treeSource is nil, Intelligence routes strictly by direct exact match of each key in
+// contract_ids or keys against routes and refuses any caller-supplied tree or ancestor chain.
+func ResolveProjectRoute(routes []ProjectRoute, treeSource *ProjectTreeSource, input, verifiedOutline, verifiedCommit string) (ProjectRoute, error) {
 	if err := validateProjectRoutes(routes); err != nil {
 		return ProjectRoute{}, bad("%s", err)
+	}
+	if treeSource != nil {
+		if err := validateProjectTreeSource(*treeSource); err != nil {
+			return ProjectRoute{}, bad("%s", err)
+		}
 	}
 	hdr, err := parseRoutingHeader(input)
 	if err != nil {
 		return ProjectRoute{}, err
 	}
+
 	index := make(map[string]ProjectRoute)
 	for _, rt := range routes {
 		cleanDir := path.Clean(strings.TrimSpace(rt.Directory))
@@ -88,21 +129,73 @@ func ResolveProjectRoute(routes []ProjectRoute, input string) (ProjectRoute, err
 		}
 	}
 
+	var treeParent map[string]string
+	var inTree map[string]bool
+	if treeSource != nil {
+		if !hdr.hasTree || len(hdr.tree) == 0 {
+			return ProjectRoute{}, bad("mapped workflow with treeSource requires contract_tree in leading YAML frontmatter")
+		}
+		if !gitCommitSHARe.MatchString(hdr.commitSHA) {
+			return ProjectRoute{}, bad("mapped workflow with treeSource requires a 40-character hex outline_commit_sha in leading YAML frontmatter")
+		}
+		if verifiedCommit == "" || verifiedCommit != hdr.commitSHA || strings.TrimSpace(verifiedOutline) == "" {
+			return ProjectRoute{}, bad("authoritative Git outline at commit %s is unavailable; refusing unverified contract_tree", hdr.commitSHA)
+		}
+		gitParent, gitExists, err := parseOutlineTree(verifiedOutline)
+		if err != nil {
+			return ProjectRoute{}, bad("invalid authoritative Git outline at commit %s: %s", hdr.commitSHA, err)
+		}
+		treeParent = map[string]string{}
+		inTree = map[string]bool{}
+		var verifyWalk func(nodes []ContractTreeNode, expectedParent string) error
+		verifyWalk = func(nodes []ContractTreeNode, expectedParent string) error {
+			for _, n := range nodes {
+				id := strings.ToLower(strings.TrimSpace(n.ID))
+				if id == "" {
+					return bad("contract_tree contains a node with an empty id")
+				}
+				if inTree[id] {
+					return bad("contract_tree contains duplicate node %q", id)
+				}
+				if !gitExists[id] {
+					return bad("contract_tree node %q does not exist in Git outline at commit %s", id, hdr.commitSHA)
+				}
+				if gitParent[id] != expectedParent {
+					return bad("contract_tree parent for %q does not match Git outline at commit %s", id, hdr.commitSHA)
+				}
+				inTree[id] = true
+				treeParent[id] = expectedParent
+				if err := verifyWalk(n.Children, id); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		if err := verifyWalk(hdr.tree, ""); err != nil {
+			return ProjectRoute{}, err
+		}
+	} else if hdr.hasTree {
+		return ProjectRoute{}, bad("contract_tree requires project.treeSource so Intelligence can verify the tree against Git")
+	}
+
 	var chosen *ProjectRoute
 	for _, id := range hdr.ids {
-		chain := []string{id}
-		if anc, ok := hdr.ancestors[id]; ok {
-			if len(anc) == 0 || anc[0] != id {
-				return ProjectRoute{}, bad("routing ancestor chain for %q must begin with %q", id, id)
-			}
-			chain = anc
-		}
 		var matched *ProjectRoute
-		for _, candidate := range chain {
-			if rt, ok := index[candidate]; ok {
+		if treeSource != nil {
+			if !inTree[id] {
+				return ProjectRoute{}, bad("contract %q is missing from contract_tree", id)
+			}
+			for cur := id; cur != ""; cur = treeParent[cur] {
+				if rt, ok := index[cur]; ok {
+					cp := rt
+					matched = &cp
+					break
+				}
+			}
+		} else {
+			if rt, ok := index[id]; ok {
 				cp := rt
 				matched = &cp
-				break
 			}
 		}
 		if matched == nil {
@@ -128,8 +221,58 @@ func formatRouteLabel(rt ProjectRoute) string {
 	return rt.Directory
 }
 
+// parseOutlineTree parses an Outliner Markdown outline (bullet indentation + <!-- id:<uuid> -->)
+// into authoritative parent[id] -> parentID ("" for top-level roots) and exists[id].
+func parseOutlineTree(md string) (map[string]string, map[string]bool, error) {
+	parent := map[string]string{}
+	exists := map[string]bool{}
+	type frame struct {
+		indent int
+		id     string
+	}
+	stack := []frame{{-1, ""}}
+	for _, raw := range strings.Split(strings.ReplaceAll(md, "\r\n", "\n"), "\n") {
+		line := expandLeadingTabs(raw)
+		m := outlineBulletRe.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		indent := len(m[1])
+		id := ""
+		if mm := outlineMetaIDRe.FindStringSubmatch(m[2]); mm != nil {
+			id = strings.ToLower(mm[1])
+		}
+		for len(stack) > 1 && stack[len(stack)-1].indent >= indent {
+			stack = stack[:len(stack)-1]
+		}
+		parentID := stack[len(stack)-1].id
+		if id != "" {
+			if exists[id] {
+				return nil, nil, fmt.Errorf("duplicate contract id %q in outline", id)
+			}
+			exists[id] = true
+			parent[id] = parentID
+		}
+		stack = append(stack, frame{indent: indent, id: id})
+	}
+	return parent, exists, nil
+}
+
+func expandLeadingTabs(s string) string {
+	i := 0
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
+		i++
+	}
+	if i == 0 || !strings.Contains(s[:i], "\t") {
+		return s
+	}
+	return strings.ReplaceAll(s[:i], "\t", "  ") + s[i:]
+}
+
 // parseRoutingHeader reads the leading --- ... --- YAML frontmatter of input using a strict
-// stdlib-only subset parser for top-level scalar/sequence keys and one-level ancestor maps.
+// stdlib-only subset parser. The closing --- must appear at column 0 so indented --- lines inside
+// block scalars (such as special_input) cannot terminate frontmatter early. YAML keys are unquoted
+// and normalized before checking forbidden repository fields.
 func parseRoutingHeader(input string) (parsedRoutingHeader, error) {
 	norm := strings.ReplaceAll(input, "\r\n", "\n")
 	if !strings.HasPrefix(norm, "---\n") {
@@ -139,7 +282,7 @@ func parseRoutingHeader(input string) (parsedRoutingHeader, error) {
 	lines := strings.Split(rest, "\n")
 	end := -1
 	for i, line := range lines {
-		if strings.TrimSpace(line) == "---" {
+		if line == "---" {
 			end = i
 			break
 		}
@@ -151,14 +294,14 @@ func parseRoutingHeader(input string) (parsedRoutingHeader, error) {
 
 	var contractIDs []string
 	var genericKeys []string
-	contractAncestors := map[string][]string{}
-	keyAncestors := map[string][]string{}
+	var treeLines []string
+	var inlineTree []ContractTreeNode
+	hasTree := false
+	commitSHA := ""
 	seenContractIDs := false
 	seenGenericKeys := false
 
-	section := ""      // active top-level key for indented block values
-	ancTarget := ""    // active map key inside contract_ancestors / key_ancestors
-	sectionIndent := 0 // indent of child key inside ancestors map
+	section := "" // active top-level key for indented block values
 
 	for _, rawLine := range fm {
 		trimmed := strings.TrimSpace(rawLine)
@@ -167,13 +310,12 @@ func parseRoutingHeader(input string) (parsedRoutingHeader, error) {
 		}
 		indent := countLeadingSpaces(rawLine)
 		if indent == 0 {
-			ancTarget = ""
 			section = ""
 			key, val, ok := splitYAMLKeyVal(trimmed)
 			if !ok {
 				return parsedRoutingHeader{}, bad("invalid YAML frontmatter line %q", trimmed)
 			}
-			k := strings.ToLower(strings.TrimSpace(key))
+			k := normalizeYAMLKey(key)
 			v := strings.TrimSpace(val)
 			if forbiddenMapHeaderKeys[k] {
 				if v != "" && v != "null" && v != "~" && v != `""` && v != "''" && v != "[]" {
@@ -183,6 +325,8 @@ func parseRoutingHeader(input string) (parsedRoutingHeader, error) {
 				continue
 			}
 			switch k {
+			case "contract_ancestors", "key_ancestors":
+				return parsedRoutingHeader{}, bad("unverified ancestor chains (%s) are not accepted; send contract_tree verified against project.treeSource", k)
 			case "contract_ids":
 				seenContractIDs = true
 				if v != "" {
@@ -205,16 +349,19 @@ func parseRoutingHeader(input string) (parsedRoutingHeader, error) {
 				} else {
 					section = "keys"
 				}
-			case "contract_ancestors":
-				if v != "" && v != "{}" {
-					return parsedRoutingHeader{}, bad("contract_ancestors must be a YAML mapping of contract id to ancestor list")
+			case "outline_commit_sha":
+				commitSHA = normalizeYAMLKey(v)
+			case "contract_tree":
+				hasTree = true
+				if v != "" {
+					nodes, err := parseContractTreeJSON(v)
+					if err != nil {
+						return parsedRoutingHeader{}, bad("invalid contract_tree in frontmatter: %s", err)
+					}
+					inlineTree = nodes
+				} else {
+					section = "contract_tree"
 				}
-				section = "contract_ancestors"
-			case "key_ancestors":
-				if v != "" && v != "{}" {
-					return parsedRoutingHeader{}, bad("key_ancestors must be a YAML mapping of key to ancestor list")
-				}
-				section = "key_ancestors"
 			default:
 				section = "other"
 			}
@@ -240,44 +387,10 @@ func parseRoutingHeader(input string) (parsedRoutingHeader, error) {
 			} else {
 				genericKeys = append(genericKeys, item)
 			}
-		case "contract_ancestors", "key_ancestors":
-			dst := contractAncestors
-			if section == "key_ancestors" {
-				dst = keyAncestors
-			}
-			if strings.HasPrefix(trimmed, "-") {
-				if ancTarget == "" || indent < sectionIndent {
-					return parsedRoutingHeader{}, bad("unexpected list item under %s in frontmatter", section)
-				}
-				item := normalizeYAMLKey(strings.TrimSpace(strings.TrimPrefix(trimmed, "-")))
-				if item == "" {
-					return parsedRoutingHeader{}, bad("empty ancestor under %s[%q]", section, ancTarget)
-				}
-				dst[ancTarget] = append(dst[ancTarget], item)
-				continue
-			}
-			key, val, ok := splitYAMLKeyVal(trimmed)
-			if !ok {
-				return parsedRoutingHeader{}, bad("invalid entry under %s in frontmatter: %q", section, trimmed)
-			}
-			ancTarget = normalizeYAMLKey(key)
-			sectionIndent = indent
-			if ancTarget == "" {
-				return parsedRoutingHeader{}, bad("empty key under %s in frontmatter", section)
-			}
-			v := strings.TrimSpace(val)
-			if v != "" {
-				items, err := parseYAMLFlowList(v)
-				if err != nil {
-					return parsedRoutingHeader{}, bad("invalid ancestor list for %q: %s", ancTarget, err)
-				}
-				dst[ancTarget] = items
-				ancTarget = ""
-			} else if _, exists := dst[ancTarget]; !exists {
-				dst[ancTarget] = []string{}
-			}
+		case "contract_tree":
+			treeLines = append(treeLines, rawLine)
 		default:
-			// Ignore indented lines belonging to unrelated frontmatter fields (e.g., criteria_hashes).
+			// Ignore indented lines belonging to unrelated frontmatter fields (e.g., special_input, criteria_hashes).
 		}
 	}
 
@@ -285,15 +398,139 @@ func parseRoutingHeader(input string) (parsedRoutingHeader, error) {
 		return parsedRoutingHeader{}, bad("mapped project input must not specify both contract_ids and keys")
 	}
 	ids := contractIDs
-	ancestors := contractAncestors
 	if !seenContractIDs && seenGenericKeys {
 		ids = genericKeys
-		ancestors = keyAncestors
 	}
 	if len(ids) == 0 {
 		return parsedRoutingHeader{}, bad("mapped project input needs at least one entry in contract_ids or keys")
 	}
-	return parsedRoutingHeader{ids: ids, ancestors: ancestors}, nil
+	tree := inlineTree
+	if len(treeLines) > 0 {
+		parsed, err := parseContractTreeYAML(treeLines)
+		if err != nil {
+			return parsedRoutingHeader{}, bad("invalid contract_tree in frontmatter: %s", err)
+		}
+		tree = parsed
+	}
+	return parsedRoutingHeader{
+		ids:       ids,
+		tree:      tree,
+		hasTree:   hasTree,
+		commitSHA: commitSHA,
+	}, nil
+}
+
+func parseContractTreeJSON(raw string) ([]ContractTreeNode, error) {
+	var nodes []ContractTreeNode
+	dec := json.NewDecoder(bytes.NewReader([]byte(raw)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&nodes); err != nil {
+		return nil, err
+	}
+	if dec.More() {
+		return nil, fmt.Errorf("unexpected trailing data")
+	}
+	return nodes, nil
+}
+
+// parseContractTreeYAML parses a standard yaml.v3 indented block sequence of {id, children} nodes.
+func parseContractTreeYAML(lines []string) ([]ContractTreeNode, error) {
+	type nodePtr struct {
+		id       string
+		children []*nodePtr
+	}
+	type frame struct {
+		indent int
+		node   *nodePtr
+	}
+	var roots []*nodePtr
+	var stack []frame
+
+	for _, rawLine := range lines {
+		trimmed := strings.TrimSpace(rawLine)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := countLeadingSpaces(rawLine)
+		if strings.HasPrefix(trimmed, "-") {
+			rest := strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
+			for len(stack) > 0 && stack[len(stack)-1].indent >= indent {
+				stack = stack[:len(stack)-1]
+			}
+			np := &nodePtr{}
+			if rest != "" {
+				k, v, ok := splitYAMLKeyVal(rest)
+				if !ok || normalizeYAMLKey(k) != "id" {
+					return nil, fmt.Errorf("expected '- id: <uuid>', got %q", trimmed)
+				}
+				np.id = normalizeYAMLKey(v)
+				if np.id == "" {
+					return nil, fmt.Errorf("empty id in contract_tree")
+				}
+			}
+			if len(stack) == 0 {
+				roots = append(roots, np)
+			} else {
+				stack[len(stack)-1].node.children = append(stack[len(stack)-1].node.children, np)
+			}
+			stack = append(stack, frame{indent: indent, node: np})
+			continue
+		}
+		if len(stack) == 0 || indent <= stack[len(stack)-1].indent {
+			return nil, fmt.Errorf("unexpected indentation at %q", trimmed)
+		}
+		k, v, ok := splitYAMLKeyVal(trimmed)
+		if !ok {
+			return nil, fmt.Errorf("invalid contract_tree line %q", trimmed)
+		}
+		switch normalizeYAMLKey(k) {
+		case "id":
+			if stack[len(stack)-1].node.id != "" {
+				return nil, fmt.Errorf("duplicate id in contract_tree node")
+			}
+			id := normalizeYAMLKey(v)
+			if id == "" {
+				return nil, fmt.Errorf("empty id in contract_tree")
+			}
+			stack[len(stack)-1].node.id = id
+		case "children":
+			vt := strings.TrimSpace(v)
+			if vt != "" && vt != "[]" {
+				sub, err := parseContractTreeJSON(vt)
+				if err != nil {
+					return nil, fmt.Errorf("invalid inline children: %w", err)
+				}
+				var convertIn func([]ContractTreeNode) []*nodePtr
+				convertIn = func(ns []ContractTreeNode) []*nodePtr {
+					out := make([]*nodePtr, len(ns))
+					for i, n := range ns {
+						out[i] = &nodePtr{id: normalizeYAMLKey(n.ID), children: convertIn(n.Children)}
+					}
+					return out
+				}
+				stack[len(stack)-1].node.children = append(stack[len(stack)-1].node.children, convertIn(sub)...)
+			}
+		default:
+			return nil, fmt.Errorf("unsupported field %q in contract_tree", k)
+		}
+	}
+
+	var freeze func([]*nodePtr) ([]ContractTreeNode, error)
+	freeze = func(ptrs []*nodePtr) ([]ContractTreeNode, error) {
+		out := make([]ContractTreeNode, len(ptrs))
+		for i, p := range ptrs {
+			if p.id == "" {
+				return nil, fmt.Errorf("contract_tree node missing id")
+			}
+			kids, err := freeze(p.children)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = ContractTreeNode{ID: p.id, Children: kids}
+		}
+		return out, nil
+	}
+	return freeze(roots)
 }
 
 func countLeadingSpaces(s string) int {
