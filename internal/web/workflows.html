@@ -705,6 +705,7 @@ function inspector() {
   return panel(`${KIND[s.kind]} ${i + 1}`, KIND_DESC[s.kind], `<label>Title</label><input data-s="title" value="${esc(s.title)}">
     <p class="hint mono">id: ${esc(s.id)} · <code>intelligence workflow back ${esc(s.id)}</code> returns here</p>
     <label>Kind</label><select data-s="kind">${opts(Object.entries(KIND), s.kind)}</select>
+    ${s.kind === "signoff" ? `<label class="check" style="margin-top:.7rem"><input type="checkbox" data-s="requireHumanSignoff"${s.requireHumanSignoff ? " checked" : ""}> Require explicit browser sign-off approval (blocks API/email/plain-text replies and skips)</label>` : ""}
     <label>Instructions to the orchestrator</label><textarea data-s="instructions" class="prompt">${esc(s.instructions)}</textarea>${chips}${modelTokenChips(window.modelGroups?.groups() || [])}
     <p class="hint">${s.kind === "gate" ? "Say what to check and which step to send work back to." : s.kind === "signoff" ? "Say when to skip it, and what the note should hold. Zach replies on the run's page; his reply goes to the orchestrator." : "Say when the step is done."}</p>`);
 }
@@ -818,9 +819,16 @@ function bind() {
     $$("button", m).forEach((x) => x.onclick = () => { m.hidden = true; insert(+b.dataset.insert, x.dataset.k); });
   });
   const on = (attr, target) => $$(`#inspector [data-${attr}]`).forEach((el) => {
-    const structural = el.tagName === "SELECT";
+    const isCheck = el.type === "checkbox";
+    const structural = el.tagName === "SELECT" || isCheck;
     el.addEventListener(structural ? "change" : "input", () => {
-      target()[el.dataset[attr]] = el.value;
+      if (isCheck) {
+        if (el.checked) target()[el.dataset[attr]] = true;
+        else delete target()[el.dataset[attr]];
+      } else {
+        target()[el.dataset[attr]] = el.value;
+      }
+      if (el.dataset[attr] === "kind" && el.value !== "signoff") delete target().requireHumanSignoff;
       if (el.dataset[attr] === "serviceTier" && !el.value) delete target().serviceTier;
       if (el.dataset[attr] === "provider") {
         const tierEl = $(`#inspector [data-${attr}="serviceTier"]`);
@@ -979,10 +987,12 @@ render();
 </div>
 <p class="banner" id="error" role="alert" hidden></p>
 <div id="ask">{{if eq .Run.Status "waiting"}}
-<section class="card note"><div class="card-head"><h2>The orchestrator is asking you</h2><span class="meta grow">at {{(index .Run.Steps .Run.Step).Title}}</span></div>
+{{$cur := index .Run.Steps .Run.Step}}
+<section class="card note"><div class="card-head"><h2>The orchestrator is asking you</h2><span class="meta grow">at {{$cur.Title}}</span></div>
   <div class="card-body"><div class="md" id="note">{{markdown .Run.Note}}</div>
-    <div class="reply-host" data-submit="#send"{{if $.Dictation}} data-dictation="{{$.Dictation}}"{{end}}><textarea id="reply" placeholder="Reply in your own words. The orchestrator reads it and decides what to do."></textarea>
-      <div class="side"><button class="btn primary sm" id="send" data-run-action="reply" title="⌘/Ctrl Enter">Send</button>{{if $.Dictation}}{{template "dictationbutton"}}{{end}}</div></div>
+    {{if $cur.RequireHumanSignoff}}<p class="hint" style="margin:.6rem 0 0">Explicit browser approval is required to advance past this sign-off step. Plain replies or rejections are sent to the orchestrator without authorizing landing.</p>{{end}}
+    <div class="reply-host" data-submit="#send"{{if $.Dictation}} data-dictation="{{$.Dictation}}"{{end}}><textarea id="reply" placeholder="{{if $cur.RequireHumanSignoff}}Optional note with approval, or type requested changes / rejection and click Send reply.{{else}}Reply in your own words. The orchestrator reads it and decides what to do.{{end}}"></textarea>
+      <div class="side">{{if $cur.RequireHumanSignoff}}<button class="btn primary sm" id="approve-signoff" data-run-action="reply" data-approve="true">Approve sign-off</button><button class="btn sm" id="send" data-run-action="reply" title="⌘/Ctrl Enter (reply without approving)">Send reply</button>{{else}}<button class="btn primary sm" id="send" data-run-action="reply" title="⌘/Ctrl Enter">Send</button>{{end}}{{if $.Dictation}}{{template "dictationbutton"}}{{end}}</div></div>
     <div id="reply-attachments"></div>
   </div></section>
 {{else if and (eq .Run.Status "running" "stalled") .Run.Orchestrator}}
@@ -1059,7 +1069,7 @@ function bind() {
     if (!confirm("Cancel this run? Its orchestrator is stopped; the worktree stays.")) return;
     try { await post(`/api/workflow-runs/${run}/cancel`, {}); refresh(true); } catch (e) { err(e.message); }
   };
-  const reply = $("#ask textarea"), send = $("#send");
+  const reply = $("#ask textarea"), send = $("#send"), approveBtn = $("#approve-signoff");
   if (!reply || !send) { replyAttachments = null; return; }
   if (window.imageAttachments && !reply.dataset.attachments) {
     reply.dataset.attachments = "on";
@@ -1071,19 +1081,21 @@ function bind() {
       send.click();
     }
   };
-  send.onclick = async () => {
+  const submitReply = async (approve) => {
     if (sending) return;
     const raw = reply.value.trim();
     const hasFiles = Boolean(replyAttachments?.hasFiles());
-    if (!raw && !hasFiles) return reply.focus();
+    if (!approve && !raw && !hasFiles) return reply.focus();
     const action = send.dataset.runAction;
     err("");
     $("#input-saved").hidden = true;
     sending = send.disabled = reply.readOnly = true;
+    if (approveBtn) approveBtn.disabled = true;
     replyAttachments?.setDisabled(true);
     try {
       const text = replyAttachments ? await replyAttachments.prompt(raw) : raw;
-      await post(`/api/workflow-runs/${run}/${action}`, { text });
+      const body = approve ? { text, approve: true } : { text };
+      await post(`/api/workflow-runs/${run}/${action}`, body);
       reply.value = "";
       replyAttachments?.clear();
       if (action === "input") $("#input-saved").hidden = false;
@@ -1092,9 +1104,12 @@ function bind() {
       err(e.message);
     } finally {
       sending = send.disabled = reply.readOnly = false;
+      if (approveBtn) approveBtn.disabled = false;
       replyAttachments?.setDisabled(false);
     }
   };
+  send.onclick = () => submitReply(false);
+  if (approveBtn) approveBtn.onclick = () => submitReply(true);
   // dictation into the reply, once for each reply box (a refresh can bring a new one); a replaced
   // box's shortcuts stop acting once it leaves the page
   if (window.dictation && !reply.dataset.dictating) {

@@ -1121,14 +1121,14 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 	case "next", "skip", "done":
 		if stepRequiresHumanSignoff(r) {
 			if m.Move == "skip" {
-				return "", conflict("this sign-off step requires an authenticated human reply in Intelligence and cannot be skipped")
+				return "", conflict("this sign-off step requires an explicit human browser approval in Intelligence and cannot be skipped")
 			}
-			approved, err := hasHumanSignoffReply(ctx, tx, r.ID, r.Step)
+			approved, err := hasHumanSignoffApproval(ctx, tx, r.ID, r.Step)
 			if err != nil {
 				return "", err
 			}
 			if !approved {
-				return "", conflict("this sign-off step requires an ask and an authenticated human reply in Intelligence before advancing")
+				return "", conflict("this sign-off step requires an ask followed by an explicit human browser approval in Intelligence before advancing (plain replies, rejections, email replies, and API calls do not authorize advancing)")
 			}
 		}
 		text := m.Summary
@@ -1255,15 +1255,47 @@ func (e *Engine) archiveFinder(ctx context.Context, tx pgx.Tx, r run) error {
 	return err
 }
 
-// Reply sends Zach's reply to the note account's run is waiting on, to its orchestrator.
+// Reply sends a non-browser reply (e.g. email or API) to the note account's run is waiting on.
+// Non-browser callers can never record an explicit sign-off approval.
 func (e *Engine) Reply(ctx context.Context, account int64, runID, text string) error {
 	if !uuidRe.MatchString(runID) {
 		return ErrNotFound
 	}
-	return pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error { return e.ReplyTx(ctx, tx, account, runID, text) })
+	return pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error { return e.replyTx(ctx, tx, account, runID, text, false, false) })
+}
+
+// ReplyFromBrowser sends Zach's reply from an authenticated Intelligence browser session.
+// Only this path may pass approve=true to record an explicit signoff_approved decision.
+func (e *Engine) ReplyFromBrowser(ctx context.Context, account int64, runID, text string, approve bool) error {
+	if !uuidRe.MatchString(runID) {
+		return ErrNotFound
+	}
+	return pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error { return e.replyTx(ctx, tx, account, runID, text, true, approve) })
 }
 
 func (e *Engine) ReplyTx(ctx context.Context, tx pgx.Tx, account int64, runID, text string) error {
+	return e.replyTx(ctx, tx, account, runID, text, false, false)
+}
+
+func (e *Engine) replyTx(ctx context.Context, tx pgx.Tx, account int64, runID, text string, fromBrowser, approve bool) error {
+	actor := apiActorFrom(ctx)
+	if approve && (!fromBrowser || actor.KeyID != "") {
+		return forbidden("explicit sign-off approval requires an authenticated human browser session in Intelligence")
+	}
+	r, err := e.lockRun(ctx, tx, account, runID)
+	if err != nil {
+		return err
+	}
+	if r.Status != Waiting && r.Status != Stalled {
+		return conflict("this run is not waiting for a reply (%s)", r.Status)
+	}
+	onSignoff := r.Step >= 0 && r.Step < len(r.Def.Steps) && r.Def.Steps[r.Step].Kind == KindSignoff
+	if approve && !onSignoff {
+		return bad("approve is only valid on a sign-off step")
+	}
+	if approve && strings.TrimSpace(text) == "" {
+		text = "Approved"
+	}
 	if err := agenttext.Validate(text); err != nil {
 		return bad("%s", err)
 	}
@@ -1273,24 +1305,26 @@ func (e *Engine) ReplyTx(ctx context.Context, tx pgx.Tx, account int64, runID, t
 	if strings.TrimSpace(text) == "" {
 		return bad("a reply needs text")
 	}
-	r, err := e.lockRun(ctx, tx, account, runID)
-	if err != nil {
-		return err
-	}
-	if r.Status != Waiting && r.Status != Stalled {
-		return conflict("this run is not waiting for a reply (%s)", r.Status)
-	}
-	actor := apiActorFrom(ctx)
-	if actor.KeyID != "" && stepRequiresHumanSignoff(r) {
-		return forbidden("this sign-off step requires an authenticated human reply in Intelligence; API-key replies are refused")
+	if stepRequiresHumanSignoff(r) {
+		if actor.KeyID != "" {
+			return forbidden("this sign-off step requires an authenticated human browser action in Intelligence; API-key replies are refused")
+		}
+		if !fromBrowser {
+			return forbidden("this sign-off step requires an authenticated human browser action in Intelligence; email replies cannot answer or approve sign-off")
+		}
 	}
 	heading := "Zach replied to your note:"
 	signoffNote := ""
 	if actor.KeyID != "" {
 		heading = fmt.Sprintf("API key %q replied to your note (this is an automated API caller, not Zach):", actor.KeyName)
-		if r.Step >= 0 && r.Step < len(r.Def.Steps) && r.Def.Steps[r.Step].Kind == KindSignoff {
+		if onSignoff {
 			signoffNote = fmt.Sprintf("\n\nNote: This reply came from API key %q, not from Zach. It is not Zach's approval unless this workflow's instructions explicitly authorize this API key to approve sign-off.", actor.KeyName)
 		}
+	} else if approve {
+		heading = "Zach explicitly approved this sign-off step in Intelligence:"
+	} else if stepRequiresHumanSignoff(r) {
+		heading = "Zach replied to your note (WITHOUT approving sign-off):"
+		signoffNote = "\n\nNote: Zach sent a plain reply without clicking Approve sign-off. Do NOT advance past this sign-off step; apply requested changes (back), re-ask, or fail/cancel as instructed."
 	}
 	if r.Status == Stalled {
 		if actor.KeyID != "" {
@@ -1299,7 +1333,9 @@ func (e *Engine) ReplyTx(ctx context.Context, tx pgx.Tx, account int64, runID, t
 				return err
 			}
 		} else {
-			heading = "A reply arrived for this workflow:"
+			if !approve {
+				heading = "A reply arrived for this workflow:"
+			}
 			if err := e.unstall(ctx, tx, r, "Resumed: a reply arrived for the existing orchestrator."); err != nil {
 				return err
 			}
@@ -1320,6 +1356,11 @@ func (e *Engine) ReplyTx(ctx context.Context, tx pgx.Tx, account int64, runID, t
 	}
 	if err := e.recordInput(ctx, tx, r, "reply", ptr(r.Step), text, c.ID); err != nil {
 		return err
+	}
+	if approve {
+		if err := e.event(ctx, tx, r, "signoff_approved", ptr(r.Step), nil, text); err != nil {
+			return err
+		}
 	}
 	if _, err = tx.Exec(ctx, "UPDATE workflow_runs SET status = $2, note = '', updated_at = $3 WHERE id = $1", r.ID, Running, e.Now()); err != nil {
 		return err
@@ -1471,10 +1512,11 @@ func stepRequiresHumanSignoff(r run) bool {
 		r.Def.Steps[r.Step].RequireHumanSignoff
 }
 
-// hasHumanSignoffReply reports whether the current visit to step has an ask followed by a
-// non-API (authenticated human session, api_key_id IS NULL) reply. Returning to this step after
-// a send-back starts a new visit, so earlier approvals cannot be replayed.
-func hasHumanSignoffReply(ctx context.Context, tx pgx.Tx, runID string, step int) (bool, error) {
+// hasHumanSignoffApproval reports whether the current visit to step has an ask followed by an
+// explicit typed human browser approval event (kind='signoff_approved', api_key_id IS NULL)
+// strictly after the latest ask on this visit. Plain replies, rejections, email replies, API-key
+// calls, and approvals from earlier visits or before a re-ask never satisfy this check.
+func hasHumanSignoffApproval(ctx context.Context, tx pgx.Tx, runID string, step int) (bool, error) {
 	var visitStart int64
 	if err := tx.QueryRow(ctx, `SELECT coalesce(max(id), 0) FROM workflow_run_events
 		WHERE run_id = $1 AND to_step = $2`, runID, step).Scan(&visitStart); err != nil {
@@ -1488,13 +1530,13 @@ func hasHumanSignoffReply(ctx context.Context, tx pgx.Tx, runID string, step int
 	if askID == 0 {
 		return false, nil
 	}
-	var replied bool
+	var approved bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workflow_run_events
-		WHERE run_id = $1 AND kind = 'reply' AND step = $2 AND api_key_id IS NULL AND id > $3)`,
-		runID, step, askID).Scan(&replied); err != nil {
+		WHERE run_id = $1 AND kind = 'signoff_approved' AND step = $2 AND api_key_id IS NULL AND id > $3)`,
+		runID, step, askID).Scan(&approved); err != nil {
 		return false, err
 	}
-	return replied, nil
+	return approved, nil
 }
 
 // Cancel ends account's run and stops its agent (the orchestrator, or the project finder).

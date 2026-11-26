@@ -194,16 +194,17 @@ func (a *app) startRun(v viewer) http.HandlerFunc {
 	}
 }
 
-// replyToRun: POST /api/workflow-runs/{id}/reply {"text"}: Zach's answer to the note the run waits on.
+// replyToRun: POST /api/workflow-runs/{id}/reply {"text", "approve"}: Zach's answer to the note the run waits on.
 func (a *app) replyToRun(v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Text string `json:"text"`
+			Text    string `json:"text"`
+			Approve bool   `json:"approve,omitempty"`
 		}
 		if !decodeJSON(w, r, &req) {
 			return
 		}
-		if err := a.wf.Reply(r.Context(), v.acct.ID, r.PathValue("id"), req.Text); err != nil {
+		if err := a.wf.ReplyFromBrowser(r.Context(), v.acct.ID, r.PathValue("id"), req.Text, req.Approve); err != nil {
 			workflowError(w, err)
 			return
 		}
@@ -1166,6 +1167,8 @@ func (e runEvent) Line() string {
 			return "API key " + e.APIKeyName + " replied: " + e.Text
 		}
 		return "Zach replied: " + e.Text
+	case "signoff_approved":
+		return "Zach explicitly approved sign-off: " + e.Text
 	case "input":
 		if e.APIKeyName != "" {
 			return "API key " + e.APIKeyName + " sent input: " + e.Text
