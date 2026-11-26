@@ -1,5 +1,13 @@
 [
   {
+    "id": "workflow-typed-signoff",
+    "released": "2026-11-26",
+    "title": "Require explicit browser approval on workflow sign-off steps",
+    "summary": "Sign-off steps can now enable Require explicit browser sign-off approval in the workflow editor. Waiting runs show an Approve sign-off button beside Send reply (Cmd/Ctrl+Enter sends a plain reply without approving). Only clicking Approve sign-off from your signed-in browser records a signoff_approved event that unlocks advancing past the step; plain replies, rejections, email replies, API-key calls, skips and earlier approvals before a re-ask or send-back are refused.",
+    "media": "workflow-typed-signoff.png",
+    "mediaAlt": "A waiting Release sign-off run in a local demo showing the Owner sign-off ask card with the primary Approve sign-off button beside Send reply and the note explaining that plain replies or rejections do not authorize landing."
+  },
+  {
     "id": "workflow-api-triggers",
     "released": "2026-11-25",
     "title": "Trigger, stream and control workflows with scoped API keys",
