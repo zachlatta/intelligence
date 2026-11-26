@@ -830,7 +830,12 @@ version it started with. A run:
    the provider's default mode, which may ask, so the orchestrator's first message tells it to pass
    `--mode` (in the prompt, not the saved instructions, so every version gets it). A step is only
    instructions to it; its kind (`step`, `gate` or `signoff`) changes how it reads, not what the
-   server does. The orchestrator moves the run with:
+   server does. The one exception is a `signoff` step with `requireHumanSignoff: true` (the
+   editor's “Require explicit browser sign-off approval”): the server refuses `skip`, and refuses
+   `next` and `done` until the current visit has an `ask` followed by a `signoff_approved` event.
+   Only the **Approve sign-off** button in a signed-in browser records that event. Plain replies
+   and rejections still reach the orchestrator; email replies and API-key replies or input on that
+   step are refused (403). The orchestrator moves the run with:
    - `intelligence workflow next --run <id> --summary "..."`: the step is done; prints the next
      step's instructions (after the last step, the run is finished).
    - `back --run <id> <step id> --why "..."`: back to an earlier step, with what is missing.
@@ -2056,8 +2061,9 @@ origin (another site's request is refused with 403), and those with a body must 
 - `POST /api/workflow-runs/{id}/input` with `{"text"}`: records a follow-up and queues delivery
   to the orchestrator of a running or stalled run (204; 409 if the run is waiting for a reply or
   has no active orchestrator). Requires a same-origin browser session.
-- `POST /api/workflow-runs/{id}/reply` with `{"text"}`: answers the note the run waits on (204;
-  409 when it waits on none). `POST /api/workflow-runs/{id}/cancel` with `{}`: ends the run and
+- `POST /api/workflow-runs/{id}/reply` with `{"text", "approve"?}`: answers the note the run waits on (204;
+  409 when it waits on none). `"approve": true` is valid only on a sign-off step and also records a
+  `signoff_approved` event (empty text becomes “Approved”). `POST /api/workflow-runs/{id}/cancel` with `{}`: ends the run and
   stops its orchestrator (204).
 - `POST /api/workflow-runs/{id}/moves` with `{"move", "directory", "step", "summary", "why",
   "note", "deliverable", "into"}` and `Authorization: Bearer <the run's host's key>`: `intelligence workflow`. Answers
@@ -2169,7 +2175,8 @@ and voice-memo filters all keep working alongside it.
   and every control action (`reply`, `input`, `cancel`, `resume`, `start`, `retry`) records
   `workflow_run_events.api_key_id`. Messages delivered to the orchestrator explicitly name the API key
   (never "Zach replied"), and replies at a sign-off step state that the reply came from an API key and
-  is not Zach's personal approval unless the workflow instructions authorize it.
+  is not Zach's personal approval unless the workflow instructions authorize it. On a step with
+  `requireHumanSignoff: true`, API-key replies and input are refused (403) instead.
 - **Why scoped read routes exist alongside `/api/sql`.** Intelligence's general read contract is
   account-scoped read-only SQL (`/api/sql`). A workflow API key is strictly narrower than an account:
   it may only touch runs and transcripts of its single workflow, never other workflows, hosts, or
