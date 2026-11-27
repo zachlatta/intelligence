@@ -7,7 +7,7 @@ import (
 	"github.com/zachlatta/intelligence/internal/dbtest"
 )
 
-func TestWorkflowOrchestratorNeonHighMigration(t *testing.T) {
+func TestWorkflowOrchestratorNeonMediumMigration(t *testing.T) {
 	t.Parallel()
 	d := dbtest.New(t)
 	_, ann, _ := twoAccounts(t, d)
@@ -20,12 +20,12 @@ func TestWorkflowOrchestratorNeonHighMigration(t *testing.T) {
 
 	const (
 		opusHighBefore = `{"host":"ann-host","trigger":"task","project":{"mode":"match","provider":"claude","model":"claude-opus-5-5","thinking":"medium","instructions":"Find project."},"orchestrator":{"provider":"claude","model":"claude-opus-5-5","thinking":"high","instructions":"Use claude/claude-opus-5-5 for sub-agents."},"steps":[{"id":"do","kind":"step","title":"Do","instructions":"Work."}]}`
-		opusHighAfter  = `{"host":"ann-host","trigger":"task","project":{"mode":"match","provider":"claude","model":"claude-opus-5-5","thinking":"medium","instructions":"Find project."},"orchestrator":{"provider":"antigravity","model":"gemini-4-neon-high","instructions":"Use claude/claude-opus-5-5 for sub-agents."},"steps":[{"id":"do","kind":"step","title":"Do","instructions":"Work."}]}`
+		opusHighAfter  = `{"host":"ann-host","trigger":"task","project":{"mode":"match","provider":"claude","model":"claude-opus-5-5","thinking":"medium","instructions":"Find project."},"orchestrator":{"provider":"antigravity","model":"gemini-4-neon-medium","instructions":"Use claude/claude-opus-5-5 for sub-agents."},"steps":[{"id":"do","kind":"step","title":"Do","instructions":"Work."}]}`
 		opusNoThink    = `{"host":"ann-host","trigger":"email","project":{"mode":"fixed","directory":"/srv/desk"},"orchestrator":{"provider":"claude","model":"claude-opus-5-5","instructions":"Handle email."},"steps":[{"id":"do","kind":"step","title":"Do","instructions":"Work."}]}`
-		opusNoThinkEnd = `{"host":"ann-host","trigger":"email","project":{"mode":"fixed","directory":"/srv/desk"},"orchestrator":{"provider":"antigravity","model":"gemini-4-neon-high","instructions":"Handle email."},"steps":[{"id":"do","kind":"step","title":"Do","instructions":"Work."}]}`
+		opusNoThinkEnd = `{"host":"ann-host","trigger":"email","project":{"mode":"fixed","directory":"/srv/desk"},"orchestrator":{"provider":"antigravity","model":"gemini-4-neon-medium","instructions":"Handle email."},"steps":[{"id":"do","kind":"step","title":"Do","instructions":"Work."}]}`
 		sonnetDef      = `{"host":"ann-host","trigger":"task","project":{"mode":"fixed","directory":"/srv/desk"},"orchestrator":{"provider":"claude","model":"claude-sonnet-5-5","thinking":"medium","instructions":"Run."},"steps":[{"id":"do","kind":"step","title":"Do","instructions":"Work."}]}`
 		codexDef       = `{"host":"ann-host","trigger":"task","project":{"mode":"fixed","directory":"/srv/desk"},"orchestrator":{"provider":"codex","model":"gpt-6.2-sol","thinking":"high","instructions":"Run."},"steps":[{"id":"do","kind":"step","title":"Do","instructions":"Work."}]}`
-		neonMedDef     = `{"host":"ann-host","trigger":"voice_memo","project":{"mode":"fixed","directory":"/srv/desk"},"orchestrator":{"provider":"antigravity","model":"gemini-4-neon-medium","instructions":"Handle memo."},"steps":[{"id":"do","kind":"step","title":"Do","instructions":"Work."}]}`
+		neonHighDef    = `{"host":"ann-host","trigger":"voice_memo","project":{"mode":"fixed","directory":"/srv/desk"},"orchestrator":{"provider":"antigravity","model":"gemini-4-neon-high","instructions":"Handle memo."},"steps":[{"id":"do","kind":"step","title":"Do","instructions":"Work."}]}`
 	)
 
 	for _, tc := range []struct {
@@ -36,7 +36,7 @@ func TestWorkflowOrchestratorNeonHighMigration(t *testing.T) {
 		{"opus_no_think", opusNoThink, false},
 		{"sonnet", sonnetDef, false},
 		{"codex", codexDef, false},
-		{"neon_med", neonMedDef, false},
+		{"neon_high", neonHighDef, false},
 		{"deleted_opus", opusHighBefore, true},
 	} {
 		var id string
@@ -50,7 +50,7 @@ func TestWorkflowOrchestratorNeonHighMigration(t *testing.T) {
  SELECT 1,id,1,'ann-host','Existing run','Hello','running',now(),now() FROM workflows WHERE name='opus_high'`)
 
 	// Replay the migration over state saved before this release.
-	exec(`DELETE FROM schema_migrations WHERE version='20261127T2310_workflow_orchestrator_neon_high'`)
+	exec(`DELETE FROM schema_migrations WHERE version='20261127T2310_workflow_orchestrator_neon_medium'`)
 	if err := db.Migrate(ctx, d.Owner); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestWorkflowOrchestratorNeonHighMigration(t *testing.T) {
 		"opus_no_think": 2,
 		"sonnet":        1,
 		"codex":         1,
-		"neon_med":      1,
+		"neon_high":     1,
 		"deleted_opus":  1,
 	} {
 		var version int
@@ -78,7 +78,7 @@ func TestWorkflowOrchestratorNeonHighMigration(t *testing.T) {
 		{"opus_no_think", opusNoThinkEnd, 2},
 		{"sonnet", sonnetDef, 1},
 		{"codex", codexDef, 1},
-		{"neon_med", neonMedDef, 1},
+		{"neon_high", neonHighDef, 1},
 		{"deleted_opus", opusHighBefore, 1},
 	} {
 		var equal bool
@@ -92,7 +92,7 @@ func TestWorkflowOrchestratorNeonHighMigration(t *testing.T) {
 	}
 
 	// Replaying the migration again must be a no-op.
-	exec(`DELETE FROM schema_migrations WHERE version='20261127T2310_workflow_orchestrator_neon_high'`)
+	exec(`DELETE FROM schema_migrations WHERE version='20261127T2310_workflow_orchestrator_neon_medium'`)
 	if err := db.Migrate(ctx, d.Owner); err != nil {
 		t.Fatal(err)
 	}

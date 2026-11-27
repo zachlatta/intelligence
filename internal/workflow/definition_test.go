@@ -79,8 +79,8 @@ func TestTheStartingWorkflowIsValidOnceItHasAHost(t *testing.T) {
 	if len(d.Steps) != len(Starting.Steps) || d.Steps[0].ID != "build" {
 		t.Errorf("round trip = %+v", d)
 	}
-	if d.Orchestrator.Provider != "antigravity" || d.Orchestrator.Model != "gemini-4-neon-high" || d.Orchestrator.Thinking != "" {
-		t.Errorf("starting orchestrator = %+v, want antigravity/gemini-4-neon-high with empty thinking", d.Orchestrator)
+	if d.Orchestrator.Provider != "antigravity" || d.Orchestrator.Model != "gemini-4-neon-medium" || d.Orchestrator.Thinking != "" {
+		t.Errorf("starting orchestrator = %+v, want antigravity/gemini-4-neon-medium with empty thinking", d.Orchestrator)
 	}
 }
 
