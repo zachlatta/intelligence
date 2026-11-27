@@ -399,41 +399,18 @@ func TestEmailPollInterval(t *testing.T) {
 	}
 }
 
-func TestVaultwardenConfig(t *testing.T) {
+func TestSecretsKeyConfig(t *testing.T) {
 	base := map[string]string{"DATABASE_URL": "postgres://app:p@db/app", "READONLY_DATABASE_URL": "postgres://ro:p@db/app"}
 	c, err := serverConfig(env(base))
-	if err != nil || c.Vaultwarden != nil || secretStore(c) != nil {
-		t.Fatalf("off by default: %+v %v", c.Vaultwarden, err)
+	if err != nil || c.SecretBox != nil {
+		t.Fatalf("off by default: %v %v", c.SecretBox, err)
 	}
-	// Partial config refused.
-	base["VAULTWARDEN_URL"] = "https://vault.example.com"
+	base["INTELLIGENCE_SECRETS_KEY"] = "c2hvcnQ="
 	if _, err := serverConfig(env(base)); err == nil {
-		t.Fatal("partial Vaultwarden config accepted")
+		t.Fatal("a short INTELLIGENCE_SECRETS_KEY was accepted")
 	}
-	// Non-HTTPS URL refused.
-	base["VAULTWARDEN_URL"] = "http://vault.example.com"
-	base["VAULTWARDEN_CLIENT_ID"] = "user.demo"
-	base["VAULTWARDEN_CLIENT_SECRET"] = "secret"
-	base["VAULTWARDEN_MASTER_PASSWORD"] = "master"
-	base["VAULTWARDEN_ACCOUNT"] = "owner"
-	if _, err := serverConfig(env(base)); err == nil {
-		t.Fatal("non-HTTPS Vaultwarden URL accepted")
-	}
-	// Missing VAULTWARDEN_ACCOUNT refused.
-	base["VAULTWARDEN_URL"] = "https://vault.example.com"
-	delete(base, "VAULTWARDEN_ACCOUNT")
-	if _, err := serverConfig(env(base)); err == nil {
-		t.Fatal("Vaultwarden config without VAULTWARDEN_ACCOUNT accepted")
-	}
-	// Complete config accepted.
-	base["VAULTWARDEN_ACCOUNT"] = "owner"
-	base["VAULTWARDEN_ORGANIZATION"] = "Custom Org"
-	base["VAULTWARDEN_COLLECTION"] = "Custom Collection"
-	c, err = serverConfig(env(base))
-	if err != nil || c.Vaultwarden == nil || secretStore(c) == nil || c.VaultwardenAccount != "owner" {
-		t.Fatalf("complete config failed: %+v %q %v", c.Vaultwarden, c.VaultwardenAccount, err)
-	}
-	if c.Vaultwarden.Organization != "Custom Org" || c.Vaultwarden.Collection != "Custom Collection" {
-		t.Fatalf("unexpected org/collection: %+v", c.Vaultwarden)
+	base["INTELLIGENCE_SECRETS_KEY"] = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+	if c, err = serverConfig(env(base)); err != nil || c.SecretBox == nil {
+		t.Fatalf("a 32-byte key: %v %v", c.SecretBox, err)
 	}
 }

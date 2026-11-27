@@ -20,6 +20,7 @@ import (
 	"github.com/zachlatta/intelligence/internal/fleet"
 	"github.com/zachlatta/intelligence/internal/hostclient"
 	"github.com/zachlatta/intelligence/internal/hostwatch"
+	"github.com/zachlatta/intelligence/internal/secretbox"
 	"github.com/zachlatta/intelligence/internal/voicememo"
 	"github.com/zachlatta/intelligence/internal/webpush"
 	"github.com/zachlatta/intelligence/internal/workflow"
@@ -68,11 +69,9 @@ type Config struct {
 	// Unset turns Web Push off cleanly. PushHTTP overrides the HTTP client used to post pushes (tests).
 	VAPID    *webpush.VAPID
 	PushHTTP *http.Client
-	// Secrets stores secret values submitted on workflow asks directly in Vaultwarden,
-	// scoped exclusively to the single account named by SecretsAccount.
-	// Nil disables secret submission cleanly (returns 503 without persisting values).
-	Secrets        workflow.SecretStore
-	SecretsAccount string
+	// SecretBox seals the temporary secrets Zach gives workflow runs on their asks
+	// (INTELLIGENCE_SECRETS_KEY). Nil: the page says storage is not configured and storing returns 503.
+	SecretBox *secretbox.Box
 }
 
 type app struct {
@@ -144,8 +143,7 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	}
 	a.wf.Notify = cfg.HostAlerts
 	a.wf.NotifyAccount = cfg.PDWAccount
-	a.wf.Secrets = cfg.Secrets
-	a.wf.SecretsAccount = cfg.SecretsAccount
+	a.wf.SecretBox = cfg.SecretBox
 	if cfg.QueueLimits != nil {
 		a.wf.Limits = *cfg.QueueLimits
 	}
@@ -158,6 +156,7 @@ func newHandler(cfg Config, workers bool) http.Handler {
 		go a.wf.RunStallWatchdog(cfg.Context)
 		go a.wf.RunInterruptionRecovery(cfg.Context)
 		go a.wf.RunModelQuotaWatcher(cfg.Context)
+		go a.wf.RunSecretPurge(cfg.Context)
 		watch := &hostwatch.Watcher{DB: cfg.DB, Notify: cfg.HostAlerts, Push: a.wf.Push, Account: cfg.PDWAccount, Location: cfg.NotifyLocation,
 			Started: cfg.Now(), Now: cfg.Now}
 		go watch.Run(cfg.Context)
@@ -315,6 +314,8 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	mux.HandleFunc("POST /api/workflow-runs", a.write(a.startRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/reply", a.write(a.replyToRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/secrets", a.write(a.submitRunSecrets))
+	mux.HandleFunc("POST /api/workflow-runs/{id}/secrets/fetch", a.fetchRunSecret)
+	mux.HandleFunc("POST /api/workflow-runs/{id}/secrets/{secret}/delete", a.write(a.deleteRunSecret))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/input", a.write(a.addRunInput))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/cancel", a.write(a.cancelRun))
 	mux.HandleFunc("POST /api/workflow-runs/{id}/start", a.write(a.startQueuedRun))

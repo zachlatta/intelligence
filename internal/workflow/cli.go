@@ -30,8 +30,10 @@ The agents of a workflow run move it with these, on the run's host:
   next      --run <id> [--summary <text>]  this step is done; prints the next step (after the last, finishes the run)
   back      --run <id> <step id> --why <text>
   skip      --run <id> --why <text>
-  ask       --run <id> --note <file>|- [--secret "<name>[: <purpose>]"]...
-                                       ask Zach (Markdown); --secret shows a password field stored in Vaultwarden, never in events/transcripts
+  ask       --run <id> --note <file>|- [--secret "<name>[: <purpose>]"]... [--multiline-secret "<name>[: <purpose>]"]...
+                                       ask Zach (Markdown); each --secret is a password field on the ask: Intelligence keeps
+                                       the value encrypted for this run (never in events or transcripts); fetch it with
+                                       intelligence secret (multiline: a text area, for a PEM key)
   done      --run <id> [--summary <text>]  finish the run now
   fail      --run <id> --why <text>
   suggest   --run <id> <group_token> [--exclude <provider/model>]  record a fresh suggestion without moving
@@ -211,7 +213,8 @@ func parseCLI(args []string, stdin io.Reader) (Move, string, error) {
 	fs.StringVar(&m.Into, "into", "", "steer: the live run on the same deliverable")
 	fs.StringVar(&m.Deliverable, "deliverable", "", "steer: what the two runs share")
 	var secretFlags secretFlagSlice
-	fs.Var(&secretFlags, "secret", "ask: request a secret (\"Name: Purpose\" or JSON); repeatable")
+	fs.Var(secretFlag{&secretFlags, false}, "secret", "ask: request a secret (\"Name: Purpose\" or JSON); repeatable")
+	fs.Var(secretFlag{&secretFlags, true}, "multiline-secret", "ask: request a multi-line secret (a PEM key); repeatable")
 	note := fs.String("note", "", "")
 	var pos []string
 	rest := args[1:]
@@ -272,11 +275,12 @@ func parseCLI(args []string, stdin io.Reader) (Move, string, error) {
 	if err == nil && len(secretFlags) > 0 {
 		m.Secrets = make([]SecretRequest, 0, len(secretFlags))
 		for _, raw := range secretFlags {
-			sr, serr := parseSecretFlag(raw)
+			sr, serr := parseSecretFlag(raw.value)
 			if serr != nil {
 				err = serr
 				break
 			}
+			sr.Multiline = sr.Multiline || raw.multiline
 			m.Secrets = append(m.Secrets, sr)
 		}
 		if err == nil {
@@ -289,12 +293,24 @@ func parseCLI(args []string, stdin io.Reader) (Move, string, error) {
 	return m, *run, err
 }
 
-type secretFlagSlice []string
+// secretFlagSlice keeps --secret and --multiline-secret in the order given: the ask shows them so.
+type secretFlagSlice []struct {
+	value     string
+	multiline bool
+}
 
-func (s *secretFlagSlice) String() string { return strings.Join(*s, ", ") }
+type secretFlag struct {
+	list      *secretFlagSlice
+	multiline bool
+}
 
-func (s *secretFlagSlice) Set(v string) error {
-	*s = append(*s, v)
+func (s secretFlag) String() string { return "" }
+
+func (s secretFlag) Set(v string) error {
+	*s.list = append(*s.list, struct {
+		value     string
+		multiline bool
+	}{v, s.multiline})
 	return nil
 }
 

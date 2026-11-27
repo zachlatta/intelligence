@@ -70,8 +70,6 @@ func workflowError(w http.ResponseWriter, err error) {
 		http.Error(w, "no such workflow or run in this account", http.StatusNotFound)
 	case errors.Is(err, workflow.ErrSecretsNotConfigured):
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-	case errors.Is(err, workflow.ErrSecretStoreFailed):
-		http.Error(w, err.Error(), http.StatusBadGateway)
 	case errors.As(err, &ref) && ref.Forbidden:
 		http.Error(w, ref.Msg, http.StatusForbidden)
 	case errors.As(err, &ref) && ref.Conflict:
@@ -217,7 +215,7 @@ func (a *app) replyToRun(v viewer) http.HandlerFunc {
 }
 
 // submitRunSecrets: POST /api/workflow-runs/{id}/secrets {"secrets": [{"id","value"}], "text", "approve"}:
-// stores submitted secret values directly in Vaultwarden and resumes the waiting run with only non-secret references.
+// seals the values Zach gave for the ask the run waits on and resumes it with how to fetch them, never the values.
 func (a *app) submitRunSecrets(v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -235,6 +233,51 @@ func (a *app) submitRunSecrets(v viewer) http.HandlerFunc {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// deleteRunSecret: POST /api/workflow-runs/{id}/secrets/{secret}/delete {}: wipes a stored secret early.
+func (a *app) deleteRunSecret(v viewer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct{}
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+		if err := a.wf.DeleteSecret(r.Context(), v.acct.ID, v.acct.Username, r.PathValue("id"), r.PathValue("secret")); err != nil {
+			workflowError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// fetchRunSecret: POST /api/workflow-runs/{id}/secrets/fetch {"name"}, from an agent with its host's
+// key (`intelligence secret`): {"id", "name", "value"} of a secret stored for a run of that host and
+// account. The fetch is recorded; the value is never logged.
+func (a *app) fetchRunSecret(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	acct, host, ok := a.hostCaller(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if !decodeWorkflowJSON(w, r, &req) {
+		return
+	}
+	s, err := a.wf.FetchSecret(r.Context(), acct.ID, host, r.PathValue("id"), req.Name)
+	switch {
+	case errors.Is(err, workflow.ErrSecretsNotConfigured):
+		workflowMessage(w, http.StatusServiceUnavailable, err.Error())
+		return
+	case errors.Is(err, workflow.ErrSecretUnreadable):
+		workflowMessage(w, http.StatusInternalServerError, err.Error())
+		return
+	case err != nil:
+		workflowResult(w, "", err)
+		return
+	}
+	writeJSON(w, map[string]string{"id": s.ID, "name": s.Name, "value": s.Value})
 }
 
 func (a *app) addRunInput(v viewer) http.HandlerFunc {
@@ -1108,42 +1151,50 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		secretsEnabled := cfg.Secrets != nil && strings.TrimSpace(cfg.SecretsAccount) != "" && v.acct.Username == strings.TrimSpace(cfg.SecretsAccount)
-		var pendingSecrets []pendingSecretView
-		if run.Status == workflow.Waiting && (cfg.Secrets == nil || secretsEnabled) {
-			pendingSecrets, err = readPendingSecrets(ctx, v.pool, id)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
+		secrets, err := readRunSecrets(ctx, v.pool, id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		var pendingSecrets []runSecretView
+		if run.Status == workflow.Waiting {
+			for _, s := range secrets {
+				if s.Pending {
+					pendingSecrets = append(pendingSecrets, s)
+				}
 			}
 		}
 		slices.Reverse(emails) // oldest first, as a thread reads
 		renderWorkflows(w, "run", map[string]any{"Version": cfg.Version, "Now": cfg.Now(), "Run": run, "Steps": stepViews(run, events, visits, cfg.Now()),
 			"Agents": agents, "Before": before, "Events": events, "Emails": emails, "VoiceMemos": voiceMemos, "ArchiveStatus": archiveStatus, "ArchiveError": archiveError, "Dictation": dictationPath(cfg),
-			"PendingSecrets": pendingSecrets, "VaultwardenConfigured": secretsEnabled})
+			"PendingSecrets": pendingSecrets, "Secrets": secrets, "SecretsConfigured": cfg.SecretBox != nil})
 	}
 }
 
-type pendingSecretView struct {
-	ID               string
-	Name             string
-	Purpose          string
-	Username         string
-	TargetCollection string
+// runSecretView is a run's secret as its page shows it: never its value or ciphertext.
+type runSecretView struct {
+	ID, Name, Purpose, Username, Status, StoredBy, PurgeReason string
+	Multiline                                                  bool
+	Pending                                                    bool // asked on the ask the run waits on, not yet given
+	StoredAt, ExpiresAt, PurgedAt, LastFetched                 *time.Time
+	Fetches                                                    int
 }
 
-func readPendingSecrets(ctx context.Context, p *pgxpool.Pool, runID string) ([]pendingSecretView, error) {
-	rows, err := p.Query(ctx, `SELECT id::text, name, purpose, username, target_collection
-		FROM workflow_run_secret_requests
-		WHERE run_id = $1 AND status = 'pending'
-		  AND ask_event_id = (SELECT coalesce(max(id), 0) FROM workflow_run_events WHERE run_id = $1 AND kind = 'ask')
-		ORDER BY position, id`, runID)
+func readRunSecrets(ctx context.Context, p *pgxpool.Pool, runID string) ([]runSecretView, error) {
+	rows, err := p.Query(ctx, `SELECT s.id::text, s.name, s.purpose, s.username, s.status, s.stored_by, s.purge_reason, s.multiline,
+		s.status = 'pending' AND s.ask_event_id = (SELECT coalesce(max(id), 0) FROM workflow_run_events WHERE run_id = $1 AND kind = 'ask'),
+		s.stored_at, s.expires_at, s.purged_at, f.last, coalesce(f.n, 0)
+		FROM workflow_run_secrets s
+		LEFT JOIN LATERAL (SELECT count(*)::int AS n, max(at) AS last FROM workflow_run_secret_fetches WHERE secret_id = s.id) f ON true
+		WHERE s.run_id = $1
+		ORDER BY s.ask_event_id, s.position, s.id`, runID)
 	if err != nil {
 		return nil, err
 	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (pendingSecretView, error) {
-		var s pendingSecretView
-		err := row.Scan(&s.ID, &s.Name, &s.Purpose, &s.Username, &s.TargetCollection)
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (runSecretView, error) {
+		var s runSecretView
+		err := row.Scan(&s.ID, &s.Name, &s.Purpose, &s.Username, &s.Status, &s.StoredBy, &s.PurgeReason, &s.Multiline,
+			&s.Pending, &s.StoredAt, &s.ExpiresAt, &s.PurgedAt, &s.LastFetched, &s.Fetches)
 		return s, err
 	})
 }
@@ -1249,7 +1300,7 @@ func (e runEvent) Line() string {
 		return "Claimed " + e.Text
 	case "steer", "steer_unanswered", "email_continuation_requested", "email_continued", "email_cold_start", "retried", "retry_of":
 		return linkRuns(e.Text)
-	case "error", "stalled", "continuation", "resume", "interrupted", "login_recovery", "worktree_base_fallback", "secret_stored":
+	case "error", "stalled", "continuation", "resume", "interrupted", "login_recovery", "worktree_base_fallback", "secret_stored", "secret_fetched", "secret_deleted", "secret_expired":
 		return e.Text
 	case "start_retry":
 		return "Start failed; retry queued: " + e.Text

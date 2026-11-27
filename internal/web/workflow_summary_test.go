@@ -125,7 +125,7 @@ func TestRunSummaryHeadingRefresh(t *testing.T) {
 	run := startRun(t, h, createWorkflow(t, h, workflow.Starting), "Keep the heading current")
 	page := get(t, h, "/workflow-runs/"+run, nil).Body.String()
 	live, heading, request := strings.Index(page, `<div id="live">`), strings.Index(page, "<h1>"), strings.Index(page, `<div class="request">`)
-	if live < 0 || heading <= live || heading >= request || !strings.Contains(page, `["live", "steps"]`) {
+	if live < 0 || heading <= live || heading >= request || !strings.Contains(page, `["live", "steps", "run-secrets"]`) {
 		t.Fatal("heading must be inside the refreshed live block")
 	}
 	if !strings.Contains(page, "document.title = next.title") {

@@ -18,6 +18,7 @@ import (
 	"github.com/zachlatta/intelligence/internal/fleet"
 	"github.com/zachlatta/intelligence/internal/hostclient"
 	"github.com/zachlatta/intelligence/internal/hostwatch"
+	"github.com/zachlatta/intelligence/internal/secretbox"
 	"github.com/zachlatta/intelligence/internal/webpush"
 )
 
@@ -38,8 +39,7 @@ type Engine struct {
 	Notify               hostwatch.Notifier
 	NotifyAccount        string
 	Push                 webpush.Sender
-	Secrets              SecretStore
-	SecretsAccount       string
+	SecretBox            *secretbox.Box // INTELLIGENCE_SECRETS_KEY; nil: asks cannot take secrets
 	ModelQuotaAlertAfter time.Duration
 }
 
@@ -1063,7 +1063,7 @@ type Move struct {
 	// claim: what the run will change or publish; steer: optionally, what the two runs share
 	Deliverable string          `json:"deliverable,omitempty"`
 	Into        string          `json:"into,omitempty"`    // steer: the live run on the same deliverable
-	Secrets     []SecretRequest `json:"secrets,omitempty"` // ask: secrets requested from Zach (stored in Vaultwarden)
+	Secrets     []SecretRequest `json:"secrets,omitempty"` // ask: secrets requested from Zach (stored encrypted by Intelligence)
 }
 
 // MoveRun makes m on run, for host (whose key the caller checked): the run must be on host. It
@@ -1418,15 +1418,6 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 				return fmt.Sprintf("Not asked: this run is waiting on model quota for %s. Do not ask Zach and do not launch a worker without an eligible suggestion. Poll %s every minute, or end your turn and Intelligence will resume this run automatically when an eligible model returns.", token, suggestPollCommand(r.ID, token, exclude)), nil
 			}
 		}
-		if len(m.Secrets) > 0 && e.Secrets != nil {
-			allowed, err := e.secretsAllowedForAccount(ctx, tx, r.Account)
-			if err != nil {
-				return "", err
-			}
-			if !allowed {
-				return "", forbidden("Vaultwarden secret storage is not enabled for this account")
-			}
-		}
 		askEventID, err := e.eventID(ctx, tx, r, "ask", ptr(r.Step), nil, m.Note)
 		if err != nil {
 			return "", err
@@ -1434,7 +1425,11 @@ func (e *Engine) move(ctx context.Context, tx pgx.Tx, r run, m Move) (string, er
 		if err := e.insertSecretRequests(ctx, tx, r, askEventID, m.Secrets); err != nil {
 			return "", err
 		}
-		return "Asked Zach. End your turn now: his reply comes as your next message.", set(Waiting, r.Step, m.Note)
+		asked := "Asked Zach. End your turn now: his reply comes as your next message."
+		if len(m.Secrets) > 0 && e.SecretBox == nil {
+			asked = "Asked Zach, but secret storage is not configured on this server (INTELLIGENCE_SECRETS_KEY), so he cannot give the secrets on the page; he can still reply. End your turn now: his reply comes as your next message."
+		}
+		return asked, set(Waiting, r.Step, m.Note)
 	case "fail":
 		if strings.TrimSpace(m.Why) == "" {
 			return "", bad("say why with --why.")

@@ -25,6 +25,8 @@ One binary, six commands:
   The host client reads it over a Unix socket.
 - `intelligence workflow`: what a workflow run's agents run on their host to move the run
   (Workflows, below). It reaches the server with the host's key.
+- `intelligence secret`: what a workflow run's agents run on their host to fetch a secret Zach
+  stored for the run (Temporary secrets, below). It reaches the server with the host's key.
 - `intelligence vapid-keys`: generates a P-256 VAPID key pair and prints `VAPID_PUBLIC_KEY`,
   `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` for Web Push notifications (`-subject mailto:you@example.com`).
 - `intelligence version`: prints the commit the binary was built from.
@@ -109,9 +111,11 @@ The hierarchy is hosts > workspaces > agents:
   times; account-isolated by RLS), `workflow_runs` (including `api_key_id`, `idempotency_key` and
   `idempotency_hash` for API-triggered runs) and
   `workflow_run_events` (what happened in each run, in order, including `api_key_id` when an API key
-  acted), `workflow_run_secret_requests` (non-secret metadata for secrets requested on an `ask`:
-  item name, purpose, target Vaultwarden collection, status, and the stored Vaultwarden item ID and
-  who/when — secret values are never stored in Postgres), with the views
+  acted), `workflow_run_secrets` (the secrets an `ask` requested: name, purpose, username, status,
+  who stored each and when, when it expires or was wiped and why, and its value only as AES-256-GCM
+  ciphertext sealed with `INTELLIGENCE_SECRETS_KEY` and bound to its row, so reading it gives
+  nothing) and `workflow_run_secret_fetches` (each time an agent fetched one: which, from which host,
+  when; never the value; Temporary secrets, below), with the views
   `workflow_run_step_visits` (each time a run was on a step, from its moves) and
   `workflow_run_step_times` (each step's visits and time spent, the current one to now): Workflows, below.
 - `gmail_connections` (the account's Gmail mailbox: its address, the account holder's own
@@ -868,15 +872,49 @@ version it started with. A run:
      step's instructions (after the last step, the run is finished).
    - `back --run <id> <step id> --why "..."`: back to an earlier step, with what is missing.
    - `skip --run <id> --why "..."`, `done --run <id>` and `fail --run <id> --why "..."`.
-   - `ask --run <id> --note note.md [--secret "<name>[: <purpose>]"]...`: the run waits, showing
-     Zach the note (Markdown) on its page. His reply (typed or dictated there) goes to the
-     orchestrator as a message, which decides what it means and moves on. Repeating `--secret`
-     (either `"Name: Purpose"` or a JSON object `{"name","purpose","username"}`) adds a password
-     field (`type="password"`, `autocomplete="off"`) on the ask card; submitting posts JSON to
-     `POST /api/workflow-runs/{id}/secrets`, writes the value directly to Vaultwarden's shared
-     agent collection, records only the non-secret item reference in `workflow_run_secret_requests`
-     and `workflow_run_events`, and resumes the orchestrator with `vaultwarden-agent get password <id>`
-     instructions (never the secret value).
+   - `ask --run <id> --note note.md [--secret "<name>[: <purpose>]"]... [--multiline-secret ...]`:
+     the run waits, showing Zach the note (Markdown) on its page. His reply (typed or dictated
+     there) goes to the orchestrator as a message, which decides what it means and moves on. Each
+     `--secret` (`"Name: Purpose"` or a JSON object `{"name","purpose","username","multiline"}`)
+     adds a password field on the ask; `--multiline-secret` a masked text area, for a PEM key
+     (Temporary secrets, below).
+
+#### Temporary secrets
+
+When a run needs a password or an API key from Zach, the orchestrator asks with `--secret`. The
+ask shows a password field for each (`autocomplete="new-password"`, with Show/Hide), and Zach
+stores them all with one button, with or without a note; a plain reply instead dismisses them.
+
+- Storing (`POST /api/workflow-runs/{id}/secrets`) seals every value with AES-256-GCM under
+  `INTELLIGENCE_SECRETS_KEY` (a fresh nonce each; the additional data is the secret's id, run and
+  account, so a ciphertext moved to another row does not open), keeps only that ciphertext in
+  `workflow_run_secrets`, and resumes the orchestrator, in one transaction: all of them or none.
+  A value also pasted into the note is refused (values under 6 characters, such as a PIN, are not
+  looked for: they would match ordinary text).
+- The orchestrator's message names each secret and the commands that fetch it, never the value,
+  and tells agents never to print, log or paste one. The run's events keep only "Stored 2
+  secret(s) in Intelligence: …" and Zach's note.
+- The run's agents fetch a value with their host's key, only for a run of that host and its
+  account, while the run is live and the secret unexpired:
+  - `intelligence secret env --run <id> STRIPE_API_KEY='Stripe API key' -- <command>` runs the
+    command with the value in its environment;
+  - `intelligence secret get --run <id> --to-file <path> <name>` writes it to a 0600 file (not
+    through a symlink);
+  - `intelligence secret get --run <id> <name>` prints it to a pipe, and refuses a terminal.
+
+  `<name>` is the name asked for (any case) or the secret's id. Each fetch adds a
+  `workflow_run_secret_fetches` row and a `secret_fetched` event (host, which secret, when).
+- A secret lives at most 7 days after it was stored, and is wiped sooner when its run ends
+  (succeeded, failed or canceled: a trigger on `workflow_runs`, whatever ended it) or when Zach
+  deletes it from the run page's Secrets card. Wiping clears the ciphertext and keeps the row
+  (`status = 'purged'`, `purge_reason` `expired`, `deleted` or `run_ended`); the server wipes
+  expired ones every minute, and a fetch past the expiry wipes it then. A retried or continued run
+  is a new run: the orchestrator asks again.
+- Secrets belong to the run's account: another account cannot read their rows, store into its
+  runs or fetch them, and its hosts' keys reach only its own runs.
+- Without `INTELLIGENCE_SECRETS_KEY` the ask says secret storage is not configured, storing
+  returns 503 and nothing is kept; a plain reply still works. Changing the key makes stored
+  secrets unreadable (a fetch says so); ask Zach again.
 
 Workflow prompts tell orchestrators to pass credentials by environment variable name or a
 0600 file path on the worker's host, never by value. Intelligence does not issue PDW credentials.
@@ -2100,16 +2138,22 @@ origin (another site's request is refused with 403), and those with a body must 
   409 when it waits on none). `"approve": true` is valid only on a sign-off step and also records a
   `signoff_approved` event (empty text becomes “Approved”).
 - `POST /api/workflow-runs/{id}/secrets` with `{"secrets": [{"id", "value"}], "text"?, "approve"?}`:
-  same-origin browser session only (`Cache-Control: no-store`). Stores each submitted secret value
-  directly in Vaultwarden, records only non-secret item references in `workflow_run_secret_requests`
-  and `workflow_run_events`, and resumes the orchestrator with Vaultwarden fetch commands (never the
-  value). Returns 503 when Vaultwarden is not configured, 403 for any account other than
-  `VAULTWARDEN_ACCOUNT`, 502 on an upstream Vaultwarden error, and 400 if a secret value is also
-  pasted into `text`.
+  same-origin browser session only (`Cache-Control: no-store`). Seals every value the ask the run
+  waits on requested and resumes the orchestrator with how to fetch them, never the values
+  (Temporary secrets, above); `"approve"` as on `/reply`. 204; 503 without
+  `INTELLIGENCE_SECRETS_KEY`, 404 for another account's run, 409 when the run waits on no secrets,
+  400 when a value is missing or also pasted into `text`.
+- `POST /api/workflow-runs/{id}/secrets/{secret}/delete` with `{}`: wipes a stored secret now (204;
+  409 if it holds no value).
+- `POST /api/workflow-runs/{id}/secrets/fetch` with `{"name"}` and `Authorization: Bearer <the
+  run's host's key>`: `intelligence secret`. Answers `{"id", "name", "value"}` (`Cache-Control:
+  no-store`) and records the fetch; 404 for a run not of that host and account, 409 when the
+  secret is not given yet, wiped, expired or the run has ended, 503 without
+  `INTELLIGENCE_SECRETS_KEY`.
 - `POST /api/workflow-runs/{id}/cancel` with `{}`: ends the run and
   stops its orchestrator (204).
 - `POST /api/workflow-runs/{id}/moves` with `{"move", "directory", "step", "summary", "why",
-  "note", "deliverable", "into"}` and `Authorization: Bearer <the run's host's key>`: `intelligence workflow`. Answers
+  "note", "deliverable", "into", "secrets"}` and `Authorization: Bearer <the run's host's key>`: `intelligence workflow`. Answers
   `{"message"}`, what the agent reads next; 400 or 409 (with the reason as the message) for a move
   that cannot be made, 404 for a run not on that host.
 - `GET /workflows/email`: the mailbox (connect, the account holder's own addresses, disconnect) and
@@ -2385,16 +2429,10 @@ Server:
   subscription (existing rows can no longer be unsealed and the push service rejects the old key),
   so devices must re-enable notifications on `/account`. Subscriptions that return 404 or 410 from
   the push service are removed automatically.
-- `VAULTWARDEN_URL`, `VAULTWARDEN_CLIENT_ID`, `VAULTWARDEN_CLIENT_SECRET`,
-  `VAULTWARDEN_MASTER_PASSWORD` and `VAULTWARDEN_ACCOUNT`: optional, together; enable password
-  fields on workflow asks for the single Intelligence username named by `VAULTWARDEN_ACCOUNT`
-  (every other account is refused with 403 and sees no secret fields). Submitted values are stored
-  directly in Vaultwarden without keeping values in Postgres, run events or transcripts.
-  `VAULTWARDEN_URL` is Vaultwarden's HTTPS origin (e.g. `https://vault.example.com`).
-  Optional `VAULTWARDEN_ORGANIZATION` (default `AI Agents`) and `VAULTWARDEN_COLLECTION` (default
-  `AI Agents Shared Passwords`) select the target organization and collection by name or UUID.
-  Unset, secret asks show a clear notice and `POST /api/workflow-runs/{id}/secrets` returns 503
-  without persisting any value.
+- `INTELLIGENCE_SECRETS_KEY`: optional; 32 random bytes in base64 (`openssl rand -base64 32`).
+  Seals the temporary secrets Zach gives workflow runs on their asks (Temporary secrets, above).
+  Unset, asks say secret storage is not configured and storing returns 503. Changing it makes
+  stored secrets unreadable; they expire within 7 days anyway.
 - `WORKFLOW_QUEUE_CPU_PCT`, `WORKFLOW_QUEUE_MEM_PCT`, `WORKFLOW_QUEUE_MEM_PEAK_PCT`,
   `WORKFLOW_QUEUE_LOAD_PER_CPU`: optional; when a host is near capacity, so a new workflow run
   queues (The run queue, above). Defaults 85, 80, 95 and 1.5; `0` or `off` turns one off.

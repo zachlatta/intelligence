@@ -40,8 +40,8 @@ import (
 	"github.com/zachlatta/intelligence/internal/paseo"
 	"github.com/zachlatta/intelligence/internal/probe"
 	"github.com/zachlatta/intelligence/internal/resources"
+	"github.com/zachlatta/intelligence/internal/secretbox"
 	"github.com/zachlatta/intelligence/internal/usage"
-	"github.com/zachlatta/intelligence/internal/vaultwarden"
 	"github.com/zachlatta/intelligence/internal/voicememo"
 	"github.com/zachlatta/intelligence/internal/web"
 	"github.com/zachlatta/intelligence/internal/webpush"
@@ -71,12 +71,14 @@ func main() {
 		err = runProbe(ctx)
 	case "workflow":
 		os.Exit(workflow.CLI(ctx, os.Args[2:], os.Getenv, os.Stdin, os.Stdout, os.Stderr, http.DefaultClient))
+	case "secret":
+		os.Exit(workflow.SecretCLI(ctx, os.Args[2:], os.Getenv, os.Stdin, os.Stdout, os.Stderr, http.DefaultClient, workflow.StdoutIsTerminal))
 	case "vapid-keys":
 		err = runVAPIDKeys(os.Args[2:], os.Stdout)
 	case "version":
 		fmt.Println(version(os.Getenv))
 	default:
-		err = fmt.Errorf("unknown command %q: want server, host, probe, workflow, vapid-keys or version", cmd)
+		err = fmt.Errorf("unknown command %q: want server, host, probe, workflow, secret, vapid-keys or version", cmd)
 	}
 	if err != nil {
 		log.Fatal(err)
@@ -139,11 +141,9 @@ type serverSettings struct {
 	// VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT enable Web Push notifications for the PWA;
 	// unset turns Web Push off gracefully.
 	VAPID *webpush.VAPID
-	// VAULTWARDEN_URL, VAULTWARDEN_CLIENT_ID, VAULTWARDEN_CLIENT_SECRET, VAULTWARDEN_MASTER_PASSWORD
-	// and VAULTWARDEN_ACCOUNT enable secret-ask fields on workflow runs for that single account
-	// (stored in Vaultwarden, never in Postgres/events).
-	Vaultwarden        *vaultwarden.Config
-	VaultwardenAccount string
+	// INTELLIGENCE_SECRETS_KEY seals the temporary secrets Zach gives workflow runs on their asks;
+	// unset, asks cannot take secrets (the page says so and storing returns 503).
+	SecretBox *secretbox.Box
 }
 
 func serverConfig(getenv func(string) string) (serverSettings, error) {
@@ -223,30 +223,12 @@ func serverConfig(getenv func(string) string) (serverSettings, error) {
 			return c, err
 		}
 	}
-	vwURL, vwID, vwSecret, vwPass, vwAcct := getenv("VAULTWARDEN_URL"), getenv("VAULTWARDEN_CLIENT_ID"), getenv("VAULTWARDEN_CLIENT_SECRET"), getenv("VAULTWARDEN_MASTER_PASSWORD"), strings.TrimSpace(getenv("VAULTWARDEN_ACCOUNT"))
-	if vwURL != "" || vwID != "" || vwSecret != "" || vwPass != "" || vwAcct != "" {
-		u, e := url.Parse(vwURL)
-		if e != nil || u.Scheme != "https" || u.Host == "" || (u.Path != "" && u.Path != "/") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || vwID == "" || vwSecret == "" || vwPass == "" || vwAcct == "" {
-			return c, errors.New("Vaultwarden secret storage needs VAULTWARDEN_URL (HTTPS origin), VAULTWARDEN_CLIENT_ID, VAULTWARDEN_CLIENT_SECRET, VAULTWARDEN_MASTER_PASSWORD and VAULTWARDEN_ACCOUNT")
+	if k := getenv("INTELLIGENCE_SECRETS_KEY"); strings.TrimSpace(k) != "" {
+		if c.SecretBox, err = secretbox.New(k); err != nil {
+			return c, err
 		}
-		c.Vaultwarden = &vaultwarden.Config{
-			URL:            strings.TrimRight(vwURL, "/"),
-			ClientID:       vwID,
-			ClientSecret:   vwSecret,
-			MasterPassword: vwPass,
-			Organization:   getenv("VAULTWARDEN_ORGANIZATION"),
-			Collection:     getenv("VAULTWARDEN_COLLECTION"),
-		}
-		c.VaultwardenAccount = vwAcct
 	}
 	return c, nil
-}
-
-func secretStore(c serverSettings) workflow.SecretStore {
-	if c.Vaultwarden == nil {
-		return nil
-	}
-	return vaultwarden.NewClient(*c.Vaultwarden)
 }
 
 // hostAlerts is the phone channel for silent-host alerts: PDW's notify tool, when configured.
@@ -331,7 +313,7 @@ func serve(ctx context.Context) error {
 		Handler: web.New(web.Config{Context: ctx, Version: v, DB: owner, Readonly: ro, BinDir: c.BinDir,
 			AssemblyAIKey: c.AssemblyAIKey, Google: c.Google, EmailKey: c.EmailKey, PublicURL: c.PublicURL, EmailInterval: c.EmailInterval, QueueLimits: &c.QueueLimits,
 			PDWURL: c.PDWURL, PDWKey: c.PDWKey, PDWAccount: c.PDWAccount, VoiceMemoInterval: c.VoiceMemoInterval,
-			HostAlerts: hostAlerts(c), NotifyLocation: c.NotifyLocation, VAPID: c.VAPID, Secrets: secretStore(c), SecretsAccount: c.VaultwardenAccount}),
+			HostAlerts: hostAlerts(c), NotifyLocation: c.NotifyLocation, VAPID: c.VAPID, SecretBox: c.SecretBox}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go pruneHosts(ctx, fleet.New(owner))

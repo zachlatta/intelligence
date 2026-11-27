@@ -101,6 +101,9 @@
   .secret-input-row { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
   .secret-input-row input { flex: 1; min-width: 0; font-family: var(--mono); }
   .secret-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-top: .85rem; }
+  .secret-input-row textarea { flex: 1; min-width: 0; font-family: var(--mono); font-size: 12.5px; }
+  .secret-input-row textarea.masked { -webkit-text-security: disc; }
+  .secret-list li { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
   @media (max-width: 40rem) {
     .runs-table, .runs-table tbody, .runs-table tr, .runs-table td { display: block; width: auto; }
     .runs-table thead { display: none; }
@@ -1099,28 +1102,29 @@ render();
     <div class="secret-box" id="secret-box">
       <div class="secret-box-head">
         <h3>Requested {{if eq (len $.PendingSecrets) 1}}secret{{else}}secrets{{end}}</h3>
-        <span class="badge">Vaultwarden{{with (index $.PendingSecrets 0).TargetCollection}} · {{.}}{{end}}</span>
-        <span class="meta">Stored directly in Vaultwarden; never saved in run events or transcripts.</span>
+        <span class="badge">Temporary</span>
+        <span class="meta">Encrypted by Intelligence for this run's agents only; wiped when the run ends or after 7 days. Never saved in run events or transcripts.</span>
       </div>
-      {{if not $.VaultwardenConfigured}}
-      <p class="banner" role="alert">Vaultwarden is not configured on this server. Set <code>VAULTWARDEN_URL</code>, <code>VAULTWARDEN_CLIENT_ID</code>, <code>VAULTWARDEN_CLIENT_SECRET</code>, <code>VAULTWARDEN_MASTER_PASSWORD</code> and <code>VAULTWARDEN_ACCOUNT</code> to store secrets.</p>
+      {{if not $.SecretsConfigured}}
+      <p class="banner" role="alert">Secret storage is not configured on this server: set <code>INTELLIGENCE_SECRETS_KEY</code> to store secrets. You can still send a plain reply.</p>
       {{end}}
       {{range $.PendingSecrets}}
       <div class="secret-field">
         <label for="secret-{{.ID}}">{{.Name}}{{if .Username}} <span class="meta">(username: <span class="mono">{{.Username}}</span>)</span>{{end}}</label>
         {{if .Purpose}}<p class="secret-purpose">{{.Purpose}}</p>{{end}}
         <div class="secret-input-row">
-          <input type="password" id="secret-{{.ID}}" data-secret-id="{{.ID}}" autocomplete="off" spellcheck="false" placeholder="Enter secret value"{{if not $.VaultwardenConfigured}} disabled{{end}}>
-          <button type="button" class="btn sm ghost" data-toggle-secret="secret-{{.ID}}"{{if not $.VaultwardenConfigured}} disabled{{end}}>Show</button>
+          {{if .Multiline}}<textarea class="secret-multiline masked" id="secret-{{.ID}}" data-secret-id="{{.ID}}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="4" placeholder="Paste the value (several lines allowed)"{{if not $.SecretsConfigured}} disabled{{end}}></textarea>
+          {{else}}<input type="password" id="secret-{{.ID}}" data-secret-id="{{.ID}}" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Enter secret value"{{if not $.SecretsConfigured}} disabled{{end}}>{{end}}
+          <button type="button" class="btn sm ghost" data-toggle-secret="secret-{{.ID}}"{{if not $.SecretsConfigured}} disabled{{end}}>Show</button>
         </div>
       </div>
       {{end}}
       <div class="secret-actions">
         {{if $cur.RequireHumanSignoff}}
-        <button type="button" class="btn primary sm" id="store-secrets-approve" data-secret-approve="true"{{if not $.VaultwardenConfigured}} disabled{{end}}>Store {{if eq (len $.PendingSecrets) 1}}secret{{else}}secrets{{end}} &amp; approve sign-off</button>
-        <button type="button" class="btn sm" id="store-secrets"{{if not $.VaultwardenConfigured}} disabled{{end}}>Store {{if eq (len $.PendingSecrets) 1}}secret{{else}}secrets{{end}} &amp; reply</button>
+        <button type="button" class="btn primary sm" id="store-secrets-approve" data-secret-approve="true"{{if not $.SecretsConfigured}} disabled{{end}}>Store {{if eq (len $.PendingSecrets) 1}}secret{{else}}secrets{{end}} &amp; approve sign-off</button>
+        <button type="button" class="btn sm" id="store-secrets"{{if not $.SecretsConfigured}} disabled{{end}}>Store {{if eq (len $.PendingSecrets) 1}}secret{{else}}secrets{{end}} &amp; reply</button>
         {{else}}
-        <button type="button" class="btn primary sm" id="store-secrets"{{if not $.VaultwardenConfigured}} disabled{{end}}>Store {{if eq (len $.PendingSecrets) 1}}secret{{else}}secrets{{end}} &amp; reply</button>
+        <button type="button" class="btn primary sm" id="store-secrets"{{if not $.SecretsConfigured}} disabled{{end}}>Store {{if eq (len $.PendingSecrets) 1}}secret{{else}}secrets{{end}} &amp; reply</button>
         {{end}}
       </div>
     </div>
@@ -1139,6 +1143,16 @@ render();
     <div id="reply-attachments"></div>
   </div>
 </section>{{end}}</div>
+<div id="run-secrets">{{if .Secrets}}{{$stored := false}}{{range .Secrets}}{{if not .Pending}}{{$stored = true}}{{end}}{{end}}{{if $stored}}
+<section class="card"><div class="card-head"><h2>Secrets</h2><span class="meta grow">given to this run; values are encrypted and never shown</span></div>
+  <div class="card-body"><ul class="events secret-list">{{range .Secrets}}{{if not .Pending}}<li>
+    <b>{{.Name}}</b>
+    {{if eq .Status "stored"}}<span class="badge">stored</span> <span class="meta">by {{.StoredBy}} {{with .StoredAt}}{{at . "short"}}{{end}} · expires {{with .ExpiresAt}}{{at . "short"}}{{end}} or when the run ends · fetched {{.Fetches}} {{if eq .Fetches 1}}time{{else}}times{{end}}{{with .LastFetched}}, last {{at . "short"}}{{end}}</span>
+      <button type="button" class="btn sm ghost" data-delete-secret="{{.ID}}">Delete</button>
+    {{else if eq .Status "purged"}}<span class="badge">wiped</span> <span class="meta">{{if eq .PurgeReason "deleted"}}deleted{{else if eq .PurgeReason "expired"}}expired{{else}}the run ended{{end}}{{with .PurgedAt}} {{at . "short"}}{{end}} · fetched {{.Fetches}} {{if eq .Fetches 1}}time{{else}}times{{end}}</span>
+    {{else if eq .Status "dismissed"}}<span class="badge">not given</span> <span class="meta">you replied without it</span>
+    {{else}}<span class="badge">asked</span>{{end}}
+  </li>{{end}}{{end}}</ul></div></section>{{end}}{{end}}</div>
 <p class="meta" id="input-saved" role="status" hidden>Note saved. See <a href="#run-history">What happened</a> for delivery status.</p>
 <div id="steps" class="builder">
   <div class="pipe">
@@ -1204,7 +1218,20 @@ function bind() {
     if (!confirm("Cancel this run? Its orchestrator is stopped; the worktree stays.")) return;
     try { await post(`/api/workflow-runs/${run}/cancel`, {}); refresh(true); } catch (e) { err(e.message); }
   };
-  const reply = $("#ask textarea"), send = $("#send"), approveBtn = $("#approve-signoff");
+  (document.querySelectorAll?.("[data-delete-secret]") || []).forEach((btn) => {
+    btn.onclick = async () => {
+      if (!confirm("Delete this secret? The run's agents can no longer fetch it.")) return;
+      btn.disabled = true;
+      try {
+        await post(`/api/workflow-runs/${run}/secrets/${btn.dataset.deleteSecret}/delete`, {});
+        await refresh(true);
+      } catch (e) {
+        err(e.message);
+        btn.disabled = false;
+      }
+    };
+  });
+  const reply = $("#ask textarea:not([data-secret-id])"), send = $("#send"), approveBtn = $("#approve-signoff");
   if (!reply || !send) { replyAttachments = null; return; }
   if (window.imageAttachments && !reply.dataset.attachments) {
     reply.dataset.attachments = "on";
@@ -1249,12 +1276,17 @@ function bind() {
     btn.onclick = () => {
       const inp = document.getElementById(btn.dataset.toggleSecret);
       if (!inp) return;
-      const show = inp.type === "password";
-      inp.type = show ? "text" : "password";
+      let show;
+      if (inp.tagName === "TEXTAREA") {
+        show = inp.classList.toggle("masked") === false;
+      } else {
+        show = inp.type === "password";
+        inp.type = show ? "text" : "password";
+      }
       btn.textContent = show ? "Hide" : "Show";
     };
   });
-  const secretInputs = () => [...(document.querySelectorAll?.("#ask input[data-secret-id]") || [])];
+  const secretInputs = () => [...(document.querySelectorAll?.("#ask [data-secret-id]") || [])];
   const storeBtn = $("#store-secrets"), storeApproveBtn = $("#store-secrets-approve");
   const submitSecrets = async (approve) => {
     if (sending) return;
@@ -1319,16 +1351,16 @@ async function refresh(all) {
     if (version !== refreshVersion || (sending && !all)) return;
     globalThis.localTime?.scan(next); // as the page shows it, so an unchanged section compares equal
     document.title = next.title;
-    const reply = $("#ask textarea"), nextReply = next.getElementById("ask")?.querySelector("textarea");
+    const reply = $("#ask textarea:not([data-secret-id])"), nextReply = next.getElementById("ask")?.querySelector("textarea:not([data-secret-id])");
     const listening = reply && reply.classList.contains("listening");
     const hasFiles = Boolean(replyAttachments?.hasFiles());
-    const hasSecretInput = [...(document.querySelectorAll?.("#ask input[data-secret-id]") || [])].some((i) => i.value || document.activeElement === i);
+    const hasSecretInput = [...(document.querySelectorAll?.("#ask [data-secret-id]") || [])].some((i) => i.value || document.activeElement === i);
     const writing = hasSecretInput || (reply && (reply.value || hasFiles || document.activeElement === reply));
     const sameAsk = reply && nextReply && reply.id === nextReply.id &&
       ($("#note")?.innerHTML ?? "") === (next.getElementById("note")?.innerHTML ?? "") &&
       ($("#ask .card-head")?.innerHTML ?? "") === (next.querySelector("#ask .card-head")?.innerHTML ?? "");
     const keep = listening || (hasSecretInput && !all) || (sameAsk && !all) || (reply?.id === nextReply?.id && writing && !all);
-    for (const id of ["live", "steps"].concat(keep ? [] : ["ask"])) {
+    for (const id of ["live", "steps", "run-secrets"].concat(keep ? [] : ["ask"])) {
       const n = next.getElementById(id), cur = document.getElementById(id);
       if (n && cur && n.innerHTML !== cur.innerHTML) {
         if (id === "ask") {
