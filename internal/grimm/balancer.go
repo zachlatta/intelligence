@@ -58,13 +58,13 @@ type Policy struct {
 	Reason       string
 }
 
-var opusOnly = Policy{Providers: []string{"claude"}, Pinned: map[string]string{"claude": ManagerModel}, Preferred: "claude",
+var opusOnly = Policy{Providers: []string{OpusProvider}, Pinned: map[string]string{OpusProvider: OpusModel}, Preferred: OpusProvider,
 	DenyVendors: []string{"google"}, Reason: "reviewers and checkers run on claude/claude-opus-5-5 only"}
 
 var policies = map[string]Policy{
-	"manager":  {Providers: []string{ManagerProvider}, Pinned: map[string]string{ManagerProvider: ManagerModel}, Preferred: ManagerProvider, Reason: "the manager runs on claude/claude-opus-5-5"},
+	"manager":  {Providers: []string{ManagerProvider}, Pinned: map[string]string{ManagerProvider: ManagerModel}, Preferred: ManagerProvider, Reason: "the manager runs on antigravity/gemini-4-neon-medium"},
 	"reviewer": opusOnly, "checker": opusOnly, "audit": opusOnly, "auditor": opusOnly,
-	"verifier": {Providers: []string{"claude", "codex"}, Pinned: map[string]string{"claude": ManagerModel}, Preferred: "claude",
+	"verifier": {Providers: []string{OpusProvider, "codex"}, Pinned: map[string]string{OpusProvider: OpusModel}, Preferred: OpusProvider,
 		DenyVendors: []string{"google"}, DisjointFrom: []string{"builder"},
 		Reason: "verifiers prefer Opus 5.5, never run on Gemini, and never share the builder's vendor"},
 	"builder": {DisjointFrom: []string{"verifier"}, Soft: true, Reason: "a builder avoids a live verifier's vendor when it can"},

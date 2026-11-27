@@ -482,7 +482,7 @@ var Starting = Definition{
 	Trigger: TriggerTask,
 	Project: Project{Mode: ProjectMatch, Provider: "claude", Model: "claude-opus-5-5", Thinking: "medium",
 		Instructions: "Pick the repository this task belongs in. Read each candidate's README and recent commits."},
-	Orchestrator: Orchestrator{Provider: "claude", Model: "claude-opus-5-5", Thinking: "high", Instructions: OrchestratorInstructions},
+	Orchestrator: Orchestrator{Provider: "antigravity", Model: "gemini-4-neon-high", Instructions: OrchestratorInstructions},
 	Steps: []Step{
 		{ID: "build", Kind: KindStep, Title: "Do the work", Instructions: "Have sub-agents do this:\n\n{{input}}\n\n" +
 			"Follow the repository's AGENTS.md, and work test-first if the repository does. Move on when it is committed and the tests pass."},

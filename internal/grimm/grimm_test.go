@@ -43,17 +43,25 @@ func newRig(t *testing.T) *rig {
 	r.exec(`INSERT INTO host_keys (host, account_id, key_hash, created_at) VALUES ('host-1', $1, 'hash', now())`, r.acct)
 	r.report()
 	r.exec(`UPDATE hosts SET stream_id = gen_random_uuid(), last_seen = now()`)
-	for _, p := range []string{"claude", "codex"} {
-		r.exec(`INSERT INTO usage_accounts(provider,account,first_seen,last_seen) VALUES($1,'zach',now(),now())`, p)
-		r.exec(`INSERT INTO usage_sources(host,provider,account,ok,received_at) VALUES('host-1',$1,'zach',true,now())`, p)
+	for _, p := range []struct {
+		provider, window string
+		usedPct          int
+	}{
+		{"claude", "7d", 20},
+		{"codex", "7d", 20},
+		{"antigravity", "gemini/7d", 50},
+	} {
+		r.exec(`INSERT INTO usage_accounts(provider,account,first_seen,last_seen) VALUES($1,'zach',now(),now())`, p.provider)
+		r.exec(`INSERT INTO usage_sources(host,provider,account,ok,received_at) VALUES('host-1',$1,'zach',true,now())`, p.provider)
 		r.exec(`INSERT INTO usage_readings(provider,account,window_id,window_seconds,used_pct,resets_at,first_observed,last_observed)
-			VALUES($1,'zach','7d',604800,20,now()+interval '1 day',now(),now())`, p)
-		r.exec(`INSERT INTO usage_active(host,provider,account,since,until) VALUES('host-1',$1,'zach',now(),now())`, p)
+			VALUES($1,'zach',$2,604800,$3,now()+interval '1 day',now(),now())`, p.provider, p.window, p.usedPct)
+		r.exec(`INSERT INTO usage_active(host,provider,account,since,until) VALUES('host-1',$1,'zach',now(),now())`, p.provider)
 	}
 	wf := workflow.NewEngine(d.Owner, time.Now)
 	if _, err := wf.SaveModelGroup(ctx, r.acct, "", workflow.ModelGroup{Name: "Frontier", Members: []workflow.ModelMember{
 		{Provider: "claude", Model: "claude-opus-5-5", Thinking: "medium", Login: "zach", LongWindow: "7d", Enabled: true},
 		{Provider: "codex", Model: "gpt-6.2-sol", Thinking: "high", Login: "zach", LongWindow: "7d", Enabled: true},
+		{Provider: "antigravity", Model: "gemini-4-neon-medium", Thinking: "", Login: "zach", LongWindow: "gemini/7d", Enabled: true},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -76,6 +84,7 @@ func (r *rig) report() {
 		Providers: []hostclient.Provider{
 			{Name: "claude", Available: true, Models: []hostclient.Model{{ID: "claude-opus-5-5", Thinking: []string{"medium"}}}},
 			{Name: "codex", Available: true, Models: []hostclient.Model{{ID: "gpt-6.2-sol", Thinking: []string{"high"}}}},
+			{Name: "antigravity", Available: true, Models: []hostclient.Model{{ID: "gemini-4-neon-medium"}}},
 		},
 		Workspaces: []hostclient.Workspace{{ID: "ws-1", Name: "grimm", Kind: "worktree", Status: "running", Directory: "/w/app-grimm"}},
 		Agents:     r.agents}}
@@ -180,7 +189,7 @@ func (r *rig) ready() string {
 	return id
 }
 
-func TestASessionMakesAWorktreeAndStartsOpusOnTheFirstMessage(t *testing.T) {
+func TestASessionMakesAWorktreeAndStartsNeonOnTheFirstMessage(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	ctx := t.Context()
@@ -206,7 +215,7 @@ func TestASessionMakesAWorktreeAndStartsOpusOnTheFirstMessage(t *testing.T) {
 	r.reconcile(id)
 	mgr := r.take("create_agent")
 	labels, _ := mgr.Args["labels"].(map[string]any)
-	if mgr.Args["provider"] != "claude" || mgr.Args["model"] != "claude-opus-5-5" || mgr.Args["mode"] != "bypassPermissions" ||
+	if mgr.Args["provider"] != "antigravity" || mgr.Args["model"] != "gemini-4-neon-medium" || mgr.Args["mode"] != "full-access" ||
 		mgr.Args["workspaceId"] != "ws-1" || labels[hostclient.LiveLabel] != hostclient.LiveFast || labels[SessionLabel] != id {
 		t.Fatalf("manager = %+v", mgr.Args)
 	}

@@ -108,7 +108,10 @@ func TestDisabledOrchestratorCannotStrandProjectFinder(t *testing.T) {
 				// At 70% there is room for one run, provided the failed finder
 				// no longer reserves capacity as a finding_project run.
 				hostMinute(t, b, time.Now().UTC().Truncate(time.Minute).Add(-time.Minute), 70, 0.3)
-				next := startRun(t, h, fixedWorkflow(t, h), "Next subscribed run")
+				sub := workflow.Starting
+				sub.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+				sub.Orchestrator.Provider, sub.Orchestrator.Model, sub.Orchestrator.Thinking = "claude", "claude-opus-5-5", "medium"
+				next := startRun(t, h, createWorkflow(t, h, sub), "Next subscribed run")
 				if status := runField(t, h, next, "status"); status != workflow.StartingOrchestrator {
 					t.Errorf("failed finder retained capacity: next run %v", status)
 				}
@@ -146,6 +149,7 @@ func TestDisabledProviderDoesNotBlockHostQueue(t *testing.T) {
 						if provider == "antigravity" {
 							def.Project.Thinking = ""
 						}
+						def.Orchestrator.Provider, def.Orchestrator.Model, def.Orchestrator.Thinking = "claude", "claude-opus-5-5", "medium"
 					} else {
 						def.Orchestrator.Provider = provider
 						if provider == "antigravity" {
@@ -172,7 +176,10 @@ func TestDisabledProviderDoesNotBlockHostQueue(t *testing.T) {
 						}
 					}
 					clock.Add(time.Second)
-					second := startRun(t, h, fixedWorkflow(t, h), "Subscribed provider run")
+					sub := workflow.Starting
+					sub.Project = workflow.Project{Mode: workflow.ProjectFixed, Directory: "/w/app"}
+					sub.Orchestrator.Provider, sub.Orchestrator.Model, sub.Orchestrator.Thinking = "claude", "claude-opus-5-5", "medium"
+					second := startRun(t, h, createWorkflow(t, h, sub), "Subscribed provider run")
 					clock.Add(time.Minute)
 					e := h.local.wf
 					if retry {

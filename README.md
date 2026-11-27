@@ -1546,8 +1546,9 @@ redeploy or a restart loses nothing.
   live/cap. A new session starts with the directive "Never push, deploy, publish, open pull
   requests or send external messages."
 - **The manager** starts on the first message, once the worktree is ready, with Grimm's
-  instructions and that message as its first prompt. It runs on the best eligible Claude Opus 5.5
-  entry of the account's model groups on the host (the balancer, below), in `bypassPermissions`.
+  instructions and that message as its first prompt. It runs on the best eligible Antigravity
+  Gemini 4 Neon Medium (`antigravity/gemini-4-neon-medium`) entry of the account's model groups
+  on the host (the balancer, below), in `full-access`.
   A message sent while it works joins the running turn (`send_message` steer); Stop cancels the
   turn; `/new` archives it, and the next message starts a fresh one (the thread keeps its
   history). Its words and tool calls are its transcript, which `grimm_thread` merges with

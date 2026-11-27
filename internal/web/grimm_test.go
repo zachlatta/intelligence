@@ -12,27 +12,27 @@ import (
 	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
-// grimmRig streams as host-1 with Claude Opus 5.5 in a model group and headroom on it.
+// grimmRig streams as host-1 with Antigravity Gemini 4 Neon Medium in a model group and headroom on it.
 func grimmRig(t *testing.T, h http.Handler) *rawHost {
 	t.Helper()
 	d := h.(*testServer).d
 	rep := wfReport()
-	rep.Paseo.Providers = []hostclient.Provider{{Name: "claude", Available: true, Models: []hostclient.Model{{ID: "claude-opus-5-5", Thinking: []string{"medium"}}}}}
+	rep.Paseo.Providers = []hostclient.Provider{{Name: "antigravity", Available: true, Models: []hostclient.Model{{ID: "gemini-4-neon-medium"}}}}
 	stream := openStream(t, h, "host-1")
 	if ack := stream.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
 		t.Fatal(ack.Error)
 	}
 	for _, q := range []string{
-		`INSERT INTO usage_accounts(provider,account,first_seen,last_seen) VALUES('claude','one',now(),now())`,
-		`INSERT INTO usage_sources(host,provider,account,ok,received_at) VALUES('host-1','claude','one',true,now())`,
-		`INSERT INTO usage_readings(provider,account,window_id,window_seconds,used_pct,resets_at,first_observed,last_observed) VALUES('claude','one','7d',604800,30,now()+interval '1 day',now(),now())`,
-		`INSERT INTO usage_active(host,provider,account,since,until) VALUES('host-1','claude','one',now(),now())`,
+		`INSERT INTO usage_accounts(provider,account,first_seen,last_seen) VALUES('antigravity','one',now(),now())`,
+		`INSERT INTO usage_sources(host,provider,account,ok,received_at) VALUES('host-1','antigravity','one',true,now())`,
+		`INSERT INTO usage_readings(provider,account,window_id,window_seconds,used_pct,resets_at,first_observed,last_observed) VALUES('antigravity','one','gemini/7d',604800,30,now()+interval '1 day',now(),now())`,
+		`INSERT INTO usage_active(host,provider,account,since,until) VALUES('host-1','antigravity','one',now(),now())`,
 	} {
 		if _, err := d.Owner.Exec(t.Context(), q); err != nil {
 			t.Fatal(err)
 		}
 	}
-	body := `{"name":"Opus","members":[{"provider":"claude","model":"claude-opus-5-5","thinking":"medium","login":"one","longWindow":"7d","enabled":true}]}`
+	body := `{"name":"Neon","members":[{"provider":"antigravity","model":"gemini-4-neon-medium","thinking":"","login":"one","longWindow":"gemini/7d","enabled":true}]}`
 	if rec := call(t, h, "POST", "/api/model-groups", body, sameOriginFetch); rec.Code != 201 {
 		t.Fatalf("model group: %d %s", rec.Code, rec.Body)
 	}
@@ -136,13 +136,13 @@ func TestGrimmSessionStreamsItsThreadAndState(t *testing.T) {
 	mgr := stream.command() // the supervisor starts the manager once the worktree is ready
 	var args hostclient.CreateAgentArgs
 	_ = json.Unmarshal(mgr.Args, &args)
-	if mgr.Kind != hostclient.CreateAgentKind || args.Model != "claude-opus-5-5" || args.Labels[hostclient.LiveLabel] != hostclient.LiveFast {
+	if mgr.Kind != hostclient.CreateAgentKind || args.Provider != "antigravity" || args.Model != "gemini-4-neon-medium" || args.Thinking != "" || args.Labels[hostclient.LiveLabel] != hostclient.LiveFast {
 		t.Fatalf("manager = %s %s", mgr.Kind, mgr.Args)
 	}
 	succeed(t, stream, mgr, `{"agentId":"mgr-1"}`)
 	rep := wfReport()
-	rep.Paseo.Providers = []hostclient.Provider{{Name: "claude", Available: true, Models: []hostclient.Model{{ID: "claude-opus-5-5", Thinking: []string{"medium"}}}}}
-	rep.Paseo.Agents = append(rep.Paseo.Agents, hostclient.Agent{ID: "mgr-1", WorkspaceID: "w-app", Provider: "claude", Status: "running", CreatedAt: time.Now()})
+	rep.Paseo.Providers = []hostclient.Provider{{Name: "antigravity", Available: true, Models: []hostclient.Model{{ID: "gemini-4-neon-medium"}}}}
+	rep.Paseo.Agents = append(rep.Paseo.Agents, hostclient.Agent{ID: "mgr-1", WorkspaceID: "w-app", Provider: "antigravity", Status: "running", CreatedAt: time.Now()})
 	if ack := stream.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
 		t.Fatal(ack.Error)
 	}

@@ -426,7 +426,7 @@ function renderSession() {
   if (s.pending_updates && !working) label += ` · ${s.pending_updates} update${s.pending_updates === 1 ? "" : "s"} queued`;
   if (s.host_online === false) label += ` · ${s.host} offline`;
   $("#g-pill-label").textContent = label;
-  pill.title = `Manager: ${s.manager_provider ? s.manager_provider + "/" + s.manager_model : "claude/claude-opus-5-5"}${s.manager_login ? " on " + s.manager_login : ""}${s.manager_error ? "\n" + s.manager_error : ""}`;
+  pill.title = `Manager: ${s.manager_provider ? s.manager_provider + "/" + s.manager_model : "antigravity/gemini-4-neon-medium"}${s.manager_login ? " on " + s.manager_login : ""}${s.manager_error ? "\n" + s.manager_error : ""}`;
   $("#g-typing").hidden = !working;
   $("#g-typing-label").textContent = st === "starting" ? "Starting Grimm…" : "Grimm is working" + (s.manager_turn_at ? " · " + since(s.manager_turn_at) : "");
   $("#g-stop").hidden = st !== "working";

@@ -49,7 +49,7 @@ func TestEmailContinuationUsesMainStartupPolicy(t *testing.T) {
 				hostMinute(t, b, now.Truncate(time.Minute), 99, .3)
 			}
 			if mode == "disabled provider" {
-				if _, err := d.Owner.Exec(t.Context(), "INSERT INTO provider_plan_settings(provider,enabled) VALUES('claude',false) ON CONFLICT(provider) DO UPDATE SET enabled=false"); err != nil {
+				if _, err := d.Owner.Exec(t.Context(), "INSERT INTO provider_plan_settings(provider,enabled) VALUES($1,false) ON CONFLICT(provider) DO UPDATE SET enabled=false", def.Orchestrator.Provider); err != nil {
 					t.Fatal(err)
 				}
 			}

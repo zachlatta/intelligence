@@ -1,4 +1,4 @@
-// Package grimm runs Grimm sessions: one manager agent (Claude Opus 5.5) per session is the main
+// Package grimm runs Grimm sessions: one manager agent (Gemini 4 Neon Medium) per session is the main
 // thread, and it hires named workers on the account's plans, which talk to each other and to it on
 // a shared bus. Every agent is a Paseo agent on the session's host, started and steered through the
 // host command queue (fleet.EnqueueTx), so nothing here holds a process or a login. All state is in
@@ -20,6 +20,7 @@ import (
 
 	"github.com/zachlatta/intelligence/internal/fleet"
 	"github.com/zachlatta/intelligence/internal/hostclient"
+	"github.com/zachlatta/intelligence/internal/workflow"
 )
 
 const (
@@ -30,8 +31,11 @@ const (
 	// MaxWorkersLimit is the highest cap a session can set.
 	MaxWorkersLimit = 100
 	// ManagerProvider and ManagerModel are what the manager runs on.
-	ManagerProvider = "claude"
-	ManagerModel    = "claude-opus-5-5"
+	ManagerProvider = "antigravity"
+	ManagerModel    = "gemini-4-neon-medium"
+	// OpusProvider and OpusModel are what Opus-pinned roles (reviewers, checkers, auditors, verifiers) run on.
+	OpusProvider = "claude"
+	OpusModel    = "claude-opus-5-5"
 	// MaxText bounds one message, task or directive.
 	MaxText = 20000
 	// commandTTL is how long a Grimm command may wait for its host.
@@ -53,8 +57,9 @@ const (
 
 // Service is Grimm's writes. DB is the owner pool; reads for an account go through its own role.
 type Service struct {
-	DB  *pgxpool.Pool
-	Now func() time.Time
+	DB        *pgxpool.Pool
+	Now       func() time.Time
+	Workflows *workflow.Engine
 }
 
 func (s *Service) now() time.Time {
