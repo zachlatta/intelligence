@@ -1,5 +1,13 @@
 [
   {
+    "id": "grimm-host-resources",
+    "released": "2026-11-27",
+    "title": "Live host resources in the Grimm header",
+    "summary": "The Grimm page header now shows a live resource pill in the upper right for the session's host: CPU, memory, disk, and load or pressure with color thresholds. Hover on desktop (or tap on a phone) for a detail card with CPU average and peak, 1/5/15-minute load per CPU, memory and swap headroom, Paseo cgroup memory, disk I/O and busy time, PSI pressure, filesystems, OOM kills, the session's busiest agents, and the reading's age (stale readings are marked). Updates stream live via the session's SSE feed.",
+    "media": "grimm-host-resources.png",
+    "mediaAlt": "A local demo of the Grimm page showing the live host resource pill for dev-box in the upper right of the header with its hover detail card open, displaying CPU, load, memory and swap, Paseo cgroup memory, disk I/O, PSI pressure, filesystems, OOM kills, and busiest session agents."
+  },
+  {
     "id": "grimm-desk-default",
     "released": "2026-11-27",
     "title": "Grimm starts in desk",

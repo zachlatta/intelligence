@@ -76,7 +76,11 @@ func (r *Registry) RecordHost(ctx context.Context, host string, rep resources.Re
 				tracked = EXCLUDED.tracked, received_at = EXCLUDED.received_at`,
 				host, p.Running, p.Version, p.Error, p.Tracked, at)
 		}
-		return tx.SendBatch(ctx, b).Close()
+		if err := tx.SendBatch(ctx, b).Close(); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, notifySQL, HostResourcesTopic(host))
+		return err
 	})
 }
 

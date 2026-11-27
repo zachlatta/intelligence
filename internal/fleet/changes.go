@@ -163,3 +163,6 @@ func GrimmTopic(id string) string { return "grimm:" + id }
 
 // AgentsTopic: host's report was stored, so its agents' statuses may have changed.
 func AgentsTopic(host string) string { return "agents:" + host }
+
+// HostResourcesTopic: host's resource report (minutes, filesystems, agents, OOMs) was stored.
+func HostResourcesTopic(host string) string { return "hostres:" + host }
