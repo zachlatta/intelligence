@@ -20,12 +20,13 @@ import (
 // SecretCLIUsage is `intelligence secret`'s help.
 const SecretCLIUsage = `usage: intelligence secret <get|env> --run <id> ...
 
-A workflow run's agents fetch the secrets Zach stored for the run, with their host's key:
+Agents on a workflow run's host fetch the secrets Zach stored for the run, with the host's key:
 
-  get --run <id> --to-file <path> <name>    write the value to a 0600 file (not through a symlink)
-  get --run <id> <name>                     print the value to a pipe (refused when stdout is a terminal)
   env --run <id> VAR=<name> [VAR=<name>]... -- <command> [args]...
                                             run command with each value in its environment
+  get --run <id> --to-file <path> <name>    write the value to a 0600 file (not through a symlink)
+  get --run <id> <name>                     print the value to a pipe (refused when stdout is a terminal);
+                                            not for agents: an agent's shell output is its transcript
 
 <name> is the secret's name as asked (case-insensitive) or its id. Each fetch is recorded on the
 run (who, when, which), never the value. Never print, log or paste a value.

@@ -1103,7 +1103,7 @@ render();
       <div class="secret-box-head">
         <h3>Requested {{if eq (len $.PendingSecrets) 1}}secret{{else}}secrets{{end}}</h3>
         <span class="badge">Temporary</span>
-        <span class="meta">Encrypted by Intelligence for this run's agents only; wiped when the run ends or after 7 days. Never saved in run events or transcripts.</span>
+        <span class="meta">Encrypted by Intelligence, fetchable only with this run's host key; wiped when the run ends or after 7 days. Never saved in run events or transcripts.</span>
       </div>
       {{if not $.SecretsConfigured}}
       <p class="banner" role="alert">Secret storage is not configured on this server: set <code>INTELLIGENCE_SECRETS_KEY</code> to store secrets. You can still send a plain reply.</p>
@@ -1220,7 +1220,7 @@ function bind() {
   };
   (document.querySelectorAll?.("[data-delete-secret]") || []).forEach((btn) => {
     btn.onclick = async () => {
-      if (!confirm("Delete this secret? The run's agents can no longer fetch it.")) return;
+      if (!confirm("Delete this secret? Agents on the run's host can no longer fetch it.")) return;
       btn.disabled = true;
       try {
         await post(`/api/workflow-runs/${run}/secrets/${btn.dataset.deleteSecret}/delete`, {});

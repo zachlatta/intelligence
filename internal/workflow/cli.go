@@ -32,8 +32,9 @@ The agents of a workflow run move it with these, on the run's host:
   skip      --run <id> --why <text>
   ask       --run <id> --note <file>|- [--secret "<name>[: <purpose>]"]... [--multiline-secret "<name>[: <purpose>]"]...
                                        ask Zach (Markdown); each --secret is a password field on the ask: Intelligence keeps
-                                       the value encrypted for this run (never in events or transcripts); fetch it with
-                                       intelligence secret (multiline: a text area, for a PEM key)
+                                       the value encrypted, fetchable with the run's host key (never in events or
+                                       transcripts); fetch it with intelligence secret env or get --to-file (multiline:
+                                       a text area, for a PEM key)
   done      --run <id> [--summary <text>]  finish the run now
   fail      --run <id> --why <text>
   suggest   --run <id> <group_token> [--exclude <provider/model>]  record a fresh suggestion without moving

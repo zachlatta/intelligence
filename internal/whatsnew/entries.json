@@ -3,7 +3,7 @@
     "id": "workflow-secret-asks",
     "released": "2026-11-27",
     "title": "Password fields when a run needs a secret",
-    "summary": "When a workflow run needs a password or API key from you, its ask now shows a password field for each one on the run page (a text area for a multi-line key). Intelligence keeps the value encrypted for that run's agents only, wipes it when the run ends or after 7 days, and never puts it in the run's events or transcripts. The run page's Secrets card shows when each was fetched and lets you delete one early.",
+    "summary": "When a workflow run needs a password or API key from you, its ask now shows a password field for each one on the run page (a text area for a multi-line key). Intelligence keeps the value encrypted, fetchable only by agents on the run's host, wipes it when the run ends or after 7 days, and never puts it in the run's events or transcripts. The run page's Secrets card shows when each was fetched and lets you delete one early.",
     "media": "workflow-secret-asks-v2.png",
     "mediaAlt": "A waiting workflow run's ask in a local demo: Requested secrets, marked Temporary, with masked fields for a Stripe API key and webhook signing secret, a masked multi-line Deploy key, Show buttons and Store secrets & reply."
   },

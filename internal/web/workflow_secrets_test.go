@@ -318,6 +318,16 @@ func TestWorkflowSecretAskStoreFetchNeverLeaksValue(t *testing.T) {
 	if strings.Contains(strings.ToLower(cmdText), "vaultwarden") {
 		t.Error("orchestrator message mentions Vaultwarden")
 	}
+	// An agent's stdout is its transcript: the message offers only env and --to-file, and says the
+	// scope is the run's host key, which is what FetchSecret checks.
+	for _, bad := range []string{"without --to-file", "to a pipe", "this run's agents"} {
+		if strings.Contains(cmdText, bad) {
+			t.Errorf("orchestrator message says %q:\n%s", bad, cmdText)
+		}
+	}
+	if !strings.Contains(cmdText, "fetchable only with the host key of host-1") {
+		t.Errorf("orchestrator message does not say the secrets are scoped to host-1's key:\n%s", cmdText)
+	}
 
 	// 8. The run's host fetches each by name (any case) and each fetch is recorded, not the value.
 	for name, want := range map[string]string{"stripe api key": secret1, "Deploy key": secret2, "PIN": pin} {
@@ -339,6 +349,10 @@ func TestWorkflowSecretAskStoreFetchNeverLeaksValue(t *testing.T) {
 	}
 	if code, _, _ := fetchSecretAs(t, h, hostKey, otherRun, "Stripe API key"); code != http.StatusNotFound {
 		t.Fatalf("fetch from another account's run = %d", code)
+	}
+	// Another host of the same account cannot fetch them either: the key must be the run's host's.
+	if code, v, _ := fetchSecretAs(t, h, keyOf(t, h, "host-2"), runID, "Stripe API key"); code != http.StatusNotFound || v != "" {
+		t.Fatalf("fetch from another host of the same account = %d %q", code, v)
 	}
 	if code, _, _ := fetchSecretAs(t, h, "not-a-key", runID, "Stripe API key"); code != http.StatusUnauthorized {
 		t.Fatalf("fetch without a host key = %d", code)

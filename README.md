@@ -25,7 +25,7 @@ One binary, six commands:
   The host client reads it over a Unix socket.
 - `intelligence workflow`: what a workflow run's agents run on their host to move the run
   (Workflows, below). It reaches the server with the host's key.
-- `intelligence secret`: what a workflow run's agents run on their host to fetch a secret Zach
+- `intelligence secret`: what agents on a workflow run's host run to fetch a secret Zach
   stored for the run (Temporary secrets, below). It reaches the server with the host's key.
 - `intelligence vapid-keys`: generates a P-256 VAPID key pair and prints `VAPID_PUBLIC_KEY`,
   `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` for Web Push notifications (`-subject mailto:you@example.com`).
@@ -894,13 +894,15 @@ stores them all with one button, with or without a note; a plain reply instead d
 - The orchestrator's message names each secret and the commands that fetch it, never the value,
   and tells agents never to print, log or paste one. The run's events keep only "Stored 2
   secret(s) in Intelligence: …" and Zach's note.
-- The run's agents fetch a value with their host's key, only for a run of that host and its
-  account, while the run is live and the secret unexpired:
+- A value is fetchable with the run's host's key (so by any agent on that host), only for a run
+  of that host and its account, while the run is live and the secret unexpired. The orchestrator
+  is offered only the first two of these, since an agent's shell output is its transcript:
   - `intelligence secret env --run <id> STRIPE_API_KEY='Stripe API key' -- <command>` runs the
     command with the value in its environment;
   - `intelligence secret get --run <id> --to-file <path> <name>` writes it to a 0600 file (not
     through a symlink);
-  - `intelligence secret get --run <id> <name>` prints it to a pipe, and refuses a terminal.
+  - `intelligence secret get --run <id> <name>` prints it to a pipe, and refuses a terminal (for
+    a person piping it into another command, not for agents).
 
   `<name>` is the name asked for (any case) or the secret's id. Each fetch adds a
   `workflow_run_secret_fetches` row and a `secret_fetched` event (host, which secret, when).

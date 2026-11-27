@@ -397,7 +397,7 @@ func OrchestratorPrompt(name string, d Definition, v Vars) (string, error) {
 		"  intelligence workflow next --run %[1]s --summary \"<one line>\"    this step is done; prints the next one\n"+
 		"  intelligence workflow back --run %[1]s <step id> --why \"<what is missing>\"    send the work back to an earlier step\n"+
 		"  intelligence workflow skip --run %[1]s --why \"<why>\"    skip a step its instructions let you skip\n"+
-		"  intelligence workflow ask --run %[1]s --note note.md [--secret \"<name>[: <purpose>]\"]    ask Zach (Markdown); add --secret when you need a password or API key (Zach gets a password field; Intelligence keeps the value encrypted for this run only, never in events or transcripts, and tells you how to fetch it with `intelligence secret`; repeat --secret for each, or --multiline-secret for a PEM key); then end your turn: his reply comes as your next message\n"+
+		"  intelligence workflow ask --run %[1]s --note note.md [--secret \"<name>[: <purpose>]\"]    ask Zach (Markdown); add --secret when you need a password or API key (Zach gets a password field; Intelligence keeps the value encrypted, fetchable only with this run's host key, never in events or transcripts, and tells you how to fetch it with `intelligence secret env` or `intelligence secret get --to-file`, never a command that prints it; repeat --secret for each, or --multiline-secret for a PEM key); then end your turn: his reply comes as your next message\n"+
 		"  intelligence workflow fail --run %[1]s --why \"<why>\"    the run cannot be done\n\n"+
 		"next after the last step finishes the run.\n\n", v.Run)
 	b.WriteString("Workflow instructions take precedence over conflicting shared skill defaults (including start-here, agent-factory and paseo-cli); " +

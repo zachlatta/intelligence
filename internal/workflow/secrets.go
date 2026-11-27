@@ -19,7 +19,7 @@ import (
 
 // Temporary secrets: Zach gives a waiting run a password or API key in a password field on its
 // ask; Intelligence keeps it only as AES-256-GCM ciphertext (INTELLIGENCE_SECRETS_KEY) in
-// workflow_run_secrets, bound to its row, and the run's agents fetch it with their host's key.
+// workflow_run_secrets, bound to its row, and agents fetch it with the key of the run's host.
 // The ciphertext is wiped SecretTTL after it was stored, when Zach deletes it, or when the run
 // ends (a trigger on workflow_runs), whichever comes first.
 
@@ -231,9 +231,9 @@ func (e *Engine) SubmitSecretsFromBrowser(ctx context.Context, account int64, ac
 			summary += "\n\n" + noteTrimmed
 		}
 		var msg strings.Builder
-		fmt.Fprintf(&msg, "Zach stored %d secret(s) for this run in Intelligence. They are encrypted, readable only by this run's agents on %s, and wiped at %s or when the run ends, whichever is first.\n\n%s\n\n"+
-			"Fetch a value only into the command or file that needs it: `intelligence secret env` sets it in that command's environment, and `intelligence secret get --to-file <path>` writes a 0600 file. "+
-			"`intelligence secret get` without --to-file prints to a pipe only, never to a terminal. "+
+		fmt.Fprintf(&msg, "Zach stored %d secret(s) for this run in Intelligence. They are encrypted, fetchable only with the host key of %s (by any agent of this run there), and wiped at %s or when the run ends, whichever is first.\n\n%s\n\n"+
+			"Fetch a value only into the command or file that needs it, with one of these two commands: `intelligence secret env` sets it in that command's environment, and `intelligence secret get --to-file <path>` writes a 0600 file. "+
+			"Your shell's output is your transcript: never run a command that prints a value. "+
 			"Never print, echo, log, commit or paste a secret value into chat, notes, events, files in a repository or transcripts; pass it on to workers by these commands, not by value. Each fetch is recorded on the run.",
 			len(pending), r.Host, expires.UTC().Format(time.RFC3339), strings.Join(lines, "\n"))
 		if noteTrimmed != "" {
