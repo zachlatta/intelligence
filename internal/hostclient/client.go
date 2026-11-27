@@ -244,11 +244,16 @@ func (b *Client) syncTranscripts(ctx context.Context, reported *latest) {
 		case <-dueC:
 			dueC = nil
 		}
-		if stored && len(pace.dirty) > 0 && dueC == nil {
-			now := time.Now()
+		// every push and every due time takes what is ready now (a fast agent's push is never
+		// held behind a steady one's wait), and re-arms the timer for the next to come due
+		if stored && len(pace.dirty) > 0 {
 			snap = b.Watcher.Snapshot()
-			ready, wait := pace.take(snap.Agents, now)
+			ready, wait := pace.take(snap.Agents, time.Now())
 			agents = append(agents, ready...)
+			if due != nil && dueC != nil && !due.Stop() {
+				<-due.C
+			}
+			dueC = nil
 			if wait > 0 {
 				if due == nil {
 					due = time.NewTimer(wait)

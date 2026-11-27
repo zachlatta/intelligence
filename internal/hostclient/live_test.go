@@ -66,7 +66,8 @@ func TestHostCopiesALiveAgentsTranscriptWhenTheDaemonPushesIt(t *testing.T) {
 }
 
 // However many live agents push at once, the steady ones are copied at most SteadyBudget times a
-// second together and each at most every SteadyGap; a LiveFast one is not held back by them.
+// second together and each at most every SteadyGap, and take hands out a LiveFast one regardless
+// (that the host's loop takes it at once is TestAFastAgentsPushIsNotHeldBehindAWaitingSteadyOne).
 func TestLivePaceBoundsTheHostsWork(t *testing.T) {
 	p := &livePace{fast: 100 * time.Millisecond, steady: time.Second, budget: 8, last: map[string]time.Time{}, dirty: map[string]bool{}}
 	var agents []Agent
@@ -131,5 +132,75 @@ func TestWatchAgentSetsTheLiveLabel(t *testing.T) {
 	}
 	if _, err := ParseCommand(CancelAgentKind, []byte(`{"agentId":"g1","live":"fast"}`)); err == nil {
 		t.Error("cancel_agent took live")
+	}
+}
+
+// A steady worker waiting for its gap does not hold back the manager's (LiveFast) copy: the
+// manager's push is copied at once, through the host's own loop.
+func TestAFastAgentsPushIsNotHeldBehindAWaitingSteadyOne(t *testing.T) {
+	s, d := newStreamServer(t), paseotest.New(t, tok)
+	d.SetWorkspaces(paseotest.Workspace("w1", "worktree", "running"))
+	mgr := paseotest.Agent("g1", "w1", "running")
+	mgr["labels"] = map[string]any{LiveLabel: LiveFast}
+	wk := paseotest.Agent("g2", "w1", "running")
+	wk["labels"] = map[string]any{LiveLabel: LiveSteady}
+	d.SetAgents(mgr, wk)
+	msg := func(n int) []map[string]any {
+		var out []map[string]any
+		for i := 1; i <= n; i++ {
+			out = append(out, paseotest.Entry(i, i, paseotest.Message("assistant_message", "x")))
+		}
+		return out
+	}
+	d.SetTimeline("g1", "e1", msg(1)...)
+	d.SetTimeline("g2", "e1", msg(1)...)
+	hostRig(t, s, d, func(c *Client) { c.LiveEvery = time.Hour })
+	upload := func(agent string, seq int) bool {
+		for _, f := range s.frames(TranscriptFrame) {
+			for _, e := range f.Transcript.Entries {
+				if f.Transcript.AgentID == agent && e.SeqStart == seq {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	wait := func(what string, ok func() bool) {
+		t.Helper()
+		dl := time.Now().Add(5 * time.Second)
+		for !ok() {
+			if time.Now().After(dl) {
+				t.Fatal(what)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	wait("first", func() bool { return upload("g1", 1) && upload("g2", 1) })
+	wait("sub", func() bool { return len(d.TimelineSubscriptions()) == 1 })
+	// worker pushes: copied now (sets its last), then pushes again: held for ~1s
+	d.SetTimeline("g2", "e1", msg(2)...)
+	d.Stream("g2", 2, paseotest.Message("assistant_message", "x"))
+	wait("worker 2", func() bool { return upload("g2", 2) })
+	workerCopied := time.Now()
+	d.SetTimeline("g2", "e1", msg(3)...)
+	d.Stream("g2", 3, paseotest.Message("assistant_message", "x"))
+	time.Sleep(50 * time.Millisecond)
+	// now the manager pushes
+	d.SetTimeline("g1", "e1", msg(2)...)
+	start := time.Now()
+	d.Stream("g1", 2, paseotest.Message("assistant_message", "x"))
+	wait("manager 2", func() bool { return upload("g1", 2) })
+	took := time.Since(start)
+	t.Logf("manager copied %v after its push, while a steady worker was waiting", took)
+	if took > 300*time.Millisecond {
+		t.Errorf("manager held back %v by a waiting steady worker", took)
+	}
+	// the worker's second push still waits for its gap, and is copied then, not dropped
+	if upload("g2", 3) {
+		t.Error("the steady worker was copied again before its gap")
+	}
+	wait("worker 3", func() bool { return upload("g2", 3) })
+	if gap := time.Since(workerCopied); gap < 900*time.Millisecond {
+		t.Errorf("the steady worker was copied again %v after its last copy, want about 1s", gap)
 	}
 }
