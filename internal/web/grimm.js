@@ -347,6 +347,7 @@ function lastAssistantID() {
   return "";
 }
 function upsertItems(items, reset) {
+  items = items || [];
   const stick = reset || (nearBottom() && !loadingOlder);
   const box = $("#g-items");
   if (reset) {
@@ -709,11 +710,11 @@ function connect() {
   });
   es.addEventListener("thread", (e) => {
     const d = JSON.parse(e.data);
-    upsertItems(d.items, d.reset);
+    upsertItems(d.items || [], d.reset);
     if (d.reset) { S.older = !!d.more; $("#g-older").hidden = !S.older; }
   });
-  es.addEventListener("bus", (e) => addBus(JSON.parse(e.data).items));
-  es.addEventListener("activity", (e) => addFeed(JSON.parse(e.data).items));
+  es.addEventListener("bus", (e) => addBus(JSON.parse(e.data).items || []));
+  es.addEventListener("activity", (e) => addFeed(JSON.parse(e.data).items || []));
   es.addEventListener("workflow_runs", (e) => { if (window.grimmRuns) window.grimmRuns.update(JSON.parse(e.data).items || []); });
   es.addEventListener("host_resources", (e) => document.dispatchEvent(new CustomEvent("grimm:host-resources", { detail: JSON.parse(e.data) })));
 }
