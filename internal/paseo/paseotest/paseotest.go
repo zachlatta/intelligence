@@ -412,7 +412,7 @@ func (f *Daemon) change(c *websocket.Conn, id string, msg map[string]any) bool {
 			f.write(c, session("rpc_error", map[string]any{"requestId": id, "error": "Invalid message"}))
 			return true
 		}
-		if !slices.Contains([]string{"claude", "codex", "opencode", "pi"}, provider) {
+		if !slices.Contains([]string{"claude", "codex", "antigravity", "opencode", "pi"}, provider) {
 			f.write(c, session("agent.create.response", map[string]any{"requestId": id, "agent": nil,
 				"error": "Unknown provider: " + provider}))
 			return true

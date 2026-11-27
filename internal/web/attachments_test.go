@@ -52,7 +52,7 @@ func TestImageAttachments(t *testing.T) {
 	cmds := commandsByKind(t, b, 2)
 	var ws hostclient.CreateWorkspaceArgs
 	json.Unmarshal(cmds[hostclient.CreateWorkspaceKind].Args, &ws)
-	if ws.Agent == nil || len(ws.Agent.Attachments) != 1 || !bytes.Equal(ws.Agent.Attachments[0].Data, img.Bytes()) || ws.Agent.Mode != "bypassPermissions" {
+	if ws.Agent == nil || len(ws.Agent.Attachments) != 1 || !bytes.Equal(ws.Agent.Attachments[0].Data, img.Bytes()) || ws.Agent.Mode != "full-access" {
 		t.Fatalf("orchestrator images: %+v", ws.Agent)
 	}
 	// The same references work in direct agent-session commands.

@@ -258,7 +258,8 @@ func TestAWorkflowRunFindsItsProjectThenTheOrchestratorMovesItThroughTheSteps(t 
 	ws := cmds[hostclient.CreateWorkspaceKind]
 	var wa hostclient.CreateWorkspaceArgs
 	json.Unmarshal(ws.Args, &wa)
-	if wa.Cwd != "/w/app" || !wa.Worktree || !strings.HasPrefix(wa.Branch, "wf-") || wa.Agent == nil || wa.Agent.Thinking != "high" || wa.Agent.Mode != "bypassPermissions" ||
+	if wa.Cwd != "/w/app" || !wa.Worktree || !strings.HasPrefix(wa.Branch, "wf-") || wa.Agent == nil ||
+		wa.Agent.Provider != "antigravity" || wa.Agent.Model != "gemini-4-neon-medium" || wa.Agent.Thinking != "" || wa.Agent.Mode != "full-access" ||
 		wa.Agent.Labels["intelligence.run"] != run || !strings.Contains(wa.Agent.Prompt, "Step 1 of 7: Do the work") ||
 		!strings.Contains(wa.Agent.Prompt, "Have sub-agents do this in /w/app:") || !strings.Contains(wa.Agent.Prompt, "intelligence workflow next --run "+run) {
 		t.Fatalf("workspace = %+v %+v", wa, wa.Agent)
