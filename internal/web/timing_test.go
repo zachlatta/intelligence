@@ -136,6 +136,15 @@ func TestPageLoadBeacon(t *testing.T) {
 	if strings.Contains(res.Body.String(), "secret") || strings.Contains(res.Body.String(), "abc123") {
 		t.Errorf("stored the raw path: %s", res.Body)
 	}
+	// another account reads none of them
+	other, err := h.store.Create(t.Context(), "other", testPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res = call(t, h, http.MethodPost, "/api/sql", `{"query":"SELECT count(*) FROM page_loads"}`, sameOriginFetch, sessionFor(t, h.store, other))
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `[[0]]`) {
+		t.Errorf("another account read the first's page loads: %d %s", res.Code, res.Body)
+	}
 }
 
 // The beacon is a write like any other: signed in, same origin, JSON, small and well formed.
