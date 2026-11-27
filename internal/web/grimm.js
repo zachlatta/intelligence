@@ -642,6 +642,7 @@ function connect() {
   });
   es.addEventListener("bus", (e) => addBus(JSON.parse(e.data).items));
   es.addEventListener("activity", (e) => addFeed(JSON.parse(e.data).items));
+  es.addEventListener("host_resources", (e) => document.dispatchEvent(new CustomEvent("grimm:host-resources", { detail: JSON.parse(e.data) })));
 }
 
 // ---------- composer ----------

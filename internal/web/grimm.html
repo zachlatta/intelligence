@@ -6,8 +6,10 @@
 <title>Grimm · Intelligence</title>
 {{template "css"}}
 <link rel="stylesheet" href="/grimm.css">
+<link rel="stylesheet" href="/grimm_host.css">
 <script src="/attachments.js" defer></script>
 <script src="/grimm.js" defer></script>
+<script src="/grimm_host.js" defer></script>
 </head>
 <body class="grimm-body">
 {{template "top" "/"}}
@@ -25,6 +27,7 @@
     <span class="g-spacer"></span>
     <span class="g-pill" id="g-pill" data-state="offline"><i></i><span id="g-pill-label">Grimm starts on your first message</span></span>
     <button type="button" class="btn sm ghost" id="g-archive-all" title="Archive every worker in this session (files stay)">Archive all</button>
+    <div class="g-host" id="g-host" hidden></div>
     <span class="g-conn" id="g-conn" title="Live connection" role="status" aria-label="Connecting"></span>
   </header>
 
