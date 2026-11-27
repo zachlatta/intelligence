@@ -1540,8 +1540,14 @@ lives on the server, and every bit of a session's state is in the `grimm_*` tabl
 redeploy or a restart loses nothing.
 
 - **A session** (`POST /api/grimm/sessions`) is a new git worktree of a repository on a connected
-  host of the account (`GRIMM_DEFAULT_HOST` is picked first), on its own branch `grimm/<id>`: a session never works on
-  `main`, and refuses the `desk` repository. Its **live-worker cap** is 20 unless set otherwise
+  host of the account, on its own branch `grimm/<id>`: a session never works on `main` or in a
+  main checkout. With no `repo` it is the host's **desk** checkout (`grimm.DeskRepo`: a
+  directory in `host_repositories` whose base name or project is `desk`, case-insensitively, as
+  answer agents find it), and the new-session form fills desk in for the picked host (each host
+  option's `data-desk`). The form picks `GRIMM_DEFAULT_HOST` when it is online, else the first
+  online host with desk, else the first online host. A desk session is a worktree like any other,
+  because Grimm's agents write files: answer agents may run in desk's checkout itself only because
+  they write nothing there. Its **live-worker cap** is 20 unless set otherwise
   (1 to 100, `PUT /api/grimm/sessions/{id}` or `/cap N`), shown in the page's header as Workers
   live/cap. A new session starts with the directive "Never push, deploy, publish, open pull
   requests or send external messages."

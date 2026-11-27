@@ -1,5 +1,13 @@
 [
   {
+    "id": "grimm-desk-default",
+    "released": "2026-11-27",
+    "title": "Grimm starts in desk",
+    "summary": "A new Grimm session now starts in desk by default: the Start a Grimm session form on the home page fills in the picked host's desk checkout, so you can just start and chat. Grimm works in its own worktree of desk on a grimm/ branch, never in desk's main checkout. Type another path to use a different repository.",
+    "media": "grimm-desk-default.png",
+    "mediaAlt": "The Start a Grimm session form in a local demo, with host-1 picked and the repository field already filled in with that host's desk checkout."
+  },
+  {
     "id": "grimm-home",
     "released": "2026-11-27",
     "title": "Grimm is the home page",

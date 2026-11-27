@@ -290,6 +290,7 @@ type grimmHost struct {
 	Name   string
 	Online bool
 	Repos  []string
+	Desk   string // its desk checkout, the form's repository by default; "" when it has none
 }
 
 // grimmPage is the Grimm page: session id's, or with none (the home page) the newest active one,
@@ -362,16 +363,31 @@ func grimmHosts(ctx context.Context, p *pgxpool.Pool) ([]grimmHost, error) {
 	if err != nil {
 		return nil, err
 	}
-	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (grimmHost, error) {
+	hosts, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (grimmHost, error) {
 		var h grimmHost
 		return h, r.Scan(&h.Name, &h.Online, &h.Repos)
 	})
+	if err != nil {
+		return nil, err
+	}
+	for i := range hosts {
+		if hosts[i].Desk, err = grimm.DeskRepo(ctx, p, hosts[i].Name); err != nil {
+			return nil, err
+		}
+	}
+	return hosts, nil
 }
 
-// defaultGrimmHost is the configured host when it is online, else the first online host.
+// defaultGrimmHost is the configured host when it is online, else the first online host with a
+// desk checkout, else the first online host.
 func defaultGrimmHost(hosts []grimmHost, preferred string) string {
 	for _, h := range hosts {
 		if h.Online && h.Name == preferred {
+			return h.Name
+		}
+	}
+	for _, h := range hosts {
+		if h.Online && h.Desk != "" {
 			return h.Name
 		}
 	}

@@ -122,17 +122,17 @@
   <div class="card">
     <div class="card-head"><h2>Start a Grimm session</h2></div>
     <div class="card-body">
-      <p class="muted">A session is a new git worktree of a repository on a host. Grimm (Gemini 4 Neon Medium, on the plan Intelligence's
+      <p class="muted">A session is a new git worktree of a repository on a host: desk unless you pick another. Grimm (Gemini 4 Neon Medium, on the plan Intelligence's
         balancer picks) starts there on your first message and hires named workers on your plans.</p>
       <form id="g-new" class="g-new-form" autocomplete="off">
         <label>Host
           <select id="g-new-host" required>
-            {{range .Hosts}}<option value="{{.Name}}" data-repos="{{range $i, $r := .Repos}}{{if $i}}
+            {{range .Hosts}}<option value="{{.Name}}" data-desk="{{.Desk}}" data-repos="{{range $i, $r := .Repos}}{{if $i}}
 {{end}}{{$r}}{{end}}"{{if eq .Name $.DefaultHost}} selected{{end}}{{if not .Online}} disabled{{end}}>{{.Name}}{{if not .Online}} (offline){{end}}</option>{{end}}
           </select>
         </label>
         <label>Repository on the host
-          <input id="g-new-repo" list="g-new-repos" required placeholder="/path/to/repo" spellcheck="false">
+          <input id="g-new-repo" list="g-new-repos" placeholder="/path/to/repo" spellcheck="false">
           <datalist id="g-new-repos"></datalist>
         </label>
         <label>Title <span class="muted">(optional)</span><input id="g-new-title" maxlength="200" placeholder="The repository's name"></label>

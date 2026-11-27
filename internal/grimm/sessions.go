@@ -30,8 +30,32 @@ type NewSession struct {
 
 var branchRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$`)
 
+// DeskName is the repository a session starts in when none is named: desk, the general
+// workspace, where answer agents also run.
+const DeskName = "desk"
+
+// DeskRepo is host's desk checkout, or "" when it has none: a git directory in host_repositories
+// (the registered-project and workspace catalog answer agents use) named desk by its project or
+// its directory's base name, case-insensitively.
+func DeskRepo(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, host string) (string, error) {
+	var dir string
+	err := q.QueryRow(ctx, `SELECT directory FROM host_repositories
+		WHERE host = $1 AND directory LIKE '/%' AND (lower(regexp_replace(rtrim(directory, '/'), '^.*/', '')) = $2 OR lower(trim(project)) = $2)
+		ORDER BY lower(regexp_replace(rtrim(directory, '/'), '^.*/', '')) = $2 DESC, directory LIMIT 1`, host, DeskName).Scan(&dir)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return path.Clean(dir), nil
+}
+
 // CreateSession starts a session for account on a connected host of its: a new git worktree of
-// the repository (on its own branch), where the manager starts on the first message.
+// the repository (desk when none is named) on its own branch, where the manager starts on the
+// first message. A session never works in a main checkout, desk's included.
 func (s *Service) CreateSession(ctx context.Context, account int64, n NewSession) (string, error) {
 	n.Host, n.Repo, n.Title, n.Base = strings.TrimSpace(n.Host), strings.TrimSpace(n.Repo), strings.TrimSpace(n.Title), strings.TrimSpace(n.Base)
 	if n.MaxWorkers == 0 {
@@ -43,11 +67,8 @@ func (s *Service) CreateSession(ctx context.Context, account int64, n NewSession
 	if !hostclient.ValidName(n.Host) {
 		return "", badRequest("pick a host")
 	}
-	if !path.IsAbs(n.Repo) || path.Clean(n.Repo) != n.Repo || len(n.Repo) > 1024 || n.Repo == "/" {
+	if n.Repo != "" && (!path.IsAbs(n.Repo) || path.Clean(n.Repo) != n.Repo || len(n.Repo) > 1024 || n.Repo == "/") {
 		return "", badRequest("the repository must be a clean absolute directory on the host")
-	}
-	if path.Base(n.Repo) == "desk" {
-		return "", badRequest("Grimm does not run in the desk repository")
 	}
 	if len(n.Title) > 200 {
 		return "", badRequest("the title is longer than 200 bytes")
@@ -68,6 +89,14 @@ func (s *Service) CreateSession(ctx context.Context, account int64, n NewSession
 		}
 		if !online {
 			return conflict("%s is not connected", n.Host)
+		}
+		if n.Repo == "" {
+			if n.Repo, err = DeskRepo(ctx, tx, n.Host); err != nil {
+				return err
+			}
+			if n.Repo == "" {
+				return badRequest("%s has no desk repository registered: name a repository", n.Host)
+			}
 		}
 		if err := tx.QueryRow(ctx, `SELECT gen_random_uuid()::text`).Scan(&id); err != nil {
 			return err

@@ -744,18 +744,24 @@ function bindSession() {
 
 function bindNew() {
   const form = $("#g-new"); if (!form) return;
-  const host = $("#g-new-host"), list = $("#g-new-repos");
+  const host = $("#g-new-host"), list = $("#g-new-repos"), repo = $("#g-new-repo");
+  // The repository is the host's desk checkout unless the user typed another; a host without desk
+  // leaves it blank to fill in.
+  let auto = "";
   const fill = () => {
     const opt = host.selectedOptions[0];
     list.innerHTML = "";
     for (const r of (opt?.dataset.repos || "").split("\n").filter(Boolean)) { const o = document.createElement("option"); o.value = r; list.append(o); }
+    const desk = opt?.dataset.desk || "";
+    if (repo.value === auto) { repo.value = desk; auto = desk; }
+    repo.placeholder = desk ? desk : "/path/to/repo";
   };
   host.addEventListener("change", fill); fill();
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     $("#g-new-error").textContent = ""; $("#g-new-start").disabled = true;
     try {
-      const r = await api("POST", "/api/grimm/sessions", { host: host.value, repo: $("#g-new-repo").value.trim(), title: $("#g-new-title").value.trim(),
+      const r = await api("POST", "/api/grimm/sessions", { host: host.value, repo: repo.value.trim(), title: $("#g-new-title").value.trim(),
         base: $("#g-new-base").value.trim(), maxWorkers: parseInt($("#g-new-cap").value, 10) || 0 });
       location.href = r.url;
     } catch (err) {

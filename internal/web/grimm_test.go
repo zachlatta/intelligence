@@ -58,6 +58,48 @@ func TestGrimmIsTheHomePageAndHostsMoveToHosts(t *testing.T) {
 	}
 }
 
+// The new-session form starts in desk: each host option carries its desk checkout for the
+// repository field, the default host is one with desk, and a session made with no repository
+// named starts in desk.
+func TestGrimmNewSessionDefaultsToDesk(t *testing.T) {
+	t.Parallel()
+	h, _ := dbServer(t)
+	stream := grimmRig(t, h)
+	rep := wfReport()
+	rep.Paseo.Projects = []hostclient.Project{{ID: "p-desk", Name: "desk", Kind: "git", Directory: "/w/desk"}}
+	if ack := stream.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	body := get(t, h, "/", nil).Body.String()
+	if !strings.Contains(body, `<option value="host-1" data-desk="/w/desk"`) || !strings.Contains(body, `data-desk="/w/desk" data-repos=`) {
+		t.Fatalf("the host option does not carry its desk checkout:\n%s", body)
+	}
+	if strings.Contains(body, "does not run in the desk") {
+		t.Error("the page still refuses desk")
+	}
+	rec := call(t, h, "POST", "/api/grimm/sessions", `{"host":"host-1"}`, sameOriginFetch)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("session with no repository: %d %s", rec.Code, rec.Body)
+	}
+	var repo string
+	if err := h.(*testServer).d.Owner.QueryRow(t.Context(), `SELECT repo FROM grimm_sessions`).Scan(&repo); err != nil || repo != "/w/desk" {
+		t.Fatalf("session repo = %q, %v", repo, err)
+	}
+}
+
+func TestDefaultGrimmHostPrefersDesk(t *testing.T) {
+	t.Parallel()
+	hosts := []grimmHost{{Name: "a", Online: true}, {Name: "b", Online: true, Desk: "/w/desk"}, {Name: "c", Online: false, Desk: "/w/desk"}}
+	for _, c := range []struct{ preferred, want string }{{"a", "a"}, {"", "b"}, {"c", "b"}, {"zz", "b"}} {
+		if got := defaultGrimmHost(hosts, c.preferred); got != c.want {
+			t.Errorf("defaultGrimmHost(%q) = %q, want %q", c.preferred, got, c.want)
+		}
+	}
+	if got := defaultGrimmHost(hosts[:1], ""); got != "a" {
+		t.Errorf("no desk anywhere: %q", got)
+	}
+}
+
 func TestGrimmSessionStreamsItsThreadAndState(t *testing.T) {
 	t.Parallel()
 	h, _ := dbServer(t)

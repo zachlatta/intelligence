@@ -25,9 +25,10 @@ type rig struct {
 	reg  *fleet.Registry
 	acct int64
 
-	mu     sync.Mutex
-	skew   time.Duration
-	agents []hostclient.Agent
+	mu       sync.Mutex
+	skew     time.Duration
+	agents   []hostclient.Agent
+	projects []hostclient.Project
 }
 
 func newRig(t *testing.T) *rig {
@@ -87,6 +88,7 @@ func (r *rig) report() {
 			{Name: "antigravity", Available: true, Models: []hostclient.Model{{ID: "gemini-4-neon-medium"}}},
 		},
 		Workspaces: []hostclient.Workspace{{ID: "ws-1", Name: "grimm", Kind: "worktree", Status: "running", Directory: "/w/app-grimm"}},
+		Projects:   r.projects,
 		Agents:     r.agents}}
 	if err := r.reg.Record(r.t.Context(), rep, time.Now()); err != nil {
 		r.t.Fatal(err)
@@ -268,7 +270,7 @@ func TestASessionNeedsAConnectedHostOfTheAccount(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	ctx := t.Context()
-	for _, n := range []NewSession{{Host: "host-2", Repo: "/w/app"}, {Host: "host-1", Repo: "w/app"}, {Host: "host-1", Repo: "/srv/x/desk"},
+	for _, n := range []NewSession{{Host: "host-2", Repo: "/w/app"}, {Host: "host-1", Repo: "w/app"},
 		{Host: "host-1", Repo: "/w/app", MaxWorkers: 101}} {
 		if _, err := r.s.CreateSession(ctx, r.acct, n); err == nil {
 			t.Errorf("made a session with %+v", n)
@@ -277,6 +279,37 @@ func TestASessionNeedsAConnectedHostOfTheAccount(t *testing.T) {
 	r.exec(`UPDATE hosts SET stream_id = NULL`)
 	if _, err := r.s.CreateSession(ctx, r.acct, NewSession{Host: "host-1", Repo: "/w/app"}); err == nil || !strings.Contains(err.Error(), "not connected") {
 		t.Errorf("offline host: %v", err)
+	}
+}
+
+// A session with no repository named is in the host's desk checkout, found the way answer agents
+// find it, and like any session it is a new worktree on its own branch, never desk's main checkout.
+func TestASessionDefaultsToDeskInItsOwnWorktree(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	ctx := t.Context()
+	if _, err := r.s.CreateSession(ctx, r.acct, NewSession{Host: "host-1"}); err == nil || !strings.Contains(err.Error(), "desk") {
+		t.Fatalf("no repository and no desk on the host: %v", err)
+	}
+	r.projects = []hostclient.Project{{ID: "p1", Name: "app", Kind: "git", Directory: "/w/app"}, {ID: "p2", Name: "desk", Kind: "git", Directory: "/w/Desk"}}
+	r.report()
+	if got, err := DeskRepo(ctx, r.d.Owner, "host-1"); err != nil || got != "/w/Desk" {
+		t.Fatalf("DeskRepo = %q, %v", got, err)
+	}
+	id, err := r.s.CreateSession(ctx, r.acct, NewSession{Host: "host-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := r.take("create_workspace")
+	if ws.Args["cwd"] != "/w/Desk" || ws.Args["worktree"] != true || ws.Args["branch"] != "grimm/"+id[:8] {
+		t.Fatalf("workspace command = %+v", ws.Args)
+	}
+	if got := r.one(`SELECT repo || ' ' || title FROM grimm_sessions WHERE id = $1`, id); got != "/w/Desk Desk" {
+		t.Errorf("session = %v", got)
+	}
+	// a desk path given outright works too
+	if _, err := r.s.CreateSession(ctx, r.acct, NewSession{Host: "host-1", Repo: "/srv/x/desk"}); err != nil {
+		t.Errorf("desk by path: %v", err)
 	}
 }
 
