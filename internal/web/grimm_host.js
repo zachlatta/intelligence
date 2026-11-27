@@ -260,8 +260,11 @@ function render() {
     const diskLv = level(diskPct, 75, 90);
     const loadLv = level(loadPer, 0.75, 1.2);
     const psiLv = level(psiMax, 5, 15);
-    const hasOom = (num(d.oom_kills) || 0) > 0 || (Array.isArray(d.recent_ooms) && d.recent_ooms.length > 0);
-    overallLv = d.host_online === false || hasOom ? "lv-crit" : stale ? "lv-warn" : worstLevel([cpuLv, memLv, diskLv, loadLv, psiLv]);
+    const ooms = Array.isArray(d.recent_ooms) ? d.recent_ooms : [];
+    const freshOom = (num(d.oom_kills) || 0) > 0 || ooms.some((o) => { const s = ageSec(o.at); return s !== null && s < 900; });
+    const olderOom = !freshOom && ooms.length > 0;
+    const oomLv = freshOom ? "lv-crit" : olderOom ? "lv-warn" : "lv-ok";
+    overallLv = d.host_online === false ? "lv-crit" : worstLevel([cpuLv, memLv, diskLv, loadLv, psiLv, oomLv, stale ? "lv-warn" : "lv-ok"]);
 
     const fourth = psiMax >= 5
       ? miniMeter("PSI", `${Math.round(psiMax)}%`, psiMax, psiLv)

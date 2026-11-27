@@ -431,4 +431,35 @@ func TestGrimmHostWidgetRendersMetersDetailAndStaleState(t *testing.T) {
 			t.Errorf("stale render missing %q in:\n%s", want, stale)
 		}
 	}
+
+	// An OOM kill from hours ago with green meters should tint the pill amber (lv-warn), not red (lv-crit).
+	oldOomRow := `{
+		"session_id": "00000000-0000-4000-8000-000000000001",
+		"host": "calm-box",
+		"host_online": true,
+		"has_reading": true,
+		"minute": "2026-11-27T23:14:40Z",
+		"fresh": true,
+		"cpus": 8,
+		"cpu_avg_pct": 15.0,
+		"cpu_max_pct": 25.0,
+		"load1": 1.0,
+		"load5": 1.0,
+		"load15": 1.0,
+		"load1_per_cpu": 0.125,
+		"mem_total": 34359738368,
+		"mem_available_min": 25769803776,
+		"mem_used_frac": 0.25,
+		"disk_total": 107374182400,
+		"disk_available_min": 85899345920,
+		"disk_used_frac": 0.20,
+		"oom_kills": 0,
+		"filesystems": [],
+		"recent_ooms": [{"at": "2026-11-27T18:00:00Z", "pid": 400, "comm": "python3", "agent_id": "", "anon_rss": 2147483648}],
+		"session_agents": []
+	}`
+	oldOom := run(oldOomRow)
+	if !strings.Contains(oldOom, `g-host-btn lv-warn`) || strings.Contains(oldOom, `g-host-btn lv-crit`) {
+		t.Errorf("old OOM pill should be lv-warn, not lv-crit:\n%s", oldOom)
+	}
 }
