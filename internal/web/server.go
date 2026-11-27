@@ -20,6 +20,7 @@ import (
 	"github.com/zachlatta/intelligence/internal/fleet"
 	"github.com/zachlatta/intelligence/internal/hostclient"
 	"github.com/zachlatta/intelligence/internal/hostwatch"
+	"github.com/zachlatta/intelligence/internal/timing"
 	"github.com/zachlatta/intelligence/internal/voicememo"
 	"github.com/zachlatta/intelligence/internal/webpush"
 	"github.com/zachlatta/intelligence/internal/workflow"
@@ -68,6 +69,10 @@ type Config struct {
 	// Unset turns Web Push off cleanly. PushHTTP overrides the HTTP client used to post pushes (tests).
 	VAPID    *webpush.VAPID
 	PushHTTP *http.Client
+	// Timing records every request's route, status and duration (http_requests). Its owner runs
+	// it (timing.Recorder.Run), so it can flush after the server has drained. Default: one the
+	// server runs itself until Context ends.
+	Timing *timing.Recorder
 }
 
 type app struct {
@@ -118,6 +123,12 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	}
 	if cfg.AssemblyAITokenURL == "" {
 		cfg.AssemblyAITokenURL = assemblyAITokenURL
+	}
+	if cfg.Timing == nil {
+		cfg.Timing = timing.New(cfg.DB, timing.QueueSize)
+		if workers {
+			go cfg.Timing.Run(cfg.Context, timing.FlushEvery)
+		}
 	}
 	reg := fleet.New(cfg.DB)
 	changes := fleet.NewChanges(cfg.DB)
@@ -214,6 +225,8 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	// What's New: the release notes (whatsnew), and which of them the account has seen
 	mux.HandleFunc("GET /whatsnew.js", whatsNewScript)
 	mux.HandleFunc("GET /localtime.js", localTimeScript)
+	mux.HandleFunc("GET /pageload.js", pageLoadScript)
+	mux.HandleFunc("POST /api/page-loads", a.write(a.recordPageLoad))
 	mux.HandleFunc("GET /whats-new/media/{name}", whatsNewMedia())
 	mux.HandleFunc("GET /whats-new", a.page(func(v viewer) http.HandlerFunc { return whatsNewPage(cfg, v) }))
 	mux.HandleFunc("POST /api/whats-new/seen", a.write(a.markWhatsNewSeen))
@@ -337,10 +350,12 @@ func newHandler(cfg Config, workers bool) http.Handler {
 		http.Redirect(w, r, u.RequestURI(), http.StatusMovedPermanently)
 	})
 	mux.HandleFunc("GET /{$}", a.page(func(v viewer) http.HandlerFunc { return homePage(cfg, v) }))
+	// every request is timed (http_requests)
+	served := timed(cfg.Timing, time.Now, mux)
 	// every response names the server's version, so a host sees on any call that it should update
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(hostclient.VersionHeader, cfg.Version)
-		mux.ServeHTTP(w, r)
+		served.ServeHTTP(w, r)
 	})
 }
 

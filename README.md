@@ -116,6 +116,20 @@ The hierarchy is hosts > workspaces > agents:
   addresses, how far it is read, and its Google token, sealed with `CONNECTIONS_KEY`, so reading it
   gives nothing) and `emails` (every email it received, and what it did and why): Email triggers,
   below.
+- `http_requests` and `page_loads`: how long the server took to answer each request, and each
+  signed-in page took to load in the browser (`internal/timing`). A request row has the mux route
+  pattern that served it (`/workflows/{id}`, `(no route)` for none), method, status, `duration_ms`,
+  start time `at`, and the signed-in account (session, host key or workflow API key; NULL for none).
+  No path, query, header, cookie, token, body, IP or user agent is kept. Requests are queued without
+  blocking and written in batches every second; past 10,000 queued between writes they are dropped
+  (and logged), and on shutdown the queue is written after open requests finish. A page load row
+  (`pageload.js`, `POST /api/page-loads`, below) has the page's route pattern, navigation type, and
+  `ttfb_ms`, `dom_content_loaded_ms`, `load_ms` and `duration_ms`. An account reads its own rows,
+  and the requests no one was signed in for. Rows older than 30 days are pruned when the server
+  starts and hourly. For example, p50 and p95 per route over the last day:
+  `SELECT route, count(*), percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) AS p50,
+  percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95 FROM http_requests
+  WHERE at > now() - interval '24 hours' GROUP BY route ORDER BY p95 DESC`.
 - `push_subscriptions`: the account's devices that turned on Web Push notifications (`/account`),
   with each one's push service host, browser, and when it was last sent to or failed. Its endpoint
   and keys are sealed with a key derived from `VAPID_PRIVATE_KEY`, so reading it gives nothing to
@@ -1978,6 +1992,16 @@ origin (another site's request is refused with 403), and those with a body must 
   broken or soon-ending login (`login_alerts`), and the Plans page's interrupted agents.
 - `GET /hostalerts.js`: loaded by every page with its stylesheet: the red note under the top bar
   for each host with active runs that stopped reporting (`host_silence_current`; Silent hosts).
+- `GET /pageload.js`: loaded by every page with its stylesheet. On a signed-in page, after its load
+  event, it reads the page's navigation timing (`performance.getEntriesByType('navigation')`) and
+  posts it once to `POST /api/page-loads` (`fetch` with `keepalive`), with the page's path but not
+  its query.
+- `POST /api/page-loads` with `{"path": "/workflow-runs/…", "navigationType": "navigate",
+  "ttfbMs": 12.5, "domContentLoadedMs": 80, "loadMs": 120, "durationMs": 121}`: stores the page
+  load in `page_loads` (204) under the route pattern that serves the path (`/workflow-runs/{id}`),
+  never the path itself. `navigationType` is `navigate`, `reload`, `back_forward` or `prerender`;
+  timings are milliseconds, 0 or more, clamped to ten minutes; 400 for anything else, an unknown
+  field or a body over 8 KiB.
 - `GET /localtime.js`: loaded by every page with its stylesheet. Pages show every time in the
   reader's own time zone and locale: the server writes each as an instant
   (`<time datetime="<RFC 3339, UTC>" data-format="…">`, with the time in UTC as its text for a

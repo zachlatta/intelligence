@@ -172,6 +172,7 @@ func (a *app) workflowAPI(h func(apiCaller) http.HandlerFunc) http.HandlerFunc {
 			}
 			return
 		}
+		signedInAs(r, auth.Account.ID)
 		pool, err := a.store.Reader(r.Context(), auth.Account)
 		if err != nil {
 			log.Printf("workflow api reader: %v", err)
