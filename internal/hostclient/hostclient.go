@@ -107,7 +107,14 @@ type Agent struct {
 	CreatedAt         time.Time `json:"createdAt,omitzero"`
 	UpdatedAt         time.Time `json:"updatedAt,omitzero"`
 	LastUserMessageAt time.Time `json:"lastUserMessageAt,omitzero"`
+	// Live: the agent is labelled LiveLabel (a Grimm agent), so its transcript is copied every
+	// FastEvery while it runs. Not reported: the server knows its own agents.
+	Live bool `json:"-"`
 }
+
+// LiveLabel marks an agent whose transcript someone is watching live (Grimm's manager and
+// workers): while it runs, the host copies its transcript every Client.FastEvery.
+const LiveLabel = "intelligence.live"
 
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 

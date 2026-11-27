@@ -72,7 +72,7 @@ func TestSchedulesPageListsEverySchedule(t *testing.T) {
 	if strings.Contains(body, "Nightly <tidy>") {
 		t.Error("a schedule's name is not escaped")
 	}
-	if !strings.Contains(get(t, h, "/", nil).Body.String(), `href="/schedules"`) {
+	if !strings.Contains(get(t, h, "/hosts", nil).Body.String(), `href="/schedules"`) {
 		t.Error("the top bar does not link the schedules page")
 	}
 }

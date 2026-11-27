@@ -191,7 +191,7 @@ details.card > summary::-webkit-details-marker { display: none; }
 details.card:not([open]) > .card-head { border-bottom: 0; }
 details.card > summary .fold-hint::after { content: "Expand"; }
 details.card[open] > summary .fold-hint::after { content: "Collapse"; }</style></head>
-<body>{{template "top" "/"}}
+<body>{{template "top" "/hosts"}}
 <main class="container page">
 <div class="crumbs"><a href="{{.Back}}">← Back to the transcript</a></div>
 <div class="page-head"><h1>{{.Kind}}{{if .Tool}} · {{.Tool}}{{end}}</h1><span class="badge">seq {{.Seq}}</span></div>

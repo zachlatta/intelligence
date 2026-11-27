@@ -185,3 +185,38 @@ func TestTranscriptStoresTextWithNULCharacters(t *testing.T) {
 		t.Errorf("text = %q, want NUL as U+FFFD and the escaped text untouched", text)
 	}
 }
+
+// A Grimm session's agents keep their transcripts after Paseo archives them, so the session's
+// thread and a finished worker's log outlive the agent; once the session is archived they go.
+func TestGrimmAgentsTranscriptsOutliveTheirAgentWhileTheSessionIsActive(t *testing.T) {
+	t.Parallel()
+	d := dbtest.New(t)
+	r := New(d.Owner)
+	record(t, r, full(), time.Now())
+	var acct int64
+	if err := d.Owner.QueryRow(ctx, `INSERT INTO accounts (username, password_hash, role_name) VALUES ('g', 'x', 'g_role') RETURNING id`).Scan(&acct); err != nil {
+		t.Fatal(err)
+	}
+	var session string
+	if err := d.Owner.QueryRow(ctx, `INSERT INTO grimm_sessions (account_id, host, repo, branch) VALUES ($1, 'host-1', '/w/app', 'grimm/x') RETURNING id::text`, acct).Scan(&session); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Owner.Exec(ctx, `INSERT INTO grimm_workers (session_id, account_id, name, provider, model, host, agent_id, status)
+		VALUES ($1, $2, 'athena', 'claude', 'opus', 'host-1', 'a3', 'running')`, session, acct); err != nil {
+		t.Fatal(err)
+	}
+	storeT(t, r, hostclient.TranscriptBatch{Host: "host-1", AgentID: "a3", Epoch: "ep1", Replace: true, Entries: []hostclient.TranscriptEntry{entry(1, 1, userMsg)}})
+	rep := full()
+	rep.Paseo.Agents = rep.Paseo.Agents[:2] // a3 was archived
+	record(t, r, rep, time.Now())
+	if cur, _ := r.TranscriptCursors(ctx, "host-1"); cur["a3"].LastSeqStart != 1 {
+		t.Fatalf("cursors = %v, want the Grimm worker's transcript kept", cur)
+	}
+	if _, err := d.Owner.Exec(ctx, `UPDATE grimm_sessions SET status = 'archived'`); err != nil {
+		t.Fatal(err)
+	}
+	record(t, r, rep, time.Now())
+	if cur, _ := r.TranscriptCursors(ctx, "host-1"); len(cur) != 0 && cur["a3"].LastSeqStart != 0 {
+		t.Fatalf("cursors = %v, want it gone with the archived session", cur)
+	}
+}

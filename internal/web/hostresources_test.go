@@ -45,7 +45,7 @@ func TestIndexShowsEachHostsResourcesAndAgentsMemory(t *testing.T) {
 	t.Parallel()
 	h, d := dbServer(t)
 	seedHost(t, d)
-	body := get(t, h, "/", nil).Body.String()
+	body := get(t, h, "/hosts", nil).Body.String()
 	for _, want := range []string{`href="/resources#host-1"`, "CPU 1%", "load 2.0", "RAM 12.0/20.0 GB", "disk 75% (25.0 GB free)",
 		"disk busy 62%", "3.0 GB"} {
 		if !strings.Contains(body, want) {

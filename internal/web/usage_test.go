@@ -39,7 +39,7 @@ func TestIndexShowsEachLoginsPlan(t *testing.T) {
 	t.Parallel()
 	h, d := dbServer(t)
 	seedUsage(t, d)
-	body := get(t, h, "/", nil).Body.String()
+	body := get(t, h, "/hosts", nil).Body.String()
 	for _, want := range []string{`href="/usage"`, "ada@example.com", "#1", "70% left", "host-1 #1 · active", "resets in 3d 12h",
 		"grace@example.com", "cswap usage status: expired", "host-1: codex: codex meter: 401 Unauthorized"} {
 		if !strings.Contains(body, want) {
@@ -54,7 +54,7 @@ func TestIndexShowsEachLoginsPlan(t *testing.T) {
 func TestIndexWithoutUsageSaysNothingAboutPlans(t *testing.T) {
 	t.Parallel()
 	h, _ := dbServer(t)
-	if body := get(t, h, "/", nil).Body.String(); strings.Contains(body, `class="plans"`) {
+	if body := get(t, h, "/hosts", nil).Body.String(); strings.Contains(body, `class="plans"`) {
 		t.Errorf("an empty plans section is shown")
 	}
 }
@@ -144,7 +144,7 @@ func TestIndexAndUsageShowPerHostPlanAuth(t *testing.T) {
 	if err := reg.RecordUsage(t.Context(), "host-2", rep2, now); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/", "/usage"} {
+	for _, path := range []string{"/hosts", "/usage"} {
 		body := get(t, h, path, nil).Body.String()
 		for _, want := range []string{"plan-hosts", "host-1 #1", "host-2", "active"} {
 			if !strings.Contains(body, want) {

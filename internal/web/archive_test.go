@@ -9,7 +9,7 @@ import (
 func TestHomePageArchivesWorkspacesAndAgentsThroughTheCommandsAPI(t *testing.T) {
 	t.Parallel()
 	h := reported(t)
-	page := get(t, h, "/", nil).Body.String()
+	page := get(t, h, "/hosts", nil).Body.String()
 	for _, want := range []string{
 		// w-app has two agents, one running, and uncommitted changes in its worktree
 		`data-archive="workspace" data-host="host-1" data-id="w-app" data-name="Login fix" data-agents="2" data-running="1" data-dirty="1"`,
@@ -34,7 +34,7 @@ func TestAgentPageHasAnArchiveButton(t *testing.T) {
 	t.Parallel()
 	h := reported(t)
 	page := get(t, h, "/hosts/host-1/agents/"+agentA1, nil).Body.String()
-	for _, want := range []string{`data-archive="agent" data-host="host-1" data-id="` + agentA1 + `"`, `data-running="1"`, `data-then="/"`, `function archive(`} {
+	for _, want := range []string{`data-archive="agent" data-host="host-1" data-id="` + agentA1 + `"`, `data-running="1"`, `data-then="/hosts"`, `function archive(`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("agent page misses %q", want)
 		}

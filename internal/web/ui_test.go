@@ -44,6 +44,7 @@ func TestEveryPageSharesTheStylesheetAndTopBar(t *testing.T) {
 	sendBatch(t, h, batch(true, "ep1", tentry(1, `{"type":"user_message","text":"go"}`)))
 	pages := []struct{ path, tab string }{
 		{"/", `href="/" aria-current="page"`},
+		{"/hosts", `href="/hosts" aria-current="page"`},
 		{"/workflows", `href="/workflows" aria-current="page"`},
 		{"/workflows/email", `href="/workflows" aria-current="page"`},
 		{"/schedules", `href="/schedules" aria-current="page"`},
@@ -52,10 +53,10 @@ func TestEveryPageSharesTheStylesheetAndTopBar(t *testing.T) {
 		{"/account", `href="/account" aria-current="page"`},
 		{"/workflow-proposals", `href="/workflow-proposals" id="proposals-nav" aria-current="page"`},
 		{"/whats-new", `href="/whats-new" id="nav-whats-new" aria-current="page"`},
-		{newAgentPath, `href="/" aria-current="page"`},
-		{"/hosts/host-1/workspaces/new", `href="/" aria-current="page"`},
-		{"/hosts/host-1/agents/" + agentA1, `href="/" aria-current="page"`},
-		{"/hosts/host-1/agents/" + agentA1 + "/entries/1", `href="/" aria-current="page"`},
+		{newAgentPath, `href="/hosts" aria-current="page"`},
+		{"/hosts/host-1/workspaces/new", `href="/hosts" aria-current="page"`},
+		{"/hosts/host-1/agents/" + agentA1, `href="/hosts" aria-current="page"`},
+		{"/hosts/host-1/agents/" + agentA1 + "/entries/1", `href="/hosts" aria-current="page"`},
 	}
 	for _, p := range pages {
 		rec := call(t, h, http.MethodGet, p.path, "", nil, c)
@@ -65,7 +66,7 @@ func TestEveryPageSharesTheStylesheetAndTopBar(t *testing.T) {
 		}
 		page := rec.Body.String()
 		nav, _, _ := strings.Cut(page[strings.Index(page, `class="topnav"`)+1:], "</nav>")
-		for _, tab := range []string{">Hosts<", ">Workflows<", ">Proposals<", ">Schedules<", ">Plans<", ">Host monitoring<", ">What's New<", ">Account<"} { // one tab each
+		for _, tab := range []string{">Grimm<", ">Hosts<", ">Workflows<", ">Proposals<", ">Schedules<", ">Plans<", ">Host monitoring<", ">What's New<", ">Account<"} { // one tab each
 			if n := strings.Count(nav, tab); n != 1 {
 				t.Errorf("%s: %d tabs %s, want 1", p.path, n, tab)
 			}

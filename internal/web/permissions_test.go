@@ -37,7 +37,7 @@ func TestStuckPermissionAppearsOnHostAndAgentPages(t *testing.T) {
 	if ack := b.call(hostclient.Frame{Type: hostclient.PermissionFrame, Permission: &p}); ack.Error != "" {
 		t.Fatal(ack.Error)
 	}
-	for _, path := range []string{"/", "/hosts/host-1/agents/" + agentA1} {
+	for _, path := range []string{"/hosts", "/hosts/host-1/agents/" + agentA1} {
 		if body := get(t, h, path, nil).Body.String(); !strings.Contains(body, "permission recovery stuck") {
 			t.Fatal(path, "missing stuck indicator")
 		}
@@ -119,7 +119,7 @@ func TestPermissionRestartClearsPersistedWarning(t *testing.T) {
 	if code != http.StatusOK || len(r.Rows) != 1 || r.Rows[0][0] != "cleared" || r.Rows[0][1] != true {
 		t.Fatal(code, r)
 	}
-	for _, path := range []string{"/", "/hosts/host-1/agents/" + agentA1} {
+	for _, path := range []string{"/hosts", "/hosts/host-1/agents/" + agentA1} {
 		if body := get(t, h, path, nil).Body.String(); strings.Contains(body, "permission recovery stuck") {
 			t.Fatal("stale restart warning", path)
 		}

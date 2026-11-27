@@ -52,7 +52,7 @@ func TestHealthzReportsOKAndVersion(t *testing.T) {
 func TestIndexShowsNameAndVersion(t *testing.T) {
 	t.Parallel()
 	h, _ := dbServerVersion(t, "abc123")
-	rec := get(t, h, "/", nil)
+	rec := get(t, h, "/hosts", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -69,7 +69,7 @@ func TestIndexShowsNameAndVersion(t *testing.T) {
 func TestIndexHasNoGreeting(t *testing.T) {
 	t.Parallel()
 	h, _ := dbServer(t)
-	page := get(t, h, "/", map[string]string{"Tailscale-User-Name": "Some One"}).Body.String()
+	page := get(t, h, "/hosts", map[string]string{"Tailscale-User-Name": "Some One"}).Body.String()
 	if strings.Contains(page, "Hi") || strings.Contains(page, "Some One") {
 		t.Errorf("the home page should open on the hosts, with no greeting")
 	}
@@ -99,7 +99,7 @@ func TestIndexShowsShortVersionWithFullInTooltip(t *testing.T) {
 	full := "8a578ee431111bbfa263522b95cae4a9c95ee5e2"
 	h, _ := dbServerVersion(t, full)
 	want := `<footer title="` + full + `">version 8a578ee43111</footer>`
-	if page := get(t, h, "/", nil).Body.String(); !strings.Contains(page, want) {
+	if page := get(t, h, "/hosts", nil).Body.String(); !strings.Contains(page, want) {
 		t.Errorf("index misses %s:\n%s", want, page)
 	}
 	if !strings.Contains(get(t, h, "/healthz", nil).Body.String(), full) {
@@ -189,7 +189,7 @@ func TestReportedHostIsListedInTheAPIAndOnTheHomePage(t *testing.T) {
 		t.Fatalf("list = %+v", list)
 	}
 
-	page := get(t, h, "/", nil).Body.String()
+	page := get(t, h, "/hosts", nil).Body.String()
 	for _, want := range []string{"host-1", "online", "1 running, 2 idle", "Login fix", "example/app",
 		"Fix the &lt;b&gt;login&lt;/b&gt; page", "claude-opus-5-5", "Write notes", "needs attention"} {
 		if !strings.Contains(page, want) {
@@ -205,7 +205,7 @@ func TestHomePageShowsSilentHostOffline(t *testing.T) {
 	if err := fleet.New(d.Owner).Record(t.Context(), sampleReport, time.Now().Add(-5*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	page := get(t, h, "/", nil).Body.String()
+	page := get(t, h, "/hosts", nil).Body.String()
 	if !strings.Contains(page, "offline") {
 		t.Errorf("a host silent for 5 minutes should show offline")
 	}
@@ -214,7 +214,7 @@ func TestHomePageShowsSilentHostOffline(t *testing.T) {
 func TestHomePageSaysWhenNoHostHasReported(t *testing.T) {
 	t.Parallel()
 	h, _ := dbServer(t)
-	if page := get(t, h, "/", nil).Body.String(); !strings.Contains(page, "No hosts yet") {
+	if page := get(t, h, "/hosts", nil).Body.String(); !strings.Contains(page, "No hosts yet") {
 		t.Errorf("empty fleet message missing")
 	}
 }
@@ -225,13 +225,13 @@ func TestHomePageFlagsAHostNotOnTheServersVersion(t *testing.T) {
 	rep := sampleReport
 	rep.Version = "fedcba9876543210"
 	sendReport(t, h, rep)
-	page := get(t, h, "/", nil).Body.String()
+	page := get(t, h, "/hosts", nil).Body.String()
 	if !strings.Contains(page, `title="fedcba9876543210">client fedcba987654 is not on the server's version`) {
 		t.Errorf("a host on another version than the server should say so, with its version:\n%s", page)
 	}
 	rep.Version = "0123456789abcdef"
 	sendReport(t, h, rep)
-	if strings.Contains(get(t, h, "/", nil).Body.String(), "not on the server's version") {
+	if strings.Contains(get(t, h, "/hosts", nil).Body.String(), "not on the server's version") {
 		t.Errorf("a host on the server's version is not behind")
 	}
 }
@@ -240,7 +240,7 @@ func TestHomePageNestsAgentsInTheirWorkspaces(t *testing.T) {
 	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, sampleReport)
-	page := get(t, h, "/", nil).Body.String()
+	page := get(t, h, "/hosts", nil).Body.String()
 	app, run, audit, docs, notes := strings.Index(page, "Login fix"), strings.Index(page, "a100000"),
 		strings.Index(page, "a300000"), strings.Index(page, "Docs"), strings.Index(page, "a200000")
 	if !(app >= 0 && app < run && run < audit && audit < docs && docs < notes) {
@@ -255,7 +255,7 @@ func TestHomePageFoldsWorkspacesWithoutAgents(t *testing.T) {
 	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, sampleReport)
-	page := get(t, h, "/", nil).Body.String()
+	page := get(t, h, "/hosts", nil).Body.String()
 	fold, quiet := strings.Index(page, "1 workspace without agents"), strings.Index(page, "Quiet checkout")
 	if fold < 0 || quiet < fold {
 		t.Errorf("a workspace with no agents should be folded away under a count")
@@ -266,7 +266,7 @@ func TestHomePageShowsADisconnectedHost(t *testing.T) {
 	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, hostclient.Report{Name: "host-2", Paseo: hostclient.PaseoStatus{Error: "connect ws://127.0.0.1:6767/ws: refused"}})
-	page := get(t, h, "/", nil).Body.String()
+	page := get(t, h, "/hosts", nil).Body.String()
 	if !strings.Contains(page, "not connected") || !strings.Contains(page, "refused") {
 		t.Errorf("a host that cannot reach its daemon should say so and why")
 	}
@@ -293,7 +293,7 @@ func TestHomePageIsATreeOfHostsWorkspacesAndAgents(t *testing.T) {
 	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, sampleReport)
-	page := get(t, h, "/", nil).Body.String()
+	page := get(t, h, "/hosts", nil).Body.String()
 
 	host := detailsTag(page, "host-host-1")
 	if host == "" || !strings.Contains(host, " open") {
@@ -323,7 +323,7 @@ func TestHomePageIsATreeOfHostsWorkspacesAndAgents(t *testing.T) {
 func TestHomePageRefreshesWithoutResettingTheTree(t *testing.T) {
 	t.Parallel()
 	h, _ := dbServer(t)
-	page := get(t, h, "/", nil).Body.String()
+	page := get(t, h, "/hosts", nil).Body.String()
 	if strings.Contains(page, `http-equiv="refresh"`) {
 		t.Errorf("a full-page refresh would collapse what the reader opened")
 	}
@@ -340,7 +340,7 @@ func TestHomePageShowsWorkspaceTags(t *testing.T) {
 	rep.Paseo.Workspaces[0].Tags = []string{hostclient.TagPaseoGUI} // w-app, with agents
 	rep.Paseo.Workspaces[2].Tags = []string{hostclient.TagPaseoGUI} // w-idle, without
 	sendReport(t, h, rep)
-	page := get(t, h, "/", nil).Body.String()
+	page := get(t, h, "/hosts", nil).Body.String()
 	tag := `<span class="badge tag">Paseo GUI</span>`
 	app := page[strings.Index(page, `id="ws-host-1-w-app"`):]
 	if !strings.Contains(app[:strings.Index(app, "</summary>")], tag) {
@@ -362,7 +362,7 @@ func TestHomePageSurfacesBranchDiffAndSubAgents(t *testing.T) {
 	rep.Paseo.Agents = slices.Clone(sampleReport.Paseo.Agents)
 	rep.Paseo.Agents[2].ParentID = agentA1 // Audit is a sub-agent of a1
 	sendReport(t, h, rep)
-	page := get(t, h, "/", nil).Body.String()
+	page := get(t, h, "/hosts", nil).Body.String()
 	app := page[strings.Index(page, `id="ws-host-1-w-app"`):]
 	summary := app[:strings.Index(app, "</summary>")]
 	for _, want := range []string{`<code class="branch">fix-login</code>`, `+12`, `−3`} {

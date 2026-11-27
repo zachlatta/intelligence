@@ -17,7 +17,8 @@
 <header class="topbar"><div class="container topbar-inner">
   <a class="brand" href="/"><svg viewBox="0 0 20 20" aria-hidden="true"><rect width="20" height="20" rx="5" fill="currentColor"/><path d="M6 13.5 10 6l4 7.5" fill="none" stroke="var(--panel)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Intelligence</a>
   {{if .}}<nav class="topnav" aria-label="Primary">
-    <a href="/"{{if eq . "/"}} aria-current="page"{{end}}>Hosts</a>
+    <a href="/"{{if eq . "/"}} aria-current="page"{{end}}>Grimm</a>
+    <a href="/hosts"{{if eq . "/hosts"}} aria-current="page"{{end}}>Hosts</a>
     <a href="/workflows"{{if eq . "/workflows"}} aria-current="page"{{end}}>Workflows</a>
     <a href="/workflow-proposals" id="proposals-nav"{{if eq . "/workflow-proposals"}} aria-current="page"{{end}}>Proposals<span id="proposals-count"></span></a>
     <a href="/schedules"{{if eq . "/schedules"}} aria-current="page"{{end}}>Schedules</a>

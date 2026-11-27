@@ -137,7 +137,9 @@ func (r *Registry) record(ctx context.Context, rep hostclient.Report, at time.Ti
 			return err
 		}
 		if !ps.Connected {
-			return nil // a host that lost its daemon keeps its transcripts and diffs until it can say what is gone
+			// a host that lost its daemon keeps its transcripts and diffs until it can say what is gone
+			_, err := tx.Exec(ctx, notifySQL, AgentsTopic(rep.Name))
+			return err
 		}
 		// A connected daemon's complete agent list confirms archival. An outage leaves
 		// these flags untouched; seeing an agent again clears its prior archived state.
@@ -155,8 +157,14 @@ func (r *Registry) record(ctx context.Context, rep hostclient.Report, at time.Ti
             AND NOT EXISTS (SELECT 1 FROM workflow_run_agents h WHERE h.host = d.host AND h.workspace->>'id' = d.workspace_id)`, rep.Name); err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `DELETE FROM transcripts t WHERE t.host = $1
-			AND NOT EXISTS (SELECT 1 FROM recorded_agents a WHERE a.host = t.host AND a.id = t.agent_id)`, rep.Name)
+		// An active Grimm session keeps its agents' transcripts: its thread and its workers' logs.
+		if _, err = tx.Exec(ctx, `DELETE FROM transcripts t WHERE t.host = $1
+			AND NOT EXISTS (SELECT 1 FROM recorded_agents a WHERE a.host = t.host AND a.id = t.agent_id)
+			AND NOT EXISTS (SELECT 1 FROM grimm_agents g JOIN grimm_sessions s ON s.id = g.session_id
+				WHERE s.status = 'active' AND g.host = t.host AND g.agent_id = t.agent_id)`, rep.Name); err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, notifySQL, AgentsTopic(rep.Name))
 		return err
 	})
 }

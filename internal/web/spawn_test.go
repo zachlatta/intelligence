@@ -69,7 +69,7 @@ func TestSignUpSignInAndSignOut(t *testing.T) {
 	if !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteLaxMode || c.MaxAge <= 0 || c.Path != "/" || strings.Contains(c.Value, "password") {
 		t.Errorf("cookie = %+v", c)
 	}
-	if page := call(t, h, http.MethodGet, "/", "", nil, c); page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "ann") {
+	if page := call(t, h, http.MethodGet, "/hosts", "", nil, c); page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "ann") {
 		t.Errorf("home page after sign up: %d", page.Code)
 	}
 	for body, want := range map[string]int{
@@ -254,7 +254,7 @@ func TestNewWorkspacePageOffersTheHostsRepositories(t *testing.T) {
 func TestHomePageLinksToSpawning(t *testing.T) {
 	t.Parallel()
 	h, _ := cmdServer(t)
-	home := get(t, h, "/", nil).Body.String()
+	home := get(t, h, "/hosts", nil).Body.String()
 	for _, want := range []string{`href="` + newAgentPath + `"`, `href="/hosts/host-1/workspaces/w-idle/agents/new"`,
 		`href="/hosts/host-1/workspaces/new"`, `href="/account#add"`} {
 		if !strings.Contains(home, want) {
@@ -262,7 +262,7 @@ func TestHomePageLinksToSpawning(t *testing.T) {
 		}
 	}
 	c := signInAs(t, h)
-	if signedIn := call(t, h, http.MethodGet, "/", "", nil, c).Body.String(); !strings.Contains(signedIn, `id="sign-out"`) {
+	if signedIn := call(t, h, http.MethodGet, "/hosts", "", nil, c).Body.String(); !strings.Contains(signedIn, `id="sign-out"`) {
 		t.Errorf("a signed-in home page offers to sign out")
 	}
 }

@@ -1,5 +1,13 @@
 [
   {
+    "id": "grimm-home",
+    "released": "2026-11-27",
+    "title": "Grimm is the home page",
+    "summary": "Grimm now opens when you open Intelligence: start a session on a repository on any connected host and talk to Grimm, an Opus 5.5 manager that hires named workers on your plans, watches them and reports back. Its words, the team, plans, bus and each worker's live log stream as they happen, on a phone too. Messages mid-turn, Stop, images and a per-session worker cap (20 by default) are in the chat. The old home page is now Hosts.",
+    "media": "grimm-home.gif",
+    "mediaAlt": "A local demo of the Grimm page: a message asks for a CSV to Markdown tool, Grimm streams its plan, hires athena on Codex and hermes on Claude Opus 5.5, the team panel and message bus fill in, and an update arrives when the workers finish."
+  },
+  {
     "id": "workflow-secret-asks",
     "released": "2026-11-27",
     "title": "Password fields when a run needs a secret",

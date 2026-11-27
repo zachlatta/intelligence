@@ -18,6 +18,7 @@ import (
 	"github.com/zachlatta/intelligence/internal/db"
 	"github.com/zachlatta/intelligence/internal/email"
 	"github.com/zachlatta/intelligence/internal/fleet"
+	"github.com/zachlatta/intelligence/internal/grimm"
 	"github.com/zachlatta/intelligence/internal/hostclient"
 	"github.com/zachlatta/intelligence/internal/hostwatch"
 	"github.com/zachlatta/intelligence/internal/secretbox"
@@ -48,6 +49,9 @@ type Config struct {
 	Readonly   *pgxpool.Pool // the same database as the read-only role (db.EnsureReadonlyRole)
 	SQLTimeout time.Duration // per SQL API query; default 5s
 	BinDir     string        // host binaries, intelligence-<os>-<arch>, served for self-update; "" = none
+	// GrimmDefaultHost is the host Grimm's new-session form picks first when it is online
+	// (GRIMM_DEFAULT_HOST); "" picks the first online host.
+	GrimmDefaultHost string
 	// AssemblyAIKey mints the chat box's dictation tokens; "" turns dictation off.
 	AssemblyAIKey      string
 	AssemblyAITokenURL string // default AssemblyAI's own
@@ -86,6 +90,7 @@ type app struct {
 	reg              *fleet.Registry // as the owner: for the host streams and for writes
 	changes          *fleet.Changes
 	wf               *workflow.Engine // as the owner: workflows and their runs
+	grimm            *grimm.Service   // as the owner: Grimm sessions
 	mail             *email.Service   // reads connected mailboxes; nil when email triggers are off
 	push             *webpush.Store   // nil when VAPID is unset
 	sseKeepalive     time.Duration    // override for tests; default defaultSSEInterval
@@ -144,6 +149,7 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	store := accounts.New(cfg.DB, roles)
 	a := &app{cfg: cfg, routes: http.NewServeMux(), store: store, reg: reg, changes: changes, wf: workflow.NewEngine(cfg.DB, cfg.Now)}
 	a.wf.Changes = changes
+	a.grimm = &grimm.Service{DB: cfg.DB, Now: cfg.Now}
 	if cfg.VAPID != nil {
 		a.push = &webpush.Store{
 			DB:     cfg.DB,
@@ -168,6 +174,7 @@ func newHandler(cfg Config, workers bool) http.Handler {
 		go a.wf.RunInterruptionRecovery(cfg.Context)
 		go a.wf.RunModelQuotaWatcher(cfg.Context)
 		go a.wf.RunSecretPurge(cfg.Context)
+		go a.grimm.Run(cfg.Context, changes)
 		watch := &hostwatch.Watcher{DB: cfg.DB, Notify: cfg.HostAlerts, Push: a.wf.Push, Account: cfg.PDWAccount, Location: cfg.NotifyLocation,
 			Started: cfg.Now(), Now: cfg.Now}
 		go watch.Run(cfg.Context)
@@ -353,12 +360,18 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	mux.HandleFunc("GET /hostalerts.js", hostAlertsScript)
 	mux.HandleFunc("GET /usage", a.page(func(v viewer) http.HandlerFunc { return usagePage(cfg, v.reg) }))
 	mux.HandleFunc("GET /resources", a.page(func(v viewer) http.HandlerFunc { return hostResourcesPage(cfg, v.reg) }))
-	mux.HandleFunc("GET /hosts", func(w http.ResponseWriter, r *http.Request) { // its name before the home page's hosts took it
-		u := *r.URL
-		u.Path, u.RawPath = "/resources", ""
-		http.Redirect(w, r, u.RequestURI(), http.StatusMovedPermanently)
+	hosts := a.page(func(v viewer) http.HandlerFunc { return homePage(cfg, v) })
+	mux.HandleFunc("GET /hosts", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("hours") { // host monitoring's link from when it was /hosts
+			u := *r.URL
+			u.Path, u.RawPath = "/resources", ""
+			http.Redirect(w, r, u.RequestURI(), http.StatusMovedPermanently)
+			return
+		}
+		hosts(w, r)
 	})
-	mux.HandleFunc("GET /{$}", a.page(func(v viewer) http.HandlerFunc { return homePage(cfg, v) }))
+	a.grimmRoutes(mux)
+	mux.HandleFunc("GET /{$}", a.page(func(v viewer) http.HandlerFunc { return a.grimmPage(v) }))
 	// every request is timed (http_requests)
 	served := timed(cfg.Timing, time.Now, mux)
 	// every response names the server's version, so a host sees on any call that it should update
@@ -373,7 +386,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// homePage is the tree of the account's hosts > workspaces > agents, and its plans.
+// homePage is Hosts (/hosts): the tree of the account's hosts > workspaces > agents, and its plans.
 func homePage(cfg Config, v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		list, err := v.reg.List(r.Context())

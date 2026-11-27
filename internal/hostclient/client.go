@@ -34,6 +34,7 @@ type Client struct {
 	ReportEvery time.Duration // periodic full snapshot; default 30s
 	StatusEvery time.Duration // re-read the daemon's status (a change is reported); default 15s
 	LiveEvery   time.Duration // copy running agents' transcripts; default 2s
+	FastEvery   time.Duration // copy running live agents' (LiveLabel) transcripts; default 250ms
 	DiffEvery   time.Duration // re-read the diffs of workspaces an agent works in; default 5s
 	Settle      time.Duration // gather a burst of daemon updates into one report; default 1s
 	Logf        func(format string, args ...any)
@@ -54,6 +55,9 @@ func (b *Client) Run(ctx context.Context) error {
 	}
 	if b.LiveEvery == 0 {
 		b.LiveEvery = 2 * time.Second
+	}
+	if b.FastEvery == 0 {
+		b.FastEvery = 250 * time.Millisecond
 	}
 	if b.DiffEvery == 0 {
 		b.DiffEvery = 5 * time.Second
@@ -192,14 +196,19 @@ func (b *Client) syncSchedules(ctx context.Context) {
 }
 
 // syncTranscripts copies loaded agents' transcripts after each stored report (once the server
-// knows the agents) and, while one is running, every LiveEvery.
+// knows the agents) and, while one is running, every LiveEvery; running live agents (LiveLabel)
+// every FastEvery, so a page streaming one sees its words as they come.
 func (b *Client) syncTranscripts(ctx context.Context, reported *latest) {
 	ts := &TranscriptSync{Host: b.Name, Timeline: b.Watcher.Timeline, Cursors: b.Link.TranscriptCursors, Send: b.Link.Transcript}
 	live := time.NewTicker(b.LiveEvery)
 	defer live.Stop()
+	fast := time.NewTicker(b.FastEvery)
+	defer fast.Stop()
 	var snap PaseoStatus
+	stored := false // a report has been stored on this stream, so the server knows the agents
 	lastErr := ""
 	for {
+		agents := snap.Agents
 		select {
 		case <-ctx.Done():
 			return
@@ -209,17 +218,26 @@ func (b *Client) syncTranscripts(ctx context.Context, reported *latest) {
 			if fresh {
 				ts.Reset() // the server's copies may have changed while the stream was down
 			}
+			stored = true
+			agents = snap.Agents
 		case <-live.C:
 			if !anyRunning(snap.Agents) {
 				continue
 			}
 			snap = b.Watcher.Snapshot()
+			agents = snap.Agents
+		case <-fast.C:
+			if !stored || !anyLive(snap.Agents) {
+				continue
+			}
+			snap = b.Watcher.Snapshot()
+			agents = liveRunning(snap.Agents)
 		}
-		if !snap.Connected {
+		if !snap.Connected || len(agents) == 0 && len(snap.Agents) > 0 {
 			continue
 		}
 		syncCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-		err := ts.Sync(syncCtx, snap.Agents)
+		err := ts.Sync(syncCtx, agents)
 		cancel()
 		if msg := fmt.Sprint(err); err != nil && msg != lastErr && ctx.Err() == nil {
 			b.Logf("transcript sync: %v", err)
@@ -327,6 +345,19 @@ func (b *Client) update(ctx context.Context, versions <-chan string) {
 			}
 		}
 	}
+}
+
+// anyLive: a live agent is (or was at the last snapshot) running.
+func anyLive(agents []Agent) bool { return len(liveRunning(agents)) > 0 }
+
+func liveRunning(agents []Agent) []Agent {
+	var out []Agent
+	for _, a := range agents {
+		if a.Live && a.Status == "running" {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 func anyRunning(agents []Agent) bool {

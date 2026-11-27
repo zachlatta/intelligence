@@ -271,7 +271,7 @@ func (w *Watcher) Snapshot() PaseoStatus {
 		s.Agents = append(s.Agents, Agent{ID: a.ID, WorkspaceID: a.WorkspaceID, ParentID: a.ParentAgentID(), Title: a.Title,
 			Provider: a.Provider, Model: a.ModelName(), Thinking: a.Thinking(), Status: a.Status, Cwd: a.Cwd,
 			RequiresAttention: a.RequiresAttention, AttentionReason: a.AttentionReason, CreatedAt: a.CreatedAt,
-			UpdatedAt: a.UpdatedAt, LastUserMessageAt: a.LastUserMessageAt})
+			UpdatedAt: a.UpdatedAt, LastUserMessageAt: a.LastUserMessageAt, Live: a.Labels[LiveLabel] != ""})
 	}
 	slices.SortFunc(s.Agents, func(a, b Agent) int { return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), cmp.Compare(a.ID, b.ID)) })
 	return s

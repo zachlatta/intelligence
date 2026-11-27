@@ -628,7 +628,7 @@ func TestWorkflowPages(t *testing.T) {
 	if strings.Contains(list.Body.String(), "/prompts") || strings.Contains(ed.Body.String(), "/prompts") {
 		t.Error("workflow pages should not link to a prompts page")
 	}
-	if !strings.Contains(get(t, h, "/", nil).Body.String(), `href="/workflows"`) {
+	if !strings.Contains(get(t, h, "/hosts", nil).Body.String(), `href="/workflows"`) {
 		t.Error("the top bar should link to Workflows")
 	}
 }
@@ -1061,7 +1061,7 @@ func TestFinishedWorkflowRetainsAgentsTranscriptsAndDiffAfterArchiveReport(t *te
 			t.Errorf("historical %s accepted: %d %s", kind, rec.Code, rec.Body)
 		}
 	}
-	if strings.Contains(get(t, h, "/", nil).Body.String(), `/hosts/host-1/agents/`+agentA1+`"`) {
+	if strings.Contains(get(t, h, "/hosts", nil).Body.String(), `/hosts/host-1/agents/`+agentA1+`"`) {
 		t.Fatal("archived agent appears in live fleet")
 	}
 	childPage := get(t, h, "/hosts/host-1/agents/"+wfReport().Paseo.Agents[1].ID, nil)

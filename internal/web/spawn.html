@@ -10,7 +10,7 @@
 </style>
 </head>
 <body>
-{{/* the tab follows the page: none signed out, Account's own, else Hosts, whose forms these are */}}{{if eq . "Sign in"}}{{template "top" ""}}{{else if eq . "Account"}}{{template "top" "/account"}}{{else}}{{template "top" "/"}}{{end}}
+{{/* the tab follows the page: none signed out, Account's own, else Hosts, whose forms these are */}}{{if eq . "Sign in"}}{{template "top" ""}}{{else if eq . "Account"}}{{template "top" "/account"}}{{else}}{{template "top" "/hosts"}}{{end}}
 <main class="container page narrow">
 {{end}}
 
@@ -223,14 +223,14 @@ form.addEventListener("submit", async (e) => {
 </script>{{end}}{{end}}
 
 {{define "agent"}}{{template "head" "New agent"}}
-<div class="crumbs"><a href="/">Hosts</a><span class="sep">/</span>{{.Host}}<span class="sep">/</span>{{or .Workspace.Name .Workspace.ID}}</div>
+<div class="crumbs"><a href="/hosts">Hosts</a><span class="sep">/</span>{{.Host}}<span class="sep">/</span>{{or .Workspace.Name .Workspace.ID}}</div>
 <div class="page-head"><div><h1>New agent in {{or .Workspace.Name .Workspace.ID}}</h1>
 <p class="sub"><span class="mono">{{.Workspace.Directory}}</span>{{if .Workspace.Branch}} · <span class="mono">{{.Workspace.Branch}}</span>{{end}}{{if .Workspace.Project}} · {{.Workspace.Project}}{{end}}</p></div></div>
 <form id="spawn" class="card form" data-host="{{.Host}}" data-commands="{{.Commands}}" data-kind="create_agent" data-workspace="{{.Workspace.ID}}"
   data-default-provider="{{.Agent.Provider}}" data-default-model="{{.Agent.Model}}" data-default-mode="{{.Agent.Mode}}"
   data-progress-sql="{{.ProgressSQL}}"{{if .Dictation}} data-dictation="{{.Dictation}}"{{end}}>
   {{template "agentfields" .}}
-  <div class="form-actions"><button class="btn primary">Start agent</button><a class="btn" href="/">Cancel</a>{{if .Dictation}}{{template "dictationbutton"}}{{end}}</div>
+  <div class="form-actions"><button class="btn primary">Start agent</button><a class="btn" href="/hosts">Cancel</a>{{if .Dictation}}{{template "dictationbutton"}}{{end}}</div>
   <p id="progress" class="progress"></p>
 </form>
 <script>
@@ -243,7 +243,7 @@ function spawnArgs() {
 {{template "foot" .}}{{end}}
 
 {{define "workspace"}}{{template "head" "New workspace"}}
-<div class="crumbs"><a href="/">Hosts</a><span class="sep">/</span>{{.Host}}</div>
+<div class="crumbs"><a href="/hosts">Hosts</a><span class="sep">/</span>{{.Host}}</div>
 <div class="page-head"><div><h1>New workspace on {{.Host}}</h1>
 <p class="sub">A workspace with an agent in it, by default in a new git worktree.</p></div></div>
 <form id="spawn" class="card form" data-host="{{.Host}}" data-commands="{{.Commands}}" data-kind="create_workspace"
@@ -263,7 +263,7 @@ function spawnArgs() {
   <fieldset><legend>Its agent</legend>
   {{template "agentfields" .}}
   </fieldset>
-  <div class="form-actions"><button class="btn primary">Start workspace and agent</button><a class="btn" href="/">Cancel</a>{{if .Dictation}}{{template "dictationbutton"}}{{end}}</div>
+  <div class="form-actions"><button class="btn primary">Start workspace and agent</button><a class="btn" href="/hosts">Cancel</a>{{if .Dictation}}{{template "dictationbutton"}}{{end}}</div>
   <p id="progress" class="progress"></p>
 </form>
 <script>

@@ -9,7 +9,7 @@ hosts and everything they report.
 
 ## How it fits together
 
-One binary, six commands:
+One binary, seven commands:
 
 - `intelligence` (or `intelligence server`): the web app. It runs in Coolify with a Postgres
   database, reachable only on the tailnet.
@@ -25,6 +25,9 @@ One binary, six commands:
   The host client reads it over a Unix socket.
 - `intelligence workflow`: what a workflow run's agents run on their host to move the run
   (Workflows, below). It reaches the server with the host's key.
+- `intelligence grimm ctl|bus`: what a Grimm session's manager and workers run on their host to hire,
+  message, watch and archive workers and to use the session's bus (Grimm, below). It reaches the
+  server with the host's key, as the agent that runs it.
 - `intelligence secret`: what agents on a workflow run's host run to fetch a secret Zach
   stored for the run (Temporary secrets, below). It reaches the server with the host's key.
 - `intelligence vapid-keys`: generates a P-256 VAPID key pair and prints `VAPID_PUBLIC_KEY`,
@@ -144,6 +147,10 @@ The hierarchy is hosts > workspaces > agents:
 - `whats_new` (the release notes, synced from `internal/whatsnew/entries.json` when the server
   starts; the same for every account, as they hold no account's state), `whats_new_seen` (which
   entries the account has seen) and the view `whats_new_unseen` (those it has not): What's New, below.
+- `grimm_sessions`, `grimm_managers`, `grimm_workers`, `grimm_messages` (the thread and the bus),
+  `grimm_directives`, `grimm_directive_deliveries`, `grimm_wakeups` and `grimm_events`, with the
+  views `grimm_agents`, `grimm_session_status`, `grimm_worker_status`, `grimm_thread` and
+  `grimm_quota`: Grimm, below.
 - `schema_migrations`.
 - `hosts.projects`: Paseo's registered project catalog, including projects with no workspaces.
   `host_repositories` combines its git projects with workspaces' repository roots for older hosts.
@@ -1520,6 +1527,72 @@ remain readable in `workflow_runs`, including agent ETAs held through a human wa
 All activity fields are readable through `/api/sql`; status writes use the existing moves API
 (`waitingOn` is the JSON name for `--waiting-on`).
 
+### Grimm
+
+Grimm is the home page (`/`): a multi-agent coding session. One **manager** agent (Claude Opus
+5.5) is the main thread. Zach talks to it; it plans, hires named **workers** on the account's
+plans, routes work and questions to them, reviews what they did and reports back. The workers
+talk to each other and to the manager on the session's **bus**. Every agent is a Paseo agent on
+the session's host, started and steered through the host command queue, so no login or process
+lives on the server, and every bit of a session's state is in the `grimm_*` tables, so a
+redeploy or a restart loses nothing.
+
+- **A session** (`POST /api/grimm/sessions`) is a new git worktree of a repository on a connected
+  host of the account (`GRIMM_DEFAULT_HOST` is picked first), on its own branch `grimm/<id>`: a session never works on
+  `main`, and refuses the `desk` repository. Its **live-worker cap** is 20 unless set otherwise
+  (1 to 100, `PUT /api/grimm/sessions/{id}` or `/cap N`), shown in the page's header as Workers
+  live/cap. A new session starts with the directive "Never push, deploy, publish, open pull
+  requests or send external messages."
+- **The manager** starts on the first message, once the worktree is ready, with Grimm's
+  instructions and that message as its first prompt. It runs on the best eligible Claude Opus 5.5
+  entry of the account's model groups on the host (the balancer, below), in `bypassPermissions`.
+  A message sent while it works joins the running turn (`send_message` steer); Stop cancels the
+  turn; `/new` archives it, and the next message starts a fresh one (the thread keeps its
+  history). Its words and tool calls are its transcript, which `grimm_thread` merges with
+  the thread's own rows (Zach's messages, updates, command output, notices).
+- **Workers** are hired by the manager (`intelligence grimm ctl hire`) or by Zach (`/spawn`,
+  `/fanout N`), each under the session's advisory lock: the cap is checked, the balancer picks the
+  plan, and the `starting` row and its `create_agent` command are written in one transaction. A
+  worker gets a name from a fixed pool (or the one asked for, made unique), the session's
+  directives, its peers' names and its task. The supervisor (one goroutine per server, working from
+  the tables alone) follows each worker's agent in the host's reports: when one finishes a turn
+  its last reply is kept (`last_response`) and the manager is woken with it.
+- **Waking the manager**: news (a worker finished or failed, a bus message to `grimm`) is queued in
+  `grimm_wakeups` and sent as one "[Grimm update]" message once the manager is idle and the news
+  has settled for 2 seconds. News about a worker archived since is dropped, and a worker that
+  posted its result to `grimm` is not news again when its turn ends.
+- **The bus**: `intelligence grimm bus post --to <name|grimm|all>` posts as the calling agent (its
+  `PASEO_AGENT_ID` on the caller's host, checked against the host's key), so no agent can post as
+  another. A message to a worker goes straight into its session; one to `grimm` wakes the manager.
+- **Directives**: standing rules every agent inherits. A new one is pushed at once to each worker on
+  a turn and held for an idle one until its next message, at most once each
+  (`grimm_directive_deliveries`).
+- **The balancer** is Intelligence's: `grimm_quota` is the session host's model group entries
+  (`model_group_candidates`, with its eligibility and headroom score), less 15 points for each of
+  the session's live workers on the same login and window, so hires spread across plans. Grimm's
+  role policy then decides: reviewers, checkers and auditors run on `claude/claude-opus-5-5` only;
+  verifiers prefer Opus 5.5, never run on Gemini and never share a live builder's vendor; builders
+  avoid a live verifier's vendor when they can; gemini and muse are never picked.
+- **Only the manager** may hire, message, stop, archive, peek at or wait on workers; a worker may
+  read and post on the bus and add directives.
+- **Live streaming**: the page's stream (`GET /api/grimm/sessions/{id}/stream`) is server-sent
+  events woken by the change hub (Postgres `NOTIFY`: `grimm:<id>`, the host's reports
+  `agents:<host>`, and each manager's transcript topic), never polled. The host copies the
+  transcript of each running agent labelled `intelligence.live` (every Grimm agent) every 250 ms
+  rather than every 2 seconds, so the manager's words appear as they come. A worker's live log is
+  its own stream (`GET .../workers/{name}/stream`). Each stream starts with a snapshot, so a
+  reconnect after a restart picks up where it was.
+- **Attachments** use the shared picker and limits (below): images and files go to the manager as
+  references, delivered to its working directory; a message with attachments always goes to the
+  manager, whatever its first word. The thread shows the images, read through `/api/sql`.
+- **Transcripts** of an active session's agents are kept after Paseo archives the agents, so the
+  thread and a finished worker's log stay.
+
+The page's commands, run without a manager turn: `@name <message>`, `/quota`, `/roster`, `/spawn
+[name] [--role R] [--provider P] <task>`, `/fanout N [--review] <task>`, `/remember <rule>`,
+`/forget <n>`, `/directives`, `/bus [N]`, `/stop [name]`, `/archive [name|all]`, `/cap N`, `/new`
+and `/help`. On a phone the three columns are the Chat, Team and Quota tabs.
+
 ### Attachments
 
 Workflow task submission (including the Run dialog), workflow run reply and additional-input boxes,
@@ -1904,7 +1977,22 @@ Every page and read route needs a signed-in account and shows only its own hosts
 browser that is not signed in to `/login`, and an API route answers 401. Only `/healthz`, `/login`,
 the account and enrollment routes, the host binaries and the streams (with a host key) are open.
 
-- `GET /`: a collapsible tree of hosts > workspaces (with their project, branch and diff stat) >
+- `GET /`: Grimm (above): the newest active session, or the form that starts one (`/?new=1`).
+  `GET /grimm/{id}`: a session. The page reads the `grimm_*` views through its stream and makes
+  every change through the routes below.
+- `POST /api/grimm/sessions` `{"host","repo","title","base","maxWorkers"}` (201 `{"id","url"}`);
+  `PUT /api/grimm/sessions/{id}` `{"maxWorkers","title"}`; `POST .../{id}/archive` `{}`.
+- `POST /api/grimm/sessions/{id}/messages` `{"text"}`: to the manager, `@name` or a `/command`
+  (202 `{"messageId"}`); attachments are `[attachment:<id>]` references in the text.
+  `POST .../manager/interrupt` and `.../manager/new` `{}`.
+- `POST /api/grimm/sessions/{id}/workers` `{"role","name","provider","task"}`;
+  `POST .../workers/{name}/message` `{"text"}`, `.../stop` and `.../archive` `{}`;
+  `POST .../archive-workers` `{}`.
+- `POST /api/grimm/sessions/{id}/directives` `{"text"}`; `DELETE .../directives/{seq}`.
+- `GET /api/grimm/sessions/{id}/stream` and `GET .../workers/{name}/stream`: server-sent events
+  (`state`, `thread`, `bus`, `activity`; `worker`, `entries`), rows of the `grimm_*` views.
+- `POST /api/grimm/agent` (host key, `X-Paseo-Agent-Id`): an `intelligence grimm` command.
+- `GET /hosts`: a collapsible tree of hosts > workspaces (with their project, branch and diff stat) >
   agents (with their status; sub-agents indented),
   with links to make a workspace on each host and start an agent in each workspace, and an Archive
   button on each workspace (with its agents) and each agent, through the commands API. Archiving
@@ -1931,7 +2019,7 @@ the account and enrollment routes, the host binaries and the streams (with a hos
   and its weekly peaks (the four newest, with older weeks folded). Above them, the agents a broken login stopped
   (Broken logins and login recovery, above).
 - `GET /api/usage`: the logins and their windows, as JSON.
-- `GET /resources?hours=1` (1 to 2160; it was `/hosts`, which sends here), the Host monitoring tab: each host's CPU, memory,
+- `GET /resources?hours=1` (1 to 2160; it was `/hosts`, which still sends a link with `hours` here), the Host monitoring tab: each host's CPU, memory,
   load, disk busy time and disk throughput charts, its load averages, disk I/O now and filesystems
   (used, free, total), its OOM kills and its agents ranked by CPU, with their most memory and
   commands started. The home page shows each host's CPU, load, memory, disk (and how much is free),
@@ -2429,6 +2517,8 @@ Server:
   is named after it, and its password derived from its password (keep the name under 40 characters).
 - `PORT`: listen port, default `8080`.
 - `HOST_BINARIES`: where the host binaries are; default `/usr/local/share/intelligence/host`.
+- `GRIMM_DEFAULT_HOST`: optional; the host Grimm's new-session form picks first when it is online
+  (where the manager and its workers run). Unset, the first online host.
 - `ASSEMBLYAI_API_KEY`: optional; turns on dictation everywhere a task or agent work starts (the
   pages `/dictation.js` lists). Unset, there is none.
 - `GOOGLE_OAUTH_CLIENT_JSON` and `CONNECTIONS_KEY`: optional, together; turn on email triggers. The

@@ -363,3 +363,9 @@ func hostConfig(getenv func(string) string) (server, key string, err error) {
 	}
 	return server, strings.TrimSpace(string(b)), nil
 }
+
+// HostConfig is the server and this host's key, as the host client has them (for other CLIs
+// that reach the server as the host, such as `intelligence grimm`).
+func HostConfig(getenv func(string) string) (server, key string, err error) {
+	return hostConfig(getenv)
+}

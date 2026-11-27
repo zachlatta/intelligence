@@ -156,3 +156,10 @@ func WorkflowKeyTopic(id string) string { return "wfkey:" + id }
 
 // TranscriptTopic: agent's transcript on host received new or updated entries.
 func TranscriptTopic(host, agentID string) string { return "transcript:" + host + ":" + agentID }
+
+// GrimmTopic: Grimm session id changed (a message, the roster, directives, the manager). "" is
+// any session, which the supervisor follows.
+func GrimmTopic(id string) string { return "grimm:" + id }
+
+// AgentsTopic: host's report was stored, so its agents' statuses may have changed.
+func AgentsTopic(host string) string { return "agents:" + host }

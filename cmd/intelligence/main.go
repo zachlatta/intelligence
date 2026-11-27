@@ -35,6 +35,7 @@ import (
 	"github.com/zachlatta/intelligence/internal/db"
 	"github.com/zachlatta/intelligence/internal/email"
 	"github.com/zachlatta/intelligence/internal/fleet"
+	"github.com/zachlatta/intelligence/internal/grimm"
 	"github.com/zachlatta/intelligence/internal/hostclient"
 	"github.com/zachlatta/intelligence/internal/hostwatch"
 	"github.com/zachlatta/intelligence/internal/paseo"
@@ -72,6 +73,8 @@ func main() {
 		err = runProbe(ctx)
 	case "workflow":
 		os.Exit(workflow.CLI(ctx, os.Args[2:], os.Getenv, os.Stdin, os.Stdout, os.Stderr, http.DefaultClient))
+	case "grimm":
+		os.Exit(grimm.CLI(ctx, os.Args[2:], os.Getenv, os.Stdin, os.Stdout, os.Stderr, http.DefaultClient))
 	case "secret":
 		os.Exit(workflow.SecretCLI(ctx, os.Args[2:], os.Getenv, os.Stdin, os.Stdout, os.Stderr, http.DefaultClient, workflow.StdoutIsTerminal))
 	case "vapid-keys":
@@ -79,7 +82,7 @@ func main() {
 	case "version":
 		fmt.Println(version(os.Getenv))
 	default:
-		err = fmt.Errorf("unknown command %q: want server, host, probe, workflow, secret, vapid-keys or version", cmd)
+		err = fmt.Errorf("unknown command %q: want server, host, probe, workflow, grimm, secret, vapid-keys or version", cmd)
 	}
 	if err != nil {
 		log.Fatal(err)
@@ -117,6 +120,7 @@ type serverSettings struct {
 	ReadonlyPassword string
 	BinDir           string // HOST_BINARIES: host binaries to serve; default /usr/local/share/intelligence/host
 	AssemblyAIKey    string // ASSEMBLYAI_API_KEY: for the chat box's dictation; unset turns it off
+	GrimmHost        string // GRIMM_DEFAULT_HOST: the host a new Grimm session starts on unless another is picked
 	// PDW_URL (an HTTPS origin), PDW_API_KEY (a feed:voice-memos key) and PDW_INTELLIGENCE_ACCOUNT
 	// (the username whose workflows its voice memos start) turn voice memo triggers on; unset, they are off.
 	PDWURL, PDWKey, PDWAccount string
@@ -150,7 +154,7 @@ type serverSettings struct {
 func serverConfig(getenv func(string) string) (serverSettings, error) {
 	getenv = withDevboxNames(getenv)
 	c := serverSettings{DatabaseURL: getenv("DATABASE_URL"), ReadonlyURL: getenv("READONLY_DATABASE_URL"), BinDir: getenv("HOST_BINARIES"),
-		AssemblyAIKey: getenv("ASSEMBLYAI_API_KEY")}
+		AssemblyAIKey: getenv("ASSEMBLYAI_API_KEY"), GrimmHost: getenv("GRIMM_DEFAULT_HOST")}
 	if c.BinDir == "" {
 		c.BinDir = "/usr/local/share/intelligence/host"
 	}
@@ -320,7 +324,8 @@ func serve(ctx context.Context) error {
 		Handler: web.New(web.Config{Context: ctx, Version: v, DB: owner, Readonly: ro, BinDir: c.BinDir,
 			AssemblyAIKey: c.AssemblyAIKey, Google: c.Google, EmailKey: c.EmailKey, PublicURL: c.PublicURL, EmailInterval: c.EmailInterval, QueueLimits: &c.QueueLimits,
 			PDWURL: c.PDWURL, PDWKey: c.PDWKey, PDWAccount: c.PDWAccount, VoiceMemoInterval: c.VoiceMemoInterval,
-			HostAlerts: hostAlerts(c), NotifyLocation: c.NotifyLocation, VAPID: c.VAPID, SecretBox: c.SecretBox, Timing: timed}),
+			HostAlerts: hostAlerts(c), NotifyLocation: c.NotifyLocation, VAPID: c.VAPID, SecretBox: c.SecretBox, Timing: timed,
+			GrimmDefaultHost: c.GrimmHost}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go pruneHosts(ctx, fleet.New(owner))

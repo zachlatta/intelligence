@@ -48,7 +48,7 @@ func TestEachAccountSeesOnlyItsOwnHosts(t *testing.T) {
 
 	mine := []string{"host-1", "Login fix"}
 	bobs := []string{"bobs-host", "Bob&#39;s secret project", "bob@example.com"}
-	for _, path := range []string{"/", "/api/hosts", "/resources", "/usage", "/api/usage", "/api/hosts/resources",
+	for _, path := range []string{"/", "/hosts", "/api/hosts", "/resources", "/usage", "/api/usage", "/api/hosts/resources",
 		"/api/sql?q=" + "SELECT+name+FROM+hosts+UNION+ALL+SELECT+account+FROM+usage_accounts+UNION+ALL+SELECT+username+FROM+accounts"} {
 		someone := get(t, h, path, nil)
 		other := call(t, h, http.MethodGet, path, "", nil, asBob)
@@ -64,10 +64,10 @@ func TestEachAccountSeesOnlyItsOwnHosts(t *testing.T) {
 			t.Errorf("%s shows bob someone's host-1", path)
 		}
 	}
-	if page := get(t, h, "/", nil).Body.String(); !strings.Contains(page, mine[0]) || !strings.Contains(page, mine[1]) {
+	if page := get(t, h, "/hosts", nil).Body.String(); !strings.Contains(page, mine[0]) || !strings.Contains(page, mine[1]) {
 		t.Errorf("someone's home page misses their own host")
 	}
-	if page := call(t, h, http.MethodGet, "/", "", nil, asBob).Body.String(); !strings.Contains(page, "bobs-host") {
+	if page := call(t, h, http.MethodGet, "/hosts", "", nil, asBob).Body.String(); !strings.Contains(page, "bobs-host") {
 		t.Errorf("bob's home page misses his host")
 	}
 	// someone's agent's pages are not found for bob
@@ -169,7 +169,7 @@ func TestReadsNeedASignedInAccount(t *testing.T) {
 	t.Parallel()
 	h, _ := dbServer(t)
 	sendReport(t, h, sampleReport)
-	for _, path := range []string{"/", "/usage", "/resources", "/account", "/hosts/host-1/agents/" + agentA1} {
+	for _, path := range []string{"/", "/hosts", "/usage", "/resources", "/account", "/hosts/host-1/agents/" + agentA1} {
 		if rec := get(t, anon(h), path, nil); rec.Code != http.StatusSeeOther || !strings.HasPrefix(rec.Header().Get("Location"), "/login?next=") {
 			t.Errorf("GET %s signed out: %d %q", path, rec.Code, rec.Header().Get("Location"))
 		}
@@ -226,7 +226,7 @@ func TestAKeylessHostJoinsAndReports(t *testing.T) {
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		if page := get(t, h, "/", nil).Body.String(); strings.Contains(page, "fresh-host") && strings.Contains(page, "w-app") {
+		if page := get(t, h, "/hosts", nil).Body.String(); strings.Contains(page, "fresh-host") && strings.Contains(page, "w-app") {
 			break
 		}
 		if time.Now().After(deadline) {

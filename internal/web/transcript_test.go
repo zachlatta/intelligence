@@ -77,7 +77,7 @@ func TestHomePageLinksAgentsToTranscripts(t *testing.T) {
 	t.Parallel()
 	h := reported(t)
 	sendBatch(t, h, batch(true, "ep1", tentry(1, `{"type":"user_message","text":"hi"}`)))
-	page := get(t, h, "/", nil).Body.String()
+	page := get(t, h, "/hosts", nil).Body.String()
 	if !strings.Contains(page, `href="/hosts/host-1/agents/`+agentA1+`"`) {
 		t.Errorf("home page should link each agent to its transcript")
 	}
