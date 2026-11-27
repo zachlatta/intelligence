@@ -28,8 +28,12 @@ func (s *Service) Run(ctx context.Context, changes *fleet.Changes) {
 	grimm, stop := changes.Subscribe(fleet.GrimmTopic(""))
 	defer stop()
 	hostSubs := map[string]func(){}
+	runSubs := map[string]func(){}
 	defer func() {
 		for _, stop := range hostSubs {
+			stop()
+		}
+		for _, stop := range runSubs {
 			stop()
 		}
 	}()
@@ -65,6 +69,37 @@ func (s *Service) Run(ctx context.Context, changes *fleet.Changes) {
 				}
 			}()
 			hostSubs[h] = func() { close(done); stop() }
+		}
+		if runIDs, rerr := s.activeWorkflowRunIDs(ctx); rerr == nil {
+			active := map[string]bool{}
+			for _, rid := range runIDs {
+				active[rid] = true
+				if runSubs[rid] != nil {
+					continue
+				}
+				ch, stop := changes.Subscribe(fleet.WorkflowRunTopic(rid))
+				done := make(chan struct{})
+				go func() {
+					for {
+						select {
+						case <-done:
+							return
+						case <-ch:
+							select {
+							case reports <- struct{}{}:
+							default:
+							}
+						}
+					}
+				}()
+				runSubs[rid] = func() { close(done); stop() }
+			}
+			for rid, stop := range runSubs {
+				if !active[rid] {
+					stop()
+					delete(runSubs, rid)
+				}
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -151,6 +186,9 @@ func (s *Service) Reconcile(ctx context.Context, id string) error {
 			return err
 		}
 		if err := mark(s.reconcileWorkers(ctx, tx, sess)); err != nil {
+			return err
+		}
+		if err := mark(s.reconcileWorkflowRuns(ctx, tx, sess)); err != nil {
 			return err
 		}
 		if err := s.deliverHuman(ctx, tx, sess); err != nil {

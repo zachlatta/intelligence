@@ -38,6 +38,8 @@ A message, task or rule is the rest of the line, - for stdin, or --file PATH.
   ctl stop <name>                        interrupt a worker's turn
   ctl archive <name|all>                 archive finished workers (files stay)
   ctl directive list | add <rule>|- | remove <n>
+  ctl workflow request --workflow <id|name> [--summary S] [--host H] <input>|-
+  ctl workflow list | status <proposal-or-run-id>
   bus read [--limit N] [--mine]          the shared message board
   bus post --to <name|grimm|all> [--kind chat|handoff|question|result] <message>|-
 
@@ -105,7 +107,7 @@ func ParseCLI(args []string, stdin io.Reader) (Call, error) {
 	group, verb := args[0], args[1]
 	var pos []string
 	file, dash := "", false
-	flags := map[string]*string{"--role": &c.Role, "--name": &c.Name, "--provider": &c.Provider, "--to": &c.To, "--kind": &c.Kind, "--file": &file}
+	flags := map[string]*string{"--role": &c.Role, "--name": &c.Name, "--provider": &c.Provider, "--to": &c.To, "--kind": &c.Kind, "--file": &file, "--workflow": &c.Workflow, "--summary": &c.Summary, "--host": &c.Host}
 	var ignored string
 	for _, f := range []string{"--from", "--state-dir"} {
 		flags[f] = &ignored // kept from the standalone CLI: the server knows who and where
@@ -214,6 +216,29 @@ func ParseCLI(args []string, stdin io.Reader) (Call, error) {
 			c.Args = pos
 		default:
 			return c, errors.New("directive list | add <rule> | remove <n>")
+		}
+	case "ctl workflow":
+		c.Verb = verb
+		if len(pos) == 0 {
+			pos = []string{"list"}
+		}
+		c.Args = pos[:1]
+		switch pos[0] {
+		case "list":
+		case "request":
+			if strings.TrimSpace(c.Workflow) == "" {
+				return c, errors.New("workflow request needs --workflow <id|name>")
+			}
+			if c.Text, err = text(1); err == nil && c.Text == "" {
+				err = errors.New("workflow request needs task input")
+			}
+		case "status":
+			if len(pos) != 2 {
+				return c, errors.New("workflow status <proposal-or-run-id>")
+			}
+			c.Args = pos
+		default:
+			return c, errors.New("workflow request --workflow <id|name> <input>|- | list | status <id>")
 		}
 	case "bus read":
 		c.Verb = "bus-read"

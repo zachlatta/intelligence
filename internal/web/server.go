@@ -152,7 +152,7 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	store := accounts.New(cfg.DB, roles)
 	a := &app{cfg: cfg, routes: http.NewServeMux(), store: store, reg: reg, changes: changes, wf: workflow.NewEngine(cfg.DB, cfg.Now)}
 	a.wf.Changes = changes
-	a.grimm = &grimm.Service{DB: cfg.DB, Now: cfg.Now}
+	a.grimm = &grimm.Service{DB: cfg.DB, Now: cfg.Now, Workflows: a.wf}
 	if cfg.VAPID != nil {
 		a.push = &webpush.Store{
 			DB:     cfg.DB,

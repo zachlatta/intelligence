@@ -1,5 +1,13 @@
 [
   {
+    "id": "grimm-workflow-approval",
+    "released": "2026-11-27",
+    "title": "Approve and monitor workflow runs from Grimm",
+    "summary": "The Grimm manager can now propose starting a saved workflow (intelligence grimm ctl workflow request) without launching it on its own. Each request appears as a live card in the Grimm thread where you can edit the task input, approve and start the run, or reject it from your signed-in browser. Once started, the card streams live status, step progress, gate outcomes, waiting questions or sign-off prompts, and a link to the run page, while waking Grimm on run milestones.",
+    "media": "grimm-workflow-approval.png",
+    "mediaAlt": "A local demo of the Grimm thread showing two live workflow cards: an approved Ship Feature run waiting on owner sign-off with passed step and gate badges and a Review & sign off button, and a pending Nightly Audit request with Approve & start, Edit input, and Reject buttons."
+  },
+  {
     "id": "grimm-host-resources",
     "released": "2026-11-27",
     "title": "Live host resources in the Grimm header",
