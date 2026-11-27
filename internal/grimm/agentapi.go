@@ -14,7 +14,9 @@ import (
 
 // Call is one `intelligence grimm ctl|bus` command from an agent on a host. The host's key says
 // which host (and account) is calling, and the agent's PASEO_AGENT_ID which of that host's Grimm
-// agents: it is the caller, so a worker cannot post as another or act as the manager.
+// agents: it is the caller, so a worker that follows its prompt cannot post as another or act as
+// the manager. It is not a wall between one host's agents: each can read the host's key and name
+// another agent, as with `intelligence workflow`. The host's key is the boundary.
 type Call struct {
 	Verb     string   `json:"verb"`
 	Args     []string `json:"args"`

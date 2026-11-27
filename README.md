@@ -1564,8 +1564,11 @@ redeploy or a restart loses nothing.
   has settled for 2 seconds. News about a worker archived since is dropped, and a worker that
   posted its result to `grimm` is not news again when its turn ends.
 - **The bus**: `intelligence grimm bus post --to <name|grimm|all>` posts as the calling agent (its
-  `PASEO_AGENT_ID` on the caller's host, checked against the host's key), so no agent can post as
-  another. A message to a worker goes straight into its session; one to `grimm` wakes the manager.
+  `PASEO_AGENT_ID`, which must be an agent of an active session of the account on the host whose
+  key made the call). A message to a worker goes straight into its session; one to `grimm` wakes
+  the manager. This keeps each agent to its own name and role; it is not a wall between the agents
+  of one host, as each of them can read the host's key and name another agent (the trust
+  `intelligence workflow` gives a run's agents). The host's key is the boundary.
 - **Directives**: standing rules every agent inherits. A new one is pushed at once to each worker on
   a turn and held for an idle one until its next message, at most once each
   (`grimm_directive_deliveries`).
