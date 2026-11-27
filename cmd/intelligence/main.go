@@ -41,6 +41,7 @@ import (
 	"github.com/zachlatta/intelligence/internal/probe"
 	"github.com/zachlatta/intelligence/internal/resources"
 	"github.com/zachlatta/intelligence/internal/secretbox"
+	"github.com/zachlatta/intelligence/internal/timing"
 	"github.com/zachlatta/intelligence/internal/usage"
 	"github.com/zachlatta/intelligence/internal/voicememo"
 	"github.com/zachlatta/intelligence/internal/web"
@@ -308,16 +309,24 @@ func serve(ctx context.Context) error {
 			log.Printf("%s is set but no longer used: accounts sign in with passwords, and each host has its own key", gone)
 		}
 	}
+	// request timing (http_requests) runs until the server has drained, then writes what is left
+	timed := timing.New(owner, timing.QueueSize)
+	timingCtx, stopTiming := context.WithCancel(context.WithoutCancel(ctx))
+	timingDone := make(chan struct{})
+	go func() { timed.Run(timingCtx, timing.FlushEvery); close(timingDone) }()
+	defer func() { stopTiming(); <-timingDone }()
 	srv := &http.Server{
 		Addr: addr(os.Getenv),
 		Handler: web.New(web.Config{Context: ctx, Version: v, DB: owner, Readonly: ro, BinDir: c.BinDir,
 			AssemblyAIKey: c.AssemblyAIKey, Google: c.Google, EmailKey: c.EmailKey, PublicURL: c.PublicURL, EmailInterval: c.EmailInterval, QueueLimits: &c.QueueLimits,
 			PDWURL: c.PDWURL, PDWKey: c.PDWKey, PDWAccount: c.PDWAccount, VoiceMemoInterval: c.VoiceMemoInterval,
-			HostAlerts: hostAlerts(c), NotifyLocation: c.NotifyLocation, VAPID: c.VAPID, SecretBox: c.SecretBox}),
+			HostAlerts: hostAlerts(c), NotifyLocation: c.NotifyLocation, VAPID: c.VAPID, SecretBox: c.SecretBox, Timing: timed}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go pruneHosts(ctx, fleet.New(owner))
+	drained := make(chan struct{})
 	go func() {
+		defer close(drained)
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -327,6 +336,8 @@ func serve(ctx context.Context) error {
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
+	// ListenAndServe returns as Shutdown starts; wait for open requests, so their timing is written
+	<-drained
 	return nil
 }
 

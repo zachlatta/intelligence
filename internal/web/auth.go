@@ -41,6 +41,7 @@ func (a *app) hostCaller(w http.ResponseWriter, r *http.Request) (accounts.Accou
 		workflowMessage(w, http.StatusUnauthorized, "bad or missing host key")
 		return accounts.Account{}, "", false
 	}
+	signedInAs(r, acct.ID)
 	return acct, host, true
 }
 
@@ -74,6 +75,7 @@ func (a *app) viewerOf(r *http.Request) (viewer, error) {
 	if err != nil {
 		return viewer{}, err
 	}
+	signedInAs(r, session.Account.ID)
 	v := viewer{acct: session.Account, pool: p, reg: fleet.New(p)}
 	if session.CreatedFromPath == "" && r.Method == http.MethodGet {
 		v.legacyCookie = sessionCookieFor(c.Value, session.ExpiresAt)
