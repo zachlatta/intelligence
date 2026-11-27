@@ -73,6 +73,7 @@ func (a *app) grimmRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/grimm/sessions/{id}/stream", a.read(a.grimmStream))
 	mux.HandleFunc("GET /api/grimm/sessions/{id}/workers/{name}/stream", a.read(a.grimmWorkerStream))
 	mux.HandleFunc("POST "+grimm.AgentPath, a.hostWrite(a.grimmAgent))
+	a.grimmWorkflowRoutes(mux)
 }
 
 // grimmError answers err: a refusal with its status and message, anything else as 500.
@@ -498,9 +499,14 @@ func (a *app) grimmStream(v viewer) http.HandlerFunc {
 		hostResWake, stopHostRes := a.changes.Subscribe(fleet.HostResourcesTopic(host))
 		defer stopHostRes()
 		transcripts := make(chan struct{}, 1)
+		wfRuns := make(chan struct{}, 1)
 		subs := map[string]func(){}
+		runSubs := map[string]func(){}
 		defer func() {
 			for _, s := range subs {
+				s()
+			}
+			for _, s := range runSubs {
 				s()
 			}
 		}()
@@ -522,7 +528,7 @@ func (a *app) grimmStream(v viewer) http.HandlerFunc {
 				go relay(ctx, done, ch, transcripts)
 				subs[agent] = func() { close(done); stop() }
 			}
-			return nil
+			return a.grimmFollowWorkflowRuns(ctx, v.pool, id, runSubs, wfRuns)
 		}
 		if err := follow(); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -533,7 +539,7 @@ func (a *app) grimmStream(v viewer) http.HandlerFunc {
 		w.Header().Set("X-Accel-Buffering", "no")
 		w.WriteHeader(http.StatusOK)
 
-		var lastState string
+		var lastState, lastWFRuns string
 		var quota []json.RawMessage
 		sendState := func(withQuota bool) error {
 			session, err := grimmJSON(ctx, v.pool, `SELECT to_jsonb(s) FROM grimm_session_status s WHERE id = $1`, id)
@@ -698,6 +704,9 @@ func (a *app) grimmStream(v viewer) http.HandlerFunc {
 			if err := sendRows("bus", busQ, &lastBus, 150); err != nil {
 				return err
 			}
+			if err := grimmSendWorkflowRuns(ctx, v.pool, w, flusher, id, &lastWFRuns); err != nil {
+				return err
+			}
 			return sendRows("activity", actQ, &lastEvent, 100)
 		}
 		if err := push(readAll, true); err != nil {
@@ -721,6 +730,11 @@ func (a *app) grimmStream(v viewer) http.HandlerFunc {
 				continue
 			case <-transcripts:
 				what = readThread
+			case <-wfRuns:
+				if err := grimmSendWorkflowRuns(ctx, v.pool, w, flusher, id, &lastWFRuns); err != nil {
+					return
+				}
+				continue
 			case <-keepalive.C:
 				if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
 					return
