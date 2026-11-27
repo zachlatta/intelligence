@@ -85,6 +85,9 @@ type workflowRequest struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	Definition  json.RawMessage `json:"definition"`
+	// VariantOf makes the workflow a model-only variant of that workflow; "" makes it none, and
+	// leaving it out keeps what it is.
+	VariantOf *string `json:"variantOf,omitempty"`
 }
 
 func (req workflowRequest) parse(w http.ResponseWriter) (workflow.Definition, bool) {
@@ -107,7 +110,11 @@ func (a *app) createWorkflow(v viewer) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		id, err := a.wf.CreateWorkflow(r.Context(), v.acct.ID, req.Name, req.Description, d)
+		source := ""
+		if req.VariantOf != nil {
+			source = strings.TrimSpace(*req.VariantOf)
+		}
+		id, err := a.wf.CreateVariant(r.Context(), v.acct.ID, req.Name, req.Description, d, source)
 		if err != nil {
 			workflowError(w, err)
 			return
@@ -131,7 +138,11 @@ func (a *app) updateWorkflow(v viewer) http.HandlerFunc {
 			return
 		}
 		id := r.PathValue("id")
-		version, err := a.wf.UpdateWorkflow(r.Context(), v.acct.ID, id, req.Name, req.Description, d)
+		if req.VariantOf != nil {
+			trimmed := strings.TrimSpace(*req.VariantOf)
+			req.VariantOf = &trimmed
+		}
+		version, err := a.wf.UpdateWorkflowVariant(r.Context(), v.acct.ID, id, req.Name, req.Description, d, req.VariantOf)
 		if err != nil {
 			workflowError(w, err)
 			return
@@ -395,12 +406,18 @@ type workflowRow struct {
 	IsDefault        bool                `json:"isDefault"`
 	Definition       workflow.Definition `json:"definition"`
 	PendingProposals int                 `json:"pendingProposals"`
+	VariantOf        string              `json:"variantOf"`     // the workflow this one is a model variant of, if any
+	VariantOfName    string              `json:"variantOfName"` // and its name
+	Variants         int                 `json:"variants"`      // how many live variants follow this one
 }
 
 func readWorkflows(ctx context.Context, p *pgxpool.Pool, id string) ([]workflowRow, error) {
 	rows, err := p.Query(ctx, `SELECT w.id::text, w.name, w.description, w.version, w.is_default, v.definition,
-		(SELECT count(*) FROM workflow_proposal_status p WHERE p.workflow_id=w.id AND p.effective_status='pending') FROM workflows w
+		(SELECT count(*) FROM workflow_proposal_status p WHERE p.workflow_id=w.id AND p.effective_status='pending'),
+		coalesce(w.variant_of::text, ''), coalesce(src.name, ''),
+		(SELECT count(*) FROM workflows c WHERE c.variant_of = w.id AND c.deleted_at IS NULL) FROM workflows w
 		JOIN workflow_versions v ON v.workflow_id = w.id AND v.version = w.version
+		LEFT JOIN workflows src ON src.id = w.variant_of
 		WHERE w.deleted_at IS NULL AND ($1 = '' OR w.id::text = $1) ORDER BY w.is_default DESC, w.created_at, w.id`, id)
 	if err != nil {
 		return nil, err
@@ -408,7 +425,7 @@ func readWorkflows(ctx context.Context, p *pgxpool.Pool, id string) ([]workflowR
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (workflowRow, error) {
 		var w workflowRow
 		var def []byte
-		err := row.Scan(&w.ID, &w.Name, &w.Description, &w.Version, &w.IsDefault, &def, &w.PendingProposals)
+		err := row.Scan(&w.ID, &w.Name, &w.Description, &w.Version, &w.IsDefault, &def, &w.PendingProposals, &w.VariantOf, &w.VariantOfName, &w.Variants)
 		if err == nil {
 			err = json.Unmarshal(def, &w.Definition)
 		}

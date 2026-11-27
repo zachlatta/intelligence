@@ -140,13 +140,32 @@ func workflowState(ctx context.Context, tx pgx.Tx, account int64, id string) (*W
 }
 
 func (e *Engine) CreateWorkflow(ctx context.Context, account int64, name, description string, d Definition) (string, error) {
+	return e.CreateVariant(ctx, account, name, description, d, "")
+}
+
+// CreateVariant makes a workflow, as a model-only variant of account's workflow source unless
+// source is "": it takes source's steps and prompt, and only its orchestrator agent and trigger from d.
+func (e *Engine) CreateVariant(ctx context.Context, account int64, name, description string, d Definition, source string) (string, error) {
 	var id string
 	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
 		if err := lockWorkflowAccount(ctx, tx, account); err != nil {
 			return err
 		}
+		if source != "" {
+			if err := checkVariantSource(ctx, tx, account, "", source); err != nil {
+				return err
+			}
+			s, err := workflowState(ctx, tx, account, source)
+			if err != nil {
+				return err
+			}
+			d = d.AsVariantOf(s.Definition)
+		}
 		var err error
 		id, _, err = e.applyWorkflowState(ctx, tx, account, "", nil, &WorkflowState{Name: name, Description: description, Definition: d})
+		if err == nil && source != "" {
+			_, err = tx.Exec(ctx, `UPDATE workflows SET variant_of=$2 WHERE id=$1`, id, source)
+		}
 		return err
 	})
 	return id, err
@@ -189,6 +208,13 @@ func (e *Engine) SetDefault(ctx context.Context, account int64, id string, chose
 // UpdateWorkflow saves d as the next version of account's workflow id, and returns that version.
 // Runs keep the version they started with.
 func (e *Engine) UpdateWorkflow(ctx context.Context, account int64, id, name, description string, d Definition) (int, error) {
+	return e.UpdateWorkflowVariant(ctx, account, id, name, description, d, nil)
+}
+
+// UpdateWorkflowVariant is UpdateWorkflow that, with variantOf, also makes id a model-only variant
+// of account's workflow *variantOf (taking its steps and prompt), or with "", no variant (keeping
+// d as given). With none, a variant stays one, and d must keep what it takes from its source.
+func (e *Engine) UpdateWorkflowVariant(ctx context.Context, account int64, id, name, description string, d Definition, variantOf *string) (int, error) {
 	if !uuidRe.MatchString(id) {
 		return 0, ErrNotFound
 	}
@@ -204,6 +230,13 @@ func (e *Engine) UpdateWorkflow(ctx context.Context, account int64, id, name, de
 		}
 		if current.Deleted {
 			return ErrNotFound
+		}
+		if variantOf != nil {
+			if err := setVariantOf(ctx, tx, account, id, *variantOf); err != nil {
+				return err
+			}
+		} else if err := keepsInherited(ctx, tx, account, id, d); err != nil {
+			return err
 		}
 		target := &WorkflowState{Name: name, Description: description, Definition: d, IsDefault: current.IsDefault && d.Trigger == TriggerTask}
 		_, applied, err := e.applyWorkflowState(ctx, tx, account, id, current, target)
@@ -283,6 +316,13 @@ func (e *Engine) applyWorkflowState(ctx context.Context, tx pgx.Tx, account int6
 		return "", nil, err
 	}
 	s.Name = name
+	source, _, err := variantSource(ctx, tx, account, id)
+	if err != nil {
+		return "", nil, err
+	}
+	if source != nil { // a variant runs its source's steps and prompt, whatever it was given
+		s.Definition = s.Definition.AsVariantOf(source.Definition)
+	}
 	s.Description = strings.TrimSpace(s.Description)
 	s.Definition = s.Definition.normalized()
 	if err := s.Definition.Validate(); err != nil {
@@ -326,6 +366,11 @@ func (e *Engine) applyWorkflowState(ctx context.Context, tx pgx.Tx, account int6
 		return "", nil, err
 	}
 	if current != nil {
+		if source == nil {
+			if err := e.saveVariants(ctx, tx, account, id, s.Definition); err != nil {
+				return "", nil, err
+			}
+		}
 		if err := e.retryFailedRunsForWorkflow(ctx, tx, account, id, s.Version, s.Definition.Host); err != nil {
 			return "", nil, err
 		}

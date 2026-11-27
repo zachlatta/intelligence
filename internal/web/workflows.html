@@ -314,6 +314,7 @@
 <section class="card wf-card">
   <div class="card-head"><h2><a href="/workflows/{{.ID}}">{{.Name}}</a></h2><span class="badge">v{{.Version}}</span>{{if .IsDefault}}<span class="badge">Default</span>{{end}}</div>
   <div class="card-body">{{with .Description}}<div class="meta">{{.}}</div>{{end}}<div class="strip">{{template "chips" .Definition}}</div>
+    {{if .VariantOf}}<p class="hint">Variant of <a href="/workflows/{{.VariantOf}}">{{.VariantOfName}}</a>: its steps and prompt, its own model.</p>{{end}}{{if .Variants}}<p class="hint">{{.Variants}} model variant{{if ne .Variants 1}}s{{end}} follow{{if eq .Variants 1}}s{{end}} it.</p>{{end}}
     {{if eq .Definition.Trigger "email"}}<p class="hint">✉ {{emailSummary .Definition.Email}}</p>{{end}}{{if eq .Definition.Trigger "voice_memo"}}<p class="hint">{{voiceMemoSummary .Definition.VoiceMemo}}</p>{{end}}{{if .Definition.APITrigger}}<p class="hint">API trigger enabled · <code>POST /api/workflow-api/runs</code></p>{{end}}</div>
   <div class="card-foot">{{if eq .Definition.Trigger "task"}}
     <button class="btn sm" data-default-workflow="{{.ID}}" data-default="{{if .IsDefault}}false{{else}}true{{end}}">{{if .IsDefault}}Clear default{{else}}Make default{{end}}</button>{{end}}
@@ -444,11 +445,14 @@ setInterval(async () => {
     <button class="btn sm" id="discard" disabled>Discard</button>
     <button class="btn sm" id="save" title="⌘/Ctrl Enter" disabled>Save</button>
     <button class="btn sm ghost" id="delete">Delete</button>
+    {{if not .Workflow.VariantOf}}<button class="btn sm" id="make-variant" title="A copy that keeps this workflow's steps and prompt, and changes only the orchestrator model and trigger">Make model variant</button>{{end}}
     <button class="btn sm primary" id="run">Run…</button>
     <button type="button" class="btn sm" data-model-groups-open>Model groups</button>
   </div>
 </div>
 <p class="banner" id="error" hidden></p>
+{{if .Workflow.VariantOf}}<p class="hint" id="variant-note">Model variant of <a href="/workflows/{{.Workflow.VariantOf}}">{{.Workflow.VariantOfName}}</a>: its host, priority, project, orchestrator instructions and steps come from there, and each change to it reaches this one. Only its orchestrator model and its trigger are its own. <button class="btn sm ghost" id="detach-variant">Detach</button></p>{{end}}
+{{if .Workflow.Variants}}<p class="hint" id="variants-note">{{.Workflow.Variants}} model variant{{if ne .Workflow.Variants 1}}s{{end}} follow{{if eq .Workflow.Variants 1}}s{{end}} this workflow: saving it saves {{if eq .Workflow.Variants 1}}it{{else}}them{{end}} too, each keeping its own model and trigger.</p>{{end}}
 <template id="voice-poll-status">{{template "voice-status" .VoiceStatus}}<p class="hint"><a href="/workflows/voice-memos">Recent voice memos and polling status</a></p></template>
 <div id="editor"></div>
 {{template "modelgroups" "dialog"}}
@@ -1004,6 +1008,25 @@ async function save() {
   return true;
 }
 $("#save").onclick = save;
+// a model variant keeps this workflow's steps and prompt; it starts by hand until it gets a trigger of its own
+$("#make-variant")?.addEventListener("click", async () => {
+  if (dirty && !(confirm("Save this version first, then make a variant of it?") && await save())) return;
+  const name = prompt("Name the variant. Then choose its orchestrator model and its trigger.", saved.name + " (variant)");
+  if (!name) return;
+  const d = structuredClone(saved.definition);
+  if (d.trigger === "email" || d.trigger === "voice_memo") { d.trigger = "manual"; delete d.email; delete d.voiceMemo; }
+  const res = await fetch("/api/workflows", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, description: saved.description, definition: d, variantOf: saved.id }) });
+  if (!res.ok) return err(await res.text());
+  location.href = "/workflows/" + (await res.json()).id;
+});
+$("#detach-variant")?.addEventListener("click", async () => {
+  if (!confirm("Detach “" + saved.name + "” from “" + saved.variantOfName + "”? It keeps its current steps and prompt, and stops getting the changes made there.")) return;
+  const res = await fetch("/api/workflows/" + wf.id, { method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: saved.name, description: saved.description, definition: saved.definition, variantOf: "" }) });
+  if (!res.ok) return err(await res.text());
+  dirty = false; location.reload();
+});
 $("#delete").onclick = async () => {
   if (!confirm("Delete the workflow “" + saved.name + "”? Its past runs stay readable; it cannot be run again.")) return;
   const res = await fetch("/api/workflows/" + wf.id, { method: "DELETE" });

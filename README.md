@@ -109,7 +109,7 @@ The hierarchy is hosts > workspaces > agents:
 - `accounts` (username, argon2id password hash, its role), `sessions` (signed-in browsers; a hash
   of each cookie's token), `host_keys` (each host's account and a hash of its key) and
   `host_enrollments` (hosts waiting for their code to be entered). An account reads only its own.
-- `workflows`, `workflow_versions` (every saved definition, including `apiTrigger`), `workflow_api_keys` (scoped API keys
+- `workflows` (`variant_of`: the workflow a model variant follows, Model variants below), `workflow_versions` (every saved definition, including `apiTrigger`), `workflow_api_keys` (scoped API keys
   for API-triggered workflows: name, prefix, SHA-256 hash, creation, last-used and revocation
   times; account-isolated by RLS), `workflow_runs` (including `api_key_id`, `idempotency_key` and
   `idempotency_hash` for API-triggered runs) and
@@ -902,6 +902,36 @@ version it started with. A run:
      `--secret` (`"Name: Purpose"` or a JSON object `{"name","purpose","username","multiline"}`)
      adds a password field on the ask; `--multiline-secret` a masked text area, for a PEM key
      (Temporary secrets, below).
+
+#### Model variants
+
+A workflow can be a **model variant** of another, its source (`workflows.variant_of`): the same
+workflow on a different orchestrator model, say GPT-6.2 Sol Ultrafast instead of the source's.
+A variant keeps only its own orchestrator agent (`provider`, `model`, `thinking`, `serviceTier`)
+and its own trigger (`trigger`, `apiTrigger`, `email`, `voiceMemo`, so it can have its own email
+address), and its name and description. Everything else in its definition (host, priority,
+project, the orchestrator's instructions and the steps) is its source's current one
+(`workflow.Definition.AsVariantOf`). Each save of the source (an edit, an approved proposal, an
+undo or a restore) saves each live variant again in the same transaction, as a new version of the
+variant when it changes, so a change to the source reaches every variant, and its runs keep the
+version they started with as usual. A migration that rewrites definitions in SQL does not do
+this: the variants follow at the source's next save.
+
+- **Make model variant** in a workflow's editor makes one (named “… (variant)”); a variant of an
+  email or voice memo workflow starts by hand until it is given a trigger of its own, since two
+  workflows cannot take the same email. `POST /api/workflows` with `"variantOf": "<source id>"`
+  does the same: the definition's own fields are kept and the rest is taken from the source.
+- `PUT /api/workflows/{id}` with `"variantOf": "<source id>"` makes an existing workflow (such as
+  an earlier copy) a variant, keeping its id, name, trigger, earlier versions and runs;
+  `"variantOf": ""` detaches it (**Detach** on its editor), keeping the definition it has. Leaving
+  `variantOf` out keeps what the workflow is. A save or an update proposal that changes what a
+  variant takes from its source is refused (400): change the source, or detach the variant.
+- A source is one of the account's live workflows, not the workflow itself and not a variant, and
+  a workflow with variants cannot become one. Deleting a source leaves its variants on the last
+  definition they took; restoring it saves them again.
+- Migration `20261127T2347_workflow_model_variants` made Zach Email Task (GPT-6.2 Sol Ultrafast),
+  a copy of Zach Email Task v13, a variant of Zach Email Task (matched by id and name; a no-op
+  anywhere else).
 
 #### Temporary secrets
 
@@ -2249,6 +2279,8 @@ origin (another site's request is refused with 403), and those with a body must 
     orchestrator (including an explicit non-Zach notice at sign-off steps).
 - `GET /workflows/{id}`: the editor: the host and trigger, how the project is found, the orchestrator, and
   the steps (add, reorder, edit, remove), or the definition as JSON. Saving makes a new version.
+  A model variant's editor names the workflow it follows, with Detach; any other has Make model
+  variant (Model variants, above).
   A project that is always the same repository is picked from those the workflow's host reported
   (its workspaces' `project_root`s), or typed. The “Run this workflow” dialog takes the run's task;
   with `ASSEMBLYAI_API_KEY` set, its mic button or ⌘D/Ctrl+D uses the shared dictation controls.
@@ -2258,6 +2290,7 @@ origin (another site's request is refused with 403), and those with a body must 
   which takes dictation.
 - `POST /api/workflows` with `{"name", "description", "definition"}`: 201 `{"id", "version": 1}`;
   400 for a definition that cannot run. `PUT /api/workflows/{id}`, the same body: the next version.
+  Either takes an optional `"variantOf"` (a source workflow's id, or `""` for none): Model variants, above.
 - `POST /api/workflow-runs` with `{"workflowId", "input"}`: starts a run on the workflow's host
   (201, with its `Location`), or queues it while the host is near capacity; 400 for a workflow
   saved without one.

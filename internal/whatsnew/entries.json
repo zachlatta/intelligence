@@ -1,5 +1,13 @@
 [
   {
+    "id": "workflow-model-variants",
+    "released": "2026-11-27",
+    "title": "Model variants of a workflow",
+    "summary": "Make model variant, in a workflow's editor, makes a copy that changes only the orchestrator model and its own trigger (such as its own email address). It keeps the original's steps and prompt: each later change to the original reaches the variant too. The variant's editor says which workflow it follows, with Detach to make it a plain copy again.",
+    "media": "workflow-model-variants.png",
+    "mediaAlt": "A workflow editor in a local demo, headed Email Task (GPT-6.2 Sol Ultrafast), with the note that it is a model variant of Email Task: its steps and prompt come from there, only its orchestrator model and trigger are its own, and a Detach button."
+  },
+  {
     "id": "grimm-desk-default",
     "released": "2026-11-27",
     "title": "Grimm starts in desk",

@@ -141,6 +141,11 @@ func (e *Engine) Propose(ctx context.Context, account int64, proposer string, r 
 			if err := uniqueEmailTrigger(ctx, tx, account, r.WorkflowID, r.Workflow.Definition); err != nil {
 				return err
 			}
+			if r.Operation == "update" {
+				if err := keepsInherited(ctx, tx, account, r.WorkflowID, r.Workflow.Definition); err != nil {
+					return err
+				}
+			}
 		}
 		// Store the exact target, including automatic revision/default changes.
 		switch r.Operation {
