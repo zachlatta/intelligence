@@ -3,7 +3,7 @@
 -- http_requests: one row per HTTP request the server answered: its route pattern (the mux's,
 -- never the raw path), method, status, how long it took and when it started. No query string,
 -- header, cookie, token, body, IP or user agent is stored. account_id is the signed-in account
--- (session, host key or workflow API key), NULL when no one was; requests are written in batches
+-- (session, host key, workflow API key or MCP token), NULL when no one was; requests are written in batches
 -- after they are answered, so an account deleted meanwhile leaves its id without a foreign key.
 --
 -- page_loads: each signed-in page's own navigation timing, reported by the browser

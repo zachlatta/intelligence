@@ -26,7 +26,7 @@ var pageLoadScript = asset("pageload.js", "text/javascript; charset=utf-8", page
 const noRoute = "(no route)"
 
 // requestAccount carries the account a request is signed in as from wherever it is
-// authenticated (viewerOf, hostCaller, workflowAPI) out to timed.
+// authenticated (viewerOf, hostCaller, workflowAPI, mcp) out to timed.
 type requestAccount struct{ id atomic.Int64 }
 
 type requestAccountKey struct{}

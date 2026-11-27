@@ -119,7 +119,8 @@ The hierarchy is hosts > workspaces > agents:
 - `http_requests` and `page_loads`: how long the server took to answer each request, and each
   signed-in page took to load in the browser (`internal/timing`). A request row has the mux route
   pattern that served it (`/workflows/{id}`, `(no route)` for none), method, status, `duration_ms`,
-  start time `at`, and the signed-in account (session, host key or workflow API key; NULL for none).
+  start time `at`, and the signed-in account (session, host key, workflow API key or MCP token;
+  NULL for none: sign-in, static files, enrollment, host streams).
   No path, query, header, cookie, token, body, IP or user agent is kept. Requests are queued without
   blocking and written in batches every second; past 10,000 queued between writes they are dropped
   (and logged), and on shutdown the queue is written after open requests finish. A page load row

@@ -80,6 +80,7 @@ func (a *app) mcp(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication unavailable", 500)
 		return
 	}
+	signedInAs(r, acct.ID)
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
 		http.Error(w, "only POST is supported (no SSE stream)", 405)

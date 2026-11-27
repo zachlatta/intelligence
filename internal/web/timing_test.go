@@ -221,3 +221,22 @@ func TestPageLoadScript(t *testing.T) {
 		}
 	}
 }
+
+// An MCP request (PDW's SQL queries among them) is timed as its token's account, so another
+// account cannot read it.
+func TestMCPRequestsAreTimedAsTheirAccount(t *testing.T) {
+	t.Parallel()
+	h, rec := timedServer(t)
+	_, token := mintMCP(t, h)
+	call(t, anon(h), http.MethodPost, "/mcp", `{"jsonrpc":"2.0","id":1,"method":"ping"}`, map[string]string{"Authorization": "Bearer " + token})
+	var mcp *requestRow
+	rows := requestRows(t, h, rec)
+	for i := range rows {
+		if rows[i].route == "/mcp" {
+			mcp = &rows[i]
+		}
+	}
+	if mcp == nil || mcp.account == nil || *mcp.account != h.acct.ID {
+		t.Fatalf("MCP request row = %+v, want account %d (all rows %+v)", mcp, h.acct.ID, rows)
+	}
+}
