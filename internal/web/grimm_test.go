@@ -397,3 +397,54 @@ func TestGrimmThreadLoadsOlderItems(t *testing.T) {
 		t.Errorf("read %d items in all, want 450", seen)
 	}
 }
+
+func TestGrimmPageHasPolishAndInlineCap(t *testing.T) {
+	t.Parallel()
+	h, _ := dbServer(t)
+	stream := grimmRig(t, h)
+	rec := call(t, h, "POST", "/api/grimm/sessions", `{"host":"host-1","repo":"/w/app","maxWorkers":10}`, sameOriginFetch)
+	if rec.Code != 201 {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	var created struct{ ID, URL string }
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+	succeed(t, stream, stream.command(), `{"workspaceId":"w-app"}`)
+
+	page := get(t, h, created.URL, nil).Body.String()
+	for _, want := range []string{
+		`id="g-cap-pop"`,
+		`id="g-cap-dec"`,
+		`id="g-cap-input"`,
+		`id="g-cap-inc"`,
+		`id="g-cap-error"`,
+		`id="g-attach-drafts"`,
+		`id="g-attach-btn"`,
+		`id="g-attach-status"`,
+		`class="g-empty-mark"`,
+		`id="g-host"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("grimm page missing %s", want)
+		}
+	}
+	if strings.Contains(string(grimmJS), "prompt(") {
+		t.Error("grimm.js still uses window.prompt() for worker cap")
+	}
+
+	events, cancel := openSSE(t, h, "/api/grimm/sessions/"+created.ID+"/stream")
+	defer cancel()
+	for e := range events {
+		if e[0] == "state" && strings.Contains(e[1], `"max_workers":10`) {
+			break
+		}
+	}
+	if rec := call(t, h, "PUT", "/api/grimm/sessions/"+created.ID, `{"maxWorkers":6}`, sameOriginFetch); rec.Code != 204 {
+		t.Fatalf("update cap: %d %s", rec.Code, rec.Body)
+	}
+	for e := range events {
+		if e[0] == "state" && strings.Contains(e[1], `"max_workers":6`) {
+			return
+		}
+	}
+	t.Fatal("SSE stream did not push updated max_workers")
+}

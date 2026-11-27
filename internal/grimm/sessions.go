@@ -3,9 +3,9 @@ package grimm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -140,13 +140,7 @@ func (s *Service) UpdateSession(ctx context.Context, account int64, id string, u
 			return err
 		}
 		if u.MaxWorkers != nil {
-			if *u.MaxWorkers < 1 || *u.MaxWorkers > MaxWorkersLimit {
-				return badRequest("the worker cap must be 1 to %d", MaxWorkersLimit)
-			}
-			if _, err := tx.Exec(ctx, `UPDATE grimm_sessions SET max_workers = $2 WHERE id = $1`, id, *u.MaxWorkers); err != nil {
-				return err
-			}
-			if err := event(ctx, tx, sess, "human", "cap", "info", "Set the worker cap to "+strconv.Itoa(*u.MaxWorkers), map[string]int{"maxWorkers": *u.MaxWorkers}); err != nil {
+			if err := s.setMaxWorkers(ctx, tx, sess, *u.MaxWorkers); err != nil {
 				return err
 			}
 		}
@@ -161,6 +155,42 @@ func (s *Service) UpdateSession(ctx context.Context, account int64, id string, u
 		}
 		return notify(ctx, tx, id)
 	})
+}
+
+// setMaxWorkers updates the session's live-worker cap and notifies a running or starting manager
+// when the cap actually changed, so it does not stay stuck on the cap baked into its first prompt.
+func (s *Service) setMaxWorkers(ctx context.Context, tx pgx.Tx, sess Session, n int) error {
+	if n < 1 || n > MaxWorkersLimit {
+		return badRequest("the worker cap must be 1 to %d", MaxWorkersLimit)
+	}
+	if n == sess.MaxWorkers {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `UPDATE grimm_sessions SET max_workers = $2 WHERE id = $1`, sess.ID, n); err != nil {
+		return err
+	}
+	if err := event(ctx, tx, sess, "human", "cap", "info", fmt.Sprintf("Set the worker cap to %d", n), map[string]int{"maxWorkers": n}); err != nil {
+		return err
+	}
+	m, ok, err := currentManager(ctx, tx, sess.ID)
+	if err != nil || !ok {
+		return err
+	}
+	summary := fmt.Sprintf("worker cap set to %d", n)
+	detail := fmt.Sprintf("The session's live-worker cap changed from %d to %d. You may now have up to %d live workers.", sess.MaxWorkers, n, n)
+	if m.Status == "live" && m.AgentID != "" {
+		text := updateText([]string{detail})
+		c, err := enqueue(ctx, tx, sess.Host, hostclient.SendMessageKind, hostclient.AgentArgs{AgentID: m.AgentID, Text: text, Behavior: hostclient.Steer}, commandTTL, s.now())
+		if err != nil {
+			return err
+		}
+		_, err = threadRow(ctx, tx, sess, "update", "intelligence", text, map[string]any{"summaries": []string{summary}, "commandId": c.ID})
+		return err
+	}
+	if m.Status == "starting" {
+		return s.wake(ctx, tx, sess, "", summary, detail)
+	}
+	return nil
 }
 
 // ArchiveSession archives every agent of the session and ends it. The worktree and its files stay.

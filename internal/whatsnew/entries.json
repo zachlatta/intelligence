@@ -1,5 +1,13 @@
 [
   {
+    "id": "grimm-ux-polish",
+    "released": "2026-11-27",
+    "title": "Grimm UX polish and inline live-worker cap editor",
+    "summary": "Grimm now includes an inline worker-cap stepper popover in the header (replacing the browser prompt) that validates inline, updates all open tabs live, and notifies the running manager when the cap changes. The composer moves image and file drafts inside the box with a paperclip button, live upload progress, send locking and per-session draft persistence; the thread adds boxed tool icons, centered update pills, callout notices, pulsing status dots, kind-colored bus borders, a tablet Quota drawer and 390px phone refinements.",
+    "media": "grimm-ux-polish.gif",
+    "mediaAlt": "A local demo of the Grimm page showing the polished thread, an image draft inside the composer with live status, opening the inline Workers cap stepper popover, and saving a new cap with a live header update and green confirmation toast."
+  },
+  {
     "id": "grimm-workflow-approval",
     "released": "2026-11-27",
     "title": "Approve and monitor workflow runs from Grimm",
