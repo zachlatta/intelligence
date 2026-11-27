@@ -168,5 +168,6 @@
 @media (max-width: 780px) {
   .gw-card { padding: .55rem .65rem; }
   .gw-actions { flex-direction: row; }
+  .gw-actions .btn { min-height: 36px; padding: .35rem .75rem; }
   .gw-edit-area { font-size: 16px; }
 }
