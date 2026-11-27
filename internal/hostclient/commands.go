@@ -62,6 +62,7 @@ const (
 	CreateAgentKind      = "create_agent"
 	ArchiveAgentKind     = "archive_agent"
 	RenameAgentKind      = "rename_agent"
+	WatchAgentKind       = "watch_agent" // set the agent's LiveLabel: how fast the host copies its transcript
 	SendMessageKind      = "send_message"
 	CancelAgentKind      = "cancel_agent"
 	ContinueEmailKind    = "continue_email"
@@ -144,6 +145,7 @@ type AgentArgs struct {
 	Title        string             `json:"title,omitempty"`
 	Text         string             `json:"text,omitempty"`
 	Behavior     string             `json:"behavior,omitempty"` // send_message: steer (""), interrupt or queue
+	Live         string             `json:"live,omitempty"`     // watch_agent: LiveFast while someone watches, else LiveSteady
 }
 
 // How a message treats the agent's running turn. Each starts a turn when the agent is not running.
@@ -258,7 +260,7 @@ func ParseCommand(kind string, args json.RawMessage) (any, error) {
 			return nil, errors.New("archive_workspace takes no title")
 		}
 		return a, nil
-	case ArchiveAgentKind, CancelAgentKind, RenameAgentKind, SendMessageKind:
+	case ArchiveAgentKind, CancelAgentKind, RenameAgentKind, SendMessageKind, WatchAgentKind:
 		var a AgentArgs
 		if err := decode(&a); err != nil {
 			return nil, err
@@ -270,6 +272,10 @@ func ParseCommand(kind string, args json.RawMessage) (any, error) {
 			return nil, fmt.Errorf("%s takes no afterCommand", kind)
 		case kind == RenameAgentKind && a.Title == "":
 			return nil, errors.New("rename_agent needs title")
+		case kind == WatchAgentKind && a.Live != LiveFast && a.Live != LiveSteady:
+			return nil, errors.New("watch_agent needs live: fast or steady")
+		case kind != WatchAgentKind && a.Live != "":
+			return nil, fmt.Errorf("%s takes no live", kind)
 		case kind == SendMessageKind && a.Text == "":
 			return nil, errors.New("send_message needs text")
 		case kind == SendMessageKind && a.Behavior != "" && a.Behavior != Steer && a.Behavior != Interrupt && a.Behavior != Queue:
@@ -479,6 +485,8 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 			return r, c.CancelAgent(ctx, a.AgentID)
 		case RenameAgentKind:
 			return r, c.RenameAgent(ctx, a.AgentID, a.Title)
+		case WatchAgentKind:
+			return r, c.SetAgentLabels(ctx, a.AgentID, map[string]string{LiveLabel: a.Live})
 		case SendMessageKind:
 			if a.Behavior != Queue {
 				if err := w.prepareMessageImages(a); err != nil {

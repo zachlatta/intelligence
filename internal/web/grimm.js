@@ -335,7 +335,7 @@ function lastAssistantID() {
   return "";
 }
 function upsertItems(items, reset) {
-  const stick = reset || nearBottom();
+  const stick = reset || (nearBottom() && !loadingOlder);
   const box = $("#g-items");
   if (reset) {
     const open = new Set([...S.items.values()].filter((x) => x._open).map((x) => x.item_id));
@@ -377,6 +377,30 @@ function upsertItems(items, reset) {
   }
   $("#g-empty").hidden = S.items.size > 0;
   if (stick) scrollBottom(true);
+}
+
+// ---------- older thread items, read through /api/sql a page at a time ----------
+const sqlText = (v) => "'" + String(v).replace(/'/g, "''") + "'";
+let loadingOlder = false;
+async function loadOlder() {
+  if (loadingOlder || !S.older || !S.order.length) return;
+  const oldest = S.items.get(S.order[0]);
+  if (!/^[mt][0-9.]+$/.test(oldest.item_id) || !/^[0-9T:.+\- Z]+$/.test(oldest.at)) return;
+  loadingOlder = true;
+  const btn = $("#g-older"); btn.disabled = true; btn.textContent = "Loading…";
+  try {
+    const q = root.dataset.olderSql.replace(":session", sqlText(S.id)).replace(":at", sqlText(oldest.at)).replace(":item", sqlText(oldest.item_id));
+    const rows = await sql(q);
+    const t = $("#g-thread");
+    const fromBottom = t.scrollHeight - t.scrollTop;
+    upsertItems(rows.map((r) => r[0]), false);
+    t.scrollTop = t.scrollHeight - fromBottom; // keep what was in view where it was
+    S.older = rows.length >= 200;
+  } catch (e) {
+    toast("Could not load older messages: " + e.message, true);
+  } finally {
+    loadingOlder = false; btn.disabled = false; btn.textContent = "Load older messages"; btn.hidden = !S.older;
+  }
 }
 
 // ---------- header and manager ----------
@@ -611,7 +635,11 @@ function connect() {
     renderSession(); renderTeam(); renderQuota(); renderDirectives();
     if (was !== S.session.manager_state) upsertItems([], false);
   });
-  es.addEventListener("thread", (e) => { const d = JSON.parse(e.data); upsertItems(d.items, d.reset); });
+  es.addEventListener("thread", (e) => {
+    const d = JSON.parse(e.data);
+    upsertItems(d.items, d.reset);
+    if (d.reset) { S.older = !!d.more; $("#g-older").hidden = !S.older; }
+  });
   es.addEventListener("bus", (e) => addBus(JSON.parse(e.data).items));
   es.addEventListener("activity", (e) => addFeed(JSON.parse(e.data).items));
 }
@@ -675,6 +703,8 @@ function bindSession() {
     if (!(n >= 1 && n <= limit)) return toast(`The cap is 1 to ${limit}.`, true);
     try { await api("PUT", `/api/grimm/sessions/${S.id}`, { maxWorkers: n }); toast(`Worker cap set to ${n}.`); } catch (e) { toast(e.message, true); }
   });
+  $("#g-older").addEventListener("click", loadOlder);
+  $("#g-thread").addEventListener("scroll", () => { if ($("#g-thread").scrollTop < 80) loadOlder(); }, { passive: true });
   $("#g-sessions").addEventListener("change", (e) => { location.href = "/grimm/" + e.target.value; });
   $("#g-directive-form").addEventListener("submit", async (e) => {
     e.preventDefault();

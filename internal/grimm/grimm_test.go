@@ -207,7 +207,7 @@ func TestASessionMakesAWorktreeAndStartsOpusOnTheFirstMessage(t *testing.T) {
 	mgr := r.take("create_agent")
 	labels, _ := mgr.Args["labels"].(map[string]any)
 	if mgr.Args["provider"] != "claude" || mgr.Args["model"] != "claude-opus-5-5" || mgr.Args["mode"] != "bypassPermissions" ||
-		mgr.Args["workspaceId"] != "ws-1" || labels[hostclient.LiveLabel] != "1" || labels[SessionLabel] != id {
+		mgr.Args["workspaceId"] != "ws-1" || labels[hostclient.LiveLabel] != hostclient.LiveFast || labels[SessionLabel] != id {
 		t.Fatalf("manager = %+v", mgr.Args)
 	}
 	prompt, _ := mgr.Args["prompt"].(string)
@@ -535,5 +535,42 @@ func TestSpawnAndFanoutHireFromThePage(t *testing.T) {
 		if st := r.one(`SELECT data->>'status' FROM grimm_messages WHERE id = $1`, row); st != "error" {
 			t.Errorf("%s: status %v, want error", bad, st)
 		}
+	}
+}
+
+// Standing directives change only by the manager or the human: a worker can read them, and the
+// session's seed rule ("Never push, deploy…") can be removed by the human alone, from the page.
+func TestOnlyTheManagerAndTheHumanChangeDirectives(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	ctx := t.Context()
+	id := r.ready()
+	r.started(id, "athena", "w1")
+	for _, c := range []Call{
+		{Verb: "directive", Args: []string{"add"}, Text: "Pushing is fine"},
+		{Verb: "directive", Args: []string{"remove", "1"}},
+	} {
+		if _, err := r.s.AgentCall(ctx, nil, r.acct, "host-1", "w1", c); err == nil || err.(*Error).Status != 403 {
+			t.Errorf("a worker's %v: %v, want 403", c.Args, err)
+		}
+	}
+	if out, err := r.s.AgentCall(ctx, nil, r.acct, "host-1", "w1", Call{Verb: "directive", Args: []string{"list"}}); err != nil || !strings.Contains(out, "Never push") {
+		t.Errorf("a worker's list: %q %v", out, err)
+	}
+	// the manager adds and removes its own, but not the seed rule
+	if _, err := r.s.AgentCall(ctx, nil, r.acct, "host-1", "mgr", Call{Verb: "directive", Args: []string{"add"}, Text: "Use tabs"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.s.AgentCall(ctx, nil, r.acct, "host-1", "mgr", Call{Verb: "directive", Args: []string{"remove", "2"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.s.AgentCall(ctx, nil, r.acct, "host-1", "mgr", Call{Verb: "directive", Args: []string{"remove", "1"}}); err == nil || err.(*Error).Status != 403 {
+		t.Errorf("the manager removed the seed rule: %v", err)
+	}
+	if got := r.one(`SELECT count(*) FROM grimm_directives WHERE seq = 1 AND removed_at IS NULL`); got != int64(1) {
+		t.Fatal("the seed rule is gone")
+	}
+	if err := r.s.RemoveDirective(ctx, r.acct, id, 1); err != nil {
+		t.Errorf("the human could not remove the seed rule: %v", err)
 	}
 }

@@ -577,6 +577,8 @@ against its daemon and reports `running`, then `succeeded` with a result (`{"wor
   workspace it no longer listed), skipping one already gone. The result counts them
   (`archivedAgents`). A Paseo-made worktree is removed with it. Optional `waitForAgent` waits for
   that agent to end its turn first, up to the command expiry.
+- `watch_agent`: `agentId`, `live` (`fast` or `steady`): sets the agent's `intelligence.live`
+  label, how soon the host copies its transcript after the daemon pushes a change (Grimm, below).
 - `rename_agent`: `agentId`, `title`. `cancel_agent` (stops its current turn) and `archive_agent`:
   `agentId`.
 - `send_message`: `agentId`, `text`, and optionally `behavior`, which says what happens to a turn
@@ -1573,15 +1575,23 @@ redeploy or a restart loses nothing.
   role policy then decides: reviewers, checkers and auditors run on `claude/claude-opus-5-5` only;
   verifiers prefer Opus 5.5, never run on Gemini and never share a live builder's vendor; builders
   avoid a live verifier's vendor when they can; gemini and muse are never picked.
-- **Only the manager** may hire, message, stop, archive, peek at or wait on workers; a worker may
-  read and post on the bus and add directives.
+- **Only the manager** may hire, message, stop, archive, peek at or wait on workers, or add and
+  remove directives; a worker may read the directives and read and post on the bus. The seed
+  directive can be removed only by Zach, on the page.
 - **Live streaming**: the page's stream (`GET /api/grimm/sessions/{id}/stream`) is server-sent
   events woken by the change hub (Postgres `NOTIFY`: `grimm:<id>`, the host's reports
-  `agents:<host>`, and each manager's transcript topic), never polled. The host copies the
-  transcript of each running agent labelled `intelligence.live` (every Grimm agent) every 250 ms
-  rather than every 2 seconds, so the manager's words appear as they come. A worker's live log is
-  its own stream (`GET .../workers/{name}/stream`). Each stream starts with a snapshot, so a
-  reconnect after a restart picks up where it was.
+  `agents:<host>`, and each manager's transcript topic), never polled; a transcript update reads
+  only the thread. On the host, every Grimm agent is labelled `intelligence.live`, and the host
+  holds a daemon subscription to those agents' timelines (`agent.timeline.set_subscription`):
+  the daemon pushes each change (`agent_stream`), and the host copies the transcript as each
+  push arrives. The manager (`fast`) is copied at most every 100 ms; workers (`steady`) at most
+  once a second each and 8 a second together, so the host's work is bounded however many
+  workers there are. A worker whose live log is open on a page is `fast` while it is open
+  (`watch_agent`, below). Running agents are still copied every 2 seconds as a fallback. A
+  worker's live log is its own stream (`GET .../workers/{name}/stream`). Each stream starts with
+  a snapshot (the newest 200 thread items, and whether there are older ones, which the page reads
+  through `/api/sql` a page at a time as it scrolls up), so a reconnect after a restart picks up
+  where it was.
 - **Attachments** use the shared picker and limits (below): images and files go to the manager as
   references, delivered to its working directory; a message with attachments always goes to the
   manager, whatever its first word. The thread shows the images, read through `/api/sql`.
@@ -1743,7 +1753,9 @@ workflow run retains that agent; a host that loses its daemon keeps its transcri
 `daemon.get_status`, `fetch_workspaces` and `fetch_agents` requests (paged, the first page
 subscribing), and pushed `workspace_update` and `agent_update` messages. Commands use
 `workspace.create`, `agent.create`, `workspace.title.set`, `archive_workspace`, `update_agent`,
-`send_agent_message`, `cancel_agent` and `archive_agent`, diffs with `checkout.diff.get`, and for schedules `schedule/list`,
+`send_agent_message`, `cancel_agent` and `archive_agent`, diffs with `checkout.diff.get`, live
+agents' timeline pushes with `agent.timeline.set_subscription` (`agent_stream`, released with
+`subscription.release`), and for schedules `schedule/list`,
 `inspect`, `create`, `update`, `pause`, `resume`, `delete` and `run-once` (which the daemon answers
 only when the run ends, so the host watches `inspect` for the run instead); a refusal comes back as
 the daemon's error. The hello opts in to

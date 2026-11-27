@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -55,6 +56,15 @@ type Daemon struct {
 	catalogSet bool
 
 	diffs map[string]diff // diff.go, by checkout directory
+
+	// timeline subscriptions (agent.timeline.set_subscription), by subscription id: the
+	// connection and the agents whose agent_stream events it gets
+	timelineSubs map[string]timelineSub
+}
+
+type timelineSub struct {
+	conn   *websocket.Conn
+	agents map[string]bool
 }
 
 // RefuseCreateAgent makes agent.create.request return the non-empty error string fn returns,
@@ -234,6 +244,26 @@ func (f *Daemon) answer(c *websocket.Conn, msg map[string]any) {
 		return
 	}
 	switch msg["type"] {
+	case "agent.timeline.set_subscription.request":
+		f.nextID++
+		sub := fmt.Sprintf("sub-%d", f.nextID)
+		ids, _ := msg["agentIds"].([]any)
+		set := map[string]bool{}
+		var list []any
+		for _, x := range ids {
+			if s, ok := x.(string); ok && !set[s] {
+				set[s] = true
+				list = append(list, s)
+			}
+		}
+		if f.timelineSubs == nil {
+			f.timelineSubs = map[string]timelineSub{}
+		}
+		f.timelineSubs[sub] = timelineSub{conn: c, agents: set}
+		f.write(c, session("agent.timeline.set_subscription.response", map[string]any{"requestId": id, "agentIds": list, "subscriptionId": sub}))
+	case "subscription.release.request":
+		delete(f.timelineSubs, str("subscriptionId"))
+		f.write(c, session("subscription.release.response", map[string]any{"requestId": id, "subscriptionId": str("subscriptionId")}))
 	case "workspace.recovery.inspect.request":
 		ws := str("workspaceId")
 		state := map[string]any{"kind": "unavailable", "reason": "workspace_not_found", "message": "Workspace not found"}
@@ -467,7 +497,17 @@ func (f *Daemon) change(c *websocket.Conn, id string, msg map[string]any) bool {
 		}
 		switch msg["type"] {
 		case "update_agent_request":
-			f.agents[i]["title"] = msg["name"]
+			if _, ok := msg["name"]; ok {
+				f.agents[i]["title"] = msg["name"]
+			}
+			if patch, ok := msg["labels"].(map[string]any); ok {
+				labels, _ := f.agents[i]["labels"].(map[string]any)
+				merged := map[string]any{}
+				maps.Copy(merged, labels)
+				maps.Copy(merged, patch)
+				f.agents[i]["labels"] = merged
+				f.pushLocked("agent_update", map[string]any{"kind": "upsert", "agent": f.agents[i]})
+			}
 			f.write(c, session("update_agent_response", map[string]any{"requestId": id, "agentId": ag, "ok": true, "error": nil}))
 		case "send_agent_message_request":
 			if f.missingWorktrees[fmt.Sprint(f.agents[i]["workspaceId"])] {
@@ -665,4 +705,35 @@ func (f *Daemon) timelinePage(id string, msg map[string]any) map[string]any {
 		"epoch": tl.epoch, "reset": reset, "staleCursor": reset, "gap": false, "hasOlder": false, "hasNewer": false,
 		"window": map[string]any{"minSeq": 1, "maxSeq": 1, "nextSeq": 2}, "startCursor": nil, "endCursor": nil,
 		"entries": entries, "error": nil}
+}
+
+// Stream sends an agent_stream timeline event for agent (item at seq) to each connection
+// subscribed to its timeline, as the daemon does while the agent works.
+func (f *Daemon) Stream(agent string, seq int, item map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for sub, s := range f.timelineSubs {
+		if !s.agents[agent] {
+			continue
+		}
+		f.write(s.conn, session("agent_stream", map[string]any{"subscriptionId": sub, "agentId": agent, "seq": seq, "epoch": "e1",
+			"timestamp": "2026-11-08T10:00:00.000Z", "event": map[string]any{"type": "timeline", "provider": "claude", "item": item}}))
+	}
+}
+
+// TimelineSubscriptions is each subscription's agents, sorted, as one string each.
+func (f *Daemon) TimelineSubscriptions() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, s := range f.timelineSubs {
+		var ids []string
+		for id := range s.agents {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		out = append(out, strings.Join(ids, ","))
+	}
+	sort.Strings(out)
+	return out
 }

@@ -346,7 +346,7 @@ func (a *app) grimmPage(v viewer) http.HandlerFunc {
 		w.Header().Set("Cache-Control", "no-store")
 		if err := grimmTmpl.ExecuteTemplate(w, "grimm", map[string]any{
 			"Version": a.cfg.Version, "Session": current, "Sessions": sessions, "Hosts": hosts,
-			"DefaultHost": defaultGrimmHost(hosts, a.cfg.GrimmDefaultHost), "DefaultCap": grimm.DefaultMaxWorkers, "CapLimit": grimm.MaxWorkersLimit,
+			"DefaultHost": defaultGrimmHost(hosts, a.cfg.GrimmDefaultHost), "OlderSQL": grimmOlderSQL, "DefaultCap": grimm.DefaultMaxWorkers, "CapLimit": grimm.MaxWorkersLimit,
 			"Dictation": dictationPath(a.cfg),
 		}); err != nil {
 			log.Printf("grimm page: %v", err)
@@ -433,8 +433,15 @@ func trimEntry(raw json.RawMessage) json.RawMessage {
 	return b
 }
 
-// grimmThreadPage is how many thread items the stream starts with.
+// grimmThreadPage is how many thread items the stream starts with; the page reads older ones a
+// page at a time through /api/sql with grimmOlderSQL.
 const grimmThreadPage = 200
+
+// grimmOlderSQL is the page's read of the thread items before one it has, newest first: the page
+// puts the session's id, and the item's at and item_id, as quoted literals in place of :session,
+// :at and :item.
+const grimmOlderSQL = `SELECT to_jsonb(t) FROM grimm_thread t WHERE t.session_id = :session
+AND (t.at, t.item_id) < (:at::timestamptz, :item) ORDER BY t.at DESC, t.item_id DESC LIMIT 200`
 
 // grimmStream is GET /api/grimm/sessions/{id}/stream: the session's rows as server-sent events,
 // pushed as they change. It starts with a snapshot (state, the last 200 thread items, the bus and
@@ -545,20 +552,23 @@ func (a *app) grimmStream(v viewer) http.HandlerFunc {
 			if first {
 				q = `SELECT * FROM (SELECT to_jsonb(t), t.item_id, coalesce(t.message_id, 0) AS m, coalesce(t.epoch, 0) AS e, coalesce(t.seq, 0) AS s, t.at
 					FROM grimm_thread t WHERE t.session_id = $1 AND $2::bigint >= 0 AND $3::int >= 0 AND $4::int >= 0
-					ORDER BY t.at DESC, t.item_id DESC LIMIT ` + strconv.Itoa(grimmThreadPage) + `) x ORDER BY x.at, x.item_id`
+					ORDER BY t.at DESC, t.item_id DESC LIMIT ` + strconv.Itoa(grimmThreadPage+1) + `) x ORDER BY x.at, x.item_id`
 			}
 			rows, err := v.pool.Query(ctx, q, id, lastMsg, lastEpoch, lastSeq)
 			if err != nil {
 				return err
 			}
-			var items []json.RawMessage
+			type threadRow struct {
+				raw        json.RawMessage
+				itemID     string
+				msg        int64
+				epoch, seq int
+			}
+			var got []threadRow
 			for rows.Next() {
-				var raw json.RawMessage
-				var itemID string
-				var msg int64
-				var epoch, seq int
+				var r threadRow
 				var at any
-				dest := []any{&raw, &itemID, &msg, &epoch, &seq}
+				dest := []any{&r.raw, &r.itemID, &r.msg, &r.epoch, &r.seq}
 				if first {
 					dest = append(dest, &at)
 				}
@@ -566,22 +576,31 @@ func (a *app) grimmStream(v viewer) http.HandlerFunc {
 					rows.Close()
 					return err
 				}
-				lastMsg = max(lastMsg, msg)
-				if epoch > lastEpoch || (epoch == lastEpoch && seq > lastSeq) {
-					lastEpoch, lastSeq = epoch, seq
-				}
-				raw = trimEntry(raw)
-				if sent[itemID] == string(raw) {
-					continue
-				}
-				if epoch > 0 {
-					sent[itemID] = string(raw)
-				}
-				items = append(items, raw)
+				got = append(got, r)
 			}
 			rows.Close()
 			if err := rows.Err(); err != nil {
 				return err
+			}
+			// a first page reads one row more than it sends: that row says there are older ones
+			more := first && len(got) > grimmThreadPage
+			if more {
+				got = got[1:]
+			}
+			var items []json.RawMessage
+			for _, r := range got {
+				lastMsg = max(lastMsg, r.msg)
+				if r.epoch > lastEpoch || (r.epoch == lastEpoch && r.seq > lastSeq) {
+					lastEpoch, lastSeq = r.epoch, r.seq
+				}
+				raw := trimEntry(r.raw)
+				if sent[r.itemID] == string(raw) {
+					continue
+				}
+				if r.epoch > 0 {
+					sent[r.itemID] = string(raw)
+				}
+				items = append(items, raw)
 			}
 			if len(sent) > 400 { // only the newest entries still grow
 				for k := range sent {
@@ -594,7 +613,7 @@ func (a *app) grimmStream(v viewer) http.HandlerFunc {
 			if len(items) == 0 && !first {
 				return nil
 			}
-			return writeSSE(w, flusher, "thread", "", map[string]any{"items": items, "reset": first})
+			return writeSSE(w, flusher, "thread", "", map[string]any{"items": items, "reset": first, "more": more})
 		}
 		sendRows := func(event, q string, last *int64, limit int) error {
 			rows, err := v.pool.Query(ctx, `SELECT * FROM (SELECT to_jsonb(x), x.id FROM (`+q+`) x WHERE x.session_id = $1 AND x.id > $2
@@ -735,12 +754,22 @@ func (a *app) grimmWorkerStream(v viewer) http.HandlerFunc {
 		}()
 		agentsWake, stopAgents := a.changes.Subscribe(fleet.AgentsTopic(host))
 		defer stopAgents()
+		watched := false
+		defer func() {
+			if watched {
+				a.grimmWatch(v.acct.ID, id, name, false)
+			}
+		}()
 		lastSeq, lastWorker, lastText := -1, "", ""
 		push := func() error {
 			if agent == "" {
 				if err := read(); err != nil {
 					return err
 				}
+			}
+			if agent != "" && !watched {
+				watched = true
+				a.grimmWatch(v.acct.ID, id, name, true)
 			}
 			if agent != "" && tWake == nil {
 				tWake, tStop = a.changes.Subscribe(fleet.TranscriptTopic(host, agent))
@@ -820,5 +849,34 @@ func (a *app) grimmWorkerStream(v viewer) http.HandlerFunc {
 				return
 			}
 		}
+	}
+}
+
+// grimmWatch counts the open live logs of a worker: the first asks its host to copy its transcript
+// at once, and closing the last sets it back to the steady pace.
+func (a *app) grimmWatch(account int64, session, name string, open bool) {
+	key := session + "/" + name
+	a.grimmWatchMu.Lock()
+	if a.grimmWatching == nil {
+		a.grimmWatching = map[string]int{}
+	}
+	before := a.grimmWatching[key]
+	if open {
+		a.grimmWatching[key]++
+	} else if before > 0 {
+		a.grimmWatching[key]--
+	}
+	after := a.grimmWatching[key]
+	if after == 0 {
+		delete(a.grimmWatching, key)
+	}
+	a.grimmWatchMu.Unlock()
+	if (before == 0) == (after == 0) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := a.grimm.WatchWorker(ctx, account, session, name, after > 0); err != nil {
+		log.Printf("grimm: watch %s: %v", key, err)
 	}
 }

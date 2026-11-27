@@ -34,10 +34,15 @@ type Client struct {
 	ReportEvery time.Duration // periodic full snapshot; default 30s
 	StatusEvery time.Duration // re-read the daemon's status (a change is reported); default 15s
 	LiveEvery   time.Duration // copy running agents' transcripts; default 2s
-	FastEvery   time.Duration // copy running live agents' (LiveLabel) transcripts; default 250ms
-	DiffEvery   time.Duration // re-read the diffs of workspaces an agent works in; default 5s
-	Settle      time.Duration // gather a burst of daemon updates into one report; default 1s
-	Logf        func(format string, args ...any)
+	// A live agent's transcript (LiveLabel) is copied on each push of its timeline from the
+	// daemon: a LiveFast one at most every FastGap (default 100ms), others every SteadyGap
+	// (default 1s), at most SteadyBudget (default 8) of those a second together.
+	FastGap      time.Duration
+	SteadyGap    time.Duration
+	SteadyBudget int
+	DiffEvery    time.Duration // re-read the diffs of workspaces an agent works in; default 5s
+	Settle       time.Duration // gather a burst of daemon updates into one report; default 1s
+	Logf         func(format string, args ...any)
 
 	schedules       *ScheduleSync
 	scheduleMu      sync.Mutex
@@ -56,8 +61,14 @@ func (b *Client) Run(ctx context.Context) error {
 	if b.LiveEvery == 0 {
 		b.LiveEvery = 2 * time.Second
 	}
-	if b.FastEvery == 0 {
-		b.FastEvery = 250 * time.Millisecond
+	if b.FastGap == 0 {
+		b.FastGap = 100 * time.Millisecond
+	}
+	if b.SteadyGap == 0 {
+		b.SteadyGap = time.Second
+	}
+	if b.SteadyBudget == 0 {
+		b.SteadyBudget = 8
 	}
 	if b.DiffEvery == 0 {
 		b.DiffEvery = 5 * time.Second
@@ -196,19 +207,21 @@ func (b *Client) syncSchedules(ctx context.Context) {
 }
 
 // syncTranscripts copies loaded agents' transcripts after each stored report (once the server
-// knows the agents) and, while one is running, every LiveEvery; running live agents (LiveLabel)
-// every FastEvery, so a page streaming one sees its words as they come.
+// knows the agents) and, while one is running, every LiveEvery. A live agent's (LiveLabel) is
+// copied as the daemon pushes each change to its timeline, paced by livePace, so a page that
+// streams it sees its words as they come.
 func (b *Client) syncTranscripts(ctx context.Context, reported *latest) {
 	ts := &TranscriptSync{Host: b.Name, Timeline: b.Watcher.Timeline, Cursors: b.Link.TranscriptCursors, Send: b.Link.Transcript}
 	live := time.NewTicker(b.LiveEvery)
 	defer live.Stop()
-	fast := time.NewTicker(b.FastEvery)
-	defer fast.Stop()
+	pace := &livePace{fast: b.FastGap, steady: b.SteadyGap, budget: b.SteadyBudget, last: map[string]time.Time{}, dirty: map[string]bool{}}
+	var due *time.Timer
+	var dueC <-chan time.Time
 	var snap PaseoStatus
 	stored := false // a report has been stored on this stream, so the server knows the agents
 	lastErr := ""
 	for {
-		agents := snap.Agents
+		var agents []Agent
 		select {
 		case <-ctx.Done():
 			return
@@ -226,14 +239,26 @@ func (b *Client) syncTranscripts(ctx context.Context, reported *latest) {
 			}
 			snap = b.Watcher.Snapshot()
 			agents = snap.Agents
-		case <-fast.C:
-			if !stored || !anyLive(snap.Agents) {
-				continue
-			}
-			snap = b.Watcher.Snapshot()
-			agents = liveRunning(snap.Agents)
+		case id := <-b.Watcher.TimelineUpdates():
+			pace.dirty[id] = true
+		case <-dueC:
+			dueC = nil
 		}
-		if !snap.Connected || len(agents) == 0 && len(snap.Agents) > 0 {
+		if stored && len(pace.dirty) > 0 && dueC == nil {
+			now := time.Now()
+			snap = b.Watcher.Snapshot()
+			ready, wait := pace.take(snap.Agents, now)
+			agents = append(agents, ready...)
+			if wait > 0 {
+				if due == nil {
+					due = time.NewTimer(wait)
+				} else {
+					due.Reset(wait)
+				}
+				dueC = due.C
+			}
+		}
+		if !snap.Connected || len(agents) == 0 {
 			continue
 		}
 		syncCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
@@ -246,6 +271,61 @@ func (b *Client) syncTranscripts(ctx context.Context, reported *latest) {
 			lastErr = ""
 		}
 	}
+}
+
+// livePace decides which pushed agents to copy now: a LiveFast agent once FastGap has passed
+// since its last copy, another once SteadyGap has, and the steady ones at most budget a second
+// together. The rest wait; take says how long until the next is due.
+type livePace struct {
+	fast, steady time.Duration
+	budget       int
+	last         map[string]time.Time
+	dirty        map[string]bool
+	window       time.Time // the current second of the steady budget
+	spent        int
+}
+
+func (p *livePace) take(agents []Agent, now time.Time) ([]Agent, time.Duration) {
+	byID := make(map[string]Agent, len(agents))
+	for _, a := range agents {
+		byID[a.ID] = a
+	}
+	if now.Sub(p.window) >= time.Second {
+		p.window, p.spent = now, 0
+	}
+	var ready []Agent
+	wait := time.Duration(0)
+	later := func(d time.Duration) {
+		if wait == 0 || d < wait {
+			wait = d
+		}
+	}
+	for id := range p.dirty {
+		a, ok := byID[id]
+		if !ok || a.Live == "" {
+			delete(p.dirty, id)
+			continue
+		}
+		gap := p.steady
+		if a.Live == LiveFast {
+			gap = p.fast
+		}
+		if left := gap - now.Sub(p.last[id]); left > 0 {
+			later(left)
+			continue
+		}
+		if a.Live != LiveFast {
+			if p.spent >= p.budget {
+				later(time.Second - now.Sub(p.window))
+				continue
+			}
+			p.spent++
+		}
+		delete(p.dirty, id)
+		p.last[id] = now
+		ready = append(ready, a)
+	}
+	return ready, wait
 }
 
 // syncDiffs sends the git workspaces' diffs that changed after each stored report and, while an
@@ -345,19 +425,6 @@ func (b *Client) update(ctx context.Context, versions <-chan string) {
 			}
 		}
 	}
-}
-
-// anyLive: a live agent is (or was at the last snapshot) running.
-func anyLive(agents []Agent) bool { return len(liveRunning(agents)) > 0 }
-
-func liveRunning(agents []Agent) []Agent {
-	var out []Agent
-	for _, a := range agents {
-		if a.Live && a.Status == "running" {
-			out = append(out, a)
-		}
-	}
-	return out
 }
 
 func anyRunning(agents []Agent) bool {

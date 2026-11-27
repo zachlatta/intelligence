@@ -107,7 +107,7 @@ Pass message bodies with a quoted heredoc (`+"`<<'EOF'`"+`) or `+"`--file PATH`"
   EOF
   `+"```"+`
 - `+"`--to grimm`"+` reaches the Grimm manager, who assigned your work and reports to the human; ask it when you are blocked.
-- If the human states a standing preference ("from now on", "always"), record it for every future agent: `+"`%[8]s directive add \"<rule>\"`"+`
+- If the human states a standing preference ("from now on", "always"), tell the manager on the bus (`+"`--to grimm`"+`): it records standing rules for every agent. `+"`%[8]s directive list`"+` shows them.
 
 ## Rules
 Never push, deploy, publish, open pull requests or send external messages. Never start other agents.

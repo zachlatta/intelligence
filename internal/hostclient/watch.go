@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,11 +44,19 @@ type Watcher struct {
 	queues   map[string][]queuedMessage
 	settling map[string]time.Time
 	wake     chan struct{}
+
+	// pushed timelines: the daemon streams the timelines of live agents (LiveLabel) on this
+	// connection's subscription (subID, for the agents subSet names), and each push's agent id
+	// goes to updates
+	updates chan string
+	subID   string
+	subSet  string
 }
 
 func (w *Watcher) init() {
 	w.once.Do(func() {
 		w.changed = make(chan struct{}, 1)
+		w.updates = make(chan string, 256)
 		if w.RetryEvery == 0 {
 			w.RetryEvery = 5 * time.Second
 		}
@@ -55,6 +64,53 @@ func (w *Watcher) init() {
 			w.Now = time.Now
 		}
 	})
+}
+
+// TimelineUpdates has a live agent's id each time the daemon pushes a change to its timeline.
+func (w *Watcher) TimelineUpdates() <-chan string {
+	w.init()
+	return w.updates
+}
+
+// liveSet is the ids of the agents labelled LiveLabel, sorted and joined: whose timelines the
+// daemon should push.
+func (w *Watcher) liveSetLocked() []string {
+	var ids []string
+	for id, a := range w.agents {
+		if a.Labels[LiveLabel] != "" {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+// subscribe keeps c's timeline subscription on the live agents: a new one when they change, then
+// the old one released. A failure is tried again on the next change of the agents.
+func (w *Watcher) subscribe(ctx context.Context, c *paseo.Client) {
+	w.mu.Lock()
+	ids := w.liveSetLocked()
+	set, old := strings.Join(ids, ","), w.subID
+	if set == w.subSet {
+		w.mu.Unlock()
+		return
+	}
+	w.mu.Unlock()
+	rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	id := ""
+	if len(ids) > 0 {
+		var err error
+		if id, err = c.SubscribeTimelines(rctx, ids); err != nil {
+			return
+		}
+	}
+	if old != "" {
+		_ = c.ReleaseSubscription(rctx, old)
+	}
+	w.mu.Lock()
+	w.subID, w.subSet = id, set
+	w.mu.Unlock()
 }
 
 // Changed receives after the snapshot changes (coalesced: one pending signal at most).
@@ -77,6 +133,7 @@ func (w *Watcher) Run(ctx context.Context) {
 		err := w.session(ctx)
 		w.mu.Lock()
 		w.client, w.workspaces, w.agents = nil, nil, nil
+		w.subID, w.subSet = "", "" // a subscription ends with its connection
 		if ctx.Err() == nil {
 			w.err = err.Error()
 		}
@@ -142,6 +199,7 @@ func (w *Watcher) session(ctx context.Context) error {
 	w.mu.Unlock()
 	cancel()
 	w.signal()
+	w.subscribe(ctx, c)
 	for {
 		select {
 		case <-ctx.Done():
@@ -150,6 +208,14 @@ func (w *Watcher) session(ctx context.Context) error {
 			return c.Err()
 		case e := <-c.Events():
 			w.apply(e)
+			if e.Agent != nil || e.AgentRemoved != "" {
+				w.subscribe(ctx, c)
+			}
+		case id := <-c.TimelineUpdates():
+			select {
+			case w.updates <- id:
+			default: // its reader is behind; it syncs the agent anyway
+			}
 		}
 	}
 }
@@ -271,7 +337,7 @@ func (w *Watcher) Snapshot() PaseoStatus {
 		s.Agents = append(s.Agents, Agent{ID: a.ID, WorkspaceID: a.WorkspaceID, ParentID: a.ParentAgentID(), Title: a.Title,
 			Provider: a.Provider, Model: a.ModelName(), Thinking: a.Thinking(), Status: a.Status, Cwd: a.Cwd,
 			RequiresAttention: a.RequiresAttention, AttentionReason: a.AttentionReason, CreatedAt: a.CreatedAt,
-			UpdatedAt: a.UpdatedAt, LastUserMessageAt: a.LastUserMessageAt, Live: a.Labels[LiveLabel] != ""})
+			UpdatedAt: a.UpdatedAt, LastUserMessageAt: a.LastUserMessageAt, Live: a.Labels[LiveLabel]})
 	}
 	slices.SortFunc(s.Agents, func(a, b Agent) int { return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), cmp.Compare(a.ID, b.ID)) })
 	return s

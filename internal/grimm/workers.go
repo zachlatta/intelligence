@@ -137,7 +137,7 @@ func (s *Service) hire(ctx context.Context, tx pgx.Tx, sess Session, h Hire, act
 	cmd, err := enqueue(ctx, tx, sess.Host, hostclient.CreateAgentKind, hostclient.CreateAgentArgs{
 		WorkspaceID: sess.WorkspaceID, Provider: c.Provider, Model: c.Model, Thinking: c.Thinking, Mode: c.Mode(),
 		Title: fmt.Sprintf("Grimm/%s (%s)", name, role), Prompt: workerPrompt(sess, name, role, task, peers, texts),
-		Labels: map[string]string{SessionLabel: sess.ID, RoleLabel: role, NameLabel: name, LiveLabel: "1"},
+		Labels: map[string]string{SessionLabel: sess.ID, RoleLabel: role, NameLabel: name, LiveLabel: hostclient.LiveSteady},
 	}, commandTTL, s.now())
 	if err != nil {
 		return Worker{}, Candidate{}, err
@@ -405,8 +405,13 @@ func (s *Service) addDirective(ctx context.Context, tx pgx.Tx, sess Session, by,
 }
 
 func (s *Service) removeDirective(ctx context.Context, tx pgx.Tx, sess Session, by string, seq int) (string, error) {
+	var addedBy string
+	err := tx.QueryRow(ctx, `SELECT added_by FROM grimm_directives WHERE session_id = $1 AND seq = $2 AND removed_at IS NULL`, sess.ID, seq).Scan(&addedBy)
+	if err == nil && addedBy == seedAuthor && by != "human" {
+		return "", refuse(403, "directive #%d is the session's seed rule: only the human can remove it, from the page", seq)
+	}
 	var text string
-	err := tx.QueryRow(ctx, `UPDATE grimm_directives SET removed_at = $3 WHERE session_id = $1 AND seq = $2 AND removed_at IS NULL RETURNING text`,
+	err = tx.QueryRow(ctx, `UPDATE grimm_directives SET removed_at = $3 WHERE session_id = $1 AND seq = $2 AND removed_at IS NULL RETURNING text`,
 		sess.ID, seq, s.now()).Scan(&text)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", refuse(404, "no standing directive #%d", seq)

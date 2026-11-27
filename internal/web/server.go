@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -91,10 +92,12 @@ type app struct {
 	changes          *fleet.Changes
 	wf               *workflow.Engine // as the owner: workflows and their runs
 	grimm            *grimm.Service   // as the owner: Grimm sessions
-	mail             *email.Service   // reads connected mailboxes; nil when email triggers are off
-	push             *webpush.Store   // nil when VAPID is unset
-	sseKeepalive     time.Duration    // override for tests; default defaultSSEInterval
-	sseTerminalGrace time.Duration    // override for tests; default defaultSSETerminalGrace
+	grimmWatchMu     sync.Mutex
+	grimmWatching    map[string]int // open worker live logs, by session/worker: the first and last flip its pace
+	mail             *email.Service // reads connected mailboxes; nil when email triggers are off
+	push             *webpush.Store // nil when VAPID is unset
+	sseKeepalive     time.Duration  // override for tests; default defaultSSEInterval
+	sseTerminalGrace time.Duration  // override for tests; default defaultSSETerminalGrace
 }
 
 //go:embed index.html

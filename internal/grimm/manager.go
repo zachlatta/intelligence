@@ -149,7 +149,7 @@ func (s *Service) startManager(ctx context.Context, tx pgx.Tx, sess Session, fir
 	cmd, err := enqueue(ctx, tx, sess.Host, hostclient.CreateAgentKind, hostclient.CreateAgentArgs{
 		WorkspaceID: sess.WorkspaceID, Provider: c.Provider, Model: c.Model, Thinking: c.Thinking, Mode: c.Mode(),
 		Title: "Grimm manager", Prompt: managerPrompt(sess, texts, first),
-		Labels: map[string]string{SessionLabel: sess.ID, RoleLabel: "manager", NameLabel: ManagerName, LiveLabel: "1"},
+		Labels: map[string]string{SessionLabel: sess.ID, RoleLabel: "manager", NameLabel: ManagerName, LiveLabel: hostclient.LiveFast},
 	}, commandTTL, s.now())
 	if err != nil {
 		return "", err

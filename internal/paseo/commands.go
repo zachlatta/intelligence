@@ -195,6 +195,11 @@ func (c *Client) RenameAgent(ctx context.Context, id, title string) error {
 	return c.command(ctx, map[string]any{"type": "update_agent_request", "agentId": id, "name": title}, nil)
 }
 
+// SetAgentLabels sets labels on an agent; the daemon merges them into its others.
+func (c *Client) SetAgentLabels(ctx context.Context, id string, labels map[string]string) error {
+	return c.command(ctx, map[string]any{"type": "update_agent_request", "agentId": id, "labels": labels}, nil)
+}
+
 // How a message treats a turn the agent is running: Steer joins it (the daemon falls back to
 // interrupting when the provider cannot steer), Interrupt stops it and starts a new one. Either
 // starts a turn on an agent that is not running.

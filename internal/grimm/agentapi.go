@@ -71,6 +71,9 @@ func (s *Service) AgentCall(ctx context.Context, changes *fleet.Changes, account
 		if err != nil {
 			return err
 		}
+		if c.Verb == "directive" && len(c.Args) > 0 && c.Args[0] != "list" && who.Role != "manager" {
+			return refuse(403, "only the Grimm manager changes directives; ask it on the bus (--to grimm)")
+		}
 		if managerVerbs[c.Verb] && who.Role != "manager" {
 			return refuse(403, "only the Grimm manager can %s; post to grimm on the bus instead", c.Verb)
 		}

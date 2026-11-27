@@ -161,10 +161,13 @@ type Event struct {
 // Client is one connection to a daemon. Requests may run concurrently. Pushed updates arrive on
 // Events; when the connection ends, Done closes and Err says why.
 type Client struct {
-	conn   *websocket.Conn
-	info   ServerInfo
-	events chan Event
-	nextID atomic.Uint64
+	conn *websocket.Conn
+	// streams has the id of each agent whose subscribed timeline the daemon pushed something for
+	// (an agent_stream event); a full channel drops it, as its reader only needs "look again"
+	streams chan string
+	info    ServerInfo
+	events  chan Event
+	nextID  atomic.Uint64
 
 	mu      sync.Mutex
 	pending map[string]chan reply
@@ -195,7 +198,7 @@ func Dial(ctx context.Context, t Target) (*Client, error) {
 		conn.CloseNow()
 		return nil, fmt.Errorf("hello: %w", err)
 	}
-	c := &Client{conn: conn, events: make(chan Event, 256), pending: map[string]chan reply{}, done: make(chan struct{})}
+	c := &Client{conn: conn, events: make(chan Event, 256), streams: make(chan string, 256), pending: map[string]chan reply{}, done: make(chan struct{})}
 	for {
 		_, b, err := conn.Read(ctx)
 		if err != nil {
@@ -237,6 +240,31 @@ func (c *Client) Info() ServerInfo { return c.info }
 // Events delivers pushed updates for the agents and workspaces this client fetched. It is buffered;
 // a reader that falls far behind loses the connection rather than blocking the daemon.
 func (c *Client) Events() <-chan Event { return c.events }
+
+// TimelineUpdates has the id of an agent each time the daemon pushes a change to its timeline
+// (agent_stream), for the agents SubscribeTimelines named. It says "read it again", no more.
+func (c *Client) TimelineUpdates() <-chan string { return c.streams }
+
+// SubscribeTimelines asks the daemon to push agent_stream events for agentIDs' timelines, and
+// returns the subscription (ReleaseSubscription ends it). With the client's selective timeline
+// capability, the daemon pushes timelines only for agents named this way.
+func (c *Client) SubscribeTimelines(ctx context.Context, agentIDs []string) (string, error) {
+	ids := append([]string{}, agentIDs...)
+	var out struct {
+		SubscriptionID string `json:"subscriptionId"`
+	}
+	err := c.request(ctx, map[string]any{"type": "agent.timeline.set_subscription.request", "agentIds": ids}, &out)
+	if err == nil && out.SubscriptionID == "" {
+		err = errors.New("agent.timeline.set_subscription: no subscription id")
+	}
+	return out.SubscriptionID, err
+}
+
+// ReleaseSubscription ends a subscription.
+func (c *Client) ReleaseSubscription(ctx context.Context, id string) error {
+	var out json.RawMessage
+	return c.request(ctx, map[string]any{"type": "subscription.release.request", "subscriptionId": id}, &out)
+}
 
 // Done closes when the connection ends.
 func (c *Client) Done() <-chan struct{} { return c.done }
@@ -420,6 +448,16 @@ func (c *Client) read() {
 					c.fail(errors.New("update reader fell behind"))
 					c.conn.CloseNow()
 					return
+				}
+			}
+		case "agent_stream":
+			var p struct {
+				AgentID string `json:"agentId"`
+			}
+			if json.Unmarshal(m.Message.Payload, &p) == nil && p.AgentID != "" {
+				select {
+				case c.streams <- p.AgentID:
+				default: // the reader is behind: it rereads what it was told of anyway
 				}
 			}
 		case "rpc_error":

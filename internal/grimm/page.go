@@ -2,8 +2,11 @@ package grimm
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
 // The page's writes: each runs in its own transaction under the session's lock, as the human.
@@ -84,6 +87,27 @@ func (s *Service) AddDirective(ctx context.Context, account int64, id, text stri
 func (s *Service) RemoveDirective(ctx context.Context, account int64, id string, seq int) error {
 	return s.inSession(ctx, account, id, func(tx pgx.Tx, sess Session) error {
 		_, err := s.removeDirective(ctx, tx, sess, "human", seq)
+		return err
+	})
+}
+
+// WatchWorker asks the host to copy a worker's transcript at once (live true: someone has its
+// live log open) or at the steady pace again. It does nothing for a worker with no agent yet.
+func (s *Service) WatchWorker(ctx context.Context, account int64, id, name string, live bool) error {
+	return pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
+		sess, err := session(ctx, tx, account, id)
+		if err != nil {
+			return err
+		}
+		w, err := worker(ctx, tx, sess.ID, name)
+		if err != nil || w.AgentID == "" || w.Status == "archived" || w.Status == "failed" {
+			return err
+		}
+		mode := hostclient.LiveSteady
+		if live {
+			mode = hostclient.LiveFast
+		}
+		_, err = enqueue(ctx, tx, w.Host, hostclient.WatchAgentKind, hostclient.AgentArgs{AgentID: w.AgentID, Live: mode}, time.Minute, s.now())
 		return err
 	})
 }

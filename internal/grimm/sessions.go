@@ -16,6 +16,9 @@ import (
 // SeedDirective is every new session's first standing rule.
 const SeedDirective = "Never push, deploy, publish, open pull requests or send external messages."
 
+// seedAuthor is who the seed directive is added by; only the human can remove such a rule.
+const seedAuthor = "intelligence"
+
 // NewSession is what a session is made with.
 type NewSession struct {
 	Host       string `json:"host"`
@@ -83,8 +86,8 @@ func (s *Service) CreateSession(ctx context.Context, account int64, n NewSession
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`, id, account, n.Host, n.Repo, sess.Title, sess.Branch, n.Base, n.MaxWorkers, c.ID, s.now()); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO grimm_directives (session_id, account_id, seq, text, added_by) VALUES ($1, $2, 1, $3, 'intelligence')`,
-			id, account, SeedDirective); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO grimm_directives (session_id, account_id, seq, text, added_by) VALUES ($1, $2, 1, $3, $4)`,
+			id, account, SeedDirective, seedAuthor); err != nil {
 			return err
 		}
 		if err := event(ctx, tx, sess, "human", "session", "info", "Started a session on "+n.Host+" in "+n.Repo+" (branch "+sess.Branch+")", n); err != nil {

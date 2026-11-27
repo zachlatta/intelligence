@@ -107,14 +107,21 @@ type Agent struct {
 	CreatedAt         time.Time `json:"createdAt,omitzero"`
 	UpdatedAt         time.Time `json:"updatedAt,omitzero"`
 	LastUserMessageAt time.Time `json:"lastUserMessageAt,omitzero"`
-	// Live: the agent is labelled LiveLabel (a Grimm agent), so its transcript is copied every
-	// FastEvery while it runs. Not reported: the server knows its own agents.
-	Live bool `json:"-"`
+	// Live is the agent's LiveLabel ("" for none): the daemon pushes its timeline, and the host
+	// copies it as each push arrives. Not reported: the server knows its own agents.
+	Live string `json:"-"`
 }
 
-// LiveLabel marks an agent whose transcript someone is watching live (Grimm's manager and
-// workers): while it runs, the host copies its transcript every Client.FastEvery.
-const LiveLabel = "intelligence.live"
+// LiveLabel marks an agent whose transcript someone watches as it happens (Grimm's agents). The
+// host subscribes to the daemon's pushes of its timeline (agent_stream) and copies the transcript
+// on each: LiveFast at most every FastGap, any other value every SteadyGap, and the steady ones
+// together at most SteadyBudget times a second, so the host's work is bounded whatever the
+// number of agents.
+const (
+	LiveLabel  = "intelligence.live"
+	LiveFast   = "fast"
+	LiveSteady = "steady"
+)
 
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
