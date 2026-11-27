@@ -182,6 +182,23 @@ func (e *Engine) Decide(ctx context.Context, account int64, id, action string) e
 	if !uuidRe.MatchString(id) {
 		return ErrNotFound
 	}
+	// Approving a run proposal starts the run exactly as a direct start does, so a workflow whose
+	// project map uses treeSource needs its outline verified against Git first. That waits on the
+	// host, so it happens here, before the transaction takes any locks. Its refusal is held until
+	// the transaction has ruled out an expired or stale proposal, which keep their own outcome.
+	var verifyErr error
+	if action == "approve" {
+		var operation, input string
+		var wid *string
+		err := e.p.QueryRow(ctx, "SELECT operation,workflow_id::text,input FROM workflow_proposals WHERE id=$1 AND account_id=$2 AND status='pending'",
+			id, account).Scan(&operation, &wid, &input)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if err == nil && operation == "run" && wid != nil {
+			ctx, verifyErr = e.prepareVerifiedTree(ctx, account, *wid, input, "")
+		}
+	}
 	ctx, flushPushes := e.CollectPushes(ctx)
 	var refusal error
 	err := pgx.BeginFunc(ctx, e.p, func(tx pgx.Tx) error {
@@ -257,6 +274,9 @@ func (e *Engine) Decide(ctx context.Context, account int64, id, action string) e
 			return set("stale")
 		}
 		if operation == "run" {
+			if verifyErr != nil {
+				return verifyErr
+			}
 			run, err := e.StartRunTx(ctx, tx, account, *wid, input, time.Time{})
 			if err != nil {
 				return err

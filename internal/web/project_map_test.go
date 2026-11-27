@@ -20,7 +20,7 @@ func TestProjectMapRoutingEnforcedBeforeRunCreation(t *testing.T) {
 	h := newServer(t, d, d.Owner, "test")
 	reg := fleet.New(d.Owner)
 	ctx := context.Background()
-	_ = keyOf(t, h, "host-1")
+	hostKey := keyOf(t, h, "host-1")
 
 	rep := wfReport()
 	wsOps := rep.Paseo.Workspaces[0]
@@ -248,7 +248,49 @@ func TestProjectMapRoutingEnforcedBeforeRunCreation(t *testing.T) {
 		}
 	}
 
-	// 5. Proposal diff captures Project routes and Project tree source changes cleanly.
+	// 5. Approving a run proposal verifies the outline against Git exactly like a direct start:
+	// a Git-verified contract_tree starts the routed run; an off-main commit is refused (400),
+	// creates no run and leaves the proposal pending.
+	propose := func(input string) string {
+		body, _ := json.Marshal(map[string]string{"operation": "run", "workflowId": wfID, "input": input, "summary": "Contract fix"})
+		rec := call(t, h, http.MethodPost, "/api/workflow-proposals", string(body),
+			map[string]string{"Content-Type": "application/json", "Authorization": "Bearer " + hostKey})
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("propose mapped run = %d %s, want 201", rec.Code, rec.Body)
+		}
+		var p struct{ ID string }
+		if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+			t.Fatal(err)
+		}
+		return p.ID
+	}
+	offMainProp := propose("---\ncontract_ids: [" + cAlphaLeaf + "]\noutline_commit_sha: " + commitOffMain + "\ncontract_tree:\n  - id: " + cRoot + "\n    children:\n      - id: " + cAlpha + "\n        children:\n          - id: " + cAlphaLeaf + "\n---\nFix alpha leaf.\n")
+	if rec := call(t, h, http.MethodPost, "/api/workflow-proposals/"+offMainProp+"/approve", `{}`, map[string]string{"Content-Type": "application/json", "Sec-Fetch-Site": "same-origin"}); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "not on origin/main") {
+		t.Fatalf("approve off-main proposal = %d %s, want 400 containing %q", rec.Code, rec.Body, "not on origin/main")
+	}
+	if got := countRuns(); got != beforeRefusals {
+		t.Fatalf("refused proposal approval created a run (count=%d, want %d)", got, beforeRefusals)
+	}
+	var offMainStatus string
+	if err := d.Owner.QueryRow(ctx, `SELECT status FROM workflow_proposals WHERE id = $1`, offMainProp).Scan(&offMainStatus); err != nil {
+		t.Fatal(err)
+	}
+	if offMainStatus != "pending" {
+		t.Fatalf("refused proposal status = %q, want pending", offMainStatus)
+	}
+	alphaProp := propose("---\ncontract_ids: [" + cAlphaLeaf + "]\noutline_commit_sha: " + commitMain + "\ncontract_tree:\n  - id: " + cRoot + "\n    children:\n      - id: " + cAlpha + "\n        children:\n          - id: " + cAlphaLeaf + "\n---\nFix alpha leaf.\n")
+	if rec := call(t, h, http.MethodPost, "/api/workflow-proposals/"+alphaProp+"/approve", `{}`, map[string]string{"Content-Type": "application/json", "Sec-Fetch-Site": "same-origin"}); rec.Code != http.StatusOK {
+		t.Fatalf("approve Git-verified mapped run proposal = %d %s, want 200", rec.Code, rec.Body)
+	}
+	var propStatus, propRunRepo string
+	if err := d.Owner.QueryRow(ctx, `SELECT p.status, r.repo FROM workflow_proposals p JOIN workflow_runs r ON r.id = p.started_run_id WHERE p.id = $1`, alphaProp).Scan(&propStatus, &propRunRepo); err != nil {
+		t.Fatal(err)
+	}
+	if propStatus != "applied" || propRunRepo != "/w/alpha" {
+		t.Fatalf("approved proposal status=%q run repo=%q, want applied + /w/alpha", propStatus, propRunRepo)
+	}
+
+	// 6. Proposal diff captures Project routes and Project tree source changes cleanly.
 	prev := &workflow.WorkflowState{Name: "Fix", Definition: apiWorkflowDef("host-1")}
 	next := &workflow.WorkflowState{Name: "Fix", Definition: def}
 	changes := proposalChanges(prev, next)
