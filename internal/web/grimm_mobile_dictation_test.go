@@ -113,16 +113,19 @@ func TestGrimmMobileLayoutAndKeyboardHandling(t *testing.T) {
 		`.g-bar-toggle`,
 		`.g-bar.is-expanded`,
 		`.grimm-body.g-kbd`,
-		`max-height: 540px`,
 	} {
 		if !strings.Contains(css, want) {
 			t.Errorf("grimm.css misses mobile rule %q", want)
 		}
 	}
+	if strings.Contains(css, "max-height: 540px") {
+		t.Error("grimm.css must not unconditionally hide nav/tabs via max-height media query when keyboard is closed")
+	}
 	for _, want := range []string{
 		`visualViewport`,
 		`--g-vh`,
 		`g-kbd`,
+		`focused &&`,
 		`g-bar-toggle`,
 	} {
 		if !strings.Contains(js, want) {

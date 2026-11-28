@@ -1066,6 +1066,7 @@ function bindSession() {
   // collapse top chrome while typing, and keep the thread pinned to the latest message
   const mobileMQ = matchMedia("(max-width: 780px)");
   let baselineHeight = window.innerHeight;
+  let lastWidth = window.innerWidth;
   function syncMobileViewport() {
     if (!mobileMQ.matches) {
       document.body.style?.removeProperty?.("--g-vh");
@@ -1075,10 +1076,15 @@ function bindSession() {
     }
     const vv = window.visualViewport;
     const h = vv ? Math.round(vv.height) : window.innerHeight;
-    if (h > baselineHeight) baselineHeight = h;
+    if (window.innerWidth !== lastWidth) {
+      lastWidth = window.innerWidth;
+      baselineHeight = h;
+    } else if (h > baselineHeight) {
+      baselineHeight = h;
+    }
     document.body.style?.setProperty?.("--g-vh", h + "px");
     const focused = document.activeElement === input;
-    const kbdOpen = (baselineHeight - h > 120) || (window.innerHeight - h > 120) || (focused && h < 540);
+    const kbdOpen = focused && ((baselineHeight - h > 120) || (window.innerHeight - h > 120) || h <= 500);
     const wasOpen = !!document.body.classList?.contains?.("g-kbd");
     document.body.classList?.toggle?.("g-kbd", kbdOpen);
     if (kbdOpen) {
