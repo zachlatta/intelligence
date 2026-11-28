@@ -1,5 +1,13 @@
 [
   {
+    "id": "install-host-without-checkout",
+    "released": "2026-11-28",
+    "title": "Install a host without cloning the repository",
+    "summary": "Account → Add a host now gives a one-line curl -fsSL <server>/install-host | bash command to install the Intelligence host client on any Linux or macOS machine without cloning the repository or installing Go. The server serves deploy/install-host with HOST_SERVER pre-filled; the script downloads the matching prebuilt binary from /api/host/binary/{os}/{arch}, verifies its SHA-256 checksum, and installs the systemd or launchd service. Running deploy/install-host from a checkout still works too.",
+    "media": "install-host-without-checkout.png",
+    "mediaAlt": "The Account page in a local demo showing the Add a host card with the one-line command curl -fsSL https://intelligence.example/install-host | bash, the optional checkout command underneath, and the enrollment code input."
+  },
+  {
     "id": "workflow-model-variants",
     "released": "2026-11-27",
     "title": "Model variants of a workflow",
