@@ -40,7 +40,8 @@ var fixtures sync.Map // database name -> *fixture
 const testPassword = "a test password"
 
 // testPasswordHash caches one real argon2id hash of testPassword so parallel tests do not
-// each allocate 19 MiB (5x under -race) just to create the default "someone" fixture account.
+// each allocate 19 MiB (plus race-detector shadow memory) just to create the default "someone"
+// fixture account. createFixtureAccount mirrors accounts.Store.Create's insert with that hash.
 var (
 	testPasswordHashOnce sync.Once
 	testPasswordHash     string
