@@ -339,7 +339,7 @@ const listeners = {};
 const elListeners = {};
 const elStub = (id) => ({
   id, dataset: { session: "sess-1", status: "active", capLimit: "100", olderSql: "" },
-  style: {}, classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+  style: { setProperty() {}, removeProperty() {} }, classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
   setAttribute() {}, addEventListener(ev, fn) { (elListeners[id + ":" + ev] ||= []).push(fn); },
   focus() {}, select() {},
   querySelector() { return null; }, querySelectorAll() { return []; },
