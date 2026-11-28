@@ -309,16 +309,127 @@ if (itemsBox.children.some((n) => String(n.dataset.id || "").startsWith("pending
   throw new Error("optimistic pending bubble was not reconciled on SSE arrival");
 }
 
-// 3. visibilitychange reconnects with lastEventId when EventSource closed.
+// 3. M3: Sending a follow-up while already working -> going idle clears pill, typing, and Stop.
+for (const fn of listeners.state || []) {
+  fn({ lastEventId: "m5:t1.2:b0:e0", data: JSON.stringify({
+    session: { id: "sess-1", host: "host-1", repo: "/w/app", title: "app", branch: "grimm/1", max_workers: 20, manager_state: "working", manager_provider: "claude", manager_model: "claude-opus-5-5" },
+    workers: [], directives: [], quota: [],
+  }) });
+}
+byId["g-input"].value = "Follow-up while working";
+byId["g-composer"].dispatch("submit", { preventDefault() {} });
+for (const fn of listeners.thread || []) {
+  fn({ lastEventId: "m6:t1.2:b0:e0", data: JSON.stringify({
+    reset: false,
+    items: [{ item_id: "m6", at: "2026-11-28T07:00:03Z", kind: "human", body: "Follow-up while working", delivered_at: "2026-11-28T07:00:03Z" }],
+  }) });
+}
+for (const fn of listeners.state || []) {
+  fn({ lastEventId: "m6:t1.2:b0:e0", data: JSON.stringify({
+    session: { id: "sess-1", host: "host-1", repo: "/w/app", title: "app", branch: "grimm/1", max_workers: 20, manager_state: "idle", manager_provider: "claude", manager_model: "claude-opus-5-5" },
+    workers: [], directives: [], quota: [],
+  }) });
+}
+if (byId["g-pill"].dataset.state !== "idle") throw new Error("M3: pill stuck in " + byId["g-pill"].dataset.state + " after going idle");
+if (!byId["g-typing"].hidden) throw new Error("M3: typing indicator stayed visible after going idle");
+if (!byId["g-stop"].hidden) throw new Error("M3: Stop button stayed visible after going idle");
+
+// 4. M1: Incremental SSE delta appends to existing assistant_message in place.
+for (const fn of listeners.thread || []) {
+  fn({ lastEventId: "m6:t1.2:b0:e0", data: JSON.stringify({
+    reset: false, items: [],
+    deltas: [{ item_id: "t1.2", kind: "assistant_message", append: " More text." }],
+  }) });
+}
+
+// 5. visibilitychange reconnects with lastEventId when EventSource closed.
 doc.visibilityState = "hidden";
 for (const fn of docListeners.visibilitychange || []) fn();
 doc.visibilityState = "visible";
 for (const fn of docListeners.visibilitychange || []) fn();
-// Force a closed stream check by closing isn't needed if we just check esURLs length >= 1.
 if (esURLs.length < 1) throw new Error("EventSource was not opened");
 `
 	cmd := exec.Command("node", "-e", script)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("grimm.js streaming behavior check failed: %v\n%s", err, out)
+	}
+}
+
+func TestGrimmMobileCSSKeepsManagerModelVisible(t *testing.T) {
+	t.Parallel()
+	css := string(grimmCSS)
+	idx := strings.Index(css, "@media (max-width: 780px)")
+	if idx < 0 {
+		t.Fatal("missing mobile media query in grimm.css")
+	}
+	mobile := css[idx:]
+	if strings.Contains(mobile, ".g-model { display: none") || strings.Contains(mobile, ".g-model,") && strings.Contains(mobile, "display: none") {
+		t.Fatalf("M4: .g-model must remain visible on mobile (<=780px):\n%s", mobile)
+	}
+}
+
+func TestGrimmSSEEmitsIncrementalDeltaOnGrowingReply(t *testing.T) {
+	t.Parallel()
+	h, _ := dbServer(t)
+	stream := grimmRig(t, h)
+	rec := call(t, h, "POST", "/api/grimm/sessions", `{"host":"host-1","repo":"/w/app"}`, sameOriginFetch)
+	if rec.Code != 201 {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	var created struct{ ID string }
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+	succeed(t, stream, stream.command(), `{"workspaceId":"w-app"}`)
+	succeed(t, stream, stream.command(), `{"agentId":"mgr-1"}`)
+	if rec := call(t, h, "POST", "/api/grimm/sessions/"+created.ID+"/messages", `{"text":"Hi"}`, sameOriginFetch); rec.Code != 202 {
+		t.Fatalf("post: %d %s", rec.Code, rec.Body)
+	}
+	rep := wfReport()
+	rep.Paseo.Agents = append(rep.Paseo.Agents, hostclient.Agent{ID: "mgr-1", WorkspaceID: "w-app", Provider: "claude", Status: "running", CreatedAt: time.Now()})
+	if ack := stream.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	events, cancel := openSSE(t, h, "/api/grimm/sessions/"+created.ID+"/stream")
+	defer cancel()
+	now := time.Now()
+	if ack := stream.call(hostclient.Frame{Type: hostclient.TranscriptFrame, Transcript: &hostclient.TranscriptBatch{
+		Host: "host-1", AgentID: "mgr-1", Epoch: "e1", Replace: true,
+		Entries: []hostclient.TranscriptEntry{
+			{SeqStart: 1, SeqEnd: 1, At: now, Item: json.RawMessage(`{"type":"assistant_message","text":"Hello"}`)},
+		},
+	}}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case e := <-events:
+			if e[0] == "thread" && strings.Contains(e[1], "Hello") {
+				goto sentFirst
+			}
+		case <-deadline:
+			t.Fatal("never saw initial Hello")
+		}
+	}
+sentFirst:
+	if ack := stream.call(hostclient.Frame{Type: hostclient.TranscriptFrame, Transcript: &hostclient.TranscriptBatch{
+		Host: "host-1", AgentID: "mgr-1", Epoch: "e1",
+		Entries: []hostclient.TranscriptEntry{
+			{SeqStart: 1, SeqEnd: 2, At: now, Item: json.RawMessage(`{"type":"assistant_message","text":"Hello world"}`)},
+		},
+	}}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	for {
+		select {
+		case e := <-events:
+			if e[0] == "thread" && strings.Contains(e[1], `"deltas"`) && strings.Contains(e[1], `"append":" world"`) {
+				if strings.Contains(e[1], `"Hello world"`) {
+					t.Fatalf("M1: expected incremental delta suffix only, got full body: %s", e[1])
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("M1: never saw incremental delta event for growing reply")
+		}
 	}
 }

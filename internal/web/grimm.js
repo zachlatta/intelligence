@@ -439,6 +439,26 @@ function markSupersededReasoning() {
     }
   }
 }
+function applyDeltas(deltas) {
+  const stick = nearBottom() && !loadingOlder;
+  const last = lastAssistantID();
+  for (const dl of deltas) {
+    const it = S.items.get(dl.item_id);
+    const node = S.nodes.get(dl.item_id);
+    if (!it || !node || !dl.append) continue;
+    it.body = (it.body || "") + dl.append;
+    if (it.kind === "assistant_message") {
+      updateAssistantNode(node, it, dl.item_id === last);
+    } else if (it.kind === "reasoning") {
+      const full = String(it.body || "").trim();
+      const firstLine = full.split("\n")[0].slice(0, 140) || "…";
+      const lbl = $(".g-think-label", node); if (lbl) lbl.textContent = "Thinking: " + firstLine;
+      const bdy = $(".g-think-body", node); if (bdy) bdy.textContent = full;
+    }
+  }
+  markSupersededReasoning();
+  if (stick) scrollBottom(true);
+}
 function upsertItems(items, reset) {
   items = items || [];
   const stick = reset || (nearBottom() && !loadingOlder);
@@ -839,8 +859,10 @@ function connect(resumeId) {
     const was = S.session.manager_state;
     const before = knownNames().join(",");
     S.session = d.session; S.workers = d.workers; S.directives = d.directives; S.quota = d.quota;
-    if (S.optimisticWorking && (S.session.manager_state === "working" || S.session.manager_state === "starting")) {
-      S.optimisticWorking = false;
+    if (S.optimisticWorking) {
+      if (S.session.manager_state === "working" || S.session.manager_state === "starting" || (!sending && S.optimistic.size === 0)) {
+        S.optimisticWorking = false;
+      }
     }
     if (knownNames().join(",") !== before) {
       for (const it of S.items.values()) {
@@ -859,8 +881,13 @@ function connect(resumeId) {
   es.addEventListener("thread", (e) => {
     track(e);
     const d = JSON.parse(e.data);
-    upsertItems(d.items || [], d.reset);
-    if (d.reset) { S.older = !!d.more; $("#g-older").hidden = !S.older; }
+    if (d.items && d.items.length || d.reset) {
+      upsertItems(d.items || [], d.reset);
+      if (d.reset) { S.older = !!d.more; $("#g-older").hidden = !S.older; }
+    }
+    if (d.deltas && d.deltas.length) {
+      applyDeltas(d.deltas);
+    }
   });
   es.addEventListener("bus", (e) => { track(e); addBus(JSON.parse(e.data).items || []); });
   es.addEventListener("activity", (e) => { track(e); addFeed(JSON.parse(e.data).items || []); });
@@ -1034,6 +1061,15 @@ function dropOptimistic(cid) {
   if (oldNode) { oldNode.remove(); S.nodes.delete(cid); }
   $("#g-empty").hidden = S.items.size > 0;
 }
+function addOptimistic(raw) {
+  const cid = `pending-${++nextClientId}`;
+  const item = { item_id: cid, at: new Date().toISOString(), kind: "human", sender: "human", body: raw, data: { clientId: cid }, delivered_at: null };
+  S.optimistic.set(cid, item);
+  if (S.session.manager_state !== "working" && S.session.manager_state !== "starting") S.optimisticWorking = true;
+  upsertItems([item], false);
+  renderSession();
+  return cid;
+}
 async function send() {
   const input = $("#g-input");
   const raw = input.value.trim();
@@ -1041,16 +1077,8 @@ async function send() {
   const refocus = document.activeElement === input || document.activeElement === $("#g-send");
   const sentDrafts = drafts.slice();
   const isLocalCmd = !sentDrafts.length && (raw.startsWith("/") || raw.startsWith("@"));
-  let clientId = "";
   input.value = ""; saveTextDraft(""); autosize();
-  if (!isLocalCmd) {
-    clientId = `pending-${++nextClientId}`;
-    const item = { item_id: clientId, at: new Date().toISOString(), kind: "human", sender: "human", body: raw, data: { clientId }, delivered_at: null };
-    S.optimistic.set(clientId, item);
-    S.optimisticWorking = true;
-    upsertItems([item], false);
-    renderSession();
-  }
+  const clientId = isLocalCmd ? "" : addOptimistic(raw);
   if (sentDrafts.length) { drafts.length = 0; renderDrafts(); }
   setSending(true);
   try {

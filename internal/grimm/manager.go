@@ -158,9 +158,9 @@ func (s *Service) startManager(ctx context.Context, tx pgx.Tx, sess Session, fir
 	if err != nil {
 		return "", err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO grimm_managers (session_id, account_id, epoch, host, command_id, provider, model, thinking, login, long_window, score, status, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'starting', $12)`, sess.ID, sess.Account, epoch, sess.Host, cmd.ID,
-		c.Provider, c.Model, c.Thinking, c.Login, c.LongWindow, c.Score, s.now()); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO grimm_managers (session_id, account_id, epoch, host, command_id, provider, model, thinking, login, long_window, score, status, prestarted, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'starting', $12, $13)`, sess.ID, sess.Account, epoch, sess.Host, cmd.ID,
+		c.Provider, c.Model, c.Thinking, c.Login, c.LongWindow, c.Score, len(first) == 0, s.now()); err != nil {
 		return "", err
 	}
 	msg := "Starting Grimm on " + c.Spec()

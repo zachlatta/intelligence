@@ -225,8 +225,8 @@ func TestASessionMakesAWorktreeAndStartsOpusOnTheFirstMessage(t *testing.T) {
 	if !strings.Contains(prompt, "Build the CSV tool") || !strings.Contains(prompt, "at most 20 live workers") || !strings.Contains(prompt, "intelligence grimm ctl hire") {
 		t.Errorf("manager prompt lacks the message, the cap or the CLI:\n%s", prompt)
 	}
-	if got := r.one(`SELECT manager_state FROM grimm_session_status`); got != "working" {
-		t.Errorf("state = %v, want working", got)
+	if got := r.one(`SELECT manager_state FROM grimm_session_status`); got != "starting" {
+		t.Errorf("state = %v, want starting", got)
 	}
 	r.succeed(mgr, `{"agentId":"mgr"}`)
 	r.reconcile(id)

@@ -342,7 +342,7 @@
   .g-bus-panel { display: none; }
   .g-thread { padding: .7rem .6rem .4rem; }
   .g-tool, .g-command, .g-think { margin-left: 0; }
-  .g-model { display: none; }
+  .g-model { font-size: 11px; padding: .12rem .45rem; max-width: 9.5rem; }
   .g-notice { margin: 0; }
   .g-msg-body { max-width: 92%; }
   .g-composer { padding: .45rem .5rem calc(.45rem + env(safe-area-inset-bottom)); }

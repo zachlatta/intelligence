@@ -71,9 +71,9 @@ func TestManagerPrestartsOnWorktreeReadyAndShowsWorkingImmediately(t *testing.T)
 	if mgr.Args["provider"] != "claude" || mgr.Args["model"] != "claude-opus-5-5" {
 		t.Fatalf("pre-started manager = %v/%v, want claude/claude-opus-5-5", mgr.Args["provider"], mgr.Args["model"])
 	}
-	// While create_agent is queued/sent/running, manager_state is 'working'.
-	if got := r.one(`SELECT manager_state FROM grimm_session_status WHERE id = $1`, id); got != "working" {
-		t.Fatalf("manager_state during create_agent = %v, want working", got)
+	// M2: While create_agent is queued/sent/running, manager_state is 'starting' ("Warming up Grimm…"), not 'working'.
+	if got := r.one(`SELECT manager_state FROM grimm_session_status WHERE id = $1`, id); got != "starting" {
+		t.Fatalf("manager_state during create_agent = %v, want starting", got)
 	}
 	// Pre-start should not add a noisy thread bubble.
 	if got := r.one(`SELECT count(*) FROM grimm_messages WHERE session_id = $1 AND channel = 'thread'`, id); got != int64(0) {
@@ -82,6 +82,27 @@ func TestManagerPrestartsOnWorktreeReadyAndShowsWorkingImmediately(t *testing.T)
 
 	r.succeed(mgr, `{"agentId":"mgr-1"}`)
 	r.reconcile(id)
+	// M2: While the pre-started manager is running its warm-up turn before any human message,
+	// manager_state stays 'starting' and warm-up transcript entries are hidden from grimm_thread.
+	r.setAgent("mgr-1", "running")
+	if got := r.one(`SELECT manager_state FROM grimm_session_status WHERE id = $1`, id); got != "starting" {
+		t.Fatalf("manager_state during pre-start warm-up = %v, want starting", got)
+	}
+	now := time.Now().UTC()
+	if err := r.reg.StoreTranscript(ctx, hostclient.TranscriptBatch{
+		Host: "host-1", AgentID: "mgr-1", Epoch: "e1", Replace: true,
+		Entries: []hostclient.TranscriptEntry{
+			{SeqStart: 1, SeqEnd: 1, At: now, Item: json.RawMessage(`{"type":"user_message","text":"warm-up prompt"}`)},
+			{SeqStart: 2, SeqEnd: 2, At: now.Add(time.Second), Item: json.RawMessage(`{"type":"tool_call","name":"Bash","status":"completed","detail":{"type":"shell","command":"pdw call skills__skill_read"}}`)},
+			{SeqStart: 3, SeqEnd: 3, At: now.Add(2 * time.Second), Item: json.RawMessage(`{"type":"assistant_message","text":"Ready."}`)},
+		},
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.one(`SELECT count(*) FROM grimm_thread WHERE session_id = $1`, id); got != int64(0) {
+		t.Fatalf("warm-up entries leaked into grimm_thread: %v rows, want 0", got)
+	}
+
 	r.setAgent("mgr-1", "idle")
 	if got := r.one(`SELECT manager_state FROM grimm_session_status WHERE id = $1`, id); got != "idle" {
 		t.Fatalf("manager_state when idle = %v, want idle", got)
@@ -99,6 +120,24 @@ func TestManagerPrestartsOnWorktreeReadyAndShowsWorkingImmediately(t *testing.T)
 	r.succeed(sendCmd, `{}`)
 	if got := r.one(`SELECT manager_state FROM grimm_session_status WHERE id = $1`, id); got != "idle" {
 		t.Fatalf("manager_state after send_message succeeded (still idle agent) = %v, want idle", got)
+	}
+
+	// Once the manager replies to the human's turn (2nd user_message onwards), its reply shows
+	// in grimm_thread while the earlier warm-up entries stay hidden.
+	if err := r.reg.StoreTranscript(ctx, hostclient.TranscriptBatch{
+		Host: "host-1", AgentID: "mgr-1", Epoch: "e1",
+		Entries: []hostclient.TranscriptEntry{
+			{SeqStart: 4, SeqEnd: 4, At: now.Add(5 * time.Second), Item: json.RawMessage(`{"type":"user_message","text":"Hello Grimm"}`)},
+			{SeqStart: 5, SeqEnd: 5, At: now.Add(6 * time.Second), Item: json.RawMessage(`{"type":"assistant_message","text":"Hi! How can I help?"}`)},
+		},
+	}, now.Add(6*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.one(`SELECT count(*) FROM grimm_thread WHERE session_id = $1 AND kind IN ('assistant_message','tool_call')`, id); got != int64(1) {
+		t.Fatalf("post-human manager thread entries = %v, want 1 (warm-up must stay hidden)", got)
+	}
+	if got := r.one(`SELECT body FROM grimm_thread WHERE session_id = $1 AND kind = 'assistant_message'`, id); got != "Hi! How can I help?" {
+		t.Fatalf("visible assistant reply = %v, want Hi! How can I help?", got)
 	}
 }
 

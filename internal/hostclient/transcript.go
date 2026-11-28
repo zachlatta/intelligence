@@ -51,8 +51,10 @@ type TranscriptSync struct {
 	OnFileEdit func(agentID string)
 	MaxBatch   int // bytes per upload; default 4 MB
 
-	cursors map[string]TranscriptCursor // the server's copy, by agent
-	synced  map[string]time.Time        // each agent's UpdatedAt when it was last synced
+	cursors   map[string]TranscriptCursor           // the server's copy, by agent
+	synced    map[string]time.Time                  // each agent's UpdatedAt when it was last synced
+	active    map[string]TranscriptEntry            // latest projected entry per agent for chunk merging
+	toolCalls map[string]map[string]TranscriptEntry // agentID -> callId -> latest tool_call entry
 }
 
 // itemMayEditFiles reports whether a timeline item is a tool call that may have modified files
@@ -85,9 +87,11 @@ func itemMayEditFiles(raw json.RawMessage) bool {
 }
 
 // PushStreamEvent forwards a contiguous agent_stream timeline event directly to the server
-// without re-fetching the agent's full timeline from Paseo. It returns handled=false when the
-// cursor is missing, the epoch differs, there is a seq gap, or the server asks for a resend,
-// so the caller can fall back to a normal Sync gap-resync.
+// without re-fetching the agent's full timeline from Paseo. Consecutive assistant_message and
+// reasoning chunks are merged into the active entry at the same seq_start (matching Paseo's
+// timeline projection), and tool_call updates with the same callId merge into the matching
+// tool_call entry. It returns handled=false when the cursor is missing, the epoch differs,
+// there is a seq gap, or the server asks for a resend, so the caller can fall back to Sync.
 func (s *TranscriptSync) PushStreamEvent(ctx context.Context, ev paseo.TimelineStreamEvent) (bool, error) {
 	if s.cursors == nil || ev.Epoch == "" || ev.Seq <= 0 || len(ev.Item) == 0 || !json.Valid(ev.Item) {
 		return false, nil
@@ -96,24 +100,99 @@ func (s *TranscriptSync) PushStreamEvent(ctx context.Context, ev paseo.TimelineS
 	if !have || cur.Epoch != ev.Epoch {
 		return false, nil
 	}
-	// Only direct-push contiguous next seq or in-place update of the current entry.
-	var seqStart int
-	switch {
-	case ev.Seq == cur.LastSeqEnd+1:
-		seqStart = ev.Seq
-	case ev.Seq == cur.LastSeqStart && cur.LastSeqStart > 0:
-		seqStart = cur.LastSeqStart
-	default:
+	if ev.Seq != cur.LastSeqEnd+1 && !(ev.Seq == cur.LastSeqStart && cur.LastSeqStart > 0) {
 		return false, nil
 	}
-	entry := TranscriptEntry{
-		SeqStart: seqStart,
-		SeqEnd:   ev.Seq,
-		TurnID:   ev.TurnID,
-		Provider: ev.Provider,
-		At:       ev.Timestamp,
-		Item:     ev.Item,
+	if s.active == nil {
+		s.active = map[string]TranscriptEntry{}
 	}
+	if s.toolCalls == nil {
+		s.toolCalls = map[string]map[string]TranscriptEntry{}
+	}
+
+	var incoming map[string]any
+	if err := json.Unmarshal(ev.Item, &incoming); err != nil {
+		return false, nil
+	}
+	inType, _ := incoming["type"].(string)
+
+	var entry TranscriptEntry
+	var updateActive = true
+	prev, hasPrev := s.active[ev.AgentID]
+
+	switch {
+	case inType == "tool_call" && toolCallID(incoming) != "":
+		cid := toolCallID(incoming)
+		byCall := s.toolCalls[ev.AgentID]
+		if existing, ok := byCall[cid]; ok {
+			mergedItem, err := mergeToolCallItem(existing.Item, incoming)
+			if err != nil {
+				return false, nil
+			}
+			at := existing.At
+			if at.IsZero() {
+				at = ev.Timestamp
+			}
+			entry = TranscriptEntry{
+				SeqStart: existing.SeqStart,
+				SeqEnd:   ev.Seq,
+				TurnID:   pickStr(ev.TurnID, existing.TurnID),
+				Provider: pickStr(ev.Provider, existing.Provider),
+				At:       at,
+				Item:     mergedItem,
+			}
+			byCall[cid] = entry
+			updateActive = prev.SeqStart == existing.SeqStart
+		} else {
+			entry = TranscriptEntry{
+				SeqStart: ev.Seq,
+				SeqEnd:   ev.Seq,
+				TurnID:   ev.TurnID,
+				Provider: ev.Provider,
+				At:       ev.Timestamp,
+				Item:     ev.Item,
+			}
+			if byCall == nil {
+				byCall = map[string]TranscriptEntry{}
+				s.toolCalls[ev.AgentID] = byCall
+			}
+			byCall[cid] = entry
+		}
+
+	case hasPrev && ev.Seq == cur.LastSeqEnd+1 && (inType == "assistant_message" || inType == "reasoning") &&
+		itemType(prev.Item) == inType && (prev.TurnID == "" || ev.TurnID == "" || prev.TurnID == ev.TurnID):
+		mergedItem, err := mergeTextItem(prev.Item, incoming)
+		if err != nil {
+			return false, nil
+		}
+		at := prev.At
+		if at.IsZero() {
+			at = ev.Timestamp
+		}
+		entry = TranscriptEntry{
+			SeqStart: prev.SeqStart,
+			SeqEnd:   ev.Seq,
+			TurnID:   pickStr(prev.TurnID, ev.TurnID),
+			Provider: pickStr(prev.Provider, ev.Provider),
+			At:       at,
+			Item:     mergedItem,
+		}
+
+	default:
+		seqStart := ev.Seq
+		if ev.Seq == cur.LastSeqStart && cur.LastSeqStart > 0 {
+			seqStart = cur.LastSeqStart
+		}
+		entry = TranscriptEntry{
+			SeqStart: seqStart,
+			SeqEnd:   ev.Seq,
+			TurnID:   ev.TurnID,
+			Provider: ev.Provider,
+			At:       ev.Timestamp,
+			Item:     ev.Item,
+		}
+	}
+
 	err := s.Send(ctx, TranscriptBatch{
 		Host:    s.Host,
 		AgentID: ev.AgentID,
@@ -127,18 +206,97 @@ func (s *TranscriptSync) PushStreamEvent(ctx context.Context, ev paseo.TimelineS
 	if err != nil {
 		return false, err
 	}
-	cur.LastSeqStart = seqStart
-	cur.LastSeqEnd = ev.Seq
+	if updateActive {
+		s.active[ev.AgentID] = entry
+		cur.LastSeqStart = entry.SeqStart
+	}
+	if ev.Seq > cur.LastSeqEnd {
+		cur.LastSeqEnd = ev.Seq
+	}
 	s.cursors[ev.AgentID] = cur
-	if s.OnFileEdit != nil && itemMayEditFiles(ev.Item) {
+	if s.OnFileEdit != nil && itemMayEditFiles(entry.Item) {
 		s.OnFileEdit(ev.AgentID)
 	}
 	return true, nil
 }
 
+func pickStr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+func itemType(raw json.RawMessage) string {
+	var t struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(raw, &t) != nil {
+		return ""
+	}
+	return t.Type
+}
+
+func toolCallID(m map[string]any) string {
+	for _, k := range []string{"callId", "call_id", "id"} {
+		if v, ok := m[k].(string); ok && v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func mergeTextItem(prevRaw json.RawMessage, incoming map[string]any) (json.RawMessage, error) {
+	var merged map[string]any
+	if err := json.Unmarshal(prevRaw, &merged); err != nil {
+		return nil, err
+	}
+	prevText, _ := merged["text"].(string)
+	inText, _ := incoming["text"].(string)
+	for k, v := range incoming {
+		if k == "text" {
+			continue
+		}
+		merged[k] = v
+	}
+	merged["text"] = prevText + inText
+	return json.Marshal(merged)
+}
+
+func mergeToolCallItem(prevRaw json.RawMessage, incoming map[string]any) (json.RawMessage, error) {
+	var merged map[string]any
+	if err := json.Unmarshal(prevRaw, &merged); err != nil {
+		return nil, err
+	}
+	prevDetail, _ := merged["detail"].(map[string]any)
+	inDetail, hasInDetail := incoming["detail"].(map[string]any)
+	for k, v := range incoming {
+		if k == "detail" {
+			continue
+		}
+		if s, ok := v.(string); ok && s == "" {
+			continue
+		}
+		merged[k] = v
+	}
+	if hasInDetail {
+		if prevDetail == nil {
+			prevDetail = map[string]any{}
+		}
+		for k, v := range inDetail {
+			if s, ok := v.(string); ok && s == "" {
+				continue
+			}
+			prevDetail[k] = v
+		}
+		merged["detail"] = prevDetail
+	}
+	return json.Marshal(merged)
+}
+
 // Reset forgets what the server has, so the next Sync reads its cursors again (a new stream: the
 // server may have changed meanwhile).
-func (s *TranscriptSync) Reset() { s.cursors, s.synced = nil, nil }
+func (s *TranscriptSync) Reset() { s.cursors, s.synced, s.active, s.toolCalls = nil, nil, nil, nil }
 
 // loaded statuses: the daemon holds these agents' timelines, so reading one starts nothing.
 var loaded = map[string]bool{"running": true, "idle": true, "error": true, "initializing": true}
@@ -245,7 +403,29 @@ func (s *TranscriptSync) upload(ctx context.Context, id string, tl paseo.Timelin
 		cur.Epoch = tl.Epoch
 	}
 	if n := len(tl.Entries); n > 0 {
-		cur.LastSeqStart, cur.LastSeqEnd = tl.Entries[n-1].SeqStart, tl.Entries[n-1].SeqEnd
+		last := tl.Entries[n-1]
+		cur.LastSeqStart, cur.LastSeqEnd = last.SeqStart, last.SeqEnd
+		if s.active == nil {
+			s.active = map[string]TranscriptEntry{}
+		}
+		s.active[id] = TranscriptEntry{SeqStart: last.SeqStart, SeqEnd: last.SeqEnd, TurnID: last.TurnID, Provider: last.Provider, At: last.Timestamp, Item: last.Item}
+	}
+	if whole && s.toolCalls != nil {
+		delete(s.toolCalls, id)
+	}
+	for _, e := range tl.Entries {
+		var m map[string]any
+		if json.Unmarshal(e.Item, &m) == nil && m["type"] == "tool_call" {
+			if cid := toolCallID(m); cid != "" {
+				if s.toolCalls == nil {
+					s.toolCalls = map[string]map[string]TranscriptEntry{}
+				}
+				if s.toolCalls[id] == nil {
+					s.toolCalls[id] = map[string]TranscriptEntry{}
+				}
+				s.toolCalls[id][cid] = TranscriptEntry{SeqStart: e.SeqStart, SeqEnd: e.SeqEnd, TurnID: e.TurnID, Provider: e.Provider, At: e.Timestamp, Item: e.Item}
+			}
+		}
 	}
 	s.cursors[id] = cur
 	return nil

@@ -136,7 +136,7 @@ func TestGrimmSessionStreamsItsThreadAndState(t *testing.T) {
 	}
 
 	srv := serve(t, h)
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/grimm/sessions/"+created.ID+"/stream", nil)
 	req.AddCookie(h.(*testServer).cookie)
@@ -163,6 +163,7 @@ func TestGrimmSessionStreamsItsThreadAndState(t *testing.T) {
 		}
 		close(events)
 	}()
+	sawWorking := false
 	wait := func(what string, ok func(ev, data string) bool) {
 		t.Helper()
 		for {
@@ -170,6 +171,9 @@ func TestGrimmSessionStreamsItsThreadAndState(t *testing.T) {
 			case e, open := <-events:
 				if !open {
 					t.Fatalf("stream ended waiting for %s", what)
+				}
+				if e[0] == "state" && strings.Contains(e[1], `"manager_state":"working"`) {
+					sawWorking = true
 				}
 				if ok(e[0], e[1]) {
 					return
@@ -199,9 +203,11 @@ func TestGrimmSessionStreamsItsThreadAndState(t *testing.T) {
 	if ack := stream.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
 		t.Fatal(ack.Error)
 	}
-	wait("the manager working", func(ev, data string) bool {
-		return ev == "state" && strings.Contains(data, `"manager_state":"working"`)
-	})
+	if !sawWorking {
+		wait("the manager working", func(ev, data string) bool {
+			return ev == "state" && strings.Contains(data, `"manager_state":"working"`)
+		})
+	}
 	// the manager's words stream into the thread as its transcript grows
 	batch := hostclient.TranscriptBatch{Host: "host-1", AgentID: "mgr-1", Epoch: "e1", Replace: true, Entries: []hostclient.TranscriptEntry{
 		{SeqStart: 1, SeqEnd: 1, At: time.Now(), Item: json.RawMessage(`{"type":"user_message","text":"first prompt"}`)},

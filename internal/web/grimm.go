@@ -658,13 +658,14 @@ func (a *app) grimmStream(v viewer) http.HandlerFunc {
 			lastState = string(b)
 			return writeSSE(w, flusher, "state", cursorID(), payload)
 		}
-		sent := map[string]string{} // item_id -> what was sent, for items that can still grow
+		sent := map[string]string{}     // item_id -> what was sent, for items that can still grow
+		sentBody := map[string]string{} // item_id -> last body sent, for incremental append deltas
 		sendThread := func(first bool) error {
-			q := `SELECT to_jsonb(t), t.item_id, coalesce(t.message_id, 0), coalesce(t.epoch, 0), coalesce(t.seq, 0) FROM grimm_thread t
+			q := `SELECT to_jsonb(t), t.item_id, coalesce(t.message_id, 0), coalesce(t.epoch, 0), coalesce(t.seq, 0), t.kind, t.body FROM grimm_thread t
 				WHERE t.session_id = $1 AND (t.message_id > $2 OR (t.epoch IS NOT NULL AND (t.epoch > $3 OR (t.epoch = $3 AND t.seq >= $4))))
 				ORDER BY t.at, t.item_id`
 			if first {
-				q = `SELECT * FROM (SELECT to_jsonb(t), t.item_id, coalesce(t.message_id, 0) AS m, coalesce(t.epoch, 0) AS e, coalesce(t.seq, 0) AS s, t.at
+				q = `SELECT * FROM (SELECT to_jsonb(t), t.item_id, coalesce(t.message_id, 0) AS m, coalesce(t.epoch, 0) AS e, coalesce(t.seq, 0) AS s, t.kind, t.body, t.at
 					FROM grimm_thread t WHERE t.session_id = $1 AND $2::bigint >= 0 AND $3::int >= 0 AND $4::int >= 0
 					ORDER BY t.at DESC, t.item_id DESC LIMIT ` + strconv.Itoa(grimmThreadPage+1) + `) x ORDER BY x.at, x.item_id`
 			}
@@ -677,12 +678,13 @@ func (a *app) grimmStream(v viewer) http.HandlerFunc {
 				itemID     string
 				msg        int64
 				epoch, seq int
+				kind, body string
 			}
 			var got []threadRow
 			for rows.Next() {
 				var r threadRow
 				var at any
-				dest := []any{&r.raw, &r.itemID, &r.msg, &r.epoch, &r.seq}
+				dest := []any{&r.raw, &r.itemID, &r.msg, &r.epoch, &r.seq, &r.kind, &r.body}
 				if first {
 					dest = append(dest, &at)
 				}
@@ -701,7 +703,13 @@ func (a *app) grimmStream(v viewer) http.HandlerFunc {
 			if more {
 				got = got[1:]
 			}
+			type threadDelta struct {
+				ItemID string `json:"item_id"`
+				Kind   string `json:"kind"`
+				Append string `json:"append"`
+			}
 			var items []json.RawMessage
+			var deltas []threadDelta
 			for _, r := range got {
 				lastMsg = max(lastMsg, r.msg)
 				if r.epoch > lastEpoch || (r.epoch == lastEpoch && r.seq > lastSeq) {
@@ -711,23 +719,40 @@ func (a *app) grimmStream(v viewer) http.HandlerFunc {
 				if sent[r.itemID] == string(raw) {
 					continue
 				}
+				// Incremental append delta for growing assistant_message / reasoning items already sent.
+				if !first && r.epoch > 0 && (r.kind == "assistant_message" || r.kind == "reasoning") {
+					if prev, ok := sentBody[r.itemID]; ok && prev != "" && strings.HasPrefix(r.body, prev) && len(r.body) > len(prev) {
+						deltas = append(deltas, threadDelta{ItemID: r.itemID, Kind: r.kind, Append: r.body[len(prev):]})
+						sent[r.itemID] = string(raw)
+						sentBody[r.itemID] = r.body
+						continue
+					}
+				}
 				if r.epoch > 0 {
 					sent[r.itemID] = string(raw)
+					if r.kind == "assistant_message" || r.kind == "reasoning" {
+						sentBody[r.itemID] = r.body
+					}
 				}
 				items = append(items, raw)
 			}
 			if len(sent) > 400 { // only the newest entries still grow
 				for k := range sent {
 					delete(sent, k)
+					delete(sentBody, k)
 					if len(sent) <= 200 {
 						break
 					}
 				}
 			}
-			if len(items) == 0 && !first {
+			if len(items) == 0 && len(deltas) == 0 && !first {
 				return nil
 			}
-			return writeSSE(w, flusher, "thread", cursorID(), map[string]any{"items": items, "reset": first, "more": more})
+			payload := map[string]any{"items": items, "reset": first, "more": more}
+			if len(deltas) > 0 {
+				payload["deltas"] = deltas
+			}
+			return writeSSE(w, flusher, "thread", cursorID(), payload)
 		}
 		sendRows := func(event, q string, last *int64, limit int) error {
 			rows, err := v.pool.Query(ctx, `SELECT * FROM (SELECT to_jsonb(x), x.id FROM (`+q+`) x WHERE x.session_id = $1 AND x.id > $2

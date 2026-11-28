@@ -24,7 +24,7 @@ func TestHostCopiesALiveAgentsTranscriptWhenTheDaemonPushesIt(t *testing.T) {
 	upload := func(agent string, seq int) bool {
 		for _, f := range s.frames(TranscriptFrame) {
 			for _, e := range f.Transcript.Entries {
-				if f.Transcript.AgentID == agent && e.SeqStart == seq {
+				if f.Transcript.AgentID == agent && e.SeqStart <= seq && e.SeqEnd >= seq {
 					return true
 				}
 			}
@@ -158,7 +158,7 @@ func TestAFastAgentsPushIsNotHeldBehindAWaitingSteadyOne(t *testing.T) {
 	upload := func(agent string, seq int) bool {
 		for _, f := range s.frames(TranscriptFrame) {
 			for _, e := range f.Transcript.Entries {
-				if f.Transcript.AgentID == agent && e.SeqStart == seq {
+				if f.Transcript.AgentID == agent && e.SeqStart <= seq && e.SeqEnd >= seq {
 					return true
 				}
 			}
