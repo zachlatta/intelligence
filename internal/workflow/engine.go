@@ -501,9 +501,10 @@ func (e *Engine) event(ctx context.Context, tx pgx.Tx, r run, kind string, step,
 // eventID is event, returning the new event's id (an ask's secret requests point at it).
 func (e *Engine) eventID(ctx context.Context, tx pgx.Tx, r run, kind string, step, to *int, text string) (int64, error) {
 	actor := apiActorFrom(ctx)
+	grimmActor := grimmActorFrom(ctx)
 	var id int64
-	if err := tx.QueryRow(ctx, `INSERT INTO workflow_run_events (run_id, account_id, at, kind, step, to_step, text, api_key_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`, r.ID, r.Account, e.Now(), kind, step, to, text, nullUUID(actor.KeyID)).Scan(&id); err != nil {
+	if err := tx.QueryRow(ctx, `INSERT INTO workflow_run_events (run_id, account_id, at, kind, step, to_step, text, api_key_id, grimm_session_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`, r.ID, r.Account, e.Now(), kind, step, to, text, nullUUID(actor.KeyID), nullUUID(grimmActor.SessionID)).Scan(&id); err != nil {
 		return 0, err
 	}
 	if _, err := tx.Exec(ctx, fleet.NotifySQL, fleet.WorkflowRunTopic(r.ID)); err != nil {
@@ -1141,6 +1142,18 @@ func (e *Engine) MoveRun(ctx context.Context, host, runID string, m Move) (strin
 		if r.Host != host {
 			return ErrNotFound
 		}
+		if callerAgent := callerAgentIDFrom(ctx); callerAgent != "" {
+			switch m.Move {
+			case "next", "back", "skip", "done", "fail", "steer":
+				var isGrimm bool
+				if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM grimm_agents WHERE host = $1 AND agent_id = $2)`, host, callerAgent).Scan(&isGrimm); err != nil {
+					return err
+				}
+				if isGrimm {
+					return forbidden("Grimm agents cannot move workflow runs directly (%s); use intelligence grimm ctl workflow input or reply instead", m.Move)
+				}
+			}
+		}
 		if r.Status == Stalled {
 			// Move validation below shares this transaction: an invalid move rolls
 			// back both the recovery event and the state change.
@@ -1553,7 +1566,8 @@ func (e *Engine) replyTx(ctx context.Context, tx pgx.Tx, account int64, runID, t
 // (a secret reply keeps its summary, not the orchestrator's fetch instructions).
 func (e *Engine) replyTxRecording(ctx context.Context, tx pgx.Tx, account int64, runID, text, recorded string, fromBrowser, approve bool) error {
 	actor := apiActorFrom(ctx)
-	if approve && (!fromBrowser || actor.KeyID != "") {
+	grimmActor := grimmActorFrom(ctx)
+	if approve && (!fromBrowser || actor.KeyID != "" || grimmActor.SessionID != "") {
 		return forbidden("explicit sign-off approval requires an authenticated human browser session in Intelligence")
 	}
 	r, err := e.lockRun(ctx, tx, account, runID)
@@ -1582,6 +1596,22 @@ func (e *Engine) replyTxRecording(ctx context.Context, tx pgx.Tx, account int64,
 	if recorded == "" {
 		recorded = text
 	}
+	if grimmActor.SessionID != "" {
+		if onSignoff || stepRequiresHumanSignoff(r) {
+			return forbidden("Grimm cannot reply on a sign-off step; the human must review and sign off in the browser")
+		}
+		var hasPendingSecrets bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (
+			SELECT 1 FROM workflow_run_secrets s
+			WHERE s.run_id = $1 AND s.status = 'pending'
+			  AND s.ask_event_id = (SELECT coalesce(max(id), 0) FROM workflow_run_events WHERE run_id = $1 AND kind = 'ask')
+		)`, r.ID).Scan(&hasPendingSecrets); err != nil {
+			return err
+		}
+		if hasPendingSecrets {
+			return forbidden("Grimm cannot reply to an ask requesting secrets; the human must store secrets in the browser")
+		}
+	}
 	if stepRequiresHumanSignoff(r) {
 		if actor.KeyID != "" {
 			return forbidden("this sign-off step requires an authenticated human browser action in Intelligence; API-key replies are refused")
@@ -1592,7 +1622,9 @@ func (e *Engine) replyTxRecording(ctx context.Context, tx pgx.Tx, account int64,
 	}
 	heading := "Zach replied to your note:"
 	signoffNote := ""
-	if actor.KeyID != "" {
+	if grimmActor.SessionID != "" {
+		heading = fmt.Sprintf("Grimm (session %s — automated manager, not the human directly) replied to your note:", shortGrimmSession(grimmActor.SessionID))
+	} else if actor.KeyID != "" {
 		heading = fmt.Sprintf("API key %q replied to your note (this is an automated API caller, not Zach):", actor.KeyName)
 		if onSignoff {
 			signoffNote = fmt.Sprintf("\n\nNote: This reply came from API key %q, not from Zach. It is not Zach's approval unless this workflow's instructions explicitly authorize this API key to approve sign-off.", actor.KeyName)
@@ -1604,7 +1636,12 @@ func (e *Engine) replyTxRecording(ctx context.Context, tx pgx.Tx, account int64,
 		signoffNote = "\n\nNote: Zach sent a plain reply without clicking Approve sign-off. Do NOT advance past this sign-off step; apply requested changes (back), re-ask, or fail/cancel as instructed."
 	}
 	if r.Status == Stalled {
-		if actor.KeyID != "" {
+		if grimmActor.SessionID != "" {
+			heading = fmt.Sprintf("Grimm (session %s — automated manager, not the human directly) replied for this workflow:", shortGrimmSession(grimmActor.SessionID))
+			if err := e.unstall(ctx, tx, r, fmt.Sprintf("Resumed: Grimm (session %s) replied for the existing orchestrator.", shortGrimmSession(grimmActor.SessionID))); err != nil {
+				return err
+			}
+		} else if actor.KeyID != "" {
 			heading = fmt.Sprintf("API key %q replied for this workflow (this is an automated API caller, not Zach):", actor.KeyName)
 			if err := e.unstall(ctx, tx, r, fmt.Sprintf("Resumed: API key %q replied for the existing orchestrator.", actor.KeyName)); err != nil {
 				return err
@@ -1734,11 +1771,17 @@ func (e *Engine) addInputLocked(ctx context.Context, tx pgx.Tx, account int64, r
 		return err
 	}
 	actor := apiActorFrom(ctx)
+	grimmActor := grimmActorFrom(ctx)
 	if actor.KeyID != "" && stepRequiresHumanSignoff(r) {
 		return forbidden("API-key steering input is refused during human sign-off; reply in Intelligence")
 	}
+	if grimmActor.SessionID != "" && stepRequiresHumanSignoff(r) {
+		return forbidden("Grimm steering input is refused during human sign-off; the human must respond in Intelligence")
+	}
 	heading := "Additional input for this run:"
-	if actor.KeyID != "" {
+	if grimmActor.SessionID != "" {
+		heading = fmt.Sprintf("Additional input from Grimm (session %s — automated manager, not the human directly) for this run:", shortGrimmSession(grimmActor.SessionID))
+	} else if actor.KeyID != "" {
 		heading = fmt.Sprintf("Additional input from API key %q for this run:", actor.KeyName)
 	}
 	prompt := heading + "\n\n" + text +
@@ -1749,8 +1792,11 @@ func (e *Engine) addInputLocked(ctx context.Context, tx pgx.Tx, account int64, r
 // sendInput records the new input and any redeliveries with their shared command.
 func (e *Engine) sendInput(ctx context.Context, tx pgx.Tx, r run, kind, eventText, prompt string, continuation *string) error {
 	actor := apiActorFrom(ctx)
+	grimmActor := grimmActorFrom(ctx)
 	why := "Resumed: new input arrived for the existing orchestrator."
-	if actor.KeyID != "" {
+	if grimmActor.SessionID != "" {
+		why = fmt.Sprintf("Resumed: new input from Grimm (session %s) arrived for the existing orchestrator.", shortGrimmSession(grimmActor.SessionID))
+	} else if actor.KeyID != "" {
 		why = fmt.Sprintf("Resumed: new input from API key %q arrived for the existing orchestrator.", actor.KeyName)
 	}
 	if err := e.unstall(ctx, tx, r, why); err != nil {
@@ -1812,7 +1858,7 @@ func hasHumanSignoffApproval(ctx context.Context, tx pgx.Tx, runID string, step 
 	}
 	var approved bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workflow_run_events
-		WHERE run_id = $1 AND kind = 'signoff_approved' AND step = $2 AND api_key_id IS NULL AND id > $3)`,
+		WHERE run_id = $1 AND kind = 'signoff_approved' AND step = $2 AND api_key_id IS NULL AND grimm_session_id IS NULL AND id > $3)`,
 		runID, step, askID).Scan(&approved); err != nil {
 		return false, err
 	}
@@ -1821,6 +1867,17 @@ func hasHumanSignoffApproval(ctx context.Context, tx pgx.Tx, runID string, step 
 
 // Cancel ends account's run and stops its agent (the orchestrator, or the project finder).
 func (e *Engine) Cancel(ctx context.Context, account int64, runID string) error {
+	return e.CancelWithReason(ctx, account, runID, "")
+}
+
+// CancelWithReason ends account's run with an optional reason recorded on the cancel event.
+func (e *Engine) CancelWithReason(ctx context.Context, account int64, runID, reason string) error {
+	reason = strings.TrimSpace(reason)
+	if reason != "" {
+		if err := agenttext.Validate(reason); err != nil {
+			return bad("%s", err)
+		}
+	}
 	return e.forAccount(ctx, account, runID, func(tx pgx.Tx, r run) error {
 		switch r.Status {
 		case Succeeded, Failed, Canceled:
@@ -1841,8 +1898,14 @@ func (e *Engine) Cancel(ctx context.Context, account int64, runID string) error 
 		if err := fleet.CaptureWorkflowAgents(ctx, tx, r.Host, r.ID, e.Now()); err != nil {
 			return err
 		}
-		cancelText := ""
-		if actor := apiActorFrom(ctx); actor.KeyID != "" {
+		cancelText := reason
+		if grimmActor := grimmActorFrom(ctx); grimmActor.SessionID != "" {
+			if reason != "" {
+				cancelText = fmt.Sprintf("Canceled via Grimm (session %s): %s", shortGrimmSession(grimmActor.SessionID), reason)
+			} else {
+				cancelText = fmt.Sprintf("Canceled via Grimm (session %s)", shortGrimmSession(grimmActor.SessionID))
+			}
+		} else if actor := apiActorFrom(ctx); actor.KeyID != "" {
 			cancelText = fmt.Sprintf("Canceled by API key %q", actor.KeyName)
 		}
 		if err := e.event(ctx, tx, r, "cancel", nil, nil, cancelText); err != nil {

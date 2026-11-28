@@ -1,12 +1,14 @@
 // Live workflow run approval & monitoring cards in the Grimm thread.
 // State comes from the Grimm SSE stream's `workflow_runs` event (rows of grimm_workflow_run_status).
 // Approve and Reject call the existing browser-only proposal routes (/api/workflow-proposals/{id}/approve|reject);
-// Edit input calls /api/grimm/sessions/{id}/workflow-requests/{pid}/input (also browser-only).
+// Edit input calls /api/grimm/sessions/{id}/workflow-requests/{pid}/input (also browser-only);
+// Inline clarification replies call /api/workflow-runs/{run_id}/reply (browser-session-only; sign-off stays on the run page).
 "use strict";
 (() => {
 const runsByProposal = new Map();
-const editState = new Map(); // proposal_id -> { open, draft, saving, error }
-const busyState = new Map(); // proposal_id -> string ("Approving…", "Rejecting…")
+const editState = new Map();  // proposal_id -> { open, draft, saving, error, actionError }
+const replyState = new Map(); // proposal_id -> { draft, sending, error }
+const busyState = new Map();  // proposal_id -> string ("Approving…", "Rejecting…")
 const expandedInputs = new Set();
 
 function esc(s) {
@@ -75,6 +77,12 @@ function stepBadge(s) {
   return `<span class="${cls}" title="${esc(s.title)}${kindTag ? " (" + kindTag + ")" : ""}: ${esc(s.outcome)}"><i>${icon}</i>${esc(s.title || s.id)}${kindTag ? `<small>${kindTag}</small>` : ""}</span>`;
 }
 
+function guidanceKindLabel(kind) {
+  if (kind === "reply") return "Grimm reply";
+  if (kind === "cancel") return "Canceled via Grimm";
+  return "Grimm input";
+}
+
 function populateCard(node, it, r) {
   const data = (it && it.data) || {};
   const pid = (r && r.proposal_id) || data.proposalId || "";
@@ -85,6 +93,7 @@ function populateCard(node, it, r) {
   const st = statusMeta(r);
   const busy = busyState.get(pid) || "";
   const ed = editState.get(pid);
+  const rp = replyState.get(pid) || { draft: "", sending: false, error: "" };
   const isPending = !r || r.proposal_status === "pending";
 
   node.className = `gw-card gw-st-${st.cls}`;
@@ -121,7 +130,7 @@ function populateCard(node, it, r) {
     bodyHTML += `<div class="gw-input-wrap"><pre class="gw-input">${esc(shown)}</pre>${long ? `<button type="button" class="gw-more">${open ? "Show less" : "Show full input"}</button>` : ""}</div>`;
   }
 
-  // Live run progress: current step, gates, waiting/sign-off callout, error
+  // Live run progress: current step, gates, queue reason, waiting/sign-off callout, Grimm guidance log, deliverables, error
   if (r && r.run_id) {
     if (r.step_count > 0 && r.run_step >= 0) {
       const idx = Math.min(r.run_step + 1, r.step_count);
@@ -135,11 +144,59 @@ function populateCard(node, it, r) {
     if (steps.length) {
       bodyHTML += `<div class="gw-steps">${steps.map(stepBadge).join("")}</div>`;
     }
+    if (r.run_status === "queued" && r.queue_reason) {
+      bodyHTML += `<div class="gw-callout gw-callout-info"><b>Queued:</b> ${esc(r.queue_reason)}</div>`;
+    }
     if (r.run_status === "waiting") {
-      const heading = r.require_human_signoff || r.step_kind === "signoff" ? "Sign-off waiting on you" : "Question waiting on you";
-      bodyHTML += `<div class="gw-callout gw-callout-wait">
-        <div class="gw-callout-head"><b>${heading}</b><a class="btn sm primary" href="/workflow-runs/${esc(r.run_id)}">${r.require_human_signoff || r.step_kind === "signoff" ? "Review & sign off" : "Reply on run"}</a></div>
-        ${r.run_note ? `<pre class="gw-callout-note">${esc(r.run_note)}</pre>` : (r.waiting_on ? `<p class="gw-callout-note">${esc(r.waiting_on)}</p>` : "")}
+      const askKind = r.ask_kind || (r.require_human_signoff || r.step_kind === "signoff" ? "signoff" : "clarification");
+      if (askKind === "signoff") {
+        bodyHTML += `<div class="gw-callout gw-callout-signoff">
+          <div class="gw-callout-head">
+            <b>Sign-off waiting on you <span class="gw-tag-browser">browser sign-off only</span></b>
+            <a class="btn sm primary" href="/workflow-runs/${esc(r.run_id)}">Review &amp; sign off</a>
+          </div>
+          ${r.run_note ? `<pre class="gw-callout-note">${esc(r.run_note)}</pre>` : (r.waiting_on ? `<p class="gw-callout-note">${esc(r.waiting_on)}</p>` : "")}
+        </div>`;
+      } else if (askKind === "secret") {
+        bodyHTML += `<div class="gw-callout gw-callout-wait">
+          <div class="gw-callout-head">
+            <b>Secret requested <span class="gw-tag-browser">browser only</span></b>
+            <a class="btn sm primary" href="/workflow-runs/${esc(r.run_id)}">Provide secret on run</a>
+          </div>
+          ${r.run_note ? `<pre class="gw-callout-note">${esc(r.run_note)}</pre>` : (r.waiting_on ? `<p class="gw-callout-note">${esc(r.waiting_on)}</p>` : "")}
+        </div>`;
+      } else {
+        bodyHTML += `<div class="gw-callout gw-callout-wait">
+          <div class="gw-callout-head">
+            <b>Question waiting on you</b>
+            <a class="btn sm ghost" href="/workflow-runs/${esc(r.run_id)}">Open run</a>
+          </div>
+          ${r.run_note ? `<pre class="gw-callout-note">${esc(r.run_note)}</pre>` : (r.waiting_on ? `<p class="gw-callout-note">${esc(r.waiting_on)}</p>` : "")}
+          <div class="gw-reply-form">
+            <textarea class="gw-reply-area" rows="2" placeholder="Reply directly to this run…" ${rp.sending ? "disabled" : ""}>${esc(rp.draft)}</textarea>
+            ${rp.error ? `<div class="gw-err" role="alert">${esc(rp.error)}</div>` : ""}
+            <div class="gw-actions">
+              <button type="button" class="btn sm primary gw-reply-send" ${rp.sending ? "disabled" : ""}>${rp.sending ? "Sending…" : "Send reply"}</button>
+            </div>
+          </div>
+        </div>`;
+      }
+    }
+    const grimmEvents = Array.isArray(r.grimm_events) ? r.grimm_events : [];
+    if (grimmEvents.length) {
+      bodyHTML += `<div class="gw-guidance">
+        <div class="gw-guidance-head">Grimm mid-run guidance (${grimmEvents.length})</div>
+        <ul class="gw-guidance-list">${grimmEvents.map((ev) => `<li class="gw-guidance-item gw-guidance-${esc(ev.kind || "input")}">
+          <div class="gw-guidance-meta"><span class="gw-guidance-kind">${esc(guidanceKindLabel(ev.kind))}</span>${ev.at ? `<span class="gw-time">${esc(shortTime(ev.at))}</span>` : ""}</div>
+          <div class="gw-guidance-text">${esc(ev.text || "")}</div>
+        </li>`).join("")}</ul>
+      </div>`;
+    }
+    if (r.run_status === "succeeded" && (r.done_summary || (Array.isArray(r.deliverables) && r.deliverables.length))) {
+      const delivs = Array.isArray(r.deliverables) ? r.deliverables : [];
+      bodyHTML += `<div class="gw-callout gw-callout-done">
+        ${r.done_summary ? `<div class="gw-callout-note">${esc(r.done_summary)}</div>` : ""}
+        ${delivs.length ? `<div class="gw-delivs"><b>Deliverables:</b> ${delivs.map((d) => `<code>${esc(d)}</code>`).join(" ")}</div>` : ""}
       </div>`;
     }
     if (r.run_error) {
@@ -254,6 +311,34 @@ function populateCard(node, it, r) {
       populateCard(node, it, runsByProposal.get(pid) || r);
     });
   }
+  const replyArea = node.querySelector(".gw-reply-area");
+  if (replyArea) {
+    replyArea.addEventListener("input", () => {
+      const cur = replyState.get(pid) || { draft: "", sending: false, error: "" };
+      replyState.set(pid, { ...cur, draft: replyArea.value, error: "" });
+    });
+  }
+  const replyBtn = node.querySelector(".gw-reply-send");
+  if (replyBtn && r && r.run_id) {
+    replyBtn.addEventListener("click", async () => {
+      const ta = node.querySelector(".gw-reply-area");
+      const val = ta ? ta.value.trim() : "";
+      if (!val) {
+        replyState.set(pid, { draft: ta ? ta.value : "", sending: false, error: "Reply cannot be empty." });
+        populateCard(node, it, runsByProposal.get(pid) || r);
+        return;
+      }
+      replyState.set(pid, { draft: val, sending: true, error: "" });
+      populateCard(node, it, runsByProposal.get(pid) || r);
+      try {
+        await postJSON(`/api/workflow-runs/${encodeURIComponent(r.run_id)}/reply`, { text: val });
+        replyState.delete(pid);
+      } catch (e) {
+        replyState.set(pid, { draft: val, sending: false, error: e.message });
+      }
+      populateCard(node, it, runsByProposal.get(pid) || r);
+    });
+  }
 }
 
 const threadItemsByProposal = new Map();
@@ -272,9 +357,11 @@ function update(items) {
     runsByProposal.set(r.proposal_id, r);
     const node = document.querySelector(`.gw-card[data-proposal-id="${CSS.escape(r.proposal_id)}"]`);
     if (node) {
-      // Do not clobber an active inline edit textarea while typing.
+      // Do not clobber an active inline edit or inline reply textarea while typing.
       const ed = editState.get(r.proposal_id);
       if (ed && ed.open && r.proposal_status === "pending") continue;
+      const activeEl = document.activeElement;
+      if (activeEl && node.contains(activeEl) && activeEl.classList.contains("gw-reply-area") && r.run_status === "waiting") continue;
       populateCard(node, threadItemsByProposal.get(r.proposal_id), r);
     }
   }

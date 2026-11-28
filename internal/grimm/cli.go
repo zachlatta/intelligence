@@ -38,8 +38,15 @@ A message, task or rule is the rest of the line, - for stdin, or --file PATH.
   ctl stop <name>                        interrupt a worker's turn
   ctl archive <name|all>                 archive finished workers (files stay)
   ctl directive list | add <rule>|- | remove <n>
-  ctl workflow request --workflow <id|name> [--summary S] [--host H] <input>|-
+  ctl workflow catalog                   list saved workflows (name, trigger, host, steps)
+  ctl workflow request --workflow <id|name> [--summary S] [--host H] [--replaces <proposal-id>] [--repo <path>] <input>|-
+  ctl workflow withdraw <proposal-id> --reason <why>
   ctl workflow list | status <proposal-or-run-id>
+  ctl workflow events <run> [--since <event-id>] [--limit N]
+  ctl workflow peek <run> [--agent orchestrator|<id>] [--lines N]
+  ctl workflow input <run> <text>|-      send guidance to a running or stalled linked run
+  ctl workflow reply <run> <text>|-      answer a waiting clarification ask (refused for sign-off/secrets)
+  ctl workflow cancel <run> --why <reason>
   bus read [--limit N] [--mine]          the shared message board
   bus post --to <name|grimm|all> [--kind chat|handoff|question|result] <message>|-
 
@@ -107,12 +114,28 @@ func ParseCLI(args []string, stdin io.Reader) (Call, error) {
 	group, verb := args[0], args[1]
 	var pos []string
 	file, dash := "", false
-	flags := map[string]*string{"--role": &c.Role, "--name": &c.Name, "--provider": &c.Provider, "--to": &c.To, "--kind": &c.Kind, "--file": &file, "--workflow": &c.Workflow, "--summary": &c.Summary, "--host": &c.Host}
+	flags := map[string]*string{
+		"--role":     &c.Role,
+		"--name":     &c.Name,
+		"--provider": &c.Provider,
+		"--to":       &c.To,
+		"--kind":     &c.Kind,
+		"--file":     &file,
+		"--workflow": &c.Workflow,
+		"--summary":  &c.Summary,
+		"--host":     &c.Host,
+		"--replaces": &c.Replaces,
+		"--repo":     &c.Repo,
+		"--reason":   &c.Reason,
+		"--why":      &c.Reason,
+		"--agent":    &c.Agent,
+	}
 	var ignored string
 	for _, f := range []string{"--from", "--state-dir"} {
 		flags[f] = &ignored // kept from the standalone CLI: the server knows who and where
 	}
 	ints := map[string]*int{"--lines": &c.Lines, "--limit": &c.Lines, "--timeout": &c.Timeout}
+	var since int64
 	mine := false
 	rest := args[2:]
 	if group == "ctl" && verb == "--state-dir" && len(args) > 3 {
@@ -121,6 +144,21 @@ func ParseCLI(args []string, stdin io.Reader) (Call, error) {
 	for i := 0; i < len(rest); i++ {
 		a := rest[i]
 		name, val, hasVal := strings.Cut(a, "=")
+		if name == "--since" && strings.HasPrefix(a, "--") {
+			if !hasVal {
+				if i+1 >= len(rest) {
+					return c, fmt.Errorf("%s needs a value", name)
+				}
+				i++
+				val = rest[i]
+			}
+			n, err := strconv.ParseInt(val, 10, 64)
+			if err != nil || n < 0 {
+				return c, fmt.Errorf("%s needs a number", name)
+			}
+			since = n
+			continue
+		}
 		if p, ok := flags[name]; ok && strings.HasPrefix(a, "--") {
 			if !hasVal {
 				if i+1 >= len(rest) {
@@ -158,18 +196,25 @@ func ParseCLI(args []string, stdin io.Reader) (Call, error) {
 			pos = append(pos, a)
 		}
 	}
-	text := func(from int) (string, error) {
+	c.Since = since
+	readText := func(from int, maxBytes int64) (string, error) {
 		switch {
 		case file != "":
 			b, err := os.ReadFile(file)
 			return strings.TrimSpace(string(b)), err
 		case dash:
-			b, err := io.ReadAll(io.LimitReader(stdin, MaxText+1))
+			b, err := io.ReadAll(io.LimitReader(stdin, maxBytes))
 			return strings.TrimSpace(string(b)), err
 		case len(pos) > from:
 			return strings.Join(pos[from:], " "), nil
 		}
 		return "", nil
+	}
+	text := func(from int) (string, error) {
+		return readText(from, MaxText+1)
+	}
+	workflowText := func(from int) (string, error) {
+		return readText(from, workflow.MaxAPITextBytes+1)
 	}
 	var err error
 	switch group + " " + verb {
@@ -224,21 +269,63 @@ func ParseCLI(args []string, stdin io.Reader) (Call, error) {
 		}
 		c.Args = pos[:1]
 		switch pos[0] {
-		case "list":
+		case "catalog", "list":
 		case "request":
 			if strings.TrimSpace(c.Workflow) == "" {
 				return c, errors.New("workflow request needs --workflow <id|name>")
 			}
-			if c.Text, err = text(1); err == nil && c.Text == "" {
+			if c.Text, err = workflowText(1); err == nil && c.Text == "" {
 				err = errors.New("workflow request needs task input")
 			}
+		case "withdraw":
+			if len(pos) != 2 {
+				return c, errors.New("workflow withdraw <proposal-id> --reason <why>")
+			}
+			if strings.TrimSpace(c.Reason) == "" {
+				return c, errors.New("workflow withdraw needs --reason <why>")
+			}
+			c.Args = pos
 		case "status":
 			if len(pos) != 2 {
 				return c, errors.New("workflow status <proposal-or-run-id>")
 			}
 			c.Args = pos
+		case "events":
+			if len(pos) != 2 {
+				return c, errors.New("workflow events <run> [--since <event-id>] [--limit N]")
+			}
+			c.Args = pos
+		case "peek":
+			if len(pos) != 2 {
+				return c, errors.New("workflow peek <run> [--agent orchestrator|<id>] [--lines N]")
+			}
+			c.Args = pos
+		case "input":
+			if len(pos) < 2 {
+				return c, errors.New("workflow input <run> <text>|-")
+			}
+			c.Args = pos[:2]
+			if c.Text, err = workflowText(2); err == nil && c.Text == "" {
+				err = errors.New("workflow input needs text")
+			}
+		case "reply":
+			if len(pos) < 2 {
+				return c, errors.New("workflow reply <run> <text>|-")
+			}
+			c.Args = pos[:2]
+			if c.Text, err = workflowText(2); err == nil && c.Text == "" {
+				err = errors.New("workflow reply needs text")
+			}
+		case "cancel":
+			if len(pos) != 2 {
+				return c, errors.New("workflow cancel <run> --why <reason>")
+			}
+			if strings.TrimSpace(c.Reason) == "" {
+				return c, errors.New("workflow cancel needs --why <reason>")
+			}
+			c.Args = pos
 		default:
-			return c, errors.New("workflow request --workflow <id|name> <input>|- | list | status <id>")
+			return c, errors.New("workflow catalog | request | withdraw | list | status | events | peek | input | reply | cancel")
 		}
 	case "bus read":
 		c.Verb = "bus-read"

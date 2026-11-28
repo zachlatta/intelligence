@@ -350,7 +350,8 @@ func (a *app) moveRun(w http.ResponseWriter, r *http.Request) {
 	if !decodeWorkflowJSON(w, r, &m) {
 		return
 	}
-	msg, err := a.wf.MoveRun(r.Context(), host, r.PathValue("id"), m)
+	ctx := workflow.WithCallerAgentID(r.Context(), r.Header.Get(workflow.AgentHeader))
+	msg, err := a.wf.MoveRun(ctx, host, r.PathValue("id"), m)
 	if err == nil && m.Move != "summarize" { // labeling a run must not start it or another queued run
 		a.startQueued(r.Context()) // a run that ended may make room for a queued one
 	}
@@ -628,14 +629,15 @@ func (r runRow) Live() bool {
 }
 
 type runEvent struct {
-	Kind         string
-	Step, ToStep *int
-	Text         string
-	At           time.Time
-	InputStatus  string
-	InputError   string
-	APIKeyID     string
-	APIKeyName   string
+	Kind           string
+	Step, ToStep   *int
+	Text           string
+	At             time.Time
+	InputStatus    string
+	InputError     string
+	APIKeyID       string
+	APIKeyName     string
+	GrimmSessionID string
 }
 
 // stepView is one step of a run as its page shows it.
@@ -1094,7 +1096,7 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 		rows, err = v.pool.Query(ctx, `SELECT e.kind,e.step,e.to_step,e.text,e.at,s.snapshot->'selected',s.token,
             CASE WHEN i.delivered THEN 'delivered' WHEN i.pending THEN 'pending'
                  WHEN i.event_id IS NOT NULL THEN 'failed' ELSE '' END, COALESCE(c.error, ''),
-            COALESCE(e.api_key_id::text, ''), COALESCE(ek.name, '')
+            COALESCE(e.api_key_id::text, ''), COALESCE(ek.name, ''), COALESCE(e.grimm_session_id::text, '')
             FROM workflow_run_events e
             LEFT JOIN workflow_model_suggestions s ON s.id=e.suggestion_id
             LEFT JOIN workflow_run_inputs i ON i.event_id=e.id AND i.run_id=e.run_id AND e.kind='input'
@@ -1109,7 +1111,7 @@ func runPage(cfg Config, v viewer) http.HandlerFunc {
 			var e runEvent
 			var selected []byte
 			var token *string
-			err := row.Scan(&e.Kind, &e.Step, &e.ToStep, &e.Text, &e.At, &selected, &token, &e.InputStatus, &e.InputError, &e.APIKeyID, &e.APIKeyName)
+			err := row.Scan(&e.Kind, &e.Step, &e.ToStep, &e.Text, &e.At, &selected, &token, &e.InputStatus, &e.InputError, &e.APIKeyID, &e.APIKeyName, &e.GrimmSessionID)
 			if err == nil && e.Kind == "model_suggestion" {
 				e.Text = modelSuggestionLine(selected, token)
 			}
@@ -1290,6 +1292,9 @@ func (e runEvent) Line() string {
 	case "ask":
 		return "Asked Zach"
 	case "reply":
+		if e.GrimmSessionID != "" {
+			return "Grimm (" + short(e.GrimmSessionID) + ") replied: " + e.Text
+		}
 		if e.APIKeyName != "" {
 			return "API key " + e.APIKeyName + " replied: " + e.Text
 		}
@@ -1297,6 +1302,9 @@ func (e runEvent) Line() string {
 	case "signoff_approved":
 		return "Zach explicitly approved sign-off: " + e.Text
 	case "input":
+		if e.GrimmSessionID != "" {
+			return "Grimm (" + short(e.GrimmSessionID) + ") sent input: " + e.Text
+		}
 		if e.APIKeyName != "" {
 			return "API key " + e.APIKeyName + " sent input: " + e.Text
 		}
@@ -1306,6 +1314,12 @@ func (e runEvent) Line() string {
 	case "fail":
 		return "Failed: " + e.Text
 	case "cancel":
+		if e.GrimmSessionID != "" {
+			if e.Text != "" {
+				return e.Text
+			}
+			return "Canceled via Grimm (" + short(e.GrimmSessionID) + ")"
+		}
 		if e.APIKeyName != "" {
 			return "Canceled by API key " + e.APIKeyName
 		}

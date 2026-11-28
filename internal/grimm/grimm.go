@@ -176,6 +176,17 @@ func event(ctx context.Context, tx pgx.Tx, s Session, actor, kind, level, text s
 	return err
 }
 
+func (s *Service) threadRow(ctx context.Context, tx pgx.Tx, sess Session, kind, sender, body string, data any) (int64, error) {
+	b, _ := json.Marshal(data)
+	if data == nil {
+		b = []byte("{}")
+	}
+	var id int64
+	err := tx.QueryRow(ctx, `INSERT INTO grimm_messages (session_id, account_id, channel, sender, kind, body, data, created_at)
+		VALUES ($1, $2, 'thread', $3, $4, $5, $6, $7) RETURNING id`, sess.ID, sess.Account, sender, kind, body, b, s.now()).Scan(&id)
+	return id, err
+}
+
 func threadRow(ctx context.Context, tx pgx.Tx, s Session, kind, sender, body string, data any) (int64, error) {
 	b, _ := json.Marshal(data)
 	if data == nil {

@@ -92,6 +92,9 @@ func CLI(ctx context.Context, args []string, getenv func(string) string, stdin i
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+key)
+	if agent := strings.TrimSpace(getenv("PASEO_AGENT_ID")); agent != "" {
+		req.Header.Set(AgentHeader, agent)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Fprintln(stderr, err)

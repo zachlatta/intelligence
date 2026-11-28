@@ -321,10 +321,11 @@ func (a *app) grimmDirectiveRemove(v viewer) http.HandlerFunc {
 
 // grimmAgent is POST /api/grimm/agent: an `intelligence grimm` command from an agent on a host,
 // with the host's key, as the agent PASEO_AGENT_ID names (grimm.AgentHeader).
+// Allows up to 1 MiB + 64 KiB JSON framing so workflow requests/inputs up to 1 MiB are never truncated.
 func (a *app) grimmAgent(acct accounts.Account, host string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var c grimm.Call
-		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, (1<<20)+(64<<10)))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&c); err != nil {
 			grimmError(w, &grimm.Error{Status: http.StatusBadRequest, Msg: "bad request: " + err.Error()})
