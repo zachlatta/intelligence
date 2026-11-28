@@ -386,7 +386,7 @@ func (a *app) grimmPage(v viewer) http.HandlerFunc {
 		if err := grimmTmpl.ExecuteTemplate(w, "grimm", map[string]any{
 			"Version": a.cfg.Version, "Session": cur.ID, "CurrentStatus": cur.Status, "CurrentTitle": cur.Title,
 			"CurrentHost": cur.Host, "CurrentBranch": cur.Branch,
-			"Sessions": sessions, "ActiveSessions": activeSessions, "EndedSessions": endedSessions, "Hosts": hosts,
+			"ActiveSessions": activeSessions, "EndedSessions": endedSessions, "Hosts": hosts,
 			"DefaultHost": defaultGrimmHost(hosts, a.cfg.GrimmDefaultHost), "OlderSQL": grimmOlderSQL, "DefaultCap": grimm.DefaultMaxWorkers, "CapLimit": grimm.MaxWorkersLimit,
 			"Dictation": dictationPath(a.cfg),
 		}); err != nil {

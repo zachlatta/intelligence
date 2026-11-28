@@ -2,7 +2,6 @@ package web
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -103,9 +102,6 @@ func TestGrimmEndSessionAPIAndUIAndReadOnlySQL(t *testing.T) {
 	if code != 200 || len(res.Rows) != 1 || res.Rows[0][0] != "Parser looks solid." {
 		t.Fatalf("grimm_thread after archive + host report: %d %+v", code, res)
 	}
-	code, res = sqlPost(t, h, `SELECT name, status FROM grimm_workers WHERE session_id = '`+id1+`'`)
-	_ = code
-	// Use JSON body for sqlPost:
 	code, res = sqlPost(t, h, `{"query":"SELECT name, status FROM grimm_workers WHERE session_id = '`+id1+`'"}`)
 	if code != 200 || len(res.Rows) != 1 || res.Rows[0][0] != "athena" || res.Rows[0][1] != "archived" {
 		t.Fatalf("grimm_workers after archive: %d %+v", code, res)
@@ -252,7 +248,7 @@ func TestGrimmEndSessionBrowser(t *testing.T) {
 	cmd := exec.CommandContext(t.Context(), py, script, srv.URL, c1.ID, c2.ID, c.Name, c.Value, out)
 	cmd.Env = os.Environ()
 	b, err := cmd.CombinedOutput()
-	fmt.Println(string(b))
+	t.Logf("%s", b)
 	if err != nil {
 		t.Fatalf("browser verification failed: %v", err)
 	}
