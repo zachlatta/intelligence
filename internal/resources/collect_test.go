@@ -65,8 +65,20 @@ func TestCollectorWithoutTheProbeUsesProcTicks(t *testing.T) {
 	if len(r.Agents) != 1 || r.Agents[0].CPUSeconds == nil || *r.Agents[0].CPUSeconds != 1.5 || r.Agents[0].CPUSource != "proc" || r.Agents[0].Execs != nil {
 		t.Errorf("agents = %+v", r.Agents)
 	}
-	if r.Probe == nil || r.Probe.Running || r.Probe.Error == "" {
+	if r.Probe == nil || r.Probe.Running || r.Probe.Error == "" || r.Probe.Unsupported {
 		t.Errorf("probe = %+v", r.Probe)
+	}
+}
+
+func TestCollectorWhenProbeUnsupportedMarksUnsupported(t *testing.T) {
+	c := &Collector{ProbeUnsupported: true}
+	c.addWalk(m0.Add(5*time.Second), map[string]AgentProcs{"a1": {Processes: 2, Mem: 4096, CPUTicks: 250}})
+	r := c.finish(m0, nil, nil)
+	if len(r.Agents) != 1 || r.Agents[0].CPUSeconds == nil || *r.Agents[0].CPUSeconds != 2.5 || r.Agents[0].CPUSource != "proc" || r.Agents[0].MemMax != 4096 || r.Agents[0].ProcessesMax != 2 {
+		t.Errorf("agents = %+v", r.Agents)
+	}
+	if r.Probe == nil || r.Probe.Running || !r.Probe.Unsupported || r.Probe.Error != "" {
+		t.Errorf("probe = %+v, want Unsupported=true, Running=false, Error=\"\"", r.Probe)
 	}
 }
 

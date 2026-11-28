@@ -448,10 +448,16 @@ func runHost(ctx context.Context) error {
 	}
 	// every minute: the host, each agent's processes, and the eBPF probe's CPU and OOM kills
 	probeSocket := c.ProbeSocket
-	if runtime.GOOS != "linux" {
+	probeUnsupported := runtime.GOOS != "linux"
+	if probeUnsupported {
 		probeSocket = ""
 	}
-	b.Resources = &resources.Collector{Reader: &resources.Reader{Home: home}, Walker: &resources.AgentWalker{}, ProbeSocket: probeSocket}
+	b.Resources = &resources.Collector{
+		Reader:           &resources.Reader{Home: home},
+		Walker:           &resources.AgentWalker{},
+		ProbeSocket:      probeSocket,
+		ProbeUnsupported: probeUnsupported,
+	}
 	log.Printf("intelligence host %s streaming as %s to %s (self-update %v)", v, c.Name, c.Server, b.Update != nil)
 	return b.Run(ctx)
 }

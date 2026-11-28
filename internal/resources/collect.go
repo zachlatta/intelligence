@@ -31,20 +31,22 @@ type AgentMinute struct {
 
 // ProbeStatus says whether the host's eBPF probe answers.
 type ProbeStatus struct {
-	Running bool   `json:"running"`
-	Version string `json:"version,omitempty"`
-	Error   string `json:"error,omitempty"`
-	Tracked int    `json:"tracked,omitempty"`
+	Running     bool   `json:"running"`
+	Unsupported bool   `json:"unsupported,omitempty"`
+	Version     string `json:"version,omitempty"`
+	Error       string `json:"error,omitempty"`
+	Tracked     int    `json:"tracked,omitempty"`
 }
 
 // Collector samples the host and its agents and sends each finished minute.
 type Collector struct {
-	Reader      *Reader
-	Walker      *AgentWalker
-	ProbeSocket string // "" for none
-	Send        func(context.Context, Report) error
-	SampleEvery time.Duration // default 5s
-	WalkEvery   time.Duration // default 15s
+	Reader           *Reader
+	Walker           *AgentWalker
+	ProbeSocket      string // "" for none
+	ProbeUnsupported bool   // true on OSes without an eBPF probe (e.g. macOS)
+	Send             func(context.Context, Report) error
+	SampleEvery      time.Duration // default 5s
+	WalkEvery        time.Duration // default 15s
 
 	samples  []Sample
 	before   Sample // the last sample of the minute before
@@ -123,7 +125,11 @@ func (c *Collector) finish(m time.Time, snap *probe.Snapshot, probeErr error) Re
 		}
 		c.epoch, c.counters = snap.Epoch, snap.Agents
 	default:
-		r.Probe = &ProbeStatus{Error: errString(probeErr)}
+		if c.ProbeUnsupported {
+			r.Probe = &ProbeStatus{Unsupported: true}
+		} else {
+			r.Probe = &ProbeStatus{Error: errString(probeErr)}
+		}
 		c.epoch, c.counters = "", nil
 		for id, w := range c.walks {
 			secs := float64(w.CPUTicks) / 100 // USER_HZ
