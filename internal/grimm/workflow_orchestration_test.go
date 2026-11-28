@@ -436,23 +436,31 @@ func TestManagerStartRetryBackoffAndDeduplicatedNotices(t *testing.T) {
 	var wsCmd string
 	_ = r.d.Owner.QueryRow(ctx, `SELECT workspace_command_id::text FROM grimm_sessions WHERE id = $1`, sid).Scan(&wsCmd)
 	r.exec(`UPDATE commands SET status = 'succeeded', result = '{"workspaceId":"ws-1"}' WHERE id = $1`, wsCmd)
-	r.reconcile(sid)
 
 	// Remove all model groups so startManager fails deterministically.
 	r.exec(`DELETE FROM model_groups`)
 
-	// Human posts a message: 1st failure, 1 failed manager epoch, 1 notice.
-	if _, err := r.s.Post(ctx, r.acct, sid, "Hello Grimm"); err != nil {
-		t.Fatal(err)
-	}
 	counts := func() (epochs, notices int) {
 		_ = r.d.Owner.QueryRow(ctx, `SELECT count(*) FROM grimm_managers WHERE session_id = $1 AND status = 'failed'`, sid).Scan(&epochs)
 		_ = r.d.Owner.QueryRow(ctx, `SELECT count(*) FROM grimm_messages WHERE session_id = $1 AND kind = 'notice'`, sid).Scan(&notices)
 		return
 	}
+	// The worktree is ready: the supervisor's warm-up pre-start fails silently (a failed epoch, no
+	// notice), and does not count toward the backoff after the human's message.
+	r.reconcile(sid)
 	ep, nt := counts()
-	if ep != 1 || nt != 1 {
-		t.Fatalf("after 1st failure: epochs=%d notices=%d, want 1, 1", ep, nt)
+	if ep != 1 || nt != 0 {
+		t.Fatalf("after warm-up failure: epochs=%d notices=%d, want 1, 0", ep, nt)
+	}
+	r.later(time.Second)
+
+	// Human posts a message: 1st failure since it, 1 more failed manager epoch, 1 notice.
+	if _, err := r.s.Post(ctx, r.acct, sid, "Hello Grimm"); err != nil {
+		t.Fatal(err)
+	}
+	ep, nt = counts()
+	if ep != 2 || nt != 1 {
+		t.Fatalf("after 1st failure: epochs=%d notices=%d, want 2, 1", ep, nt)
 	}
 
 	// Supervisor ticks 10 times within 4 seconds: exponential backoff prevents retry storm!
@@ -461,32 +469,32 @@ func TestManagerStartRetryBackoffAndDeduplicatedNotices(t *testing.T) {
 		r.reconcile(sid)
 	}
 	ep, nt = counts()
-	if ep != 1 || nt != 1 {
-		t.Fatalf("during 5s backoff: epochs=%d notices=%d, want 1, 1", ep, nt)
+	if ep != 2 || nt != 1 {
+		t.Fatalf("during 5s backoff: epochs=%d notices=%d, want 2, 1", ep, nt)
 	}
 
 	// Advance past 5s initial backoff: retries once (2nd failure), notice stays deduplicated at 1!
 	r.later(2 * time.Second)
 	r.reconcile(sid)
 	ep, nt = counts()
-	if ep != 2 || nt != 1 {
-		t.Fatalf("after 5s backoff: epochs=%d notices=%d, want 2, 1", ep, nt)
+	if ep != 3 || nt != 1 {
+		t.Fatalf("after 5s backoff: epochs=%d notices=%d, want 3, 1", ep, nt)
 	}
 
 	// Advance 9s (< 10s second backoff): must NOT retry.
 	r.later(9 * time.Second)
 	r.reconcile(sid)
 	ep, nt = counts()
-	if ep != 2 || nt != 1 {
-		t.Fatalf("during 10s backoff: epochs=%d notices=%d, want 2, 1", ep, nt)
+	if ep != 3 || nt != 1 {
+		t.Fatalf("during 10s backoff: epochs=%d notices=%d, want 3, 1", ep, nt)
 	}
 
 	// Advance 2s (>= 10s): retries (3rd failure), notice STILL deduplicated at 1!
 	r.later(2 * time.Second)
 	r.reconcile(sid)
 	ep, nt = counts()
-	if ep != 3 || nt != 1 {
-		t.Fatalf("after 10s backoff: epochs=%d notices=%d, want 3, 1", ep, nt)
+	if ep != 4 || nt != 1 {
+		t.Fatalf("after 10s backoff: epochs=%d notices=%d, want 4, 1", ep, nt)
 	}
 
 	// Human posts a new message: retries immediately regardless of backoff!
@@ -495,7 +503,7 @@ func TestManagerStartRetryBackoffAndDeduplicatedNotices(t *testing.T) {
 		t.Fatal(err)
 	}
 	ep, _ = counts()
-	if ep != 4 {
-		t.Fatalf("after human retry message: epochs=%d, want 4", ep)
+	if ep != 5 {
+		t.Fatalf("after human retry message: epochs=%d, want 5", ep)
 	}
 }
