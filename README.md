@@ -605,6 +605,10 @@ against its daemon and reports `running`, then `succeeded` with a result (`{"wor
   branches. It refuses a commit that is not on that branch, or whose blob at `path` differs from
   the blob at the branch's tip. The result is `{"content"}`, the blob as UTF-8 text, up to 512 KiB.
   A mapped project with `treeSource` (Workflows, below) sends it before a run starts.
+- `read_file`: `path` (a clean absolute path) and `roots` (1 to 16 clean absolute directories, not
+  `/`). The host resolves symlinks in both and reads the file only if it is a regular file strictly
+  inside one of the roots, up to 2 MiB. The result is `{"content","encoding","mediaType","size"}`:
+  `encoding` is `utf-8` for text and `base64` otherwise. Grimm's file links (below) send it.
 - `create_schedule`: `prompt`, a cadence (`every`, a duration of at least `1m` such as `30m` or
   `1h30m`; or `cron`, five fields, with an optional `timezone`), and `agent`: `provider`, `cwd`, and
   optionally `model`, `thinking`, `mode`, `title`, `isolation` (`worktree`, a new git worktree each
@@ -1654,6 +1658,13 @@ redeploy or a restart loses nothing.
 - **Attachments** use the shared picker and limits (below): images and files go to the manager as
   references, delivered to its working directory; a message with attachments always goes to the
   manager, whatever its first word. The thread shows the images, read through `/api/sql`.
+- **File links**: a Markdown `[name](file:///path)` link (or a bare `file:///path`, optionally
+  `#L10-L25`) in the thread is a file pill. Clicking it calls `POST
+  /api/grimm/sessions/{id}/read-file` `{"path"}`, which refuses a path outside the session's
+  worktree, repository or its agents' working directories and queues `read_file` on the session's
+  host (returning 202 `{"commandId","path","name"}`); the page reads the command's result from
+  `commands` through `/api/sql` and shows it in a viewer (rendered or raw Markdown, numbered lines,
+  images, download).
 - **Transcripts** of Grimm sessions' agents are kept after Paseo archives the agents and after the
   session ends, so the thread and every worker's log stay readable in the UI and through `/api/sql`.
 - **Ending a session** (`POST /api/grimm/sessions/{id}/archive` with `{"deleteWorktree": bool}`,

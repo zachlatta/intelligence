@@ -60,6 +60,33 @@ async function sql(query) {
 
 // ---------- markdown: escape first, then a small safe subset ----------
 const LIST_RE = /^\s*([-*+]|\d+[.)])\s+/;
+function unescAttr(s) {
+  return String(s ?? "").replace(/&amp;/g, "&").replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+}
+function parseFileURL(raw) {
+  const s = unescAttr(raw);
+  let rest;
+  if (s.startsWith("file:///")) rest = s.slice(7); // keep leading "/"
+  else if (/^file:\/\/localhost\//i.test(s)) rest = s.slice(16); // keep leading "/"
+  else return null;
+  let hash = "";
+  const hashIdx = rest.indexOf("#");
+  if (hashIdx >= 0) {
+    const frag = rest.slice(hashIdx);
+    rest = rest.slice(0, hashIdx);
+    if (/^#L\d+(-L?\d+)?$/i.test(frag)) hash = frag;
+  }
+  let filePath = rest;
+  try { filePath = decodeURIComponent(rest); } catch (_) { /* keep raw if malformed % */ }
+  if (!filePath.startsWith("/") || filePath.length < 2 || filePath.includes("\u0000")) return null;
+  return { path: filePath, hash };
+}
+function fileLinkHTML(labelHTML, rawURL) {
+  const info = parseFileURL(rawURL);
+  if (!info) return null;
+  const href = `#file-${encodeURIComponent(info.path)}${info.hash || ""}`;
+  return `<a class="g-file-link" href="${esc(href)}" data-file-path="${esc(info.path)}"${info.hash ? ` data-file-hash="${esc(info.hash)}"` : ""} title="${esc(info.path)}"><span class="g-file-ico" aria-hidden="true">📄</span>${labelHTML}</a>`;
+}
 function md(src, names) {
   const blocks = [];
   const text = String(src ?? "").replace(/```([\w-]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
@@ -73,8 +100,25 @@ function md(src, names) {
     s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
       .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, "$1<em>$2</em>")
       .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
-      .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
-    if (nameRe) s = s.split(/(<[^>]+>)/).map((p) => (p.startsWith("<") ? p : p.replace(nameRe, (m) => chipHTML(m)))).join("");
+      .replace(/\[([^\]]+)\]\((file:\/\/[^\s)]+)\)/g, (full, label, url) => fileLinkHTML(label, url) || full)
+      .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>')
+      .replace(/(^|[\s(])(file:\/\/\/[^\s<)]+)/g, (full, pre, url) => {
+        const info = parseFileURL(url);
+        if (!info) return full;
+        const name = info.path.split("/").pop() || info.path;
+        return pre + fileLinkHTML(esc(name), url);
+      });
+    if (nameRe) {
+      let inLink = false;
+      s = s.split(/(<[^>]+>)/).map((p) => {
+        if (p.startsWith("<")) {
+          if (/^<a[\s>]/i.test(p)) inLink = true;
+          else if (/^<\/a>/i.test(p)) inLink = false;
+          return p;
+        }
+        return inLink ? p : p.replace(nameRe, (m) => chipHTML(m));
+      }).join("");
+    }
     return s.replace(/\u0001(\d+)\u0001/g, (_, i) => codes[+i]);
   };
   const lines = text.split("\n");
@@ -1398,7 +1442,10 @@ function bindSession() {
     composer.classList.remove("is-dragging");
     addFiles(e.dataTransfer.files);
   });
-  window.addEventListener("pagehide", () => { for (const d of drafts) if (d.preview) URL.revokeObjectURL(d.preview); });
+  window.addEventListener("pagehide", () => {
+    for (const d of drafts) if (d.preview) URL.revokeObjectURL(d.preview);
+    revokeFileBlobURLs();
+  });
 
   $("#g-stop").addEventListener("click", async () => { try { await api("POST", `/api/grimm/sessions/${S.id}/manager/interrupt`, {}); } catch (e) { toast(e.message, true); } });
   $("#g-suggest").addEventListener("click", (e) => {
@@ -1485,6 +1532,12 @@ function bindSession() {
     try { await api("POST", `/api/grimm/sessions/${S.id}/directives`, { text: v }); box.value = ""; } catch (err) { toast(err.message, true); }
   });
   document.addEventListener("click", (e) => {
+    const fileLink = e.target.closest("a.g-file-link");
+    if (fileLink && fileLink.dataset.filePath) {
+      e.preventDefault();
+      openFileViewer(fileLink.dataset.filePath, fileLink.dataset.fileHash || "");
+      return;
+    }
     const chip = e.target.closest(".g-wchip, .g-card");
     if (chip && chip.dataset.worker) { e.preventDefault(); openFocus(chip.dataset.worker); }
   });
@@ -1588,6 +1641,7 @@ function bindSession() {
 
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
+      if ($("#g-file-modal")) { closeFileViewer(); return; }
       const lb = $(".g-lightbox");
       if (lb) { lb.remove(); return; }
       if (!$("#g-end-dialog").hidden) { closeEndDialog(true); return; }
@@ -1688,7 +1742,167 @@ function bindNew() {
   });
 }
 
+// ---------- file viewer modal ----------
+function formatBytes(n) {
+  if (n == null || n < 0) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`;
+  return `${(n / (1024 * 1024)).toFixed(2)} MiB`;
+}
+function parseLineRange(hash) {
+  const m = String(hash || "").match(/^#L(\d+)(?:-L?(\d+))?$/i);
+  if (!m) return null;
+  const start = parseInt(m[1], 10);
+  const end = m[2] ? Math.max(start, parseInt(m[2], 10)) : start;
+  return { start, end };
+}
+function renderCodeLines(text, range) {
+  const lines = String(text ?? "").split("\n");
+  const rows = lines.map((line, idx) => {
+    const n = idx + 1;
+    const hi = range && n >= range.start && n <= range.end ? " hi" : "";
+    return `<div class="g-fline${hi}" data-line="${n}"><span class="g-fnum">${n}</span><span class="g-ftxt">${esc(line) || " "}</span></div>`;
+  }).join("");
+  return `<div class="g-fcode">${rows}</div>`;
+}
+let fileReqSeq = 0;
+let fileBlobURLs = [];
+function revokeFileBlobURLs() {
+  for (const u of fileBlobURLs) {
+    try { URL.revokeObjectURL(u); } catch (_) { /* ignore */ }
+  }
+  fileBlobURLs = [];
+}
+function closeFileViewer() {
+  fileReqSeq++;
+  revokeFileBlobURLs();
+  $("#g-file-modal")?.remove();
+}
+function safeRawBlobType(mediaType) {
+  const base = String(mediaType || "").split(";")[0].trim().toLowerCase();
+  if (["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf"].includes(base)) return base;
+  return "text/plain; charset=utf-8";
+}
+function fileResultToBytes(res) {
+  if (res.encoding === "base64") {
+    const bin = atob(res.content || "");
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  return new TextEncoder().encode(res.content || "");
+}
+function makeFileBlobURL(bytes, type) {
+  const u = URL.createObjectURL(new Blob([bytes], { type }));
+  fileBlobURLs.push(u);
+  return u;
+}
+async function pollReadFileCommand(cmdID, seq, modal) {
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    if (seq !== fileReqSeq || !document.body.contains(modal)) return null;
+    const rows = await sql(`SELECT status, result, error FROM commands WHERE id = '${cmdID}'`);
+    if (seq !== fileReqSeq || !document.body.contains(modal)) return null;
+    const [status, result, errMsg] = rows[0] || [];
+    if (status === "succeeded") return result || {};
+    if (status === "failed" || status === "expired") {
+      const msg = String(errMsg || status).trim();
+      if (/unknown command kind/i.test(msg)) throw new Error("this host needs an updated intelligence agent to open files");
+      throw new Error(msg || "could not read file");
+    }
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  throw new Error(`timed out waiting for ${S.session.host || "the host"} to read the file`);
+}
+async function openFileViewer(filePath, hash) {
+  closeFileViewer();
+  const seq = fileReqSeq;
+  const name = filePath.split("/").pop() || filePath;
+  const modal = el("div", "g-file-modal", `
+    <div class="g-file-dialog" role="dialog" aria-modal="true" aria-label="${esc(name)}">
+      <div class="g-file-head">
+        <div class="g-file-title">
+          <div class="g-file-name">${esc(name)}</div>
+          <div class="g-file-path" title="${esc(filePath)}">${esc(filePath)}</div>
+        </div>
+        <div class="g-file-tools">
+          <span class="g-file-meta" id="g-file-meta"></span>
+          <button type="button" class="btn sm ghost" id="g-file-toggle" hidden>Raw</button>
+          <button type="button" class="btn sm ghost" id="g-file-copy" title="Copy full path">Copy path</button>
+          <a class="btn sm ghost" id="g-file-raw" target="_blank" rel="noopener noreferrer" hidden>Open raw</a>
+          <a class="btn sm ghost" id="g-file-dl" download="${esc(name)}" hidden>Download</a>
+          <button type="button" class="g-icon" id="g-file-close" aria-label="Close file viewer" title="Close (Esc)">×</button>
+        </div>
+      </div>
+      <div class="g-file-body" id="g-file-body"><p class="muted">Loading ${esc(name)}…</p></div>
+    </div>`);
+  modal.id = "g-file-modal";
+  modal.addEventListener("click", (e) => { if (e.target === modal) closeFileViewer(); });
+  $("#g-file-close", modal).addEventListener("click", closeFileViewer);
+  $("#g-file-copy", modal).addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(filePath); toast("Copied file path."); }
+    catch (_) { toast("Could not copy path.", true); }
+  });
+  document.body.append(modal);
+  $("#g-file-close", modal).focus();
+
+  const body = $("#g-file-body", modal);
+  const meta = $("#g-file-meta", modal);
+  const toggle = $("#g-file-toggle", modal);
+  const rawLink = $("#g-file-raw", modal);
+  const dlLink = $("#g-file-dl", modal);
+  try {
+    const req = await api("POST", `/api/grimm/sessions/${encodeURIComponent(S.id)}/read-file`, { path: filePath });
+    if (seq !== fileReqSeq || !document.body.contains(modal)) return;
+    if (!req.commandId || !/^[0-9a-f-]{36}$/.test(req.commandId)) throw new Error("unexpected response from server");
+    const res = await pollReadFileCommand(req.commandId, seq, modal);
+    if (!res || seq !== fileReqSeq || !document.body.contains(modal)) return;
+    const fileName = req.name || name;
+    meta.textContent = formatBytes(res.size);
+    const mt = String(res.mediaType || "").toLowerCase();
+    const isMD = mt.startsWith("text/markdown") || /\.(md|markdown|mdx)$/i.test(fileName);
+    const isRasterImg = /^image\/(png|jpeg|gif|webp)\b/.test(mt) && res.encoding === "base64";
+    const range = parseLineRange(hash);
+
+    const bytes = fileResultToBytes(res);
+    const rawURL = makeFileBlobURL(bytes, safeRawBlobType(res.mediaType));
+    const dlURL = makeFileBlobURL(bytes, "application/octet-stream");
+    rawLink.href = rawURL; rawLink.hidden = false;
+    dlLink.href = dlURL; dlLink.download = fileName; dlLink.hidden = false;
+
+    if (isRasterImg) {
+      const img = el("img", "g-file-img");
+      img.src = rawURL;
+      img.alt = fileName;
+      body.innerHTML = "";
+      body.append(img);
+    } else if (res.encoding === "utf-8") {
+      if (isMD) {
+        let showRaw = !!range; // a #L anchor opens Markdown raw so the lines can be highlighted
+        const draw = () => {
+          toggle.textContent = showRaw ? "Rendered" : "Raw";
+          body.innerHTML = showRaw ? renderCodeLines(res.content, range) : `<div class="g-md g-file-md">${md(res.content, knownNames())}</div>`;
+        };
+        toggle.hidden = false;
+        toggle.addEventListener("click", () => { showRaw = !showRaw; draw(); });
+        draw();
+      } else {
+        body.innerHTML = renderCodeLines(res.content, range);
+      }
+      if (range) {
+        const target = body.querySelector(`.g-fline[data-line="${range.start}"]`);
+        if (target) target.scrollIntoView({ block: "center" });
+      }
+    } else {
+      body.innerHTML = `<div class="g-file-binary"><p>Binary file (${esc(res.mediaType || "application/octet-stream")}, ${esc(formatBytes(res.size))}).</p><p><a class="btn sm primary" href="${esc(dlURL)}" download="${esc(fileName)}">Download ${esc(fileName)}</a> <a class="btn sm ghost" href="${esc(rawURL)}" target="_blank" rel="noopener noreferrer">Open in new tab</a></p></div>`;
+    }
+  } catch (err) {
+    if (seq !== fileReqSeq || !document.body.contains(modal)) return;
+    body.innerHTML = `<div class="g-file-err" role="alert"><p><b>Could not open file:</b> ${esc(err.message)}</p><p class="muted small"><code>${esc(filePath)}</code></p></div>`;
+  }
+}
+
 if (root) bindSession(); else bindNew();
 // for tests and the console
-window.grimmLabels = { describeTool, grimmCalls, md, statusHTML };
+window.grimmLabels = { describeTool, grimmCalls, md, statusHTML, parseFileURL, safeRawBlobType };
 })();

@@ -403,6 +403,33 @@
 .g-lightbox { position: fixed; inset: 0; z-index: 70; background: rgba(0, 0, 0, .75); display: flex; align-items: center; justify-content: center; cursor: zoom-out; }
 .g-lightbox img { max-width: 94vw; max-height: 92vh; border-radius: 6px; }
 
+/* file:// links and in-page file viewer */
+.g-md a.g-file-link { display: inline-flex; align-items: baseline; gap: .25rem; padding: .02rem .35rem; border-radius: 5px;
+  background: color-mix(in srgb, var(--link) 10%, var(--bg-subtle)); border: 1px solid color-mix(in srgb, var(--link) 28%, var(--line));
+  color: var(--link); text-decoration: none; font-weight: 500; vertical-align: baseline; transition: border-color .12s, background .12s; }
+.g-md a.g-file-link:hover { background: color-mix(in srgb, var(--link) 16%, var(--bg-subtle)); border-color: var(--link); text-decoration: underline; }
+.g-md a.g-file-link code { background: transparent; padding: 0; color: inherit; }
+.g-file-ico { font-size: .85em; line-height: 1; opacity: .85; }
+.g-file-modal { position: fixed; inset: 0; z-index: 65; background: rgba(0, 0, 0, .55); display: flex; align-items: center; justify-content: center; padding: 1.25rem; }
+.g-file-dialog { width: min(64rem, 100%); max-height: 90dvh; display: flex; flex-direction: column; background: var(--panel);
+  border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: var(--shadow-md); overflow: hidden; }
+.g-file-head { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .75rem; padding: .65rem .9rem; border-bottom: 1px solid var(--line); background: var(--bg-subtle); }
+.g-file-title { min-width: 0; flex: 1 1 16rem; }
+.g-file-name { font-weight: 700; font-size: 14.5px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.g-file-path { font-family: var(--mono); font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.g-file-tools { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; flex: none; }
+.g-file-meta { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-right: .2rem; }
+.g-file-body { flex: 1; min-height: 0; overflow: auto; padding: 1rem 1.15rem; background: var(--bg); }
+.g-file-md { max-width: 48rem; margin: 0 auto; font-size: 14px; line-height: 1.6; }
+.g-file-img { display: block; max-width: 100%; max-height: 75dvh; margin: 0 auto; border-radius: 6px; border: 1px solid var(--line); }
+.g-fcode { font-family: var(--mono); font-size: 12.5px; line-height: 1.5; }
+.g-fline { display: flex; gap: .75rem; padding: 0 .35rem; border-radius: 3px; }
+.g-fline.hi { background: color-mix(in srgb, var(--link) 16%, transparent); }
+.g-fnum { flex: none; min-width: 2.5rem; text-align: right; color: var(--faint); user-select: none; font-variant-numeric: tabular-nums; }
+.g-ftxt { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); flex: 1; min-width: 0; }
+.g-file-err { color: var(--red); padding: .5rem .75rem; border: 1px solid var(--red-line); background: var(--red-bg); border-radius: 8px; }
+.g-file-binary { padding: 1rem 0; color: var(--fg-2); }
+
 /* tablet: Chat + Team side-by-side, Quota/Directives/Activity in a slide-over drawer */
 @media (max-width: 1180px) and (min-width: 781px) {
   .grimm { grid-template-columns: minmax(0, 1fr) minmax(17rem, 21rem); grid-template-rows: auto auto minmax(0, 1fr);

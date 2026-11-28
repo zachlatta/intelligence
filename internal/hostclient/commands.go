@@ -69,6 +69,7 @@ const (
 	ContinueEmailKind    = "continue_email"
 	SwitchLoginKind      = "switch_login"
 	ReadGitFileKind      = "read_git_file"
+	ReadFileKind         = "read_file"
 )
 
 // ReadGitFileArgs reads a single UTF-8 file from a verified commit on origin's default branch
@@ -180,9 +181,12 @@ type CommandResult struct {
 	ArchivedAgents       int                 `json:"archivedAgents,omitempty"` // archive_workspace: how many agents went with it
 	WorktreeDiff         *WorktreeDiffResult `json:"worktreeDiff,omitempty"`   // worktree_diff: uncommitted changes snapshot
 	WorktreeBaseFallback bool                `json:"worktreeBaseFallback,omitempty"`
-	Login                string              `json:"login,omitempty"`   // switch_login: the login now active
-	Slot                 int                 `json:"slot,omitempty"`    // switch_login: its cswap slot when switched
-	Content              string              `json:"content,omitempty"` // read_git_file: UTF-8 blob contents at commit
+	Login                string              `json:"login,omitempty"`     // switch_login: the login now active
+	Slot                 int                 `json:"slot,omitempty"`      // switch_login: its cswap slot when switched
+	Content              string              `json:"content,omitempty"`   // read_git_file / read_file: UTF-8 or base64 contents
+	MediaType            string              `json:"mediaType,omitempty"` // read_file: detected MIME type
+	Encoding             string              `json:"encoding,omitempty"`  // read_file: "utf-8" or "base64"
+	Size                 int64               `json:"size,omitempty"`      // read_file: file size in bytes
 }
 
 // ParseCommand decodes args for kind strictly (no unknown fields) and checks what it needs. The
@@ -320,6 +324,12 @@ func ParseCommand(kind string, args json.RawMessage) (any, error) {
 		a.Commit = commit
 		a.Path = rel
 		return a, nil
+	case ReadFileKind:
+		var a ReadFileArgs
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		return validateReadFileArgs(a)
 	case CreateScheduleKind, UpdateScheduleKind, PauseScheduleKind, ResumeScheduleKind, DeleteScheduleKind, RunScheduleKind:
 		return parseSchedule(kind, decode) // schedules.go
 	}
@@ -357,6 +367,9 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 	if a, ok := parsed.(ReadGitFileArgs); ok {
 		content, err := ReadGitFile(ctx, a)
 		return CommandResult{Content: content}, err
+	}
+	if a, ok := parsed.(ReadFileArgs); ok {
+		return ReadFile(ctx, a)
 	}
 	if a, ok := parsed.(WorkspaceArgs); ok && cmd.Kind == ArchiveWorkspaceKind && a.WaitForAgent != "" {
 		return w.archiveAfterTurn(ctx, a)
