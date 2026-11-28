@@ -214,17 +214,21 @@ type AgentProcs struct {
 // AgentWalker finds each Paseo agent's processes: every process whose environment names it
 // (PASEO_AGENT_ID, which an agent's commands inherit). It reads only processes of its own user.
 type AgentWalker struct {
-	Proc     string // default /proc
-	PageSize uint64 // default the system's
+	Proc     string // default /proc (Linux)
+	PageSize uint64 // default the system's (Linux)
 
-	prev map[int]procTicks
+	prev         map[int]procTicks
+	darwinBuf    []byte
+	darwinAgents map[int]darwinCachedAgent
+	darwinTBFreq uint64
+	darwinArgMax int
 }
 
 type procTicks struct{ start, ticks uint64 }
 
 var agentVar = []byte("PASEO_AGENT_ID=")
 
-func (w *AgentWalker) Walk() map[string]AgentProcs {
+func (w *AgentWalker) walkLinux() map[string]AgentProcs {
 	root := w.Proc
 	if root == "" {
 		root = "/proc"

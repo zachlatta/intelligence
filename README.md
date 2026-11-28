@@ -727,10 +727,12 @@ Every host measures itself (`internal/resources`) and sends each finished minute
   The newest reading replaces the host's rows in `host_filesystems` (`used_frac` is how full).
 - Each agent, every 15 seconds: its processes are those whose environment names it
   (`PASEO_AGENT_ID`, which commands inherit); a minute keeps their most memory (proportional set
-  size, so shared pages count once) and how many there were.
-- Each agent's CPU and commands, and every OOM kill, from the eBPF probe where it runs (below);
-  otherwise CPU comes from the processes alive at each 15-second walk, which misses short-lived
-  commands (`cpu_source` says which).
+  size on Linux, resident size on macOS) and how many there were. On macOS this walks the current
+  user's processes with Darwin syscalls (`kern.proc.uid`, `KERN_PROCARGS2`, and `PROC_PIDTASKINFO`),
+  also attributing descendant processes via PPID, without root or Full Disk Access.
+- Each agent's CPU and commands, and every OOM kill, from the eBPF probe where it runs (Linux,
+  below); otherwise CPU comes from the processes alive at each 15-second walk, which misses
+  short-lived commands (`cpu_source` says which).
 
 The server keeps 90 days of minutes (OOM kills are kept). `host_current` is each host's newest
 minute (with `load1_per_cpu`); `host_days` and `agent_days` sum days (`host_days` has the day's

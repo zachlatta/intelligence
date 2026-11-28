@@ -462,4 +462,45 @@ func TestGrimmHostWidgetRendersMetersDetailAndStaleState(t *testing.T) {
 	if !strings.Contains(oldOom, `g-host-btn lv-warn`) || strings.Contains(oldOom, `g-host-btn lv-crit`) {
 		t.Errorf("old OOM pill should be lv-warn, not lv-crit:\n%s", oldOom)
 	}
+
+	// macOS hosts (no probe row -> probe_running: null, or probe_error: "unsupported") must not show "eBPF probe off",
+	// whereas a Linux host with a failing probe (probe_running: false, probe_error: "dial ...") still shows it.
+	noProbeRow := `{
+		"session_id": "00000000-0000-4000-8000-000000000001",
+		"host": "mac-box",
+		"host_online": true,
+		"has_reading": true,
+		"minute": "2026-11-27T23:14:40Z",
+		"fresh": true,
+		"cpus": 10,
+		"cpu_avg_pct": 15.0,
+		"cpu_max_pct": 25.0,
+		"load1": 1.0,
+		"mem_total": 34359738368,
+		"mem_available_min": 25769803776,
+		"mem_used_frac": 0.25,
+		"disk_total": 107374182400,
+		"disk_available_min": 85899345920,
+		"disk_used_frac": 0.20,
+		"probe_running": null,
+		"probe_error": "",
+		"filesystems": [],
+		"recent_ooms": [],
+		"session_agents": []
+	}`
+	if out := run(noProbeRow); strings.Contains(out, "eBPF probe off") {
+		t.Errorf("null probe_running should not show eBPF probe off:\n%s", out)
+	}
+
+	unsupportedProbeRow := strings.Replace(noProbeRow, `"probe_running": null,`, `"probe_running": false,`, 1)
+	unsupportedProbeRow = strings.Replace(unsupportedProbeRow, `"probe_error": ""`, `"probe_error": "unsupported"`, 1)
+	if out := run(unsupportedProbeRow); strings.Contains(out, "eBPF probe off") {
+		t.Errorf("unsupported probe should not show eBPF probe off:\n%s", out)
+	}
+
+	brokenProbeRow := strings.Replace(noProbeRow, `"probe_running": null,`, `"probe_running": false,`, 1)
+	brokenProbeRow = strings.Replace(brokenProbeRow, `"probe_error": ""`, `"probe_error": "dial unix: no such file"`, 1)
+	if out := run(brokenProbeRow); !strings.Contains(out, "eBPF probe off") {
+		t.Errorf("broken Linux probe should show eBPF probe off:\n%s", out)
+	}
 }

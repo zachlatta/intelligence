@@ -155,3 +155,50 @@ func TestHostsPageMovedToResources(t *testing.T) {
 		t.Fatalf("status %d, Location %q", rec.Code, rec.Header().Get("Location"))
 	}
 }
+
+func TestResourcesPageHidesEBPFBannerWhenProbeUnsupported(t *testing.T) {
+	t.Parallel()
+	h, d := dbServer(t)
+	sendReport(t, h, sampleReport)
+	now := time.Now().UTC().Truncate(time.Minute)
+	f := func(v float64) *float64 { return &v }
+	reg := fleet.New(d.Owner)
+
+	// Seed a stale "probe not configured" row first (as older macOS clients sent), then send
+	// an Unsupported report to verify RecordHost clears host_probes and /resources hides the banner.
+	stale := resources.Report{
+		Minutes: []resources.Minute{{Minute: now.Add(-time.Minute), Samples: 12, CPUs: 10, CPUAvgPct: f(15), MemTotal: 32 << 30, MemAvailableMin: 16 << 30}},
+		Probe:   &resources.ProbeStatus{Running: false, Error: "probe not configured"},
+	}
+	if err := reg.RecordHost(t.Context(), "host-1", stale, now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	rep := resources.Report{
+		Minutes: []resources.Minute{{Minute: now, Samples: 12, CPUs: 10, CPUAvgPct: f(20), MemTotal: 32 << 30, MemAvailableMin: 16 << 30}},
+		Agents:  []resources.AgentMinute{{AgentID: agentA1, Minute: now, CPUSeconds: f(12.5), CPUSource: "proc", MemMax: 2 << 30, ProcessesMax: 3}},
+		Probe:   &resources.ProbeStatus{Unsupported: true},
+	}
+	if err := reg.RecordHost(t.Context(), "host-1", rep, now); err != nil {
+		t.Fatal(err)
+	}
+
+	var probeRows int
+	if err := d.Owner.QueryRow(t.Context(), "SELECT count(*) FROM host_probes WHERE host = 'host-1'").Scan(&probeRows); err != nil {
+		t.Fatal(err)
+	}
+	if probeRows != 0 {
+		t.Fatalf("host_probes rows = %d, want 0 after Unsupported report", probeRows)
+	}
+
+	body := get(t, h, "/resources", nil).Body.String()
+	for _, forbidden := range []string{"eBPF probe not running", "probe not configured"} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("resources page should not contain %q", forbidden)
+		}
+	}
+	for _, want := range []string{"Fix the", "12.5s", "2.0 GB"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("resources page missing sampled agent detail %q", want)
+		}
+	}
+}

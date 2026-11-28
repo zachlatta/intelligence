@@ -216,7 +216,7 @@ function renderCardBody(d, stale, ageText) {
           <span>${gb(o.anon_rss)} · ${esc(fmtAge(ageSec(o.at)))}</span>
         </div>`).join("") : `<div class="g-hc-sub">Kernel recorded ${minOoms} OOM kill(s) in the latest minute.</div>`}
       </div>`
-    : `<div class="g-hc-sec g-hc-oom-ok"><span>OOM kills (24h): <b>0</b></span>${d.probe_running === false ? `<span class="g-hc-sub">eBPF probe off</span>` : ""}</div>`;
+    : `<div class="g-hc-sec g-hc-oom-ok"><span>OOM kills (24h): <b>0</b></span>${d.probe_running === false && d.probe_error !== "unsupported" ? `<span class="g-hc-sub">eBPF probe off</span>` : ""}</div>`;
 
   // Busiest session agents
   const agents = Array.isArray(d.session_agents) ? d.session_agents : [];
