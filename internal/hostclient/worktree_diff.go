@@ -134,16 +134,8 @@ func parsePorcelainZ(raw []byte) []wtStatusEntry {
 }
 
 func fillUntrackedDiff(dir string, f *WorktreeDiffFile, limit int) {
-	fullPath := filepath.Join(dir, filepath.FromSlash(f.Path))
-	fh, err := os.Open(fullPath)
-	if err != nil {
-		return
-	}
-	defer fh.Close()
-
-	// Read up to limit+1 bytes so we know if the file is larger than our cap.
-	data, err := io.ReadAll(io.LimitReader(fh, int64(limit)+1))
-	if err != nil {
+	data, ok := readUntracked(filepath.Join(dir, filepath.FromSlash(f.Path)), limit)
+	if !ok {
 		return
 	}
 	probeLen := min(len(data), 8192)
@@ -180,8 +172,36 @@ func fillUntrackedDiff(dir string, f *WorktreeDiffFile, limit int) {
 	f.Truncated = truncated
 }
 
+// readUntracked reads up to limit+1 bytes of an untracked file, so the caller knows when it is
+// larger than the cap. A symlink reads as its target, as git records it, so the diff never
+// carries the contents of a file it points to (which may be outside the worktree). Anything else
+// that is not a regular file (a FIFO, a socket) is not opened.
+func readUntracked(path string, limit int) ([]byte, bool) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, false
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(path)
+		return []byte(target), err == nil
+	}
+	if !info.Mode().IsRegular() {
+		return nil, false
+	}
+	fh, err := os.Open(path)
+	if err != nil {
+		return nil, false
+	}
+	defer fh.Close()
+	if opened, err := fh.Stat(); err != nil || !os.SameFile(info, opened) {
+		return nil, false // replaced between Lstat and Open
+	}
+	data, err := io.ReadAll(io.LimitReader(fh, int64(limit)+1))
+	return data, err == nil
+}
+
 func fillTrackedDiff(ctx context.Context, dir, base string, f *WorktreeDiffFile, limit int) {
-	out, err := exec.CommandContext(ctx, "git", "-C", dir, "diff", "--no-color", "--no-ext-diff", "--no-renames", base, "--", f.Path).Output()
+	out, err := exec.CommandContext(ctx, "git", "-C", dir, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", base, "--", f.Path).Output()
 	if err != nil || len(out) == 0 {
 		return
 	}

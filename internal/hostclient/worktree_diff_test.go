@@ -58,6 +58,41 @@ func TestWorktreeDiffParse(t *testing.T) {
 	}
 }
 
+// An untracked symlink shows its target, as git does, never the contents of the file it points to
+// (which may be outside the worktree); an untracked FIFO is listed without being opened.
+func TestWorktreeDiffUntrackedSymlinkAndFIFO(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("outside-the-worktree\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	if err := os.Symlink(outside, filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	fifo := filepath.Join(dir, "pipe")
+	if err := exec.Command("mkfifo", fifo).Run(); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+
+	res := inspectWorktreeDiff(t.Context(), dir)
+	byPath := map[string]WorktreeDiffFile{}
+	for _, f := range res.Files {
+		byPath[f.Path] = f
+	}
+	link, ok := byPath["link"]
+	if !ok || link.Status != "?" || strings.Contains(link.Diff, "outside-the-worktree") || !strings.Contains(link.Diff, "+"+outside) || link.Additions != 1 {
+		t.Errorf("link = %+v, want the symlink target %q and not its contents", link, outside)
+	}
+	if f, ok := byPath["pipe"]; ok && f.Diff != "" {
+		t.Errorf("pipe = %+v, want no diff", f)
+	}
+}
+
 func TestWorktreeDiffCleanDirtyUnbornBinaryAndTruncation(t *testing.T) {
 	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {
