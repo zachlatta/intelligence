@@ -371,7 +371,7 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 		return CommandResult{}, errors.New("not connected to the Paseo daemon")
 	}
 	if IsScheduleKind(cmd.Kind) {
-		return executeSchedule(ctx, c, cmd, parsed)
+		return executeSchedule(ctx, c, cmd, w.withStartModel(parsed))
 	}
 	home, _ := os.UserHomeDir()
 	key := cmd.IdempotencyKey
@@ -454,6 +454,7 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 		}
 		ag := *a.Agent
 		ag.WorkspaceID, ag.Cwd = ws.ID, ws.Directory
+		ag.Model, ag.Thinking = w.startModel(ag.Provider, ag.Model, ag.Thinking)
 		// its own idempotency key: a repeat returns the same agent, never the workspace
 		res, err := createAgent(ctx, c, ag, key, key+":agent", key+":agent:retry:"+cmd.ID)
 		res.WorkspaceID = ws.ID
@@ -472,6 +473,7 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 				return CommandResult{}, fmt.Errorf("no workspace %s on this host", a.WorkspaceID)
 			}
 		}
+		a.Model, a.Thinking = w.startModel(a.Provider, a.Model, a.Thinking)
 		return createAgent(ctx, c, a, key, key, key+":retry:"+cmd.ID)
 	case WorkspaceArgs:
 		if cmd.Kind == WorktreeDiffKind {
