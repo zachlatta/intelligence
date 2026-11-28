@@ -246,7 +246,8 @@ function chipHTML(name) {
   const w = workerByName(name);
   return `<span class="g-wchip ${w ? provClass(w.provider) : "p-other"}" data-worker="${esc(name)}"><i></i>${esc(name)}</span>`;
 }
-function managerWorking() { return ["working", "starting"].includes(S.session.manager_state); }
+function managerWorking() { return !isArchived() && ["working", "starting"].includes(S.session.manager_state); }
+function isArchived() { return (S.session.status || root?.dataset.status) === "archived"; }
 
 // ---------- thread ----------
 const ATTACH = /\[attachment:([0-9a-f-]{36})\]/g;
@@ -416,17 +417,43 @@ async function loadOlder() {
   }
 }
 
-// ---------- header, worker cap popover, and manager ----------
+// ---------- header, session picker, end dialog, worker cap popover, and manager ----------
 function renderSession() {
   const s = S.session;
   if (!s.id) return;
+  const archived = s.status === "archived";
+  if (root) root.dataset.status = s.status || "active";
   $("#g-repo").textContent = s.title || s.repo;
   $("#g-branch").textContent = s.branch || "";
+  const pickerLabel = $("#g-picker-label");
+  if (pickerLabel) pickerLabel.textContent = `${s.title || s.repo}${s.host ? " · " + s.host : ""}`;
   $("#g-chip").title = `${s.repo} on ${s.host}\nbranch ${s.branch}${s.workspace_error ? "\nworktree failed: " + s.workspace_error : ""}`;
   $("#g-cap-live").textContent = s.live_workers ?? 0;
   $("#g-cap-max").textContent = s.max_workers;
-  $("#g-cap").classList.toggle("full", (s.live_workers || 0) >= s.max_workers);
-  $("#g-cap").title = `${s.live_workers || 0} live workers of this session's cap of ${s.max_workers}. Click to change the cap.`;
+  $("#g-cap").classList.toggle("full", !archived && (s.live_workers || 0) >= s.max_workers);
+  $("#g-cap").disabled = archived;
+  $("#g-cap").title = archived
+    ? `${s.live_workers || 0} live workers of ${s.max_workers} (session ended).`
+    : `${s.live_workers || 0} live workers of this session's cap of ${s.max_workers}. Click to change the cap.`;
+  $("#g-end-session").hidden = archived;
+  $("#g-archive-all").hidden = archived;
+  $("#g-composer").hidden = archived;
+  $("#g-ended-banner").hidden = !archived;
+  $("#g-directive-form").hidden = archived;
+  const branchNote = $("#g-ended-branch-note");
+  if (branchNote) branchNote.innerHTML = s.branch ? ` Branch <code>${esc(s.branch)}</code> was kept.` : "";
+  if (archived) {
+    closeCapPopover(false);
+    document.title = `Grimm · ${s.title || s.repo} (ended)`;
+    const pill = $("#g-pill"); pill.dataset.state = "offline";
+    $("#g-pill-label").textContent = "Session ended";
+    pill.title = "This session has ended. Transcripts and roster are read-only.";
+    $("#g-typing").hidden = true;
+    $("#g-stop").hidden = true;
+    const cur = $(`#g-items [data-id="${CSS.escape(lastAssistantID())}"] .g-md`);
+    if (cur) cur.classList.remove("cursor");
+    return;
+  }
   document.title = `Grimm · ${s.title || s.repo}`;
   const st = s.manager_state || "offline";
   const pill = $("#g-pill"); pill.dataset.state = st;
@@ -447,6 +474,75 @@ function renderSession() {
   $("#g-stop").hidden = st !== "working";
   const cur = $(`#g-items [data-id="${CSS.escape(lastAssistantID())}"] .g-md`);
   if (cur) cur.classList.toggle("cursor", st === "working");
+}
+
+function openPicker() {
+  const pop = $("#g-picker-pop"), btn = $("#g-picker-btn");
+  if (!pop || !btn) return;
+  closeCapPopover(false);
+  pop.hidden = false;
+  btn.setAttribute("aria-expanded", "true");
+  if (matchMedia("(max-width: 780px)").matches) {
+    const r = btn.getBoundingClientRect();
+    pop.style.top = Math.round(r.bottom + 6) + "px";
+  } else {
+    pop.style.top = "";
+  }
+}
+function closePicker(refocusBtn) {
+  const pop = $("#g-picker-pop"), btn = $("#g-picker-btn");
+  if (!pop || pop.hidden) return;
+  pop.hidden = true;
+  btn.setAttribute("aria-expanded", "false");
+  if (refocusBtn) btn.focus();
+}
+
+let endingSession = false;
+function openEndDialog() {
+  if (isArchived()) return;
+  const dlg = $("#g-end-dialog");
+  if (!dlg) return;
+  closePicker(false);
+  closeCapPopover(false);
+  const live = S.workers.filter((w) => w.status !== "archived").length;
+  const lead = $("#g-end-lead");
+  if (lead) {
+    lead.textContent = live === 0
+      ? "Stops Grimm's turn (0 live workers), archives its Paseo agent, and removes this session from the active picker."
+      : `Stops Grimm's turn and ${live} live ${live === 1 ? "worker" : "workers"}, archives their Paseo agents, and removes this session from the active picker.`;
+  }
+  const br = $("#g-end-branch");
+  if (br) br.textContent = S.session.branch || "grimm/…";
+  $("#g-end-error").textContent = "";
+  dlg.hidden = false;
+  $("#g-end-cancel").focus();
+}
+function closeEndDialog(refocusBtn) {
+  if (endingSession) return;
+  const dlg = $("#g-end-dialog");
+  if (!dlg || dlg.hidden) return;
+  dlg.hidden = true;
+  $("#g-end-error").textContent = "";
+  if (refocusBtn) $("#g-end-session").focus();
+}
+async function confirmEndSession() {
+  if (endingSession) return;
+  const err = $("#g-end-error"), confirmBtn = $("#g-end-confirm"), cancelBtn = $("#g-end-cancel");
+  err.textContent = "";
+  endingSession = true;
+  confirmBtn.disabled = true;
+  cancelBtn.disabled = true;
+  confirmBtn.textContent = "Ending session…";
+  try {
+    const r = await api("POST", `/api/grimm/sessions/${S.id}/archive`, {});
+    location.href = (r && r.nextUrl) || "/";
+  } catch (e) {
+    err.textContent = e.message;
+    endingSession = false;
+    confirmBtn.disabled = false;
+    cancelBtn.disabled = false;
+    confirmBtn.textContent = "End session";
+  }
 }
 
 let capSaving = false;
@@ -569,14 +665,18 @@ function renderQuota() {
 // ---------- directives, bus, activity ----------
 function renderDirectives() {
   const ol = $("#g-directives"); ol.innerHTML = "";
+  const archived = isArchived();
   for (const d of S.directives) {
     const li = el("li"); li.value = d.seq; li.textContent = d.text;
-    const b = el("button", "", "×"); b.type = "button"; b.title = `Remove directive ${d.seq}`; b.setAttribute("aria-label", `Remove directive ${d.seq}`);
-    b.addEventListener("click", async () => {
-      if (!confirm(`Remove directive ${d.seq}?\n\n${d.text}`)) return;
-      try { await api("DELETE", `/api/grimm/sessions/${S.id}/directives/${d.seq}`); } catch (e) { toast(e.message, true); }
-    });
-    li.append(b); ol.append(li);
+    if (!archived) {
+      const b = el("button", "", "×"); b.type = "button"; b.title = `Remove directive ${d.seq}`; b.setAttribute("aria-label", `Remove directive ${d.seq}`);
+      b.addEventListener("click", async () => {
+        if (!confirm(`Remove directive ${d.seq}?\n\n${d.text}`)) return;
+        try { await api("DELETE", `/api/grimm/sessions/${S.id}/directives/${d.seq}`); } catch (e) { toast(e.message, true); }
+      });
+      li.append(b);
+    }
+    ol.append(li);
   }
 }
 function busLi(m) {
@@ -636,12 +736,16 @@ function closeFocus() {
 function renderFocusHead() {
   const w = workerByName(S.focus);
   if (!w) return;
+  const archived = isArchived();
   $("#g-focus-name").textContent = w.name;
   $("#g-focus-sub").textContent = `${w.role} · ${PROVIDER[w.provider] || w.provider} ${w.model} · ${w.login}`;
   const pill = $("#g-focus-status"); pill.className = `g-status ${w.status}`; pill.textContent = w.status;
   $("#g-focus-id").textContent = w.agent_id ? "agent " + w.agent_id.slice(0, 8) : "";
-  $("#g-focus-archive").disabled = w.status === "archived";
-  $("#g-focus-stop").disabled = w.status !== "running";
+  $("#g-focus-form").hidden = archived;
+  $("#g-focus-stop").hidden = archived;
+  $("#g-focus-archive").hidden = archived;
+  $("#g-focus-archive").disabled = archived || w.status === "archived";
+  $("#g-focus-stop").disabled = archived || w.status !== "running";
 }
 function setFocusTab(tab) {
   S.focusTab = tab;
@@ -1012,9 +1116,24 @@ function bindSession() {
     if (!$("#g-cap-wrap").contains(e.target)) saveCapPopover();
   });
 
+  // session picker popover
+  $("#g-picker-btn").addEventListener("click", () => {
+    if ($("#g-picker-pop").hidden) openPicker(); else closePicker(false);
+  });
+  document.addEventListener("mousedown", (e) => {
+    if (!$("#g-picker-pop").hidden && !$("#g-picker-wrap").contains(e.target)) closePicker(false);
+  });
+
+  // end session confirm dialog
+  $("#g-end-session").addEventListener("click", openEndDialog);
+  $("#g-end-cancel").addEventListener("click", () => closeEndDialog(true));
+  $("#g-end-confirm").addEventListener("click", confirmEndSession);
+  $("#g-end-dialog").addEventListener("click", (e) => {
+    if (e.target === $("#g-end-dialog")) closeEndDialog(true);
+  });
+
   $("#g-older").addEventListener("click", loadOlder);
   $("#g-thread").addEventListener("scroll", () => { if ($("#g-thread").scrollTop < 80) loadOlder(); }, { passive: true });
-  $("#g-sessions").addEventListener("change", (e) => { location.href = "/grimm/" + e.target.value; });
   $("#g-directive-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const box = $("#g-directive-input"); const v = box.value.trim(); if (!v) return;
@@ -1046,15 +1165,17 @@ function bindSession() {
     if (e.key === "Escape") {
       const lb = $(".g-lightbox");
       if (lb) { lb.remove(); return; }
+      if (!$("#g-end-dialog").hidden) { closeEndDialog(true); return; }
+      if (!$("#g-picker-pop").hidden) { closePicker(true); return; }
       if (!$("#g-cap-pop").hidden) { closeCapPopover(true); return; }
       if (S.focus && !e.target.closest(".g-box")) { closeFocus(); return; }
     }
-    if (e.key === "/" && (document.activeElement === document.body || !document.activeElement)) { e.preventDefault(); input.focus(); }
+    if (e.key === "/" && !isArchived() && (document.activeElement === document.body || !document.activeElement)) { e.preventDefault(); input.focus(); }
   });
   setInterval(() => { renderSession(); if (S.workers.some((w) => w.status === "running")) renderTeam(); }, 1000);
   if (matchMedia("(max-width: 780px)").matches) input.placeholder = "Tell Grimm what to do…";
   connect();
-  if (!matchMedia("(pointer: coarse)").matches) input.focus();
+  if (!matchMedia("(pointer: coarse)").matches && !isArchived()) input.focus();
 }
 
 function bindNew() {

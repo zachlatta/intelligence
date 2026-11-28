@@ -193,23 +193,41 @@ func (s *Service) setMaxWorkers(ctx context.Context, tx pgx.Tx, sess Session, n 
 	return nil
 }
 
-// ArchiveSession archives every agent of the session and ends it. The worktree and its files stay.
+// ArchiveSession stops and archives the manager and every live worker, cleans up the session's
+// worktree only when it has no uncommitted changes (keeping the grimm/<id> branch), drops pending
+// wakeups, and marks the session archived. Thread history, transcripts and roster remain readable
+// through /api/sql; pending workflow proposals stay open on the Proposals page and running
+// workflows keep running.
 func (s *Service) ArchiveSession(ctx context.Context, account int64, id string) error {
 	return pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
 		sess, err := activeSession(ctx, tx, account, id)
 		if err != nil {
 			return err
 		}
-		if _, err := s.archiveWorkers(ctx, tx, sess, "", "human"); err != nil {
+		if _, err := s.archiveWorkersOpts(ctx, tx, sess, "", "human", true); err != nil {
 			return err
 		}
-		if err := s.endManager(ctx, tx, sess); err != nil {
+		if err := s.endManager(ctx, tx, sess, true); err != nil {
 			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE grimm_wakeups SET dropped = true, delivered_at = $2 WHERE session_id = $1 AND delivered_at IS NULL`, id, s.now()); err != nil {
+			return err
+		}
+		if sess.WorkspaceID != "" {
+			if _, err := enqueue(ctx, tx, sess.Host, hostclient.ArchiveWorkspaceKind, hostclient.WorkspaceArgs{
+				WorkspaceID: sess.WorkspaceID,
+				OnlyIfClean: true,
+			}, commandTTL, s.now()); err != nil {
+				return err
+			}
 		}
 		if _, err := tx.Exec(ctx, `UPDATE grimm_sessions SET status = 'archived', archived_at = $2 WHERE id = $1`, id, s.now()); err != nil {
 			return err
 		}
-		if err := event(ctx, tx, sess, "human", "archive_session", "info", "Archived the session", nil); err != nil {
+		if _, err := threadRow(ctx, tx, sess, "divider", "intelligence", "Session ended", nil); err != nil {
+			return err
+		}
+		if err := event(ctx, tx, sess, "human", "archive_session", "info", "Ended the session", nil); err != nil {
 			return err
 		}
 		return notify(ctx, tx, id)

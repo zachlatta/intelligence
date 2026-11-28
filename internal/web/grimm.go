@@ -57,9 +57,7 @@ func (a *app) grimmRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /grimm/{id}", a.page(func(v viewer) http.HandlerFunc { return a.grimmPage(v) }))
 	mux.HandleFunc("POST /api/grimm/sessions", a.write(a.grimmCreate))
 	mux.HandleFunc("PUT /api/grimm/sessions/{id}", a.write(a.grimmUpdate))
-	mux.HandleFunc("POST /api/grimm/sessions/{id}/archive", a.write(a.grimmSimple(func(ctx context.Context, acct int64, id string) error {
-		return a.grimm.ArchiveSession(ctx, acct, id)
-	})))
+	mux.HandleFunc("POST /api/grimm/sessions/{id}/archive", a.write(a.grimmArchive))
 	mux.HandleFunc("POST /api/grimm/sessions/{id}/messages", a.write(a.grimmMessage))
 	mux.HandleFunc("POST /api/grimm/sessions/{id}/manager/interrupt", a.write(a.grimmSimple(a.grimm.Interrupt)))
 	mux.HandleFunc("POST /api/grimm/sessions/{id}/manager/new", a.write(a.grimmSimple(a.grimm.NewManager)))
@@ -135,6 +133,27 @@ func (a *app) grimmUpdate(v viewer) http.HandlerFunc {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// grimmArchive is POST /api/grimm/sessions/{id}/archive {}: ends the session and returns the
+// next URL for the page to open (another active session, or / for the start-a-session form).
+func (a *app) grimmArchive(v viewer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var empty struct{}
+		if !decodeGrimm(w, r, &empty) {
+			return
+		}
+		if err := a.grimm.ArchiveSession(r.Context(), v.acct.ID, r.PathValue("id")); err != nil {
+			grimmError(w, err)
+			return
+		}
+		nextURL := "/"
+		var nextID string
+		if err := v.pool.QueryRow(r.Context(), `SELECT id::text FROM grimm_sessions WHERE status = 'active' ORDER BY created_at DESC LIMIT 1`).Scan(&nextID); err == nil && nextID != "" {
+			nextURL = "/grimm/" + nextID
+		}
+		writeJSONStatus(w, http.StatusOK, map[string]string{"status": "archived", "nextUrl": nextURL})
 	}
 }
 
@@ -315,9 +334,9 @@ func (a *app) grimmPage(v viewer) http.HandlerFunc {
 			return
 		}
 		type sessionItem struct {
-			ID, Title, Host, Repo, Status string
+			ID, Title, Host, Repo, Status, Branch string
 		}
-		rows, err := v.pool.Query(ctx, `SELECT id::text, title, host, repo, status FROM grimm_sessions
+		rows, err := v.pool.Query(ctx, `SELECT id::text, title, host, repo, status, branch FROM grimm_sessions
 			ORDER BY status = 'active' DESC, created_at DESC LIMIT 50`)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -325,29 +344,37 @@ func (a *app) grimmPage(v viewer) http.HandlerFunc {
 		}
 		sessions, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (sessionItem, error) {
 			var s sessionItem
-			return s, r.Scan(&s.ID, &s.Title, &s.Host, &s.Repo, &s.Status)
+			return s, r.Scan(&s.ID, &s.Title, &s.Host, &s.Repo, &s.Status, &s.Branch)
 		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		current := ""
+		var activeSessions, endedSessions []sessionItem
+		for _, s := range sessions {
+			if s.Status == "active" {
+				activeSessions = append(activeSessions, s)
+			} else {
+				endedSessions = append(endedSessions, s)
+			}
+		}
+		var cur sessionItem
 		if id != "" {
 			for _, s := range sessions {
 				if s.ID == id {
-					current = id
+					cur = s
+					break
 				}
 			}
-			if current == "" {
-				var found bool
-				if err := v.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM grimm_sessions WHERE id = $1)`, id).Scan(&found); err != nil || !found {
+			if cur.ID == "" {
+				if err := v.pool.QueryRow(ctx, `SELECT id::text, title, host, repo, status, branch FROM grimm_sessions WHERE id = $1`, id).
+					Scan(&cur.ID, &cur.Title, &cur.Host, &cur.Repo, &cur.Status, &cur.Branch); err != nil {
 					http.NotFound(w, r)
 					return
 				}
-				current = id
 			}
-		} else if len(sessions) > 0 && sessions[0].Status == "active" && r.URL.Query().Get("new") == "" {
-			current = sessions[0].ID
+		} else if len(activeSessions) > 0 && r.URL.Query().Get("new") == "" {
+			cur = activeSessions[0]
 		}
 		hosts, err := grimmHosts(ctx, v.pool)
 		if err != nil {
@@ -357,7 +384,9 @@ func (a *app) grimmPage(v viewer) http.HandlerFunc {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		if err := grimmTmpl.ExecuteTemplate(w, "grimm", map[string]any{
-			"Version": a.cfg.Version, "Session": current, "Sessions": sessions, "Hosts": hosts,
+			"Version": a.cfg.Version, "Session": cur.ID, "CurrentStatus": cur.Status, "CurrentTitle": cur.Title,
+			"CurrentHost": cur.Host, "CurrentBranch": cur.Branch,
+			"Sessions": sessions, "ActiveSessions": activeSessions, "EndedSessions": endedSessions, "Hosts": hosts,
 			"DefaultHost": defaultGrimmHost(hosts, a.cfg.GrimmDefaultHost), "OlderSQL": grimmOlderSQL, "DefaultCap": grimm.DefaultMaxWorkers, "CapLimit": grimm.MaxWorkersLimit,
 			"Dictation": dictationPath(a.cfg),
 		}); err != nil {

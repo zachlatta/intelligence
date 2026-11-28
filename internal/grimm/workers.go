@@ -259,6 +259,10 @@ func (s *Service) stop(ctx context.Context, tx pgx.Tx, sess Session, actor, name
 
 // archiveWorkers archives one worker, or with name "" every one not yet archived. Their files stay.
 func (s *Service) archiveWorkers(ctx context.Context, tx pgx.Tx, sess Session, name, actor string) ([]string, error) {
+	return s.archiveWorkersOpts(ctx, tx, sess, name, actor, false)
+}
+
+func (s *Service) archiveWorkersOpts(ctx context.Context, tx pgx.Tx, sess Session, name, actor string, stopFirst bool) ([]string, error) {
 	q := `SELECT name, agent_id FROM grimm_workers WHERE session_id = $1 AND status <> 'archived' AND ($2 = '' OR name = $2) ORDER BY created_at`
 	rows, err := tx.Query(ctx, q, sess.ID, name)
 	if err != nil {
@@ -281,6 +285,11 @@ func (s *Service) archiveWorkers(ctx context.Context, tx pgx.Tx, sess Session, n
 	var names []string
 	for _, x := range list {
 		if x.agent != "" {
+			if stopFirst {
+				if _, err := enqueue(ctx, tx, sess.Host, hostclient.CancelAgentKind, hostclient.AgentArgs{AgentID: x.agent}, commandTTL, s.now()); err != nil {
+					return nil, err
+				}
+			}
 			if _, err := enqueue(ctx, tx, sess.Host, hostclient.ArchiveAgentKind, hostclient.AgentArgs{AgentID: x.agent}, commandTTL, s.now()); err != nil {
 				return nil, err
 			}
