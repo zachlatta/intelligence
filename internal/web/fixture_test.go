@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/zachlatta/intelligence/internal/accounts"
@@ -38,6 +39,14 @@ var fixtures sync.Map // database name -> *fixture
 
 const testPassword = "a test password"
 
+// testPasswordHash caches one real argon2id hash of testPassword so parallel tests do not
+// each allocate 19 MiB (5x under -race) just to create the default "someone" fixture account.
+var (
+	testPasswordHashOnce sync.Once
+	testPasswordHash     string
+	testPasswordHashErr  error
+)
+
 func fixtureFor(t *testing.T, d dbtest.DB) *fixture {
 	t.Helper()
 	if f, ok := fixtures.Load(d.Name); ok {
@@ -46,14 +55,53 @@ func fixtureFor(t *testing.T, d dbtest.DB) *fixture {
 	roles := db.NewAccountRoles(d.Owner, d.Readonly)
 	t.Cleanup(roles.Close)
 	f := &fixture{store: accounts.New(d.Owner, roles), keys: map[string]string{}}
-	var err error
-	if f.acct, err = f.store.Create(context.Background(), "someone", testPassword); err != nil {
-		t.Fatal(err)
+	ctx := context.Background()
+	var created accounts.Account
+	createdInOnce := false
+	testPasswordHashOnce.Do(func() {
+		created, testPasswordHashErr = f.store.Create(ctx, "someone", testPassword)
+		if testPasswordHashErr != nil {
+			return
+		}
+		createdInOnce = true
+		testPasswordHashErr = d.Owner.QueryRow(ctx, "SELECT password_hash FROM accounts WHERE id = $1", created.ID).Scan(&testPasswordHash)
+	})
+	if testPasswordHashErr != nil {
+		t.Fatal(testPasswordHashErr)
+	}
+	if createdInOnce {
+		f.acct = created
+	} else {
+		f.acct = createFixtureAccount(t, d.Owner, roles, "someone", testPasswordHash)
 	}
 	f.cookie = sessionFor(t, f.store, f.acct)
 	fixtures.Store(d.Name, f)
 	t.Cleanup(func() { fixtures.Delete(d.Name) })
 	return f
+}
+
+func createFixtureAccount(t *testing.T, p *pgxpool.Pool, roles *db.AccountRoles, username, hash string) accounts.Account {
+	t.Helper()
+	ctx := context.Background()
+	a := accounts.Account{Username: username}
+	err := pgx.BeginFunc(ctx, p, func(tx pgx.Tx) error {
+		var err error
+		if err := tx.QueryRow(ctx, "SELECT nextval(pg_get_serial_sequence('accounts', 'id'))").Scan(&a.ID); err != nil {
+			return err
+		}
+		if a.Role, err = roles.RoleName(a.ID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO accounts (id, username, password_hash, role_name, created_at, password_changed_at)
+			VALUES ($1, $2, $3, $4, now(), now())`, a.ID, a.Username, hash, a.Role); err != nil {
+			return err
+		}
+		return roles.Ensure(ctx, tx, a.Role)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
 }
 
 func sessionFor(t *testing.T, s *accounts.Store, a accounts.Account) *http.Cookie {
@@ -117,6 +165,26 @@ func anon(h http.Handler) http.Handler {
 func signedIn(h http.Handler, req *http.Request) {
 	if ts, ok := h.(*testServer); ok && req.Header.Get("Cookie") == "" {
 		req.AddCookie(ts.cookie)
+	}
+}
+
+func TestFixtureForReusesPasswordHash(t *testing.T) {
+	t.Parallel()
+	d1, d2 := dbtest.New(t), dbtest.New(t)
+	f1, f2 := fixtureFor(t, d1), fixtureFor(t, d2)
+
+	var h1, h2 string
+	if err := d1.Owner.QueryRow(t.Context(), "SELECT password_hash FROM accounts WHERE id = $1", f1.acct.ID).Scan(&h1); err != nil {
+		t.Fatal(err)
+	}
+	if err := d2.Owner.QueryRow(t.Context(), "SELECT password_hash FROM accounts WHERE id = $1", f2.acct.ID).Scan(&h2); err != nil {
+		t.Fatal(err)
+	}
+	if h1 == "" || h1 != h2 {
+		t.Fatalf("fixtureFor computed distinct password hashes (%q vs %q); want one shared argon2id hash", h1, h2)
+	}
+	if _, err := f2.store.Authenticate(t.Context(), "someone", testPassword); err != nil {
+		t.Fatalf("reused fixture hash failed Authenticate: %v", err)
 	}
 }
 

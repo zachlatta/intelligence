@@ -139,3 +139,14 @@ func TestWhatsNew(t *testing.T) {
 		t.Fatalf("another account reads seen rows not its own: %s", r.Body)
 	}
 }
+
+// Not parallel: testing.AllocsPerRun requires no concurrent tests.
+func TestWhatsNewMediaHandlerDoesNotReloadEmbeddedFilesPerServer(t *testing.T) {
+	// Constructing a server handler must not re-read embedded What's New media on every call.
+	allocs := testing.AllocsPerRun(5, func() {
+		_ = whatsNewMedia()
+	})
+	if allocs > 2 {
+		t.Fatalf("whatsNewMedia() allocated %.0f objects per call, want <= 2 (cached once)", allocs)
+	}
+}

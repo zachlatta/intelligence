@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -100,7 +101,9 @@ func (a *app) markWhatsNewSeen(v viewer) http.HandlerFunc {
 	}
 }
 
-func whatsNewMedia() http.HandlerFunc {
+// whatsNewMediaFiles caches the immutable embedded What's New media once per process
+// so constructing multiple servers (e.g. in parallel tests) does not re-read every asset.
+var whatsNewMediaFiles = sync.OnceValue(func() map[string]http.HandlerFunc {
 	files := map[string]http.HandlerFunc{}
 	names, _ := fs.Glob(whatsnew.Media, "media/*")
 	for _, path := range names {
@@ -110,8 +113,12 @@ func whatsNewMedia() http.HandlerFunc {
 			files[name] = asset(name, ct, body)
 		}
 	}
+	return files
+})
+
+func whatsNewMedia() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		serve, ok := files[r.PathValue("name")]
+		serve, ok := whatsNewMediaFiles()[r.PathValue("name")]
 		if !ok {
 			http.NotFound(w, r)
 			return
