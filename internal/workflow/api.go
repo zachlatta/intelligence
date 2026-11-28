@@ -16,6 +16,9 @@ import (
 	"github.com/zachlatta/intelligence/internal/attachment"
 )
 
+// AgentHeader names the calling Paseo agent (PASEO_AGENT_ID) on host-key CLI requests.
+const AgentHeader = "X-Paseo-Agent-Id"
+
 // APIActor identifies the scoped workflow API key performing an action.
 type APIActor struct {
 	KeyID   string
@@ -36,6 +39,53 @@ func WithAPIActor(ctx context.Context, actor APIActor) context.Context {
 func apiActorFrom(ctx context.Context) APIActor {
 	actor, _ := ctx.Value(apiActorKey{}).(APIActor)
 	return actor
+}
+
+// GrimmActor identifies a Grimm session manager sending mid-run guidance,
+// clarification replies, or cancellations to a linked workflow run.
+type GrimmActor struct {
+	SessionID string
+	AgentID   string
+}
+
+type grimmActorKey struct{}
+
+// WithGrimmActor attaches a Grimm session actor to ctx so workflow_run_events
+// record grimm_session_id and messages clearly attribute Grimm (not the human).
+func WithGrimmActor(ctx context.Context, actor GrimmActor) context.Context {
+	if actor.SessionID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, grimmActorKey{}, actor)
+}
+
+func grimmActorFrom(ctx context.Context) GrimmActor {
+	actor, _ := ctx.Value(grimmActorKey{}).(GrimmActor)
+	return actor
+}
+
+func shortGrimmSession(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+type callerAgentKey struct{}
+
+// WithCallerAgentID attaches the caller's PASEO_AGENT_ID to ctx so MoveRun can
+// refuse Grimm agents attempting to drive workflow state transitions directly.
+func WithCallerAgentID(ctx context.Context, agentID string) context.Context {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, callerAgentKey{}, agentID)
+}
+
+func callerAgentIDFrom(ctx context.Context) string {
+	id, _ := ctx.Value(callerAgentKey{}).(string)
+	return id
 }
 
 func nullUUID(id string) any {

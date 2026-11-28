@@ -191,7 +191,7 @@ func (s *Service) Reconcile(ctx context.Context, id string) error {
 		if err := mark(s.reconcileWorkflowRuns(ctx, tx, sess)); err != nil {
 			return err
 		}
-		if err := s.deliverHuman(ctx, tx, sess); err != nil {
+		if err := s.deliverHuman(ctx, tx, sess, false); err != nil {
 			return err
 		}
 		if err := mark(s.flushUpdates(ctx, tx, sess)); err != nil {
@@ -295,7 +295,7 @@ func (s *Service) reconcileManagers(ctx context.Context, tx pgx.Tx, sess Session
 				sess.ID, m.epoch, why, s.now()); err != nil {
 				return false, err
 			}
-			if _, err := threadRow(ctx, tx, sess, "notice", "intelligence", "Grimm could not start: "+why+". Your next message tries again.", map[string]string{"level": "error"}); err != nil {
+			if err := s.postStartFailureNotice(ctx, tx, sess, "Grimm could not start: "+why+". Your next message tries again."); err != nil {
 				return false, err
 			}
 			if err := event(ctx, tx, sess, "intelligence", "manager_failed", "warn", "The manager failed to start: "+why, nil); err != nil {

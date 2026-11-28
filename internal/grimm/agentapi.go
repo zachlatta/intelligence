@@ -31,6 +31,11 @@ type Call struct {
 	Workflow string   `json:"workflow"` // workflow request
 	Summary  string   `json:"summary"`  // workflow request
 	Host     string   `json:"host"`     // workflow request
+	Replaces string   `json:"replaces"` // workflow request --replaces
+	Repo     string   `json:"repo"`     // workflow request --repo
+	Reason   string   `json:"reason"`   // workflow withdraw --reason / cancel --why
+	Since    int64    `json:"since"`    // workflow events --since
+	Agent    string   `json:"agent"`    // workflow peek --agent
 }
 
 // Caller is who an agent call is from.
@@ -66,8 +71,19 @@ func (s *Service) AgentCall(ctx context.Context, changes *fleet.Changes, account
 	if c.Verb == "wait" {
 		return s.wait(ctx, changes, account, host, agent, c)
 	}
-	if c.Verb == "workflow" && len(c.Args) > 0 && c.Args[0] == "request" {
-		return s.requestWorkflow(ctx, account, host, agent, c)
+	if c.Verb == "workflow" && len(c.Args) > 0 {
+		switch c.Args[0] {
+		case "request":
+			return s.requestWorkflow(ctx, account, host, agent, c)
+		case "withdraw":
+			return s.withdrawWorkflow(ctx, account, host, agent, c)
+		case "input":
+			return s.inputWorkflow(ctx, account, host, agent, c)
+		case "reply":
+			return s.replyWorkflow(ctx, account, host, agent, c)
+		case "cancel":
+			return s.cancelWorkflow(ctx, account, host, agent, c)
+		}
 	}
 	var out string
 	err := pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
@@ -171,12 +187,18 @@ func (s *Service) AgentCall(ctx context.Context, changes *fleet.Changes, account
 			return err
 		case "workflow":
 			switch arg(0) {
+			case "catalog":
+				out, err = workflowCatalogText(ctx, tx, sess.Account)
 			case "", "list":
 				out, err = workflowListText(ctx, tx, sess.ID)
 			case "status":
 				out, err = workflowStatusText(ctx, tx, sess.ID, arg(1))
+			case "events":
+				out, err = workflowEventsText(ctx, tx, sess.ID, arg(1), c.Since, c.Lines)
+			case "peek":
+				out, err = workflowPeekText(ctx, tx, sess.ID, arg(1), c.Agent, c.Lines)
 			default:
-				return badRequest("workflow request --workflow <id|name> <input>|- | list | status <id>")
+				return badRequest("workflow catalog | request | withdraw | list | status | events | peek | input | reply | cancel")
 			}
 			return err
 		case "bus-read":

@@ -51,8 +51,9 @@ func undeliveredInputs(ctx context.Context, tx pgx.Tx, runID string, now time.Ti
 func (e *Engine) recordInput(ctx context.Context, tx pgx.Tx, r run, kind string, step *int, eventText, commandID string) error {
 	var event int64
 	actor := apiActorFrom(ctx)
-	if err := tx.QueryRow(ctx, `INSERT INTO workflow_run_events (run_id, account_id, at, kind, step, text, api_key_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`, r.ID, r.Account, e.Now(), kind, step, eventText, nullUUID(actor.KeyID)).Scan(&event); err != nil {
+	grimmActor := grimmActorFrom(ctx)
+	if err := tx.QueryRow(ctx, `INSERT INTO workflow_run_events (run_id, account_id, at, kind, step, text, api_key_id, grimm_session_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`, r.ID, r.Account, e.Now(), kind, step, eventText, nullUUID(actor.KeyID), nullUUID(grimmActor.SessionID)).Scan(&event); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, fleet.NotifySQL, fleet.WorkflowRunTopic(r.ID)); err != nil {

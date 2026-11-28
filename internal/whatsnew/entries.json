@@ -1,5 +1,13 @@
 [
   {
+    "id": "grimm-workflow-orchestration",
+    "released": "2026-11-28",
+    "title": "Grimm workflow orchestration, mid-run guidance and inline replies",
+    "summary": "Grimm now keeps research and small throwaway prototypes free in its session worktree while routing real software and system changes through human-approved Intelligence workflows. The manager can inspect the workflow catalog, supersede or withdraw proposals, read run events and transcripts, send rate-limited mid-run guidance, and answer clarification asks—with server-enforced refusals for sign-off steps, secrets, and direct run moves. Workflow cards in the Grimm thread now show Grimm's mid-run guidance log and an inline reply box for clarifications, keeping sign-off approvals browser-only.",
+    "media": "grimm-workflow-orchestration.png",
+    "mediaAlt": "A local demo of the Grimm thread showing two live Factory Task workflow cards: one waiting on a clarification question with an inline Send reply box and Grimm mid-run guidance log (Grimm input and Grimm reply), and a second waiting on browser-only human sign-off with passed step and gate badges and a Review & sign off button."
+  },
+  {
     "id": "workflow-model-variants",
     "released": "2026-11-27",
     "title": "Model variants of a workflow",

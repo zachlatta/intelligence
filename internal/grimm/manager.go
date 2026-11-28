@@ -3,12 +3,52 @@ package grimm
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/zachlatta/intelligence/internal/attachment"
 	"github.com/zachlatta/intelligence/internal/hostclient"
 )
+
+const (
+	// managerRetryBase is the initial backoff after a failed manager start before the supervisor retries.
+	managerRetryBase = 5 * time.Second
+	// managerRetryMax caps exponential backoff between automatic manager start retries.
+	managerRetryMax = 5 * time.Minute
+)
+
+// managerRetryDelay returns exponential backoff (5s, 10s, 20s, ..., capped at 5m) after consecutiveFailures.
+func managerRetryDelay(consecutiveFailures int) time.Duration {
+	if consecutiveFailures <= 0 {
+		return 0
+	}
+	d := managerRetryBase
+	for i := 1; i < consecutiveFailures && d < managerRetryMax; i++ {
+		d *= 2
+	}
+	if d > managerRetryMax {
+		d = managerRetryMax
+	}
+	return d
+}
+
+// postStartFailureNotice appends a thread notice for a manager start failure unless the latest
+// thread notice/human row is already the exact same failure notice (preventing retry spam).
+func (s *Service) postStartFailureNotice(ctx context.Context, tx pgx.Tx, sess Session, body string) error {
+	var lastKind, lastBody string
+	err := tx.QueryRow(ctx, `SELECT kind, body FROM grimm_messages
+		WHERE session_id = $1 AND channel = 'thread' AND kind IN ('notice', 'human')
+		ORDER BY id DESC LIMIT 1`, sess.ID).Scan(&lastKind, &lastBody)
+	if err == nil && lastKind == "notice" && lastBody == body {
+		return nil
+	}
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	_, err = s.threadRow(ctx, tx, sess, "notice", "intelligence", body, map[string]string{"level": "error"})
+	return err
+}
 
 // manager is the newest grimm_managers row: an ended or failed one means the next message starts another.
 type manager struct {
@@ -34,19 +74,20 @@ func (m manager) running() bool { return m.Status == "starting" || m.Status == "
 // SendToManager adds a human message to the thread and sends it to the manager, which folds it
 // into a running turn (steer) or starts one; a session with no manager yet starts one with it.
 func (s *Service) SendToManager(ctx context.Context, tx pgx.Tx, sess Session, text string) (int64, error) {
-	id, err := threadRow(ctx, tx, sess, "human", "human", text, map[string]int{"attachments": len(attachment.Reference.FindAllString(text, -1))})
+	id, err := s.threadRow(ctx, tx, sess, "human", "human", text, map[string]int{"attachments": len(attachment.Reference.FindAllString(text, -1))})
 	if err != nil {
 		return 0, err
 	}
-	if err := s.deliverHuman(ctx, tx, sess); err != nil {
+	if err := s.deliverHuman(ctx, tx, sess, true); err != nil {
 		return 0, err
 	}
 	return id, notify(ctx, tx, sess.ID)
 }
 
 // deliverHuman sends the thread's undelivered human messages to the manager, starting one when
-// there is none and the session's worktree is ready.
-func (s *Service) deliverHuman(ctx context.Context, tx pgx.Tx, sess Session) error {
+// there is none and the session's worktree is ready. When immediate is false (supervisor pass),
+// repeated manager start failures back off exponentially so a broken provider cannot cause a retry storm.
+func (s *Service) deliverHuman(ctx context.Context, tx pgx.Tx, sess Session, immediate bool) error {
 	rows, err := tx.Query(ctx, `SELECT id, body FROM grimm_messages WHERE session_id = $1 AND kind = 'human' AND delivered_at IS NULL ORDER BY id`, sess.ID)
 	if err != nil {
 		return err
@@ -83,6 +124,21 @@ func (s *Service) deliverHuman(ctx context.Context, tx pgx.Tx, sess Session) err
 	}
 	if sess.WorkspaceID == "" {
 		return nil // the worktree is not ready: the supervisor starts the manager when it is
+	}
+	if !immediate && ok && m.Status == "failed" {
+		var failCount int
+		var lastFailed *time.Time
+		if err := tx.QueryRow(ctx, `SELECT count(*), max(coalesce(ended_at, created_at))
+			FROM grimm_managers
+			WHERE session_id = $1 AND status = 'failed'
+			  AND epoch > coalesce((SELECT max(epoch) FROM grimm_managers WHERE session_id = $1 AND status <> 'failed'), 0)
+			  AND coalesce(ended_at, created_at) >= coalesce((SELECT max(created_at) FROM grimm_messages WHERE session_id = $1 AND kind = 'human'), 'epoch'::timestamptz)`,
+			sess.ID).Scan(&failCount, &lastFailed); err != nil {
+			return err
+		}
+		if failCount > 0 && lastFailed != nil && s.now().Sub(*lastFailed) < managerRetryDelay(failCount) {
+			return nil
+		}
 	}
 	texts := make([]string, len(pending))
 	for i, p := range pending {
@@ -129,11 +185,11 @@ func (s *Service) startManager(ctx context.Context, tx pgx.Tx, sess Session, fir
 		if !errors.As(err, &e) {
 			return "", err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO grimm_managers (session_id, account_id, epoch, host, status, error, ended_at)
-			VALUES ($1, $2, $3, $4, 'failed', $5, $6)`, sess.ID, sess.Account, epoch, sess.Host, e.Msg, s.now()); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO grimm_managers (session_id, account_id, epoch, host, status, error, created_at, ended_at)
+			VALUES ($1, $2, $3, $4, 'failed', $5, $6, $6)`, sess.ID, sess.Account, epoch, sess.Host, e.Msg, s.now()); err != nil {
 			return "", err
 		}
-		if _, err := threadRow(ctx, tx, sess, "notice", "intelligence", "Could not start Grimm: "+e.Msg+". Your next message tries again.", map[string]string{"level": "error"}); err != nil {
+		if err := s.postStartFailureNotice(ctx, tx, sess, "Could not start Grimm: "+e.Msg+". Your next message tries again."); err != nil {
 			return "", err
 		}
 		return "", event(ctx, tx, sess, "intelligence", "manager_failed", "warn", "Could not start the manager: "+e.Msg, nil)

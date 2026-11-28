@@ -1405,7 +1405,7 @@ setInterval(refresh, 4000);
 
 {{define "run-event-body" -}}
 {{if eq .Kind "input" -}}
-<div><b>Additional input</b> · <span>
+<div><b>{{if .GrimmSessionID}}Additional input from Grimm (<a href="/grimm/{{.GrimmSessionID}}">{{short .GrimmSessionID}}</a>){{else if .APIKeyName}}Additional input from API key {{.APIKeyName}}{{else}}Additional input{{end}}</b> · <span>
   {{- if eq .InputStatus "delivered"}}Delivered to orchestrator
   {{- else if eq .InputStatus "pending"}}Delivery pending
   {{- else}}Delivery failed{{end -}}

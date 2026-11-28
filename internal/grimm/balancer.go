@@ -62,12 +62,16 @@ var opusOnly = Policy{Providers: []string{OpusProvider}, Pinned: map[string]stri
 	DenyVendors: []string{"google"}, Reason: "reviewers and checkers run on claude/claude-opus-5-5 only"}
 
 var policies = map[string]Policy{
-	"manager":  {Providers: []string{ManagerProvider}, Pinned: map[string]string{ManagerProvider: ManagerModel}, Preferred: ManagerProvider, Reason: "the manager runs on antigravity/gemini-4-neon-medium"},
-	"reviewer": opusOnly, "checker": opusOnly, "audit": opusOnly, "auditor": opusOnly,
-	"verifier": {Providers: []string{OpusProvider, "codex"}, Pinned: map[string]string{OpusProvider: OpusModel}, Preferred: OpusProvider,
-		DenyVendors: []string{"google"}, DisjointFrom: []string{"builder"},
-		Reason: "verifiers prefer Opus 5.5, never run on Gemini, and never share the builder's vendor"},
-	"builder": {DisjointFrom: []string{"verifier"}, Soft: true, Reason: "a builder avoids a live verifier's vendor when it can"},
+	"manager":    {Providers: []string{ManagerProvider}, Pinned: map[string]string{ManagerProvider: ManagerModel}, Preferred: ManagerProvider, Reason: "the manager runs on antigravity/gemini-4-neon-medium"},
+	"reviewer":   opusOnly,
+	"checker":    opusOnly,
+	"audit":      opusOnly,
+	"auditor":    opusOnly,
+	"verifier":   {Providers: []string{OpusProvider, "codex"}, Pinned: map[string]string{OpusProvider: OpusModel}, Preferred: OpusProvider, DenyVendors: []string{"google"}, DisjointFrom: []string{"builder"}, Reason: "verifiers prefer Opus 5.5, never run on Gemini, and never share the builder's vendor"},
+	"builder":    {DisjointFrom: []string{"verifier"}, Soft: true, Reason: "a builder avoids a live verifier's vendor when it can"},
+	"researcher": {Reason: "researchers run on any eligible non-disabled plan"},
+	"analyst":    {Reason: "analysts run on any eligible non-disabled plan"},
+	"prototyper": {Reason: "prototypers run on any eligible non-disabled plan"},
 }
 
 // PolicyFor is role's policy; an unknown role has none.
