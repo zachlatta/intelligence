@@ -52,8 +52,9 @@ type Daemon struct {
 	noSchedules bool              // every schedule request fails, as on a daemon without them
 	runOnce     map[string]waiter // run-once requests waiting for their run to end, by run id
 
-	catalog    []map[string]any // catalog.go
-	catalogSet bool
+	catalog         []map[string]any // catalog.go
+	catalogSet      bool
+	statusProviders []any // catalog.go: the providers the status lists, once set
 
 	diffs map[string]diff // diff.go, by checkout directory
 
@@ -312,8 +313,7 @@ func (f *Daemon) answer(c *websocket.Conn, msg map[string]any) {
 		}
 		f.write(c, session("daemon.get_status.response", map[string]any{"requestId": id, "listen": "0.0.0.0:6767", "pid": 42,
 			"serverId": "srv_test", "startedAt": "2026-11-08T07:00:00.000Z", "version": "0.15.3",
-			"providers": []any{map[string]any{"provider": "claude", "available": true, "error": nil},
-				map[string]any{"provider": "pi", "available": false, "error": "not installed"}}}))
+			"providers": f.statusProvidersLocked()}))
 	case "get_providers_snapshot_request":
 		f.write(c, session("get_providers_snapshot_response", map[string]any{"requestId": id, "entries": f.catalogLocked(),
 			"generatedAt": "2026-11-08T07:00:00.000Z"}))

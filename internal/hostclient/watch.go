@@ -321,7 +321,9 @@ func (w *Watcher) Snapshot() PaseoStatus {
 		Hostname: w.info.Hostname, Listen: w.status.Listen, PID: w.status.PID, StartedAt: w.status.StartedAt, ProvidersAt: w.statusAt,
 		Workspaces: []Workspace{}, Agents: []Agent{}}
 	for _, p := range w.status.Providers {
-		s.Providers = append(s.Providers, withCatalog(Provider{Name: p.Provider, Available: p.Available, Error: p.Error}, w.catalog[p.Provider]))
+		pr := withCatalog(Provider{Name: p.Provider, Available: p.Available, Error: p.Error}, w.catalog[p.Provider])
+		pr.Models = withFlatModels(pr.Name, pr.Models)
+		s.Providers = append(s.Providers, pr)
 	}
 	for _, p := range w.projects {
 		s.Projects = append(s.Projects, Project{ID: p.ID, Name: p.Name, Kind: p.Kind, Directory: p.Directory})
@@ -334,8 +336,9 @@ func (w *Watcher) Snapshot() PaseoStatus {
 	}
 	slices.SortFunc(s.Workspaces, func(a, b Workspace) int { return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.ID, b.ID)) })
 	for _, a := range w.agents {
+		model, thinking := flatAgentModel(w.catalog, a.Provider, a.ModelName(), a.Thinking())
 		s.Agents = append(s.Agents, Agent{ID: a.ID, WorkspaceID: a.WorkspaceID, ParentID: a.ParentAgentID(), Title: a.Title,
-			Provider: a.Provider, Model: a.ModelName(), Thinking: a.Thinking(), Status: a.Status, Cwd: a.Cwd,
+			Provider: a.Provider, Model: model, Thinking: thinking, Status: a.Status, Cwd: a.Cwd,
 			RequiresAttention: a.RequiresAttention, AttentionReason: a.AttentionReason, CreatedAt: a.CreatedAt,
 			UpdatedAt: a.UpdatedAt, LastUserMessageAt: a.LastUserMessageAt, Live: a.Labels[LiveLabel]})
 	}

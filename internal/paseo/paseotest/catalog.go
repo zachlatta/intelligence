@@ -36,3 +36,22 @@ func (f *Daemon) catalogLocked() []map[string]any {
 	}
 	return []map[string]any{CatalogEntry("claude"), {"provider": "pi", "status": "unavailable", "enabled": true}}
 }
+
+// SetStatusProviders sets the providers the daemon's status lists as available. Before it is
+// called, the status lists an available claude and an unavailable pi.
+func (f *Daemon) SetStatusProviders(names ...string) {
+	f.mu.Lock()
+	f.statusProviders = nil
+	for _, n := range names {
+		f.statusProviders = append(f.statusProviders, map[string]any{"provider": n, "available": true, "error": nil})
+	}
+	f.mu.Unlock()
+}
+
+func (f *Daemon) statusProvidersLocked() []any {
+	if f.statusProviders != nil {
+		return f.statusProviders
+	}
+	return []any{map[string]any{"provider": "claude", "available": true, "error": nil},
+		map[string]any{"provider": "pi", "available": false, "error": "not installed"}}
+}
