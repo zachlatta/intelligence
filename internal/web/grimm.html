@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="/grimm.css">
 <link rel="stylesheet" href="/grimm_host.css">
 <link rel="stylesheet" href="/grimm_runs.css">
+{{if and .Session .Dictation}}<script src="/dictation.js" defer></script>{{end}}
 <script src="/grimm_runs.js" defer></script>
 <script src="/grimm.js" defer></script>
 <script src="/grimm_host.js" defer></script>
@@ -41,6 +42,7 @@
     <button type="button" class="btn sm ghost" id="g-archive-all" title="Archive every worker in this session (files stay)">Archive all</button>
     <div class="g-host" id="g-host" hidden></div>
     <span class="g-conn" id="g-conn" title="Live connection" role="status" aria-label="Connecting"></span>
+    <button type="button" class="btn sm ghost g-bar-toggle" id="g-bar-toggle" aria-expanded="false" aria-label="Session details" title="Session details">⋯</button>
   </header>
 
   <nav class="g-tabs" id="g-tabs" aria-label="Grimm panels">
@@ -96,7 +98,7 @@
       <div id="g-items"></div>
       <div class="g-typing" id="g-typing" hidden><span class="g-avatar g">G</span><span class="g-dots"><i></i><i></i><i></i></span><span id="g-typing-label">Grimm is working</span></div>
     </div>
-    <form class="g-composer" id="g-composer" autocomplete="off">
+    <form class="g-composer" id="g-composer" autocomplete="off"{{if .Dictation}} data-dictation="{{.Dictation}}"{{end}}>
       <div class="g-box" id="g-box">
         <ul class="g-attach-drafts" id="g-attach-drafts" aria-label="Attachments ready to send" hidden></ul>
         <textarea id="g-input" rows="1" placeholder="Tell Grimm what to do…   ( / for commands, @name to message a worker )" aria-label="Message Grimm" aria-describedby="g-hint"></textarea>
@@ -105,11 +107,12 @@
           <button type="button" id="g-attach-btn" class="btn sm ghost g-attach-btn" aria-label="Attach images or files" title="Attach images or files (up to 8 files, 4 MiB each, 8 MiB total)">
             <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21.4 11.1-9.2 9.2a5.4 5.4 0 0 1-7.6-7.6l9.5-9.5a3.6 3.6 0 0 1 5.1 5.1l-9.5 9.5a1.8 1.8 0 1 1-2.5-2.5l8.3-8.3"/></svg>
           </button>
+          {{if .Dictation}}<button type="button" id="dictate" class="btn sm ghost mic g-mic-btn" title="Dictate (⌘D): into the box if it has text, else to send" aria-label="Dictate">{{template "micicon"}}</button>{{end}}
           <button type="button" class="btn sm danger" id="g-stop" hidden title="Interrupt Grimm's turn">Stop</button>
           <button type="submit" class="btn sm primary" id="g-send" title="Send (Enter)">Send</button>
         </div>
       </div>
-      <p class="g-hint" id="g-hint">Enter to send · Shift+Enter for a new line · Drop or paste images · /help</p>
+      <p class="g-hint" id="g-hint">Enter to send · Shift+Enter for a new line · Drop or paste images{{if .Dictation}} · ⌘D dictates{{end}} · /help</p>
       <p class="g-hint g-attach-status" id="g-attach-status" role="status"></p>
     </form>
   </main>

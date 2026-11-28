@@ -865,6 +865,8 @@ function setSending(active) {
   sending = active;
   $("#g-send").disabled = active || checking > 0;
   $("#g-attach-btn").disabled = active;
+  const mic = $("#dictate");
+  if (mic) mic.disabled = active;
   $("#g-input").readOnly = active;
   $$(".g-draft-remove", $("#g-attach-drafts")).forEach((b) => { b.disabled = active; });
 }
@@ -1042,6 +1044,80 @@ function bindSession() {
     try { await api("POST", `/api/grimm/sessions/${S.id}/workers/${encodeURIComponent(name)}/archive`, {}); toast(`Archived ${name}.`); } catch (e) { toast(e.message, true); }
   });
   $("#g-tabs").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) setTab(b.dataset.tab); });
+
+  // mobile header details toggle (+ New, Workers cap, Host resources)
+  const bar = $(".g-bar"), barToggle = $("#g-bar-toggle");
+  function setBarExpanded(open) {
+    if (!bar || !barToggle) return;
+    bar.classList.toggle("is-expanded", open);
+    barToggle.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+  if (barToggle) {
+    barToggle.addEventListener("click", () => setBarExpanded(!bar.classList.contains("is-expanded")));
+    document.addEventListener("click", (e) => {
+      if (!bar.classList.contains("is-expanded")) return;
+      if (bar.contains(e.target)) return;
+      if (e.target.closest("#g-cap-pop, .g-host-card")) return;
+      setBarExpanded(false);
+    });
+  }
+
+  // mobile visualViewport / virtual-keyboard handling: keep the composer above the keyboard,
+  // collapse top chrome while typing, and keep the thread pinned to the latest message
+  const mobileMQ = matchMedia("(max-width: 780px)");
+  let baselineHeight = window.innerHeight;
+  function syncMobileViewport() {
+    if (!mobileMQ.matches) {
+      document.body.style?.removeProperty?.("--g-vh");
+      document.body.classList?.remove?.("g-kbd");
+      setBarExpanded(false);
+      return;
+    }
+    const vv = window.visualViewport;
+    const h = vv ? Math.round(vv.height) : window.innerHeight;
+    if (h > baselineHeight) baselineHeight = h;
+    document.body.style?.setProperty?.("--g-vh", h + "px");
+    const focused = document.activeElement === input;
+    const kbdOpen = (baselineHeight - h > 120) || (window.innerHeight - h > 120) || (focused && h < 540);
+    const wasOpen = !!document.body.classList?.contains?.("g-kbd");
+    document.body.classList?.toggle?.("g-kbd", kbdOpen);
+    if (kbdOpen) {
+      setBarExpanded(false);
+      if (vv && vv.offsetTop > 0) window.scrollTo(0, 0);
+      if (!wasOpen) scrollBottom(true);
+    }
+  }
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", syncMobileViewport);
+    window.visualViewport.addEventListener("scroll", syncMobileViewport);
+  }
+  window.addEventListener("resize", syncMobileViewport);
+  input.addEventListener("focus", () => {
+    if (mobileMQ.matches) {
+      const stick = nearBottom();
+      setTimeout(() => { syncMobileViewport(); if (stick) scrollBottom(true); }, 80);
+    }
+  });
+  input.addEventListener("blur", () => {
+    if (mobileMQ.matches) setTimeout(syncMobileViewport, 120);
+  });
+  syncMobileViewport();
+
+  // dictation (AssemblyAI streaming via /api/dictation/token, when ASSEMBLYAI_API_KEY is configured)
+  const mic = $("#dictate");
+  if (composer.dataset.dictation && mic && window.dictation) {
+    window.dictation({
+      text: input,
+      tokenPath: composer.dataset.dictation,
+      mic,
+      row: $("#g-actions"),
+      label: () => "Send",
+      send: () => send(),
+      warn: (msg) => toast(msg, true),
+      active: () => !sending && $("#g-cap-pop").hidden && !S.focus && !$(".g-lightbox") && root.dataset.tab === "chat",
+    });
+  }
+
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       const lb = $(".g-lightbox");

@@ -72,9 +72,13 @@ window.dictation = ({ text, tokenPath, mic, row, label, send = () => {}, warn, a
         return res.json();
       });
       token.catch(() => {});
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error('microphone capture is unavailable in this browser or context (HTTPS required)');
       s.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
       if (session !== s) return release(s);
-      const ctx = s.ctx = new AudioContext();
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      const ctx = s.ctx = new AudioCtx();
+      if (ctx.state === 'suspended') await ctx.resume();
+      if (!ctx.audioWorklet) throw new Error('this browser does not support AudioWorklet microphone streaming');
       const mod = URL.createObjectURL(new Blob([tap], { type: 'application/javascript' }));
       await ctx.audioWorklet.addModule(mod);
       URL.revokeObjectURL(mod);

@@ -1,8 +1,8 @@
 /* Grimm (the home page): a thread with the manager in the middle, plans, directives and activity
    on the left, the team and the bus on the right. Under 1180px the left panel becomes a drawer;
    under 780px the three columns become tabs. */
-.grimm-body { --g-claude: #c46a3c; --g-codex: #2f8f6f; --g-antigravity: #5b6fd6; --g-other: #8a8786;
-  height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+.grimm-body { --g-claude: #c46a3c; --g-codex: #2f8f6f; --g-antigravity: #5b6fd6; --g-other: #8a8786; --g-vh: 100dvh;
+  height: 100dvh; height: var(--g-vh, 100dvh); display: flex; flex-direction: column; overflow: hidden; }
 @media (prefers-color-scheme: dark) { .grimm-body { --g-claude: #e08a5c; --g-codex: #4fc29b; --g-antigravity: #8798ee; } }
 .grimm-body > .topbar { flex: none; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
@@ -12,6 +12,7 @@
   grid-template-rows: auto minmax(0, 1fr); grid-template-areas: "bar bar bar" "left center right"; position: relative; }
 .g-bar { grid-area: bar; display: flex; flex-wrap: wrap; align-items: center; gap: .45rem .6rem; padding: .45rem .9rem;
   border-bottom: 1px solid var(--line); background: var(--panel); min-width: 0; position: relative; z-index: 15; }
+.g-switch { margin: 0; }
 .g-switch select { max-width: 16rem; height: 1.9rem; border: 1px solid var(--line); border-radius: var(--control-radius);
   background: var(--panel); color: var(--fg); font: inherit; font-size: 13px; padding: 0 .4rem; }
 .g-chip { display: inline-flex; align-items: center; gap: .4rem; min-width: 0; max-width: 26rem; padding: .18rem .6rem;
@@ -44,6 +45,7 @@
 .g-pill[data-state="idle"] i { background: var(--green); }
 .g-conn { width: .55rem; height: .55rem; border-radius: 50%; background: var(--red); flex: none; }
 .g-conn.on { background: var(--green); }
+.g-bar-toggle { display: none; }
 @keyframes g-pulse { 50% { opacity: .35; } }
 @keyframes g-ring { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 55%, transparent); } 70% { box-shadow: 0 0 0 6px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
 
@@ -210,11 +212,15 @@
   border-radius: 13px; padding: .4rem .45rem .4rem .75rem; background: var(--panel); min-width: 0; transition: border-color .15s, box-shadow .15s, background .15s; }
 .g-composer.is-dragging .g-box, .g-box.dropping { border-color: var(--link); background: color-mix(in srgb, var(--link) 6%, var(--panel)); box-shadow: 0 0 0 3px var(--ring); }
 .g-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
-.g-box textarea, .g-box textarea:focus { width: 100%; min-width: 0; min-height: 0; border: 0; outline: 0; box-shadow: none; resize: none;
+.g-box:has(textarea.listening) { border-color: var(--red); box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 22%, transparent); }
+.g-box textarea, .g-box textarea:focus, .g-box textarea.listening, .g-box textarea.listening:focus { width: 100%; min-width: 0; min-height: 0; border: 0; outline: 0; box-shadow: none; resize: none;
   font: inherit; font-size: 14.5px; line-height: 1.45; max-height: 13.5rem; padding: .3rem 0; background: transparent; color: var(--fg); }
 .g-actions { display: flex; align-items: center; gap: .35rem; flex: none; }
-.g-attach-btn { display: inline-grid; place-items: center; width: 2rem; min-width: 2rem; padding: 0; border: 1px solid var(--line); }
-.g-attach-btn:hover { border-color: var(--line-strong); }
+.g-actions[hidden] { display: none; }
+.g-attach-btn, .g-mic-btn { display: inline-grid; place-items: center; width: 2rem; min-width: 2rem; padding: 0; border: 1px solid var(--line); }
+.g-attach-btn:hover, .g-mic-btn:hover { border-color: var(--line-strong); }
+.g-box .dictation { grid-column: 1 / -1; padding-top: .35rem; border-top: 1px solid var(--line); }
+.g-box .dictation[hidden] { display: none; }
 .g-attach-drafts { grid-column: 1 / -1; display: flex; gap: .5rem; overflow-x: auto; list-style: none; margin: 0; padding: .2rem .1rem .3rem; }
 .g-attach-drafts[hidden] { display: none; }
 .g-attach-draft { position: relative; flex: none; }
@@ -311,31 +317,72 @@
   .g-chip { display: none; }
 }
 
-/* phone: single column with Chat / Team / Quota tabs */
+/* Hide desktop-only composer keyboard/drag hints on phones and touch devices */
+@media (max-width: 780px), (pointer: coarse) {
+  #g-hint { display: none; }
+}
+
+/* phone: single column with Chat / Team / Quota tabs, compact single-row chrome */
 @media (max-width: 780px) {
   .grimm { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); grid-template-areas: "bar" "tabs" "main"; }
-  .g-bar { padding: .35rem .55rem; gap: .3rem .4rem; }
-  .g-switch select { max-width: 8.5rem; font-size: 12.5px; }
-  .g-chip, #g-archive-all { display: none; }
+  /* single slim row for site header instead of stacked 2-row nav */
+  .grimm-body .topbar .container { padding: 0 .65rem; }
+  .grimm-body .topbar-inner { flex-direction: row; align-items: center; gap: .75rem; min-height: 2.35rem; }
+  .grimm-body .brand { padding: .3rem 0; font-size: 13.5px; }
+  .grimm-body .topnav { flex-wrap: nowrap; overflow-x: auto; gap: .85rem; }
+  .grimm-body .topnav a { padding: .42rem 0; font-size: 13px; }
+  /* single compact row for session bar; secondary items (+ New, Workers, Host resources) expand on demand */
+  .g-bar { padding: .28rem .5rem; gap: .3rem .35rem; align-items: center; }
+  .g-switch { flex: 1 1 8rem; min-width: 7rem; }
+  .g-switch select { width: 100%; max-width: none; height: 2rem; font-size: 16px; }
+  .g-spacer, .g-chip, #g-archive-all { display: none; }
+  .g-pill { max-width: 44%; overflow: hidden; padding: .15rem .5rem; font-size: 11.5px; }
+  #g-pill-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .g-bar-toggle.btn.sm { display: inline-grid; place-items: center; width: 2rem; min-width: 2rem; height: 2rem; padding: 0;
+    border: 1px solid var(--line); font-size: 16px; line-height: 1; flex: none; }
+  .g-bar-toggle[aria-expanded="true"] { background: var(--accent-bg); border-color: var(--line-strong); color: var(--fg); }
+  .g-bar:not(.is-expanded) > a.btn,
+  .g-bar:not(.is-expanded) > .g-cap-wrap,
+  .g-bar:not(.is-expanded) > .g-host { display: none; }
+  .g-bar.is-expanded > a.btn,
+  .g-bar.is-expanded > .g-cap-wrap,
+  .g-bar.is-expanded > .g-host { order: 10; }
+  .g-bar.is-expanded > a.btn { min-height: 2rem; }
+  .g-bar.is-expanded > .g-cap-wrap .g-cap { min-height: 2rem; }
   .g-cap-pop { position: fixed; left: .5rem; right: .5rem; top: auto; width: auto; max-width: none; }
   .g-cap-row input { font-size: 16px; height: 2.15rem; }
   .g-cap-step { width: 2.15rem; min-width: 2.15rem; height: 2.15rem; }
-  .g-tabs { grid-area: tabs; display: flex; gap: .2rem; padding: .3rem .5rem; border-bottom: 1px solid var(--line); background: var(--panel); }
-  .g-tabs button { flex: 1; }
+  .g-tabs { grid-area: tabs; display: flex; gap: .2rem; padding: .22rem .5rem; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .g-tabs button { flex: 1; min-height: 2.1rem; }
   .g-left, .g-center, .g-right { grid-area: main; border: 0; display: none; }
   .grimm[data-tab="chat"] .g-center, .grimm[data-tab="team"] .g-right, .grimm[data-tab="subs"] .g-left { display: flex; }
   .g-right .g-team { max-height: none; flex: 1; }
   .g-bus-panel { display: none; }
-  .g-thread { padding: .7rem .6rem .4rem; }
+  .g-thread { padding: .6rem .55rem .4rem; -webkit-overflow-scrolling: touch; }
   .g-tool, .g-command { margin-left: 0; }
   .g-notice { margin: 0; }
   .g-msg-body { max-width: 92%; }
-  .g-composer { padding: .45rem .5rem calc(.45rem + env(safe-area-inset-bottom)); }
-  .g-box { padding: .35rem .4rem .35rem .6rem; }
-  .g-box textarea { font-size: 16px; } /* no zoom on focus in iOS Safari */
+  .g-directive-form input, .g-focus-compose input { font-size: 16px; height: 2.25rem; }
+  .g-composer { padding: .38rem .5rem calc(.38rem + env(safe-area-inset-bottom)); }
+  .g-box { padding: .3rem .35rem .3rem .6rem; gap: .35rem; }
+  .g-box textarea { font-size: 16px; max-height: 8.5rem; } /* no zoom on focus in iOS Safari */
+  .g-actions .g-attach-btn, .g-actions .g-mic-btn { width: 2.35rem; min-width: 2.35rem; height: 2.35rem; }
+  .g-actions #g-send, .g-actions #g-stop { height: 2.35rem; padding: 0 .85rem; font-size: 14px; }
+  .g-box .dictation .btn { min-height: 2.15rem; }
   .g-hint { font-size: 11px; }
-  /* the chat gets the height: every tab stays in sight, packed tighter */
-  .grimm-body .brand { padding: .45rem 0 .1rem; }
-  .grimm-body .topnav { gap: 0 .8rem; }
-  .grimm-body .topnav a { padding: .3rem 0 .4rem; font-size: 13px; }
+  /* keyboard-open compact mode: hide site topbar and chat tabs so messages own the viewport */
+  .grimm-body.g-kbd > .topbar { display: none; }
+  .grimm-body.g-kbd .grimm[data-tab="chat"] .g-tabs { display: none; }
+  .grimm-body.g-kbd .g-bar { padding: .2rem .45rem; }
+  .grimm-body.g-kbd .g-composer { padding: .3rem .45rem calc(.3rem + env(safe-area-inset-bottom)); }
+  .grimm-body.g-kbd .g-box textarea { max-height: 5.5rem; }
+}
+
+/* short mobile viewport (e.g. virtual keyboard open on Android/iOS or 390x420): maximize chat area */
+@media (max-width: 780px) and (max-height: 540px) {
+  .grimm-body > .topbar { display: none; }
+  .grimm[data-tab="chat"] .g-tabs { display: none; }
+  .g-bar { padding: .2rem .45rem; }
+  .g-composer { padding: .3rem .45rem calc(.3rem + env(safe-area-inset-bottom)); }
+  .g-box textarea { max-height: 5.5rem; }
 }
