@@ -1,5 +1,13 @@
 [
   {
+    "id": "grimm-file-links",
+    "released": "2026-11-28",
+    "title": "Clickable file:// links and in-page file viewer in Grimm",
+    "summary": "Markdown file:// links in Grimm now render as clickable file pills instead of raw text. Clicking a link reads the file from the session's workspace on its host and opens it in an in-page viewer with Rendered/Raw toggle for Markdown, line-numbered code with #L anchor highlighting, inline image preview, Copy path, Open raw, and Download.",
+    "media": "grimm-file-links.png",
+    "mediaAlt": "A local demo of Grimm showing a formatted clickable launch-brief.md file link in the thread and the in-page file viewer modal open on the rendered Markdown brief with Raw, Copy path, Open raw, and Download buttons."
+  },
+  {
     "id": "grimm-workflow-orchestration",
     "released": "2026-11-28",
     "title": "Grimm workflow orchestration, mid-run guidance and inline replies",

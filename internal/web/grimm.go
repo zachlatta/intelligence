@@ -57,6 +57,7 @@ func (a *app) grimmRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /grimm/{id}", a.page(func(v viewer) http.HandlerFunc { return a.grimmPage(v) }))
 	mux.HandleFunc("POST /api/grimm/sessions", a.write(a.grimmCreate))
 	mux.HandleFunc("PUT /api/grimm/sessions/{id}", a.write(a.grimmUpdate))
+	mux.HandleFunc("POST /api/grimm/sessions/{id}/read-file", a.write(a.grimmReadFile))
 	mux.HandleFunc("POST /api/grimm/sessions/{id}/worktree-diff", a.write(a.grimmWorktreeDiff))
 	mux.HandleFunc("POST /api/grimm/sessions/{id}/archive", a.write(a.grimmArchive))
 	mux.HandleFunc("POST /api/grimm/sessions/{id}/messages", a.write(a.grimmMessage))
