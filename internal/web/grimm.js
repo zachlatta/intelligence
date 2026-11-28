@@ -498,6 +498,139 @@ function closePicker(refocusBtn) {
 }
 
 let endingSession = false;
+let endCheckToken = 0;
+let endWtTouched = false;
+let endDiffFiles = [];
+
+function formatUnifiedDiff(text) {
+  return String(text || "").split("\n").map((line) => {
+    let cls = "ctx";
+    if (line.startsWith("@@")) cls = "hunk";
+    else if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff --git ") || line.startsWith("index ")) cls = "meta";
+    else if (line.startsWith("+")) cls = "add";
+    else if (line.startsWith("-")) cls = "del";
+    return `<span class="g-dl ${cls}">${esc(line)}</span>`;
+  }).join("");
+}
+function renderEndDiffFile(idx) {
+  const view = $("#g-end-diff-view");
+  const filesBox = $("#g-end-diff-files");
+  if (!view || !filesBox) return;
+  const f = endDiffFiles[idx];
+  if (!f) { view.innerHTML = ""; return; }
+  $$(".g-end-diff-file", filesBox).forEach((b, i) => {
+    b.classList.toggle("active", i === idx);
+    b.setAttribute("aria-selected", i === idx ? "true" : "false");
+  });
+  const stats = f.binary ? '<span class="muted">binary</span>'
+    : `${f.additions ? `<span class="g-stat-add">+${f.additions}</span>` : ""}${f.deletions ? `<span class="g-stat-del">−${f.deletions}</span>` : ""}`;
+  let body = "";
+  if (f.binary) {
+    body = '<p class="muted small g-diff-note">Binary file — text diff not shown.</p>';
+  } else if (f.diff) {
+    body = `<pre class="g-diff-pre">${formatUnifiedDiff(f.diff)}</pre>${f.truncated ? '<p class="muted small g-diff-note">Diff truncated for preview.</p>' : ""}`;
+  } else if (f.truncated) {
+    body = '<p class="muted small g-diff-note">Diff omitted (preview size limit reached).</p>';
+  } else {
+    body = '<p class="muted small g-diff-note">Empty file or mode-only change.</p>';
+  }
+  view.innerHTML = `<div class="g-diff-head"><span class="g-dst st-${esc(f.status === "?" ? "u" : (f.status || "m").toLowerCase())}">${esc(f.status || "M")}</span><code class="g-diff-path">${esc(f.path)}</code><span class="g-diff-stats">${stats}</span></div>${body}`;
+}
+function renderEndDiff(files) {
+  endDiffFiles = files || [];
+  const box = $("#g-end-diff");
+  const list = $("#g-end-diff-files");
+  const modal = $("#g-end-modal");
+  if (!box || !list) return;
+  list.innerHTML = "";
+  if (!endDiffFiles.length) {
+    box.hidden = true;
+    modal?.classList.remove("has-diff");
+    return;
+  }
+  endDiffFiles.forEach((f, i) => {
+    const stCls = f.status === "?" ? "u" : (f.status || "m").toLowerCase();
+    const counts = f.binary ? '<span class="muted">bin</span>'
+      : `${f.additions ? `<span class="g-stat-add">+${f.additions}</span>` : ""}${f.deletions ? `<span class="g-stat-del">−${f.deletions}</span>` : ""}`;
+    const btn = el("button", "g-end-diff-file", `<span class="g-dst st-${esc(stCls)}">${esc(f.status || "M")}</span><span class="g-df-path">${esc(f.path)}</span><span class="g-df-counts">${counts}</span>`);
+    btn.type = "button";
+    btn.setAttribute("role", "tab");
+    btn.setAttribute("aria-selected", i === 0 ? "true" : "false");
+    btn.addEventListener("click", () => renderEndDiffFile(i));
+    list.append(btn);
+  });
+  box.hidden = false;
+  modal?.classList.add("has-diff");
+  renderEndDiffFile(0);
+}
+function setEndWtStatus(state, text) {
+  const st = $("#g-end-wt-status");
+  if (!st) return;
+  st.dataset.state = state;
+  st.textContent = text;
+}
+async function loadWorktreeDiff(token) {
+  const chk = $("#g-end-delete-wt");
+  const box = $("#g-end-diff");
+  const modal = $("#g-end-modal");
+  if (box) box.hidden = true;
+  modal?.classList.remove("has-diff");
+  endDiffFiles = [];
+  if (chk) { chk.checked = false; chk.disabled = false; }
+
+  setEndWtStatus("checking", "Checking worktree for uncommitted changes…");
+  let req;
+  try {
+    req = await api("POST", `/api/grimm/sessions/${S.id}/worktree-diff`, {});
+  } catch (e) {
+    if (token !== endCheckToken) return;
+    setEndWtStatus("warn", `Could not inspect worktree: ${e.message}. You can still end the session.`);
+    return;
+  }
+  if (token !== endCheckToken) return;
+  if (req.noWorkspace || !req.commandId || !/^[0-9a-f-]{36}$/.test(req.commandId)) {
+    setEndWtStatus("none", "No git worktree has been created for this session yet.");
+    if (chk) chk.disabled = true;
+    return;
+  }
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    if (token !== endCheckToken) return;
+    try {
+      const rows = await sql(`SELECT status, result, error FROM commands WHERE id = '${req.commandId}'`);
+      if (token !== endCheckToken) return;
+      const [status, result, errMsg] = rows[0] || [];
+      if (status === "succeeded") {
+        const wt = (result && result.worktreeDiff) || {};
+        if (wt.error) {
+          setEndWtStatus("warn", `Could not inspect worktree: ${wt.error}. You can still end the session.`);
+          return;
+        }
+        if (wt.clean) {
+          setEndWtStatus("clean", "Worktree is clean (no uncommitted changes).");
+          if (chk && !endWtTouched) chk.checked = true;
+          return;
+        }
+        const files = Array.isArray(wt.files) ? wt.files : [];
+        const n = files.length;
+        setEndWtStatus("dirty", `Worktree has ${n} uncommitted ${n === 1 ? "file" : "files"}${wt.truncated ? " (preview truncated)" : ""}.`);
+        renderEndDiff(files);
+        return;
+      }
+      if (status === "failed" || status === "expired") {
+        setEndWtStatus("warn", `Could not inspect worktree (${errMsg || status}). You can still end the session.`);
+        return;
+      }
+    } catch (e) {
+      if (token !== endCheckToken) return;
+      setEndWtStatus("warn", `Could not read worktree status: ${e.message}. You can still end the session.`);
+      return;
+    }
+    await new Promise((ok) => setTimeout(ok, 350));
+  }
+  if (token !== endCheckToken) return;
+  setEndWtStatus("warn", "Worktree check timed out (host may be offline). You can still end the session.");
+}
 function openEndDialog() {
   if (isArchived()) return;
   const dlg = $("#g-end-dialog");
@@ -514,33 +647,40 @@ function openEndDialog() {
   const br = $("#g-end-branch");
   if (br) br.textContent = S.session.branch || "grimm/…";
   $("#g-end-error").textContent = "";
+  endWtTouched = false;
+  const token = ++endCheckToken;
   dlg.hidden = false;
   $("#g-end-cancel").focus();
+  loadWorktreeDiff(token);
 }
 function closeEndDialog(refocusBtn) {
   if (endingSession) return;
   const dlg = $("#g-end-dialog");
   if (!dlg || dlg.hidden) return;
+  endCheckToken++;
   dlg.hidden = true;
   $("#g-end-error").textContent = "";
   if (refocusBtn) $("#g-end-session").focus();
 }
 async function confirmEndSession() {
   if (endingSession) return;
-  const err = $("#g-end-error"), confirmBtn = $("#g-end-confirm"), cancelBtn = $("#g-end-cancel");
+  const err = $("#g-end-error"), confirmBtn = $("#g-end-confirm"), cancelBtn = $("#g-end-cancel"), chk = $("#g-end-delete-wt");
   err.textContent = "";
   endingSession = true;
+  endCheckToken++;
   confirmBtn.disabled = true;
   cancelBtn.disabled = true;
+  if (chk) chk.disabled = true;
   confirmBtn.textContent = "Ending session…";
   try {
-    const r = await api("POST", `/api/grimm/sessions/${S.id}/archive`, {});
+    const r = await api("POST", `/api/grimm/sessions/${S.id}/archive`, { deleteWorktree: !!(chk && chk.checked) });
     location.href = (r && r.nextUrl) || "/";
   } catch (e) {
     err.textContent = e.message;
     endingSession = false;
     confirmBtn.disabled = false;
     cancelBtn.disabled = false;
+    if (chk && S.session.workspace_id) chk.disabled = false;
     confirmBtn.textContent = "End session";
   }
 }
@@ -1128,6 +1268,7 @@ function bindSession() {
   $("#g-end-session").addEventListener("click", openEndDialog);
   $("#g-end-cancel").addEventListener("click", () => closeEndDialog(true));
   $("#g-end-confirm").addEventListener("click", confirmEndSession);
+  $("#g-end-delete-wt").addEventListener("change", () => { endWtTouched = true; });
   $("#g-end-dialog").addEventListener("click", (e) => {
     if (e.target === $("#g-end-dialog")) closeEndDialog(true);
   });

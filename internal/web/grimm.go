@@ -57,6 +57,7 @@ func (a *app) grimmRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /grimm/{id}", a.page(func(v viewer) http.HandlerFunc { return a.grimmPage(v) }))
 	mux.HandleFunc("POST /api/grimm/sessions", a.write(a.grimmCreate))
 	mux.HandleFunc("PUT /api/grimm/sessions/{id}", a.write(a.grimmUpdate))
+	mux.HandleFunc("POST /api/grimm/sessions/{id}/worktree-diff", a.write(a.grimmWorktreeDiff))
 	mux.HandleFunc("POST /api/grimm/sessions/{id}/archive", a.write(a.grimmArchive))
 	mux.HandleFunc("POST /api/grimm/sessions/{id}/messages", a.write(a.grimmMessage))
 	mux.HandleFunc("POST /api/grimm/sessions/{id}/manager/interrupt", a.write(a.grimmSimple(a.grimm.Interrupt)))
@@ -136,15 +137,38 @@ func (a *app) grimmUpdate(v viewer) http.HandlerFunc {
 	}
 }
 
-// grimmArchive is POST /api/grimm/sessions/{id}/archive {}: ends the session and returns the
-// next URL for the page to open (another active session, or / for the start-a-session form).
-func (a *app) grimmArchive(v viewer) http.HandlerFunc {
+// grimmWorktreeDiff is POST /api/grimm/sessions/{id}/worktree-diff {}: enqueues a worktree_diff
+// command on the session's host so the browser can poll commands via /api/sql.
+func (a *app) grimmWorktreeDiff(v viewer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var empty struct{}
 		if !decodeGrimm(w, r, &empty) {
 			return
 		}
-		if err := a.grimm.ArchiveSession(r.Context(), v.acct.ID, r.PathValue("id")); err != nil {
+		cmdID, err := a.grimm.RequestWorktreeDiff(r.Context(), v.acct.ID, r.PathValue("id"))
+		if err != nil {
+			grimmError(w, err)
+			return
+		}
+		if cmdID == "" {
+			writeJSONStatus(w, http.StatusOK, map[string]any{"commandId": "", "noWorkspace": true})
+			return
+		}
+		writeJSONStatus(w, http.StatusAccepted, map[string]any{"commandId": cmdID})
+	}
+}
+
+// grimmArchive is POST /api/grimm/sessions/{id}/archive {"deleteWorktree": bool}: ends the session
+// and returns the next URL for the page to open (another active session, or / for the start form).
+func (a *app) grimmArchive(v viewer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			DeleteWorktree bool `json:"deleteWorktree"`
+		}
+		if !decodeGrimm(w, r, &req) {
+			return
+		}
+		if err := a.grimm.ArchiveSession(r.Context(), v.acct.ID, r.PathValue("id"), req.DeleteWorktree); err != nil {
 			grimmError(w, err)
 			return
 		}

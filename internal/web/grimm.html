@@ -181,14 +181,24 @@
   </aside>
 
   <div class="g-modal-backdrop" id="g-end-dialog" role="dialog" aria-modal="true" aria-labelledby="g-end-title" hidden>
-    <div class="g-modal">
+    <div class="g-modal" id="g-end-modal">
       <h2 id="g-end-title">End this Grimm session?</h2>
       <p class="g-modal-lead" id="g-end-lead">Stops Grimm's turn and every live worker, archives their Paseo agents, and removes this session from the active picker.</p>
       <ul class="g-modal-list">
         <li><strong>Thread, transcripts &amp; roster:</strong> kept read-only in the <em>Ended</em> group and through <code>/api/sql</code>.</li>
-        <li><strong>Git branch &amp; worktree:</strong> keeps branch <code id="g-end-branch">{{.CurrentBranch}}</code>; removes the worktree only if it has no uncommitted changes.</li>
         <li><strong>Workflows &amp; proposals:</strong> pending workflow proposals stay open on the <a href="/workflow-proposals">Proposals</a> page; running workflows keep running.</li>
       </ul>
+      <div class="g-end-wt" id="g-end-wt">
+        <div class="g-end-wt-status" id="g-end-wt-status" data-state="checking">Checking worktree for uncommitted changes…</div>
+        <div class="g-end-diff" id="g-end-diff" hidden>
+          <div class="g-end-diff-files" id="g-end-diff-files" role="tablist" aria-label="Uncommitted files"></div>
+          <div class="g-end-diff-view" id="g-end-diff-view"></div>
+        </div>
+        <label class="g-end-wt-check" id="g-end-delete-wt-wrap">
+          <input type="checkbox" id="g-end-delete-wt">
+          <span>Delete git worktree <small class="muted">(branch <code id="g-end-branch">{{.CurrentBranch}}</code> is always kept)</small></span>
+        </label>
+      </div>
       <p class="g-modal-error" id="g-end-error" role="alert"></p>
       <div class="g-modal-actions">
         <button type="button" class="btn sm ghost" id="g-end-cancel">Cancel</button>

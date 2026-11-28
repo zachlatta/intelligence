@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -60,6 +59,7 @@ const (
 	CreateWorkspaceKind  = "create_workspace"
 	ArchiveWorkspaceKind = "archive_workspace"
 	RenameWorkspaceKind  = "rename_workspace"
+	WorktreeDiffKind     = "worktree_diff"
 	CreateAgentKind      = "create_agent"
 	ArchiveAgentKind     = "archive_agent"
 	RenameAgentKind      = "rename_agent"
@@ -130,12 +130,11 @@ type CreateAgentArgs struct {
 	Labels      map[string]string  `json:"labels,omitempty"`
 }
 
-// WorkspaceArgs name a workspace: archive_workspace, and rename_workspace with Title ("" resets it).
+// WorkspaceArgs name a workspace: archive_workspace, worktree_diff, and rename_workspace with Title ("" resets it).
 type WorkspaceArgs struct {
 	WorkspaceID  string `json:"workspaceId"`
 	Title        string `json:"title,omitempty"`
 	WaitForAgent string `json:"waitForAgent,omitempty"` // archive: let this agent finish its turn first
-	OnlyIfClean  bool   `json:"onlyIfClean,omitempty"`  // archive: keep the worktree if it has uncommitted changes
 }
 
 // AgentArgs name an agent: archive_agent, cancel_agent, rename_agent with Title, send_message with
@@ -171,19 +170,19 @@ func (c Command) waitsForTurn() bool {
 }
 
 type CommandResult struct {
-	NotDelivered         bool   `json:"notDelivered,omitempty"` // failure before calling SendMessage
-	FailureStage         string `json:"failureStage,omitempty"`
-	AgentGone            bool   `json:"agentGone,omitempty"`
-	WorkspaceID          string `json:"workspaceId,omitempty"`
-	AgentID              string `json:"agentId,omitempty"`
-	ScheduleID           string `json:"scheduleId,omitempty"`
-	RunID                string `json:"runId,omitempty"`          // run_schedule: the run it started
-	ArchivedAgents       int    `json:"archivedAgents,omitempty"` // archive_workspace: how many agents went with it
-	WorktreeKept         bool   `json:"worktreeKept,omitempty"`   // archive_workspace(onlyIfClean): worktree kept because dirty or unreadable
-	WorktreeBaseFallback bool   `json:"worktreeBaseFallback,omitempty"`
-	Login                string `json:"login,omitempty"`   // switch_login: the login now active
-	Slot                 int    `json:"slot,omitempty"`    // switch_login: its cswap slot when switched
-	Content              string `json:"content,omitempty"` // read_git_file: UTF-8 blob contents at commit
+	NotDelivered         bool                `json:"notDelivered,omitempty"` // failure before calling SendMessage
+	FailureStage         string              `json:"failureStage,omitempty"`
+	AgentGone            bool                `json:"agentGone,omitempty"`
+	WorkspaceID          string              `json:"workspaceId,omitempty"`
+	AgentID              string              `json:"agentId,omitempty"`
+	ScheduleID           string              `json:"scheduleId,omitempty"`
+	RunID                string              `json:"runId,omitempty"`          // run_schedule: the run it started
+	ArchivedAgents       int                 `json:"archivedAgents,omitempty"` // archive_workspace: how many agents went with it
+	WorktreeDiff         *WorktreeDiffResult `json:"worktreeDiff,omitempty"`   // worktree_diff: uncommitted changes snapshot
+	WorktreeBaseFallback bool                `json:"worktreeBaseFallback,omitempty"`
+	Login                string              `json:"login,omitempty"`   // switch_login: the login now active
+	Slot                 int                 `json:"slot,omitempty"`    // switch_login: its cswap slot when switched
+	Content              string              `json:"content,omitempty"` // read_git_file: UTF-8 blob contents at commit
 }
 
 // ParseCommand decodes args for kind strictly (no unknown fields) and checks what it needs. The
@@ -248,7 +247,7 @@ func ParseCommand(kind string, args json.RawMessage) (any, error) {
 			return nil, errors.New("create_agent needs a provider, and a workspaceId or cwd")
 		}
 		return a, nil
-	case ArchiveWorkspaceKind, RenameWorkspaceKind:
+	case ArchiveWorkspaceKind, RenameWorkspaceKind, WorktreeDiffKind:
 		var a WorkspaceArgs
 		if err := decode(&a); err != nil {
 			return nil, err
@@ -256,14 +255,11 @@ func ParseCommand(kind string, args json.RawMessage) (any, error) {
 		if a.WorkspaceID == "" {
 			return nil, fmt.Errorf("%s needs workspaceId", kind)
 		}
-		if kind == RenameWorkspaceKind && a.WaitForAgent != "" {
-			return nil, errors.New("rename_workspace takes no waitForAgent")
+		if kind != ArchiveWorkspaceKind && a.WaitForAgent != "" {
+			return nil, fmt.Errorf("%s takes no waitForAgent", kind)
 		}
-		if kind == RenameWorkspaceKind && a.OnlyIfClean {
-			return nil, errors.New("rename_workspace takes no onlyIfClean")
-		}
-		if kind == ArchiveWorkspaceKind && a.Title != "" {
-			return nil, errors.New("archive_workspace takes no title")
+		if kind != RenameWorkspaceKind && a.Title != "" {
+			return nil, fmt.Errorf("%s takes no title", kind)
 		}
 		return a, nil
 	case ArchiveAgentKind, CancelAgentKind, RenameAgentKind, SendMessageKind, WatchAgentKind:
@@ -478,8 +474,15 @@ func (w *Watcher) Execute(ctx context.Context, cmd Command) (CommandResult, erro
 		}
 		return createAgent(ctx, c, a, key, key, key+":retry:"+cmd.ID)
 	case WorkspaceArgs:
+		if cmd.Kind == WorktreeDiffKind {
+			w.mu.Lock()
+			dir := w.workspaces[a.WorkspaceID].Directory
+			w.mu.Unlock()
+			diff := inspectWorktreeDiff(ctx, dir)
+			return CommandResult{WorkspaceID: a.WorkspaceID, WorktreeDiff: &diff}, nil
+		}
 		if cmd.Kind == ArchiveWorkspaceKind {
-			return w.archiveWorkspace(ctx, c, a.WorkspaceID, a.OnlyIfClean)
+			return w.archiveWorkspace(ctx, c, a.WorkspaceID)
 		}
 		return CommandResult{WorkspaceID: a.WorkspaceID}, c.SetWorkspaceTitle(ctx, a.WorkspaceID, a.Title)
 	case AgentArgs:
@@ -532,7 +535,7 @@ func (w *Watcher) archiveAfterTurn(ctx context.Context, a WorkspaceArgs) (Comman
 				current := w.client
 				w.mu.Unlock()
 				if !running && current != nil && current == c {
-					result, err := w.archiveWorkspace(ctx, current, a.WorkspaceID, a.OnlyIfClean)
+					result, err := w.archiveWorkspace(ctx, current, a.WorkspaceID)
 					if err == nil {
 						return result, nil
 					}
@@ -555,9 +558,7 @@ func (w *Watcher) archiveAfterTurn(ctx context.Context, a WorkspaceArgs) (Comman
 // archiveWorkspace archives each agent in the workspace, then the workspace. Paseo 0.15 archives a
 // workspace's agents itself, but an older daemon leaves them running in a workspace it no longer
 // lists, so the host does it first. An agent already gone (archived elsewhere) is skipped.
-// When onlyIfClean is true, the workspace is archived (removing its worktree, keeping its git
-// branch) only if git reports no uncommitted or untracked changes in its directory.
-func (w *Watcher) archiveWorkspace(ctx context.Context, c *paseo.Client, id string, onlyIfClean bool) (CommandResult, error) {
+func (w *Watcher) archiveWorkspace(ctx context.Context, c *paseo.Client, id string) (CommandResult, error) {
 	w.mu.Lock()
 	var agents []string
 	for _, ag := range w.agents {
@@ -565,7 +566,6 @@ func (w *Watcher) archiveWorkspace(ctx context.Context, c *paseo.Client, id stri
 			agents = append(agents, ag.ID)
 		}
 	}
-	dir := w.workspaces[id].Directory
 	w.mu.Unlock()
 	slices.Sort(agents)
 	r := CommandResult{WorkspaceID: id}
@@ -578,24 +578,7 @@ func (w *Watcher) archiveWorkspace(ctx context.Context, c *paseo.Client, id stri
 		}
 		r.ArchivedAgents++
 	}
-	if onlyIfClean && !worktreeClean(ctx, dir) {
-		r.WorktreeKept = true
-		return r, nil
-	}
 	return r, c.ArchiveWorkspace(ctx, id)
-}
-
-// worktreeClean reports whether dir is a git checkout with no uncommitted or untracked changes.
-// Any error (missing directory, not a git repo, git failure) returns false so dirty work is kept.
-func worktreeClean(ctx context.Context, dir string) bool {
-	if strings.TrimSpace(dir) == "" {
-		return false
-	}
-	out, err := exec.CommandContext(ctx, "git", "-C", dir, "status", "--porcelain", "--untracked-files=normal").Output()
-	if err != nil {
-		return false
-	}
-	return len(bytes.TrimSpace(out)) == 0
 }
 
 // expandHome reads a leading "~" in path as the home directory: the server does not know it.

@@ -63,12 +63,40 @@ func TestGrimmEndSessionAPIAndUIAndReadOnlySQL(t *testing.T) {
 	id2 := created2.ID
 	succeed(t, stream, stream.command(), `{"workspaceId":"w-other"}`)
 
-	// Active session page has the End session button and confirm dialog.
+	// Active session page has the End session button, confirm dialog, delete-worktree checkbox, and diff viewer.
 	page1 := get(t, h, "/grimm/"+id1, nil).Body.String()
-	for _, want := range []string{`id="g-end-session"`, `id="g-end-dialog"`, `id="g-end-confirm"`} {
+	for _, want := range []string{`id="g-end-session"`, `id="g-end-dialog"`, `id="g-end-confirm"`, `id="g-end-delete-wt"`, `id="g-end-diff"`} {
 		if !strings.Contains(page1, want) {
 			t.Errorf("active session page missing %s", want)
 		}
+	}
+
+	// Worktree diff route: cross-site refused (403), unknown session (404), valid session (202 with commandId).
+	if rec := call(t, h, "POST", "/api/grimm/sessions/"+id1+"/worktree-diff", `{}`, map[string]string{"Sec-Fetch-Site": "cross-site"}); rec.Code != 403 {
+		t.Errorf("cross-site worktree-diff: %d, want 403", rec.Code)
+	}
+	if rec := call(t, h, "POST", "/api/grimm/sessions/00000000-0000-4000-8000-000000000009/worktree-diff", `{}`, sameOriginFetch); rec.Code != 404 {
+		t.Errorf("unknown session worktree-diff: %d, want 404", rec.Code)
+	}
+	diffRec := call(t, h, "POST", "/api/grimm/sessions/"+id1+"/worktree-diff", `{}`, sameOriginFetch)
+	if diffRec.Code != http.StatusAccepted {
+		t.Fatalf("worktree-diff: %d %s", diffRec.Code, diffRec.Body)
+	}
+	var diffResp struct {
+		CommandID string `json:"commandId"`
+	}
+	if err := json.Unmarshal(diffRec.Body.Bytes(), &diffResp); err != nil || diffResp.CommandID == "" {
+		t.Fatalf("worktree-diff response = %s (%v)", diffRec.Body, err)
+	}
+	diffCmd := stream.command()
+	if diffCmd.Kind != hostclient.WorktreeDiffKind || diffCmd.ID != diffResp.CommandID {
+		t.Fatalf("stream command = %+v, want worktree_diff %s", diffCmd, diffResp.CommandID)
+	}
+	succeed(t, stream, diffCmd, `{"workspaceId":"w-app","worktreeDiff":{"clean":true}}`)
+	// Command result is readable through /api/sql.
+	code, res := sqlPost(t, h, `{"query":"SELECT status, result->'worktreeDiff'->>'clean' FROM commands WHERE id = '`+diffResp.CommandID+`'"}`)
+	if code != 200 || len(res.Rows) != 1 || res.Rows[0][0] != "succeeded" || res.Rows[0][1] != "true" {
+		t.Fatalf("commands via /api/sql: %d %+v", code, res)
 	}
 
 	// Cross-site archive is refused with 403.
@@ -76,7 +104,7 @@ func TestGrimmEndSessionAPIAndUIAndReadOnlySQL(t *testing.T) {
 		t.Errorf("cross-site archive: %d, want 403", rec.Code)
 	}
 
-	// End session 1 via JSON API.
+	// End session 1 via JSON API with default body {} (deleteWorktree defaults to false -> no archive_workspace).
 	archRec := call(t, h, "POST", "/api/grimm/sessions/"+id1+"/archive", `{}`, sameOriginFetch)
 	if archRec.Code != http.StatusOK {
 		t.Fatalf("archive session 1: %d %s", archRec.Code, archRec.Body)
@@ -91,6 +119,14 @@ func TestGrimmEndSessionAPIAndUIAndReadOnlySQL(t *testing.T) {
 	if archBody.Status != "archived" || archBody.NextURL != "/grimm/"+id2 {
 		t.Errorf("archive response = %+v, want status=archived nextUrl=/grimm/%s", archBody, id2)
 	}
+	var wsArchCount int
+	if err := d.Owner.QueryRow(t.Context(), `SELECT count(*) FROM commands WHERE kind = 'archive_workspace' AND args->>'workspaceId' = 'w-app'`).Scan(&wsArchCount); err != nil || wsArchCount != 0 {
+		t.Errorf("default {} archive enqueued archive_workspace: count=%d err=%v", wsArchCount, err)
+	}
+	// Requesting worktree-diff on an archived session returns 409.
+	if rec := call(t, h, "POST", "/api/grimm/sessions/"+id1+"/worktree-diff", `{}`, sameOriginFetch); rec.Code != 409 {
+		t.Errorf("archived worktree-diff: %d, want 409", rec.Code)
+	}
 
 	// Host reports mgr-1 and w-1 gone (archived in Paseo): transcripts MUST still stay readable via /api/sql.
 	repGone := wfReport()
@@ -98,7 +134,7 @@ func TestGrimmEndSessionAPIAndUIAndReadOnlySQL(t *testing.T) {
 	if ack := stream.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &repGone}); ack.Error != "" {
 		t.Fatal(ack.Error)
 	}
-	code, res := sqlPost(t, h, `{"query":"SELECT body FROM grimm_thread WHERE session_id = '`+id1+`' AND kind = 'assistant_message'"}`)
+	code, res = sqlPost(t, h, `{"query":"SELECT body FROM grimm_thread WHERE session_id = '`+id1+`' AND kind = 'assistant_message'"}`)
 	if code != 200 || len(res.Rows) != 1 || res.Rows[0][0] != "Parser looks solid." {
 		t.Fatalf("grimm_thread after archive + host report: %d %+v", code, res)
 	}
@@ -122,8 +158,8 @@ func TestGrimmEndSessionAPIAndUIAndReadOnlySQL(t *testing.T) {
 		t.Errorf("ended session page missing archived/read-only markers")
 	}
 
-	// End session 2 (the last active session): nextUrl is "/" (start-a-session form).
-	archRec2 := call(t, h, "POST", "/api/grimm/sessions/"+id2+"/archive", `{}`, sameOriginFetch)
+	// End session 2 (the last active session) with deleteWorktree=true: enqueues archive_workspace and nextUrl is "/".
+	archRec2 := call(t, h, "POST", "/api/grimm/sessions/"+id2+"/archive", `{"deleteWorktree":true}`, sameOriginFetch)
 	if archRec2.Code != http.StatusOK {
 		t.Fatalf("archive session 2: %d %s", archRec2.Code, archRec2.Body)
 	}
@@ -134,6 +170,10 @@ func TestGrimmEndSessionAPIAndUIAndReadOnlySQL(t *testing.T) {
 	_ = json.Unmarshal(archRec2.Body.Bytes(), &archBody2)
 	if archBody2.NextURL != "/" {
 		t.Errorf("last session archive nextUrl = %q, want /", archBody2.NextURL)
+	}
+	var wsArchCount2 int
+	if err := d.Owner.QueryRow(t.Context(), `SELECT count(*) FROM commands WHERE kind = 'archive_workspace' AND args->>'workspaceId' = 'w-other'`).Scan(&wsArchCount2); err != nil || wsArchCount2 != 1 {
+		t.Errorf("deleteWorktree=true archive_workspace count = %d (err=%v), want 1", wsArchCount2, err)
 	}
 
 	// Home page now shows the start-a-session form with collapsed Ended sessions.
@@ -234,6 +274,36 @@ func TestGrimmEndSessionBrowser(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+
+	// Respond to worktree_diff commands from the browser: w-csv is dirty (3 files), w-docs is clean.
+	stopHost := make(chan struct{})
+	defer close(stopHost)
+	go func() {
+		dirtyJSON := `{"workspaceId":"w-csv","worktreeDiff":{"clean":false,"files":[` +
+			`{"path":"cmd/csvfmt/main.go","status":"M","additions":4,"deletions":1,"diff":"diff --git a/cmd/csvfmt/main.go b/cmd/csvfmt/main.go\nindex 1a2b3c4..5d6e7f8 100644\n--- a/cmd/csvfmt/main.go\n+++ b/cmd/csvfmt/main.go\n@@ -12,4 +12,7 @@ func main() {\n \tdelim := flag.String(\"d\", \",\", \"field delimiter\")\n-\tflag.Parse()\n+\tmarkdown := flag.Bool(\"markdown\", false, \"format output as a Markdown table\")\n+\tflag.Parse()\n+\tif *markdown {\n+\t\tformatMarkdown(os.Stdin, os.Stdout, *delim)\n+\t}\n }"},` +
+			`{"path":"markdown_test.go","status":"A","additions":6,"deletions":0,"diff":"diff --git a/markdown_test.go b/markdown_test.go\nnew file mode 100644\n--- /dev/null\n+++ b/markdown_test.go\n@@ -0,0 +1,6 @@\n+package csvfmt\n+\n+import \"testing\"\n+\n+func TestMarkdownTableEscapesPipes(t *testing.T) {\n+}"},` +
+			`{"path":"scratch-notes.txt","status":"?","additions":2,"deletions":0,"diff":"--- /dev/null\n+++ b/scratch-notes.txt\n@@ -0,0 +1,2 @@\n+TODO: benchmark 100k row CSV input\n+Check quoted newline handling"}` +
+			`]}}`
+		cleanJSON := `{"workspaceId":"w-docs","worktreeDiff":{"clean":true}}`
+		for {
+			select {
+			case <-stopHost:
+				return
+			default:
+			}
+			var cid, wsID string
+			err := d.Owner.QueryRow(t.Context(), `SELECT id::text, args->>'workspaceId' FROM commands
+				WHERE host = 'host-1' AND kind = 'worktree_diff' AND status IN ('queued', 'sent') ORDER BY created_at LIMIT 1`).Scan(&cid, &wsID)
+			if err == nil && cid != "" {
+				res := cleanJSON
+				if wsID == "w-csv" {
+					res = dirtyJSON
+				}
+				_, _ = d.Owner.Exec(t.Context(), `UPDATE commands SET status = 'succeeded', result = $2::jsonb, finished_at = now() WHERE id = $1`, cid, res)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
 
 	srv := serve(t, h)
 	c := h.(*testServer).cookie
