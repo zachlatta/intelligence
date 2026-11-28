@@ -482,7 +482,7 @@ const vm = require("vm");
 const listeners = {};
 const elStub = (id) => ({
   id, dataset: { session: "sess-1", capLimit: "100", olderSql: "" },
-  style: {}, classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+  style: { setProperty() {}, removeProperty() {} }, classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
   setAttribute() {}, addEventListener() {}, focus() {}, select() {},
   querySelector() { return null; }, querySelectorAll() { return []; },
   append() {}, replaceChildren() {}, contains() { return false; },

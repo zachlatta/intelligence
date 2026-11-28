@@ -138,15 +138,22 @@ func accountPage(cfg Config, v viewer) http.HandlerFunc {
 			"Version": cfg.Version, "Username": v.acct.Username, "Hosts": hosts,
 			"MCPTokens": tokens, "MCPTokensSQL": accountMCPTokensSQL,
 			"PushSubs": pushSubs, "PushSubsSQL": accountPushSubsSQL, "VAPIDPublicKey": vapidPub,
-			"Now": cfg.Now(), "Server": serverURL(r),
+			"Now": cfg.Now(), "Server": requestOrigin(cfg, r),
 		})
 	}
 }
 
-func serverURL(r *http.Request) string {
+// requestOrigin is the server's origin as the browser reaches it: PUBLIC_URL, else the request's.
+func requestOrigin(cfg Config, r *http.Request) string {
+	if cfg.PublicURL != "" {
+		return strings.TrimRight(cfg.PublicURL, "/")
+	}
 	scheme := "http"
-	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+	if r.TLS != nil {
 		scheme = "https"
+	}
+	if p := r.Header.Get("X-Forwarded-Proto"); p == "https" || p == "http" {
+		scheme = p
 	}
 	host := r.Host
 	if h := r.Header.Get("X-Forwarded-Host"); h != "" {

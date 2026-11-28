@@ -577,6 +577,13 @@ against its daemon and reports `running`, then `succeeded` with a result (`{"wor
   workspace it no longer listed), skipping one already gone. The result counts them
   (`archivedAgents`). A Paseo-made worktree is removed with it. Optional `waitForAgent` waits for
   that agent to end its turn first, up to the command expiry.
+- `worktree_diff`: `workspaceId`. The host reads the workspace directory's uncommitted changes with
+  `git status` and `git diff` against `HEAD` (staged, unstaged and untracked files), without
+  changing the checkout or index. The result is `{"workspaceId","worktreeDiff"}`, where
+  `worktreeDiff` is `{"clean","files","truncated","error"}` and each file is `{"path","status"
+  (M, A, D, R or ?),"binary","additions","deletions","diff","truncated"}`. It lists up to 200
+  files, with up to 32 KiB of diff each and 256 KiB in all; a binary file has no diff. A missing
+  directory or a git failure succeeds with `error` set. Grimm's End session dialog sends it.
 - `watch_agent`: `agentId`, `live` (`fast` or `steady`): sets the agent's `intelligence.live`
   label, how soon the host copies its transcript after the daemon pushes a change (Grimm, below).
 - `rename_agent`: `agentId`, `title`. `cancel_agent` (stops its current turn) and `archive_agent`:
@@ -728,10 +735,12 @@ Every host measures itself (`internal/resources`) and sends each finished minute
   The newest reading replaces the host's rows in `host_filesystems` (`used_frac` is how full).
 - Each agent, every 15 seconds: its processes are those whose environment names it
   (`PASEO_AGENT_ID`, which commands inherit); a minute keeps their most memory (proportional set
-  size, so shared pages count once) and how many there were.
-- Each agent's CPU and commands, and every OOM kill, from the eBPF probe where it runs (below);
-  otherwise CPU comes from the processes alive at each 15-second walk, which misses short-lived
-  commands (`cpu_source` says which).
+  size on Linux, resident size on macOS) and how many there were. On macOS this walks the current
+  user's processes with Darwin syscalls (`kern.proc.uid`, `KERN_PROCARGS2`, and `PROC_PIDTASKINFO`),
+  also attributing descendant processes via PPID, without root or Full Disk Access.
+- Each agent's CPU and commands, and every OOM kill, from the eBPF probe where it runs (Linux,
+  below); otherwise CPU comes from the processes alive at each 15-second walk, which misses
+  short-lived commands (`cpu_source` says which).
 
 The server keeps 90 days of minutes (OOM kills are kept). `host_current` is each host's newest
 minute (with `load1_per_cpu`); `host_days` and `agent_days` sum days (`host_days` has the day's
@@ -1645,8 +1654,20 @@ redeploy or a restart loses nothing.
 - **Attachments** use the shared picker and limits (below): images and files go to the manager as
   references, delivered to its working directory; a message with attachments always goes to the
   manager, whatever its first word. The thread shows the images, read through `/api/sql`.
-- **Transcripts** of an active session's agents are kept after Paseo archives the agents, so the
-  thread and a finished worker's log stay.
+- **Transcripts** of Grimm sessions' agents are kept after Paseo archives the agents and after the
+  session ends, so the thread and every worker's log stay readable in the UI and through `/api/sql`.
+- **Ending a session** (`POST /api/grimm/sessions/{id}/archive` with `{"deleteWorktree": bool}`,
+  or **End session** in the header): opening the confirm dialog inspects the session's worktree
+  (`POST /api/grimm/sessions/{id}/worktree-diff`, which enqueues a `worktree_diff` host command
+  read through `/api/sql`) and asks whether to delete the git worktree (keeping the `grimm/<id>`
+  branch). Clean worktrees default the checkbox to checked; dirty worktrees default it to unchecked
+  and show a browsable unified diff of modified, staged, deleted and untracked files. Confirming
+  stops the manager's turn and every live worker (`cancel_agent`), archives their Paseo agents
+  (`archive_agent`), drops pending wakeups, deletes the worktree (`archive_workspace`) only when
+  `deleteWorktree` is true (default `false`), marks the session archived and moves it out of the
+  active picker into a collapsed **Ended** group (read-only). Pending workflow-request proposals
+  remain open on the Proposals page, and workflow runs already started keep running. After ending,
+  the page opens the next active session or the start-a-session form.
 
 The page's commands, run without a manager turn: `@name <message>`, `/quota`, `/roster`, `/spawn
 [name] [--role R] [--provider P] <task>`, `/fanout N [--review] <task>`, `/remember <rule>`,
@@ -2166,6 +2187,7 @@ origin (another site's request is refused with 403), and those with a body must 
   read-only query, as the account's own role, so it reads only the account's rows. Returns `{"columns": [{"name", "type"}], "rows": [[...]], "rowCount",
   "truncated"}`, or 400 with `{"error"}`. At most 10000 rows; 5 seconds per query.
 - `GET /api/host/binary/{os}/{arch}`: the host binary at the server's version.
+- `GET /install-host`: the standalone host installer (`deploy/install-host`) with `HOST_SERVER` defaulted to this server's origin.
 - `GET /dictation.js`: the dictation engine shared by the chat box, the new agent and workspace forms,
   the new and edit schedule forms, the new task box, the workflow run dialog, the reply to a
   waiting run and workflow proposal questions.
@@ -2657,10 +2679,13 @@ Probe (in `/etc/intelligence/probe.env`, written by `deploy/install-probe`):
   every push to `main`. The app has no public domain: its port is bound to loopback on the machine it
   runs on, and `tailscale serve` publishes it over HTTPS to the tailnet only. That machine's details
   are kept outside this repo.
-- Host: once per host, from a checkout of `main`, run `deploy/install-host` (the first run needs
-  `HOST_SERVER` in the environment; it builds the client, so it needs Go). It prints the host's code:
-  enter it on the server's `/account` page. After that the host updates itself. Running it again
-  rebuilds and restarts the client and keeps `host.env` and the key.
+- Host: once per host, run `curl -fsSL <server>/install-host | bash` (no repository checkout or Go
+  needed: it downloads the host binary from `/api/host/binary/{os}/{arch}`, verifies its SHA-256
+  checksum, and installs the service). From a checkout of `main`, `HOST_SERVER=<server>
+  deploy/install-host` still works too (building from source when Go is installed, or downloading
+  from the server otherwise). It prints the host's code: enter it on the server's `/account` page.
+  After that the host updates itself. Running it again updates and restarts the client and keeps
+  `host.env` and the key.
   - Linux: a systemd user service, `intelligence-host`. Logs: `journalctl --user -u intelligence-host`.
   - macOS: a launchd user agent, `~/Library/LaunchAgents/intelligence-host.plist` (label
     `intelligence-host`), started at login and restarted when it exits. Logs:

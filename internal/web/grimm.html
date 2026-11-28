@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="/grimm.css">
 <link rel="stylesheet" href="/grimm_host.css">
 <link rel="stylesheet" href="/grimm_runs.css">
+{{if and .Session .Dictation}}<script src="/dictation.js" defer></script>{{end}}
 <script src="/grimm_runs.js" defer></script>
 <script src="/grimm.js" defer></script>
 <script src="/grimm_host.js" defer></script>
@@ -15,17 +16,40 @@
 <body class="grimm-body">
 {{template "top" "/"}}
 {{if .Session}}
-<div id="grimm" class="grimm" data-session="{{.Session}}" data-tab="chat" data-cap-limit="{{.CapLimit}}" data-older-sql="{{.OlderSQL}}">
+<div id="grimm" class="grimm" data-session="{{.Session}}" data-status="{{.CurrentStatus}}" data-tab="chat" data-cap-limit="{{.CapLimit}}" data-older-sql="{{.OlderSQL}}">
   <header class="g-bar">
-    <label class="g-switch"><span class="sr-only">Session</span>
-      <select id="g-sessions" aria-label="Session">
-        {{range .Sessions}}<option value="{{.ID}}"{{if eq .ID $.Session}} selected{{end}}>{{.Title}} · {{.Host}}{{if ne .Status "active"}} (archived){{end}}</option>{{end}}
-      </select>
-    </label>
+    <div class="g-picker-wrap" id="g-picker-wrap">
+      <button type="button" class="g-picker-btn" id="g-picker-btn" aria-expanded="false" aria-controls="g-picker-pop" aria-label="Switch session">
+        <span class="g-picker-label" id="g-picker-label">{{.CurrentTitle}}{{if .CurrentHost}} · {{.CurrentHost}}{{end}}</span>
+        {{if eq .CurrentStatus "archived"}}<span class="g-ended-tag">Ended</span>{{end}}
+        <span class="g-picker-caret" aria-hidden="true">▾</span>
+      </button>
+      <div class="g-picker-pop" id="g-picker-pop" role="dialog" aria-label="Sessions" hidden>
+        {{if .ActiveSessions}}
+        <div class="g-picker-group-label">Active</div>
+        <ul class="g-picker-list" id="g-picker-active">
+          {{range .ActiveSessions}}<li><a href="/grimm/{{.ID}}"{{if eq .ID $.Session}} aria-current="page" class="is-current"{{end}}><span class="g-picker-name">{{.Title}}</span><span class="g-picker-meta">{{.Host}}</span></a></li>{{end}}
+        </ul>
+        {{else}}
+        <p class="muted small g-picker-empty">No active sessions.</p>
+        {{end}}
+        {{if .EndedSessions}}
+        <details class="g-ended-group"{{if eq .CurrentStatus "archived"}} open{{end}}>
+          <summary>Ended ({{len .EndedSessions}})</summary>
+          <ul class="g-picker-list" id="g-picker-ended">
+            {{range .EndedSessions}}<li><a href="/grimm/{{.ID}}"{{if eq .ID $.Session}} aria-current="page" class="is-current"{{end}}><span class="g-picker-name">{{.Title}}</span><span class="g-picker-meta">{{.Host}}</span></a></li>{{end}}
+          </ul>
+        </details>
+        {{end}}
+        <div class="g-picker-foot">
+          <a class="btn sm ghost" href="/?new=1">＋ New session</a>
+        </div>
+      </div>
+    </div>
     <a class="btn sm ghost" href="/?new=1" title="Start another session">＋ New</a>
     <span class="g-chip" id="g-chip" title=""><span class="g-repo" id="g-repo">…</span><code class="g-branch" id="g-branch"></code></span>
     <div class="g-cap-wrap" id="g-cap-wrap">
-      <button type="button" class="g-cap" id="g-cap" aria-expanded="false" aria-controls="g-cap-pop" title="Live workers / this session's cap. Click to change the cap.">Workers <b id="g-cap-live">0</b>/<b id="g-cap-max">–</b></button>
+      <button type="button" class="g-cap" id="g-cap" aria-expanded="false" aria-controls="g-cap-pop" title="Live workers / this session's cap. Click to change the cap."{{if ne .CurrentStatus "active"}} disabled{{end}}>Workers <b id="g-cap-live">0</b>/<b id="g-cap-max">–</b></button>
       <div class="g-cap-pop" id="g-cap-pop" role="dialog" aria-label="Live-worker cap" hidden>
         <div class="g-cap-row">
           <button type="button" class="btn sm ghost g-cap-step" id="g-cap-dec" aria-label="Decrease worker cap">−</button>
@@ -38,10 +62,12 @@
     </div>
     <span class="g-spacer"></span>
     <span class="g-model" id="g-model" title="Manager model"></span>
-    <span class="g-pill" id="g-pill" data-state="offline"><i></i><span id="g-pill-label">Starting Grimm…</span></span>
-    <button type="button" class="btn sm ghost" id="g-archive-all" title="Archive every worker in this session (files stay)">Archive all</button>
+    <span class="g-pill" id="g-pill" data-state="offline"><i></i><span id="g-pill-label">{{if eq .CurrentStatus "archived"}}Session ended{{else}}Starting Grimm…{{end}}</span></span>
+    <button type="button" class="btn sm ghost" id="g-archive-all" title="Archive every worker in this session (files stay)"{{if ne .CurrentStatus "active"}} hidden{{end}}>Archive all</button>
+    <button type="button" class="btn sm ghost danger" id="g-end-session" title="End this Grimm session"{{if ne .CurrentStatus "active"}} hidden{{end}}>End<span class="g-end-word"> session</span></button>
     <div class="g-host" id="g-host" hidden></div>
     <span class="g-conn" id="g-conn" title="Live connection" role="status" aria-label="Connecting"></span>
+    <button type="button" class="btn sm ghost g-bar-toggle" id="g-bar-toggle" aria-expanded="false" aria-label="Session details" title="Session details">⋯</button>
   </header>
 
   <nav class="g-tabs" id="g-tabs" aria-label="Grimm panels">
@@ -59,7 +85,7 @@
     <section class="g-panel">
       <div class="g-panel-head"><h2>Standing directives</h2></div>
       <ol id="g-directives" class="g-directives"></ol>
-      <form id="g-directive-form" class="g-directive-form" autocomplete="off">
+      <form id="g-directive-form" class="g-directive-form" autocomplete="off"{{if ne .CurrentStatus "active"}} hidden{{end}}>
         <input id="g-directive-input" placeholder="Add a rule every agent inherits…" maxlength="2000" aria-label="New standing directive">
       </form>
     </section>
@@ -97,7 +123,14 @@
       <div id="g-items"></div>
       <div class="g-typing" id="g-typing" hidden><span class="g-avatar g">G</span><span class="g-dots"><i></i><i></i><i></i></span><span id="g-typing-label">Grimm is working</span></div>
     </div>
-    <form class="g-composer" id="g-composer" autocomplete="off">
+    <div class="g-ended-banner" id="g-ended-banner"{{if eq .CurrentStatus "active"}} hidden{{end}}>
+      <div class="g-ended-banner-text">
+        <strong>This session has ended.</strong>
+        <span>Thread, transcripts and roster are read-only and remain readable through <code>/api/sql</code>.<span id="g-ended-branch-note">{{if .CurrentBranch}} Branch <code>{{.CurrentBranch}}</code> was kept.{{end}}</span></span>
+      </div>
+      <a class="btn sm primary" href="/?new=1">Start new session</a>
+    </div>
+    <form class="g-composer" id="g-composer" autocomplete="off"{{if .Dictation}} data-dictation="{{.Dictation}}"{{end}}{{if ne .CurrentStatus "active"}} hidden{{end}}>
       <div class="g-box" id="g-box">
         <ul class="g-attach-drafts" id="g-attach-drafts" aria-label="Attachments ready to send" hidden></ul>
         <textarea id="g-input" rows="1" placeholder="Tell Grimm what to do…   ( / for commands, @name to message a worker )" aria-label="Message Grimm" aria-describedby="g-hint"></textarea>
@@ -106,11 +139,12 @@
           <button type="button" id="g-attach-btn" class="btn sm ghost g-attach-btn" aria-label="Attach images or files" title="Attach images or files (up to 8 files, 4 MiB each, 8 MiB total)">
             <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21.4 11.1-9.2 9.2a5.4 5.4 0 0 1-7.6-7.6l9.5-9.5a3.6 3.6 0 0 1 5.1 5.1l-9.5 9.5a1.8 1.8 0 1 1-2.5-2.5l8.3-8.3"/></svg>
           </button>
+          {{if .Dictation}}<button type="button" id="dictate" class="btn sm ghost mic g-mic-btn" title="Dictate (⌘D): into the box if it has text, else to send" aria-label="Dictate">{{template "micicon"}}</button>{{end}}
           <button type="button" class="btn sm danger" id="g-stop" hidden title="Interrupt Grimm's turn">Stop</button>
           <button type="submit" class="btn sm primary" id="g-send" title="Send (Enter)">Send</button>
         </div>
       </div>
-      <p class="g-hint" id="g-hint">Enter to send · Shift+Enter for a new line · Drop or paste images · /help</p>
+      <p class="g-hint" id="g-hint">Enter to send · Shift+Enter for a new line · Drop or paste images{{if .Dictation}} · ⌘D dictates{{end}} · /help</p>
       <p class="g-hint g-attach-status" id="g-attach-status" role="status"></p>
     </form>
   </main>
@@ -149,6 +183,33 @@
       </div>
     </section>
   </aside>
+
+  <div class="g-modal-backdrop" id="g-end-dialog" role="dialog" aria-modal="true" aria-labelledby="g-end-title" hidden>
+    <div class="g-modal" id="g-end-modal">
+      <h2 id="g-end-title">End this Grimm session?</h2>
+      <p class="g-modal-lead" id="g-end-lead">Stops Grimm's turn and every live worker, archives their Paseo agents, and removes this session from the active picker.</p>
+      <ul class="g-modal-list">
+        <li><strong>Thread, transcripts &amp; roster:</strong> kept read-only in the <em>Ended</em> group and through <code>/api/sql</code>.</li>
+        <li><strong>Workflows &amp; proposals:</strong> pending workflow proposals stay open on the <a href="/workflow-proposals">Proposals</a> page; running workflows keep running.</li>
+      </ul>
+      <div class="g-end-wt" id="g-end-wt">
+        <div class="g-end-wt-status" id="g-end-wt-status" data-state="checking">Checking worktree for uncommitted changes…</div>
+        <div class="g-end-diff" id="g-end-diff" hidden>
+          <div class="g-end-diff-files" id="g-end-diff-files" role="tablist" aria-label="Uncommitted files"></div>
+          <div class="g-end-diff-view" id="g-end-diff-view"></div>
+        </div>
+        <label class="g-end-wt-check" id="g-end-delete-wt-wrap">
+          <input type="checkbox" id="g-end-delete-wt">
+          <span>Delete git worktree <small class="muted">(branch <code id="g-end-branch">{{.CurrentBranch}}</code> is always kept)</small></span>
+        </label>
+      </div>
+      <p class="g-modal-error" id="g-end-error" role="alert"></p>
+      <div class="g-modal-actions">
+        <button type="button" class="btn sm ghost" id="g-end-cancel">Cancel</button>
+        <button type="button" class="btn sm danger" id="g-end-confirm">End session</button>
+      </div>
+    </div>
+  </div>
 </div>
 {{else}}
 <main class="container page mid g-new">
@@ -178,14 +239,17 @@
         <label>Base branch <span class="muted">(optional)</span><input id="g-new-base" placeholder="Paseo's default" spellcheck="false"></label>
         <label>Live-worker cap<input id="g-new-cap" type="number" min="1" max="{{.CapLimit}}" value="{{.DefaultCap}}" required></label>
         <p class="warn" id="g-new-error" role="alert"></p>
-        <div class="form-actions"><button class="btn primary" id="g-new-start">Start session</button>{{if .Sessions}}<a class="btn" href="/grimm/{{(index .Sessions 0).ID}}">Back</a>{{end}}</div>
+        <div class="form-actions"><button class="btn primary" id="g-new-start">Start session</button>{{if .ActiveSessions}}<a class="btn" href="/grimm/{{(index .ActiveSessions 0).ID}}">Back</a>{{end}}</div>
       </form>
       {{if not .Hosts}}<p class="muted">No hosts yet: add one on <a href="/account">Account</a>.</p>{{end}}
     </div>
   </div>
-  {{if .Sessions}}<div class="card"><div class="card-head"><h2>Sessions</h2></div><ul class="g-session-list">
-    {{range .Sessions}}<li><a href="/grimm/{{.ID}}">{{.Title}}</a> <span class="muted">{{.Host}} · {{.Repo}}{{if ne .Status "active"}} · archived{{end}}</span></li>{{end}}
+  {{if .ActiveSessions}}<div class="card"><div class="card-head"><h2>Active sessions</h2></div><ul class="g-session-list">
+    {{range .ActiveSessions}}<li><a href="/grimm/{{.ID}}">{{.Title}}</a> <span class="muted">{{.Host}} · {{.Repo}}</span></li>{{end}}
   </ul></div>{{end}}
+  {{if .EndedSessions}}<div class="card"><details class="g-ended-group g-new-ended"><summary>Ended sessions ({{len .EndedSessions}})</summary><ul class="g-session-list">
+    {{range .EndedSessions}}<li><a href="/grimm/{{.ID}}">{{.Title}}</a> <span class="muted">{{.Host}} · {{.Repo}} · ended</span></li>{{end}}
+  </ul></details></div>{{end}}
 </main>
 {{end}}
 </body>

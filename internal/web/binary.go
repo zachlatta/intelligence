@@ -8,12 +8,35 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 
+	"github.com/zachlatta/intelligence/deploy"
 	"github.com/zachlatta/intelligence/internal/hostclient"
 )
 
-var platformRe = regexp.MustCompile(`^[a-z0-9]{1,16}$`)
+var (
+	platformRe   = regexp.MustCompile(`^[a-z0-9]{1,16}$`)
+	safeOriginRe = regexp.MustCompile(`^https?://[A-Za-z0-9._:\[\]-]+$`)
+)
+
+// installHostHandler serves deploy/install-host so a host can install without cloning the repo.
+// When the request's origin is a clean http(s) origin, it sets a default HOST_SERVER after the
+// shebang so `curl -fsSL <server>/install-host | bash` works without repeating the URL.
+func installHostHandler(cfg Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		script := deploy.InstallHost
+		origin := requestOrigin(cfg, r)
+		if safeOriginRe.MatchString(origin) {
+			if first, rest, ok := strings.Cut(script, "\n"); ok {
+				script = first + "\n: \"${HOST_SERVER:=" + origin + "}\"\n" + rest
+			}
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = io.WriteString(w, script)
+	}
+}
 
 // binaries serves dir's intelligence-<os>-<arch> files, with their sha256, for host self-update.
 // The files are built into the image with the server, so they are the server's version.

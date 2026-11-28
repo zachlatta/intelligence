@@ -4,8 +4,12 @@
 package deploy
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/xml"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,7 +40,7 @@ func newInstallHost(t *testing.T, system string) *installHost {
 	h := &installHost{t: t, home: t.TempDir(), stubs: t.TempDir()}
 	h.calls = filepath.Join(h.stubs, "calls")
 	log := `printf '%s\n' "$(basename "$0") $*" >> "` + h.calls + `"` + "\n"
-	h.stub("uname", log+`echo `+system)
+	h.stub("uname", log+`case "${1:-}" in -m) echo "${STUB_ARCH:-x86_64}";; *) echo `+system+`;; esac`)
 	// go build ... -o <path> ...: write a stand-in binary at <path>
 	h.stub("go", log+`while [ $# -gt 0 ]; do if [ "$1" = -o ]; then printf '#!/bin/sh\n' > "$2"; chmod +x "$2"; fi; shift; done`)
 	// the host logs its code once it is started: kickstart and bootstrap stand for that
@@ -196,9 +200,11 @@ func TestInstallHostLinuxKeepsSystemdUserService(t *testing.T) {
 	h := newInstallHost(t, "Linux")
 	out := h.run("HOST_SERVER=https://server.example", "STUB_CODE=ABCD-1234")
 	unit := filepath.Join(h.home, ".config/systemd/user/intelligence-host.service")
-	if _, err := os.Stat(unit); err != nil {
+	gotUnit, err := os.ReadFile(unit)
+	if err != nil {
 		t.Fatalf("unit not installed: %v", err)
 	}
+	checkHostUnit(t, gotUnit)
 	for _, want := range []string{"systemctl --user daemon-reload", "systemctl --user enable intelligence-host.service",
 		"systemctl --user restart intelligence-host.service"} {
 		if !h.called(want) {
@@ -213,5 +219,162 @@ func TestInstallHostLinuxKeepsSystemdUserService(t *testing.T) {
 	}
 	if !strings.Contains(out, "enter the code ABCD-1234") {
 		t.Errorf("output lacks the code:\n%s", out)
+	}
+}
+
+// runPiped runs deploy/install-host piped to bash from a directory outside the repo,
+// without go on PATH, as on a host that does not have the repository cloned.
+func (h *installHost) runPiped(env ...string) (string, error) {
+	h.t.Helper()
+	script, err := os.ReadFile("install-host")
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	// shadow go with a failing stub so tests catch any accidental go build in standalone mode
+	h.stub("go", `echo "go should not be called in standalone mode" >&2; exit 99`)
+	cmd := exec.Command("bash")
+	cmd.Dir = h.t.TempDir()
+	cmd.Stdin = strings.NewReader(string(script))
+	cmd.Env = append([]string{"HOME=" + h.home, "PATH=" + h.stubs + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"XDG_RUNTIME_DIR=" + filepath.Join(h.home, "run")}, env...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func fakeBinaryServer(t *testing.T, wantPath string, body []byte, shaOverride string) *httptest.Server {
+	t.Helper()
+	sum := sha256.Sum256(body)
+	sha := hex.EncodeToString(sum[:])
+	if shaOverride != "" {
+		sha = shaOverride
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != wantPath {
+			http.NotFound(w, r)
+			return
+		}
+		if sha != "NONE" {
+			w.Header().Set("X-Intelligence-Sha256", sha)
+		}
+		w.Header().Set("X-Intelligence-Version", "c0ffee")
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestInstallHostLinuxStandalonePipedFromServer(t *testing.T) {
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("no curl")
+	}
+	h := newInstallHost(t, "Linux")
+	binBody := []byte("#!/bin/sh\necho c0ffee\n")
+	srv := fakeBinaryServer(t, "/api/host/binary/linux/amd64", binBody, "")
+
+	out, err := h.runPiped("HOST_SERVER="+srv.URL, "STUB_CODE=ABCD-1234", "STUB_ARCH=x86_64")
+	if err != nil {
+		t.Fatalf("standalone install-host failed: %v\n%s", err, out)
+	}
+
+	envFile := filepath.Join(h.home, ".config/intelligence/host.env")
+	if b, err := os.ReadFile(envFile); err != nil || string(b) != "HOST_SERVER="+srv.URL+"\n" {
+		t.Fatalf("host.env = %q, %v", b, err)
+	}
+	binPath := filepath.Join(h.home, ".local/bin/intelligence")
+	if b, err := os.ReadFile(binPath); err != nil || string(b) != string(binBody) {
+		t.Fatalf("installed binary = %q, %v", b, err)
+	}
+	if _, err := os.Stat(binPath + ".new"); !os.IsNotExist(err) {
+		t.Errorf("temp file %s.new was left behind", binPath)
+	}
+	if _, err := os.Stat(binPath + ".headers"); !os.IsNotExist(err) {
+		t.Errorf("temp file %s.headers was left behind", binPath)
+	}
+	gotUnit, err := os.ReadFile(filepath.Join(h.home, ".config/systemd/user/intelligence-host.service"))
+	if err != nil {
+		t.Fatalf("unit not installed: %v", err)
+	}
+	checkHostUnit(t, gotUnit)
+	if !strings.Contains(out, "enter the code ABCD-1234") {
+		t.Errorf("output lacks code:\n%s", out)
+	}
+}
+
+func TestInstallHostMacOSStandalonePipedFromServer(t *testing.T) {
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("no curl")
+	}
+	h := newInstallHost(t, "Darwin")
+	binBody := []byte("#!/bin/sh\necho c0ffee\n")
+	srv := fakeBinaryServer(t, "/api/host/binary/darwin/arm64", binBody, "")
+
+	out, err := h.runPiped("HOST_SERVER="+srv.URL, "STUB_CODE=EFGH-5678", "STUB_ARCH=arm64")
+	if err != nil {
+		t.Fatalf("standalone macOS install-host failed: %v\n%s", err, out)
+	}
+	binPath := filepath.Join(h.home, ".local/bin/intelligence")
+	if b, err := os.ReadFile(binPath); err != nil || string(b) != string(binBody) {
+		t.Fatalf("installed binary = %q, %v", b, err)
+	}
+	if !h.called("launchctl bootstrap gui/") || !h.called("launchctl kickstart -k gui/") {
+		t.Errorf("launchctl calls: %q", h.callLines())
+	}
+	if !strings.Contains(out, "enter the code EFGH-5678") {
+		t.Errorf("output lacks code:\n%s", out)
+	}
+}
+
+func TestInstallHostStandaloneRerunReadsServerFromEnvFile(t *testing.T) {
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("no curl")
+	}
+	h := newInstallHost(t, "Linux")
+	binBody := []byte("#!/bin/sh\necho c0ffee\n")
+	srv := fakeBinaryServer(t, "/api/host/binary/linux/amd64", binBody, "")
+
+	if out, err := h.runPiped("HOST_SERVER="+srv.URL, "STUB_CODE=FIRST-111"); err != nil {
+		t.Fatalf("first run failed: %v\n%s", err, out)
+	}
+	// rerun without HOST_SERVER in environment: should read HOST_SERVER from host.env
+	out, err := h.runPiped("STUB_CODE=SECOND-22")
+	if err != nil {
+		t.Fatalf("rerun failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "enter the code SECOND-22") {
+		t.Errorf("rerun output lacks code:\n%s", out)
+	}
+}
+
+func TestInstallHostStandaloneRejectsBadChecksum(t *testing.T) {
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("no curl")
+	}
+	h := newInstallHost(t, "Linux")
+	srv := fakeBinaryServer(t, "/api/host/binary/linux/amd64", []byte("#!/bin/sh\necho c0ffee\n"), strings.Repeat("0", 64))
+
+	out, err := h.runPiped("HOST_SERVER=" + srv.URL)
+	if err == nil {
+		t.Fatalf("expected checksum mismatch failure, got success:\n%s", out)
+	}
+	if !strings.Contains(out, "sha256") {
+		t.Errorf("expected sha256 error message, got:\n%s", out)
+	}
+	binPath := filepath.Join(h.home, ".local/bin/intelligence")
+	if _, err := os.Stat(binPath); !os.IsNotExist(err) {
+		t.Errorf("binary should not be installed after checksum failure")
+	}
+	if _, err := os.Stat(binPath + ".new"); !os.IsNotExist(err) {
+		t.Errorf("temp file %s.new should be cleaned up", binPath)
+	}
+}
+
+// checkHostUnit checks the systemd unit install-host writes runs the installed client with host.env.
+func checkHostUnit(t *testing.T, unit []byte) {
+	t.Helper()
+	for _, want := range []string{"EnvironmentFile=%h/.config/intelligence/host.env",
+		"ExecStart=%h/.local/bin/intelligence host", "Restart=always", "WantedBy=default.target"} {
+		if !strings.Contains(string(unit), want+"\n") {
+			t.Errorf("unit lacks %q:\n%s", want, unit)
+		}
 	}
 }

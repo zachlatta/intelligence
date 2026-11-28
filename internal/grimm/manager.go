@@ -235,7 +235,7 @@ func (s *Service) NewManager(ctx context.Context, account int64, id string) erro
 }
 
 func (s *Service) newManager(ctx context.Context, tx pgx.Tx, sess Session) error {
-	if err := s.endManager(ctx, tx, sess); err != nil {
+	if err := s.endManager(ctx, tx, sess, false); err != nil {
 		return err
 	}
 	if _, err := threadRow(ctx, tx, sess, "divider", "intelligence", "Fresh manager conversation", nil); err != nil {
@@ -247,13 +247,19 @@ func (s *Service) newManager(ctx context.Context, tx pgx.Tx, sess Session) error
 	return notify(ctx, tx, sess.ID)
 }
 
-// endManager archives the current manager agent, if any.
-func (s *Service) endManager(ctx context.Context, tx pgx.Tx, sess Session) error {
+// endManager archives the current manager agent, if any. When stopFirst is true, it also cancels
+// any active turn before archiving.
+func (s *Service) endManager(ctx context.Context, tx pgx.Tx, sess Session, stopFirst bool) error {
 	m, ok, err := currentManager(ctx, tx, sess.ID)
 	if err != nil || !ok || !m.running() {
 		return err
 	}
 	if m.AgentID != "" {
+		if stopFirst {
+			if _, err := enqueue(ctx, tx, sess.Host, hostclient.CancelAgentKind, hostclient.AgentArgs{AgentID: m.AgentID}, commandTTL, s.now()); err != nil {
+				return err
+			}
+		}
 		if _, err := enqueue(ctx, tx, sess.Host, hostclient.ArchiveAgentKind, hostclient.AgentArgs{AgentID: m.AgentID}, commandTTL, s.now()); err != nil {
 			return err
 		}
