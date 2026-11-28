@@ -504,7 +504,7 @@ function openEndDialog() {
   if (!dlg) return;
   closePicker(false);
   closeCapPopover(false);
-  const live = S.workers.filter((w) => w.status !== "archived").length;
+  const live = S.workers.filter((w) => w.status === "starting" || w.status === "running" || w.status === "idle").length;
   const lead = $("#g-end-lead");
   if (lead) {
     lead.textContent = live === 0

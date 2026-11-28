@@ -257,3 +257,101 @@ func TestGrimmEndSessionBrowser(t *testing.T) {
 		t.Fatalf("browser verification failed: %v", err)
 	}
 }
+
+// TestGrimmEndDialogCountsOnlyLiveWorkers verifies that the End session confirm dialog counts only
+// starting, running, and idle workers (matching grimm_session_status.live_workers) and excludes
+// failed and archived workers.
+func TestGrimmEndDialogCountsOnlyLiveWorkers(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not available")
+	}
+	script := `
+const fs = require("fs");
+const vm = require("vm");
+const listeners = {};
+const elListeners = {};
+const elStub = (id) => ({
+  id, dataset: { session: "sess-1", status: "active", capLimit: "100", olderSql: "" },
+  style: {}, classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+  setAttribute() {}, addEventListener(ev, fn) { (elListeners[id + ":" + ev] ||= []).push(fn); },
+  focus() {}, select() {},
+  querySelector() { return null; }, querySelectorAll() { return []; },
+  append() {}, replaceChildren() {}, contains() { return false; },
+  scrollHeight: 0, scrollTop: 0, clientHeight: 100, hidden: false, innerHTML: "", textContent: "", value: "",
+});
+const byId = {};
+const doc = {
+  body: elStub("body"),
+  activeElement: null,
+  querySelector(sel) {
+    const m = sel.match(/^#([\w-]+)$/);
+    if (m) return (byId[m[1]] ||= elStub(m[1]));
+    return null;
+  },
+  querySelectorAll() { return []; },
+  addEventListener() {},
+  dispatchEvent() {},
+  createElement(tag) { return elStub(tag); },
+};
+function EventSource() {
+  return {
+    addEventListener(ev, fn) { (listeners[ev] ||= []).push(fn); },
+    close() {},
+  };
+}
+const ctx = {
+  document: doc, addEventListener() {}, location: { pathname: "/grimm/sess-1", href: "/grimm/sess-1" },
+  EventSource, CustomEvent: function(t, o) { return { type: t, detail: o && o.detail }; },
+  matchMedia: () => ({ matches: false }),
+  requestAnimationFrame: (fn) => fn(),
+  setInterval: () => 0, setTimeout: () => 0, clearTimeout: () => {},
+  CSS: { escape: (s) => s }, sessionStorage: { getItem: () => "", setItem() {}, removeItem() {} },
+  console,
+};
+ctx.window = ctx;
+vm.runInNewContext(fs.readFileSync("grimm.js", "utf8"), ctx);
+
+function emitState(workers, liveWorkers) {
+  const payload = JSON.stringify({
+    session: { id: "sess-1", status: "active", title: "Demo", host: "host-1", repo: "/w/app", branch: "grimm/12345678", max_workers: 10, live_workers: liveWorkers },
+    workers,
+    directives: [],
+    quota: [],
+  });
+  for (const fn of listeners.state || []) fn({ data: payload });
+}
+function clickEnd() {
+  for (const fn of elListeners["g-end-session:click"] || []) fn();
+}
+
+// 3 live (starting, running, idle) + 1 failed + 1 archived => must report 3 live workers, not 4.
+emitState([
+  { name: "athena", status: "running", provider: "claude", model: "opus", login: "a" },
+  { name: "hermes", status: "idle", provider: "codex", model: "gpt", login: "a" },
+  { name: "iris", status: "starting", provider: "codex", model: "gpt", login: "a" },
+  { name: "atlas", status: "failed", provider: "claude", model: "opus", login: "a" },
+  { name: "apollo", status: "archived", provider: "claude", model: "opus", login: "a" },
+], 3);
+clickEnd();
+const lead1 = byId["g-end-lead"].textContent;
+if (!lead1.includes("3 live workers")) {
+  throw new Error("expected 3 live workers (excluding failed and archived), got: " + lead1);
+}
+
+// Only failed and archived workers => must report 0 live workers.
+emitState([
+  { name: "atlas", status: "failed", provider: "claude", model: "opus", login: "a" },
+  { name: "apollo", status: "archived", provider: "claude", model: "opus", login: "a" },
+], 0);
+clickEnd();
+const lead2 = byId["g-end-lead"].textContent;
+if (!lead2.includes("0 live workers")) {
+  throw new Error("expected 0 live workers (excluding failed and archived), got: " + lead2);
+}
+`
+	cmd := exec.Command("node", "-e", script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("end dialog live worker count check failed: %v\n%s", err, out)
+	}
+}
