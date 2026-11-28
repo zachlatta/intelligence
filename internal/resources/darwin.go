@@ -119,6 +119,26 @@ func parseDarwinProcArgs2(buf []byte) string {
 	return agentOf(buf[i:])
 }
 
+// darwinProcArgsBufSize returns the single reusable buffer size for KERN_PROCARGS2:
+// kern.argmax (1 MiB on modern macOS) so XNU's sysctl_procargsx does not silently
+// tail-truncate large argv+env payloads.
+func darwinProcArgsBufSize(argMax uint32, ok bool) int {
+	if ok && argMax >= 4096 && argMax <= 4<<20 {
+		return int(argMax)
+	}
+	return 1 << 20
+}
+
+// darwinProcArgsSlice validates the byte count returned by KERN_PROCARGS2. When XNU's
+// sysctl_procargsx receives a buffer smaller than argslen, it copies only the tail and
+// returns success with n == len(buf); rejecting n >= len(buf) avoids parsing a shifted offset.
+func darwinProcArgsSlice(buf []byte, n int) ([]byte, bool) {
+	if n <= 0 || n >= len(buf) {
+		return nil, false
+	}
+	return buf[:n], true
+}
+
 // machToTicks converts Mach absolute time units to 1/100 s CPU ticks (matching Linux USER_HZ)
 // without overflowing uint64 for long-running processes.
 func machToTicks(machTime, tbFreq uint64) uint64 {

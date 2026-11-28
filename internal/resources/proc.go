@@ -221,7 +221,6 @@ type AgentWalker struct {
 	darwinBuf    []byte
 	darwinAgents map[int]darwinCachedAgent
 	darwinTBFreq uint64
-	darwinArgMax int
 }
 
 type procTicks struct{ start, ticks uint64 }

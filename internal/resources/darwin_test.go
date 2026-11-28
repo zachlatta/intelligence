@@ -76,6 +76,51 @@ func TestParseDarwinProcArgs2(t *testing.T) {
 			t.Errorf("bad %x: got %q, want empty", bad, got)
 		}
 	}
+
+	// Large (>64 KiB) argv + envp payload must parse cleanly without truncation or misreading argv.
+	bigArg := string(bytes.Repeat([]byte{'x'}, 80<<10))
+	bigBuf := makeProcArgs2("/usr/local/bin/claude", 4,
+		[]string{"claude", "--prompt", bigArg, "PASEO_AGENT_ID=from-big-arg"},
+		[]string{"HOME=/Users/someone", "BIG_ENV=" + string(bytes.Repeat([]byte{'y'}, 16<<10)), "PASEO_AGENT_ID=agent-big"},
+	)
+	if len(bigBuf) <= 64<<10 {
+		t.Fatalf("expected payload > 64 KiB, got %d", len(bigBuf))
+	}
+	if got := parseDarwinProcArgs2(bigBuf); got != "agent-big" {
+		t.Errorf("large payload got %q, want agent-big", got)
+	}
+}
+
+func TestDarwinProcArgsBufSizeAndTruncation(t *testing.T) {
+	// Buffer must be sized to kern.argmax (e.g. 1 MiB), not capped at 64 KiB.
+	if got := darwinProcArgsBufSize(1<<20, true); got != 1<<20 {
+		t.Errorf("argmax=1MiB: got %d, want %d", got, 1<<20)
+	}
+	if got := darwinProcArgsBufSize(256<<10, true); got != 256<<10 {
+		t.Errorf("argmax=256KiB: got %d, want %d", got, 256<<10)
+	}
+	// Invalid or missing kern.argmax falls back to 1 MiB.
+	if got := darwinProcArgsBufSize(0, false); got != 1<<20 {
+		t.Errorf("missing argmax: got %d, want %d", got, 1<<20)
+	}
+	if got := darwinProcArgsBufSize(1024, true); got != 1<<20 {
+		t.Errorf("tiny argmax: got %d, want %d", got, 1<<20)
+	}
+
+	// A full-buffer return (n == len(buf)) may be tail-truncated by XNU sysctl_procargsx
+	// and must be rejected rather than parsed from a corrupt offset.
+	buf := make([]byte, 128)
+	payload := makeProcArgs2("/bin/sh", 2, []string{"sh", "-c"}, []string{"PASEO_AGENT_ID=a1"})
+	copy(buf, payload)
+	if _, ok := darwinProcArgsSlice(buf, len(buf)); ok {
+		t.Errorf("n == len(buf) should be rejected as potentially truncated")
+	}
+	if _, ok := darwinProcArgsSlice(buf, 0); ok {
+		t.Errorf("n == 0 should be rejected")
+	}
+	if got, ok := darwinProcArgsSlice(buf, len(payload)); !ok || parseDarwinProcArgs2(got) != "a1" {
+		t.Errorf("valid slice got (%d bytes, %v), want ok with agent a1", len(got), ok)
+	}
 }
 
 func TestMachToTicks(t *testing.T) {

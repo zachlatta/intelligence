@@ -49,15 +49,8 @@ func (w *AgentWalker) Walk() map[string]AgentProcs {
 	if w.darwinTBFreq == 0 {
 		w.darwinTBFreq = darwinTimebaseFreq()
 	}
-	if w.darwinArgMax == 0 {
-		w.darwinArgMax = darwinArgMax()
-	}
 	if len(w.darwinBuf) == 0 {
-		size := 64 << 10
-		if size > w.darwinArgMax {
-			size = w.darwinArgMax
-		}
-		w.darwinBuf = make([]byte, size)
+		w.darwinBuf = make([]byte, darwinArgMax())
 	}
 
 	kps, err := unix.SysctlKinfoProcSlice("kern.proc.uid", os.Getuid())
@@ -118,30 +111,20 @@ func (w *AgentWalker) Walk() map[string]AgentProcs {
 
 func (w *AgentWalker) readProcArgs2(pid int) ([]byte, bool) {
 	mib := [3]int32{darwinCtlKern, darwinKernProcArgs2, int32(pid)}
-	for {
-		n := uintptr(len(w.darwinBuf))
-		_, _, errno := unix.Syscall6(
-			unix.SYS___SYSCTL,
-			uintptr(unsafe.Pointer(&mib[0])),
-			3,
-			uintptr(unsafe.Pointer(&w.darwinBuf[0])),
-			uintptr(unsafe.Pointer(&n)),
-			0,
-			0,
-		)
-		if errno == 0 {
-			return w.darwinBuf[:n], true
-		}
-		if errno == unix.ENOMEM && len(w.darwinBuf) < w.darwinArgMax {
-			nextSize := len(w.darwinBuf) * 2
-			if nextSize > w.darwinArgMax {
-				nextSize = w.darwinArgMax
-			}
-			w.darwinBuf = make([]byte, nextSize)
-			continue
-		}
+	n := uintptr(len(w.darwinBuf))
+	_, _, errno := unix.Syscall6(
+		unix.SYS___SYSCTL,
+		uintptr(unsafe.Pointer(&mib[0])),
+		3,
+		uintptr(unsafe.Pointer(&w.darwinBuf[0])),
+		uintptr(unsafe.Pointer(&n)),
+		0,
+		0,
+	)
+	if errno != 0 {
 		return nil, false
 	}
+	return darwinProcArgsSlice(w.darwinBuf, int(n))
 }
 
 func darwinTaskInfo(pid int) (darwinProcTaskInfo, bool) {
@@ -180,8 +163,6 @@ func darwinTimebaseFreq() uint64 {
 }
 
 func darwinArgMax() int {
-	if v, err := unix.SysctlUint32("kern.argmax"); err == nil && v >= 4096 && v <= 4<<20 {
-		return int(v)
-	}
-	return 1 << 20
+	v, err := unix.SysctlUint32("kern.argmax")
+	return darwinProcArgsBufSize(v, err == nil)
 }
