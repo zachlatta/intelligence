@@ -282,6 +282,7 @@ legend { font-size: 12.5px; font-weight: 600; color: var(--fg-2); padding: 0 .4r
 .dictation.finishing .rec { animation: none; opacity: .4; }
 @keyframes rec { 50% { opacity: .3; } }
 .dictation kbd { font: inherit; font-size: .7rem; opacity: .75; margin-left: .3rem; }
+@media (max-width: 780px), (pointer: coarse) { .dictation kbd { display: none; } }
 textarea.listening, textarea.listening:focus { border-color: var(--red); box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 25%, transparent); }
 
 .attachments { margin: .6rem 0; min-width: 0; }
