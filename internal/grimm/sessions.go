@@ -193,23 +193,65 @@ func (s *Service) setMaxWorkers(ctx context.Context, tx pgx.Tx, sess Session, n 
 	return nil
 }
 
-// ArchiveSession archives every agent of the session and ends it. The worktree and its files stay.
-func (s *Service) ArchiveSession(ctx context.Context, account int64, id string) error {
+// RequestWorktreeDiff enqueues a worktree_diff host command for the session's workspace so the
+// browser can inspect whether the worktree is clean or show a browsable diff of uncommitted
+// changes before ending the session. Returns "" when the session has no workspace yet.
+func (s *Service) RequestWorktreeDiff(ctx context.Context, account int64, id string) (string, error) {
+	var cmdID string
+	err := pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
+		sess, err := activeSession(ctx, tx, account, id)
+		if err != nil {
+			return err
+		}
+		if sess.WorkspaceID == "" {
+			return nil
+		}
+		c, err := enqueue(ctx, tx, sess.Host, hostclient.WorktreeDiffKind, hostclient.WorkspaceArgs{
+			WorkspaceID: sess.WorkspaceID,
+		}, commandTTL, s.now())
+		if err != nil {
+			return err
+		}
+		cmdID = c.ID
+		return nil
+	})
+	return cmdID, err
+}
+
+// ArchiveSession stops and archives the manager and every live worker, optionally deletes the
+// session's git worktree via Paseo (always keeping the grimm/<id> branch), drops pending wakeups,
+// and marks the session archived. Thread history, transcripts and roster remain readable through
+// /api/sql; pending workflow proposals stay open on the Proposals page and running workflows keep
+// running.
+func (s *Service) ArchiveSession(ctx context.Context, account int64, id string, deleteWorktree bool) error {
 	return pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
 		sess, err := activeSession(ctx, tx, account, id)
 		if err != nil {
 			return err
 		}
-		if _, err := s.archiveWorkers(ctx, tx, sess, "", "human"); err != nil {
+		if _, err := s.archiveWorkersOpts(ctx, tx, sess, "", "human", true); err != nil {
 			return err
 		}
-		if err := s.endManager(ctx, tx, sess); err != nil {
+		if err := s.endManager(ctx, tx, sess, true); err != nil {
 			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE grimm_wakeups SET dropped = true, delivered_at = $2 WHERE session_id = $1 AND delivered_at IS NULL`, id, s.now()); err != nil {
+			return err
+		}
+		if deleteWorktree && sess.WorkspaceID != "" {
+			if _, err := enqueue(ctx, tx, sess.Host, hostclient.ArchiveWorkspaceKind, hostclient.WorkspaceArgs{
+				WorkspaceID: sess.WorkspaceID,
+			}, commandTTL, s.now()); err != nil {
+				return err
+			}
 		}
 		if _, err := tx.Exec(ctx, `UPDATE grimm_sessions SET status = 'archived', archived_at = $2 WHERE id = $1`, id, s.now()); err != nil {
 			return err
 		}
-		if err := event(ctx, tx, sess, "human", "archive_session", "info", "Archived the session", nil); err != nil {
+		if _, err := threadRow(ctx, tx, sess, "divider", "intelligence", "Session ended", nil); err != nil {
+			return err
+		}
+		if err := event(ctx, tx, sess, "human", "archive_session", "info", "Ended the session", map[string]bool{"deleteWorktree": deleteWorktree}); err != nil {
 			return err
 		}
 		return notify(ctx, tx, id)
