@@ -205,7 +205,9 @@ func (s *Service) requestWorkflow(ctx context.Context, account int64, host, agen
 		}
 		if replacesID != "" {
 			cardData["replacesId"] = replacesID
-			_, _ = tx.Exec(ctx, `UPDATE grimm_workflow_runs SET last_proposal_status = 'withdrawn' WHERE proposal_id = $1 AND session_id = $2`, replacesID, locked.ID)
+			if _, err := tx.Exec(ctx, `UPDATE grimm_workflow_runs SET last_proposal_status = 'withdrawn' WHERE proposal_id = $1 AND session_id = $2`, replacesID, locked.ID); err != nil {
+				return err
+			}
 		}
 		msgID, err := threadRow(ctx, tx, locked, "workflow_request", ManagerName, summary, cardData)
 		if err != nil {
@@ -269,7 +271,9 @@ func (s *Service) withdrawWorkflow(ctx context.Context, account int64, host, age
 		if err != nil {
 			return err
 		}
-		_, _ = tx.Exec(ctx, `UPDATE grimm_workflow_runs SET last_proposal_status = 'withdrawn' WHERE proposal_id = $1 AND session_id = $2`, propID, locked.ID)
+		if _, err := tx.Exec(ctx, `UPDATE grimm_workflow_runs SET last_proposal_status = 'withdrawn' WHERE proposal_id = $1 AND session_id = $2`, propID, locked.ID); err != nil {
+			return err
+		}
 		if err := event(ctx, tx, locked, ManagerName, "workflow_withdrawn", "info",
 			fmt.Sprintf("Withdrew workflow proposal %s (%s): %s", shortID(propID), wfName, cut(reason, 200)),
 			map[string]string{"proposalId": propID}); err != nil {
@@ -447,7 +451,9 @@ func (s *Service) cancelWorkflow(ctx context.Context, account int64, host, agent
 		if err != nil {
 			return err
 		}
-		_, _ = tx.Exec(ctx, `UPDATE grimm_workflow_runs SET last_run_status = 'canceled' WHERE proposal_id = $1 AND session_id = $2`, propID, locked.ID)
+		if _, err := tx.Exec(ctx, `UPDATE grimm_workflow_runs SET last_run_status = 'canceled' WHERE proposal_id = $1 AND session_id = $2`, propID, locked.ID); err != nil {
+			return err
+		}
 		if err := event(ctx, tx, locked, ManagerName, "workflow_canceled", "info",
 			fmt.Sprintf("Canceled %s (%s): %s", wfName, shortID(runID), cut(reason, 200)),
 			map[string]string{"proposalId": propID, "runId": runID}); err != nil {
