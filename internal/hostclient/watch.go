@@ -48,8 +48,7 @@ type Watcher struct {
 
 	// pushed timelines: the daemon streams the timelines of live agents (LiveLabel) on this
 	// connection's subscription (subID, for the agents subSet names), and each push goes to
-	// updates / streamEvents.
-	updates      chan string
+	// streamEvents; a full channel drops it, and its reader falls back to rereading the timeline.
 	streamEvents chan paseo.TimelineStreamEvent
 	subID        string
 	subSet       string
@@ -59,7 +58,6 @@ func (w *Watcher) init() {
 	w.once.Do(func() {
 		w.changed = make(chan struct{}, 1)
 		w.fastChanged = make(chan struct{}, 1)
-		w.updates = make(chan string, 256)
 		w.streamEvents = make(chan paseo.TimelineStreamEvent, 256)
 		if w.RetryEvery == 0 {
 			w.RetryEvery = 5 * time.Second
@@ -68,12 +66,6 @@ func (w *Watcher) init() {
 			w.Now = time.Now
 		}
 	})
-}
-
-// TimelineUpdates has a live agent's id each time the daemon pushes a change to its timeline.
-func (w *Watcher) TimelineUpdates() <-chan string {
-	w.init()
-	return w.updates
 }
 
 // TimelineStreamEvents delivers decoded agent_stream timeline events from the daemon.
@@ -238,11 +230,7 @@ func (w *Watcher) session(ctx context.Context) error {
 		case ev := <-c.TimelineStreamEvents():
 			select {
 			case w.streamEvents <- ev:
-			default:
-			}
-			select {
-			case w.updates <- ev.AgentID:
-			default: // its reader is behind; it syncs the agent anyway
+			default: // its reader is behind: a seq gap or the live tick makes it reread the timeline
 			}
 		}
 	}

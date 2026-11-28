@@ -187,8 +187,9 @@ func (s *Service) prestartManager(ctx context.Context, tx pgx.Tx, sess Session) 
 	if err != nil || ok {
 		return false, err
 	}
-	cmdID, err := s.startManager(ctx, tx, sess, nil)
-	return cmdID != "" || err == nil, err
+	// With no plan, startManager records a failed manager (a change too); the first message retries.
+	_, err = s.startManager(ctx, tx, sess, nil)
+	return err == nil, err
 }
 
 // Interrupt cancels the manager's running turn (cancel_agent); the agent and its conversation stay.

@@ -644,7 +644,8 @@ Each git workspace's diff goes up the stream when it changed, one `diff` frame p
 the workspace's work changed against its base branch (from the merge base), with uncommitted and
 untracked files, as the daemon parses it for its own diff view (`checkout.diff.get`, mode `all`).
 Reading a diff runs git, so the host reads a workspace's again only when its diff stat, branch or
-directory moved, while an agent in it is working (every 5 seconds), once after the agent stops (for
+directory moved, when an agent's transcript shows a tool call that may write files (an edit, a write
+or a shell command), every 30 seconds while an agent in it is working, once after the agent stops (for
 its last edits), and on each new stream; it sends it only when it differs from what it last sent. A
 line is cut after 4 KB, and past 2 MB of a workspace's files the biggest lose their hunks (status
 `too_large`, counts kept). A diff the daemon cannot read is sent with its reason. The server keeps
@@ -1597,10 +1598,12 @@ redeploy or a restart loses nothing.
   worker gets a name from a fixed pool (or the one asked for, made unique), the session's
   directives, its peers' names and its task. The supervisor (one goroutine per server, working from
   the tables alone) follows each worker's agent in the host's reports: when one finishes a turn
-  its last reply is kept (`last_response`) and the manager is woken with it.
+  its last reply is kept (`last_response`) and the manager is woken with it. A worker idle for 10
+  minutes after its turn ended, with no undelivered news, is archived (`worker_auto_archived`).
 - **Waking the manager**: news (a worker finished or failed, a bus message to `grimm`) is queued in
   `grimm_wakeups` and sent as one "[Grimm update]" message once the manager is idle and the news
-  has settled for 2 seconds. News about a worker archived since is dropped, and a worker that
+  has settled for 750 ms (2 seconds for an Antigravity manager, which cannot be steered); the
+  supervisor arms a timer for the rest of the wait rather than waiting for its next pass. News about a worker archived since is dropped, and a worker that
   posted its result to `grimm` is not news again when its turn ends.
 - **The bus**: `intelligence grimm bus post --to <name|grimm|all>` posts as the calling agent (its
   `PASEO_AGENT_ID`, which must be an agent of an active session of the account on the host whose
@@ -1626,14 +1629,19 @@ redeploy or a restart loses nothing.
   only the thread. On the host, every Grimm agent is labelled `intelligence.live`, and the host
   holds a daemon subscription to those agents' timelines (`agent.timeline.set_subscription`):
   the daemon pushes each change (`agent_stream`), and the host copies the transcript as each
-  push arrives. The manager (`fast`) is copied at most every 100 ms; workers (`steady`) at most
+  push arrives. A `fast` agent's push that follows on from what the server has is sent as it is
+  (streamed text chunks merged into their entry, tool call updates into their call), without
+  rereading the timeline; a gap or a new epoch falls back to a reread. The manager (`fast`) is
+  otherwise copied at most every 100 ms; workers (`steady`) at most
   once a second each and 8 a second together, so the host's work is bounded however many
   workers there are. A worker whose live log is open on a page is `fast` while it is open
   (`watch_agent`, below). Running agents are still copied every 2 seconds as a fallback. A
   worker's live log is its own stream (`GET .../workers/{name}/stream`). Each stream starts with
   a snapshot (the newest 200 thread items, and whether there are older ones, which the page reads
-  through `/api/sql` a page at a time as it scrolls up), so a reconnect after a restart picks up
-  where it was.
+  through `/api/sql` a page at a time as it scrolls up). Each event carries an id (the newest
+  thread, bus and activity positions), and a reconnect that sends it back (`Last-Event-ID`, or
+  `?lastEventId=` when the page reconnects after sleep) gets only what came after; growing
+  manager words and reasoning are sent as appended text (`deltas`).
 - **Attachments** use the shared picker and limits (below): images and files go to the manager as
   references, delivered to its working directory; a message with attachments always goes to the
   manager, whatever its first word. The thread shows the images, read through `/api/sql`.

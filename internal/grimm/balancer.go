@@ -22,6 +22,9 @@ import (
 // disabledProviders are never picked, whatever the plan settings say.
 var disabledProviders = []string{"gemini", "muse", "copilot", "opencode", "pi", "omp"}
 
+// DisabledProviders is a copy of disabledProviders, for the pages that offer models.
+func DisabledProviders() []string { return slices.Clone(disabledProviders) }
+
 // Candidate is one plan entry the balancer can hire on: a grimm_quota row, judged for a role.
 type Candidate struct {
 	Provider      string     `json:"provider"`

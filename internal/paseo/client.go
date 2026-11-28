@@ -175,9 +175,8 @@ type TimelineStreamEvent struct {
 // Events; when the connection ends, Done closes and Err says why.
 type Client struct {
 	conn *websocket.Conn
-	// streams has the id of each agent whose subscribed timeline the daemon pushed something for
-	// (an agent_stream event); a full channel drops it, as its reader only needs "look again"
-	streams      chan string
+	// streamEvents has each agent_stream event the daemon pushed for a subscribed timeline; a full
+	// channel drops it, as its reader rereads the timeline on a seq gap
 	streamEvents chan TimelineStreamEvent
 	info         ServerInfo
 	events       chan Event
@@ -212,7 +211,7 @@ func Dial(ctx context.Context, t Target) (*Client, error) {
 		conn.CloseNow()
 		return nil, fmt.Errorf("hello: %w", err)
 	}
-	c := &Client{conn: conn, events: make(chan Event, 256), streams: make(chan string, 256), streamEvents: make(chan TimelineStreamEvent, 256), pending: map[string]chan reply{}, done: make(chan struct{})}
+	c := &Client{conn: conn, events: make(chan Event, 256), streamEvents: make(chan TimelineStreamEvent, 256), pending: map[string]chan reply{}, done: make(chan struct{})}
 	for {
 		_, b, err := conn.Read(ctx)
 		if err != nil {
@@ -255,11 +254,8 @@ func (c *Client) Info() ServerInfo { return c.info }
 // a reader that falls far behind loses the connection rather than blocking the daemon.
 func (c *Client) Events() <-chan Event { return c.events }
 
-// TimelineUpdates has the id of an agent each time the daemon pushes a change to its timeline
-// (agent_stream), for the agents SubscribeTimelines named. It says "read it again", no more.
-func (c *Client) TimelineUpdates() <-chan string { return c.streams }
-
-// TimelineStreamEvents delivers decoded agent_stream payloads for subscribed agents.
+// TimelineStreamEvents delivers decoded agent_stream payloads for the agents SubscribeTimelines
+// named. An event without Item says only "read the timeline again".
 func (c *Client) TimelineStreamEvents() <-chan TimelineStreamEvent { return c.streamEvents }
 
 // SubscribeTimelines asks the daemon to push agent_stream events for agentIDs' timelines, and
@@ -494,10 +490,6 @@ func (c *Client) read() {
 				}
 				select {
 				case c.streamEvents <- ev:
-				default:
-				}
-				select {
-				case c.streams <- p.AgentID:
 				default: // the reader is behind: it rereads what it was told of anyway
 				}
 			}

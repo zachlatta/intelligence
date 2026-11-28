@@ -433,3 +433,24 @@ sentFirst:
 		}
 	}
 }
+
+func TestGrimmNewSessionFormOmitsDisabledManagerProviders(t *testing.T) {
+	t.Parallel()
+	h, _ := dbServer(t)
+	stream := grimmRig(t, h)
+	rep := wfReport()
+	rep.Paseo.Providers = []hostclient.Provider{
+		{Name: "claude", Available: true, Models: []hostclient.Model{{ID: "claude-opus-5-5", Label: "Claude Opus 5.5"}}},
+		{Name: "muse", Available: true, Models: []hostclient.Model{{ID: "muse-disabled-model", Label: "Muse"}}},
+	}
+	if ack := stream.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
+		t.Fatal(ack.Error)
+	}
+	home := get(t, h, "/", nil).Body.String()
+	if !strings.Contains(home, `claude-opus-5-5`) {
+		t.Fatal("new session page missing the default manager model")
+	}
+	if strings.Contains(home, `muse-disabled-model`) {
+		t.Error("new session page offers a disabled provider's model")
+	}
+}

@@ -398,14 +398,14 @@ func grimmHosts(ctx context.Context, p *pgxpool.Pool) ([]grimmHost, error) {
 	}
 	mrows, err := p.Query(ctx, `SELECT host, provider, id, coalesce(nullif(label, ''), id), coalesce(thinking, '{}'), coalesce(default_thinking, '')
 		FROM provider_models
-		WHERE provider NOT IN ('gemini', 'muse', 'copilot', 'opencode', 'pi', 'omp')
+		WHERE provider <> ALL($1::text[])
 		ORDER BY host,
 		  CASE WHEN provider = 'claude' AND id = 'claude-opus-5-5' THEN 0
 		       WHEN provider = 'claude' THEN 1
 		       WHEN provider = 'antigravity' THEN 2
 		       WHEN provider = 'codex' THEN 3
 		       ELSE 4 END,
-		  position, id`)
+		  position, id`, grimm.DisabledProviders())
 	if err != nil {
 		return nil, err
 	}
