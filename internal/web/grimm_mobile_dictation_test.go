@@ -134,7 +134,7 @@ func TestGrimmMobileLayoutAndKeyboardHandling(t *testing.T) {
 	}
 }
 
-const grimmMobileViewportHarness = `
+const dictationWithoutMicHarness = `
 const assert = require("assert"), fs = require("fs");
 // Verify that grimm.js parses cleanly with Node and that dictation.js guards missing mediaDevices.
 const dictationSrc = fs.readFileSync(process.argv[1], "utf8");
@@ -178,10 +178,12 @@ eval(dictationSrc);
 })().catch((e) => { console.error(e); process.exit(1); });
 `
 
+// TestGrimmDictationMissingMediaDevicesWarning: grimm.js and dictation.js parse, and where the
+// browser has no navigator.mediaDevices (an insecure context), the mic warns instead of throwing.
 func TestGrimmDictationMissingMediaDevicesWarning(t *testing.T) {
 	t.Parallel()
 	node := requireNode(t)
-	out, err := exec.Command(node, "-e", grimmMobileViewportHarness, "dictation.js", "grimm.js").CombinedOutput()
+	out, err := exec.Command(node, "-e", dictationWithoutMicHarness, "dictation.js", "grimm.js").CombinedOutput()
 	if err != nil || strings.TrimSpace(string(out)) != "ok" {
 		t.Fatalf("dictation/grimm JS check failed: %v\n%s", err, out)
 	}

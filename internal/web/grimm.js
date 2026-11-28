@@ -1069,8 +1069,8 @@ function bindSession() {
   let lastWidth = window.innerWidth;
   function syncMobileViewport() {
     if (!mobileMQ.matches) {
-      document.body.style?.removeProperty?.("--g-vh");
-      document.body.classList?.remove?.("g-kbd");
+      document.body.style.removeProperty("--g-vh");
+      document.body.classList.remove("g-kbd");
       setBarExpanded(false);
       return;
     }
@@ -1082,11 +1082,11 @@ function bindSession() {
     } else if (h > baselineHeight) {
       baselineHeight = h;
     }
-    document.body.style?.setProperty?.("--g-vh", h + "px");
+    document.body.style.setProperty("--g-vh", h + "px");
     const focused = document.activeElement === input;
     const kbdOpen = focused && ((baselineHeight - h > 120) || (window.innerHeight - h > 120) || h <= 500);
-    const wasOpen = !!document.body.classList?.contains?.("g-kbd");
-    document.body.classList?.toggle?.("g-kbd", kbdOpen);
+    const wasOpen = document.body.classList.contains("g-kbd");
+    document.body.classList.toggle("g-kbd", kbdOpen);
     if (kbdOpen) {
       setBarExpanded(false);
       if (vv && vv.offsetTop > 0) window.scrollTo(0, 0);
