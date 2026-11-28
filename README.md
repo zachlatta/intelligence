@@ -577,6 +577,13 @@ against its daemon and reports `running`, then `succeeded` with a result (`{"wor
   workspace it no longer listed), skipping one already gone. The result counts them
   (`archivedAgents`). A Paseo-made worktree is removed with it. Optional `waitForAgent` waits for
   that agent to end its turn first, up to the command expiry.
+- `worktree_diff`: `workspaceId`. The host reads the workspace directory's uncommitted changes with
+  `git status` and `git diff` against `HEAD` (staged, unstaged and untracked files), without
+  changing the checkout or index. The result is `{"workspaceId","worktreeDiff"}`, where
+  `worktreeDiff` is `{"clean","files","truncated","error"}` and each file is `{"path","status"
+  (M, A, D, R or ?),"binary","additions","deletions","diff","truncated"}`. It lists up to 200
+  files, with up to 32 KiB of diff each and 256 KiB in all; a binary file has no diff. A missing
+  directory or a git failure succeeds with `error` set. Grimm's End session dialog sends it.
 - `watch_agent`: `agentId`, `live` (`fast` or `steady`): sets the agent's `intelligence.live`
   label, how soon the host copies its transcript after the daemon pushes a change (Grimm, below).
 - `rename_agent`: `agentId`, `title`. `cancel_agent` (stops its current turn) and `archive_agent`:
@@ -1637,8 +1644,20 @@ redeploy or a restart loses nothing.
 - **Attachments** use the shared picker and limits (below): images and files go to the manager as
   references, delivered to its working directory; a message with attachments always goes to the
   manager, whatever its first word. The thread shows the images, read through `/api/sql`.
-- **Transcripts** of an active session's agents are kept after Paseo archives the agents, so the
-  thread and a finished worker's log stay.
+- **Transcripts** of Grimm sessions' agents are kept after Paseo archives the agents and after the
+  session ends, so the thread and every worker's log stay readable in the UI and through `/api/sql`.
+- **Ending a session** (`POST /api/grimm/sessions/{id}/archive` with `{"deleteWorktree": bool}`,
+  or **End session** in the header): opening the confirm dialog inspects the session's worktree
+  (`POST /api/grimm/sessions/{id}/worktree-diff`, which enqueues a `worktree_diff` host command
+  read through `/api/sql`) and asks whether to delete the git worktree (keeping the `grimm/<id>`
+  branch). Clean worktrees default the checkbox to checked; dirty worktrees default it to unchecked
+  and show a browsable unified diff of modified, staged, deleted and untracked files. Confirming
+  stops the manager's turn and every live worker (`cancel_agent`), archives their Paseo agents
+  (`archive_agent`), drops pending wakeups, deletes the worktree (`archive_workspace`) only when
+  `deleteWorktree` is true (default `false`), marks the session archived and moves it out of the
+  active picker into a collapsed **Ended** group (read-only). Pending workflow-request proposals
+  remain open on the Proposals page, and workflow runs already started keep running. After ending,
+  the page opens the next active session or the start-a-session form.
 
 The page's commands, run without a manager turn: `@name <message>`, `/quota`, `/roster`, `/spawn
 [name] [--role R] [--provider P] <task>`, `/fanout N [--review] <task>`, `/remember <rule>`,

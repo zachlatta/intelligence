@@ -1,5 +1,21 @@
 [
   {
+    "id": "grimm-dictation-mobile",
+    "released": "2026-11-28",
+    "title": "Dictate to Grimm and a roomier mobile chat",
+    "summary": "Grimm's chat box now has a microphone button (and ⌘D / Ctrl+D shortcut) for live AssemblyAI dictation when ASSEMBLYAI_API_KEY is set, with Cancel, Edit, and Send controls. On phones, Grimm packs the top nav and session bar into single slim rows, tucks + New, Workers, and host resources behind the ⋯ button, hides the desktop keyboard hint, and collapses the top nav and chat tabs while the virtual keyboard is open so the conversation owns the screen.",
+    "media": "grimm-dictation-mobile.png",
+    "mediaAlt": "A mobile local demo of the Grimm chat page showing the compact single-row site nav and session bar with the details toggle, the full chat thread visible, and the composer actively dictating with Listening status and Cancel, Edit, and Send buttons."
+  },
+  {
+    "id": "grimm-end-session",
+    "released": "2026-11-27",
+    "title": "End a Grimm session from the header",
+    "summary": "Click End session in the Grimm header (or End on a phone) to clear out a finished session. The confirm dialog inspects the session's worktree, asks whether to delete it (keeping the grimm/ branch), and shows a browsable file diff when there are uncommitted changes. Confirming stops Grimm and every live worker, archives their Paseo agents, leaves pending workflow proposals on the Proposals page, and lets running workflows keep going. Ended sessions move into a collapsed Ended group in the picker, read-only, with thread, transcripts and roster readable via /api/sql.",
+    "media": "grimm-end-session.png",
+    "mediaAlt": "The Grimm page in a local demo showing the End session confirm dialog over an active CSV Formatter session with two live workers, a browsable diff of three uncommitted files, and the Delete git worktree checkbox unchecked by default."
+  },
+  {
     "id": "workflow-model-variants",
     "released": "2026-11-27",
     "title": "Model variants of a workflow",

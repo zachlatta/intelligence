@@ -246,7 +246,8 @@ function chipHTML(name) {
   const w = workerByName(name);
   return `<span class="g-wchip ${w ? provClass(w.provider) : "p-other"}" data-worker="${esc(name)}"><i></i>${esc(name)}</span>`;
 }
-function managerWorking() { return ["working", "starting"].includes(S.session.manager_state); }
+function managerWorking() { return !isArchived() && ["working", "starting"].includes(S.session.manager_state); }
+function isArchived() { return (S.session.status || root?.dataset.status) === "archived"; }
 
 // ---------- thread ----------
 const ATTACH = /\[attachment:([0-9a-f-]{36})\]/g;
@@ -416,17 +417,43 @@ async function loadOlder() {
   }
 }
 
-// ---------- header, worker cap popover, and manager ----------
+// ---------- header, session picker, end dialog, worker cap popover, and manager ----------
 function renderSession() {
   const s = S.session;
   if (!s.id) return;
+  const archived = s.status === "archived";
+  if (root) root.dataset.status = s.status || "active";
   $("#g-repo").textContent = s.title || s.repo;
   $("#g-branch").textContent = s.branch || "";
+  const pickerLabel = $("#g-picker-label");
+  if (pickerLabel) pickerLabel.textContent = `${s.title || s.repo}${s.host ? " · " + s.host : ""}`;
   $("#g-chip").title = `${s.repo} on ${s.host}\nbranch ${s.branch}${s.workspace_error ? "\nworktree failed: " + s.workspace_error : ""}`;
   $("#g-cap-live").textContent = s.live_workers ?? 0;
   $("#g-cap-max").textContent = s.max_workers;
-  $("#g-cap").classList.toggle("full", (s.live_workers || 0) >= s.max_workers);
-  $("#g-cap").title = `${s.live_workers || 0} live workers of this session's cap of ${s.max_workers}. Click to change the cap.`;
+  $("#g-cap").classList.toggle("full", !archived && (s.live_workers || 0) >= s.max_workers);
+  $("#g-cap").disabled = archived;
+  $("#g-cap").title = archived
+    ? `${s.live_workers || 0} live workers of ${s.max_workers} (session ended).`
+    : `${s.live_workers || 0} live workers of this session's cap of ${s.max_workers}. Click to change the cap.`;
+  $("#g-end-session").hidden = archived;
+  $("#g-archive-all").hidden = archived;
+  $("#g-composer").hidden = archived;
+  $("#g-ended-banner").hidden = !archived;
+  $("#g-directive-form").hidden = archived;
+  const branchNote = $("#g-ended-branch-note");
+  if (branchNote) branchNote.innerHTML = s.branch ? ` Branch <code>${esc(s.branch)}</code> was kept.` : "";
+  if (archived) {
+    closeCapPopover(false);
+    document.title = `Grimm · ${s.title || s.repo} (ended)`;
+    const pill = $("#g-pill"); pill.dataset.state = "offline";
+    $("#g-pill-label").textContent = "Session ended";
+    pill.title = "This session has ended. Transcripts and roster are read-only.";
+    $("#g-typing").hidden = true;
+    $("#g-stop").hidden = true;
+    const cur = $(`#g-items [data-id="${CSS.escape(lastAssistantID())}"] .g-md`);
+    if (cur) cur.classList.remove("cursor");
+    return;
+  }
   document.title = `Grimm · ${s.title || s.repo}`;
   const st = s.manager_state || "offline";
   const pill = $("#g-pill"); pill.dataset.state = st;
@@ -447,6 +474,215 @@ function renderSession() {
   $("#g-stop").hidden = st !== "working";
   const cur = $(`#g-items [data-id="${CSS.escape(lastAssistantID())}"] .g-md`);
   if (cur) cur.classList.toggle("cursor", st === "working");
+}
+
+function openPicker() {
+  const pop = $("#g-picker-pop"), btn = $("#g-picker-btn");
+  if (!pop || !btn) return;
+  closeCapPopover(false);
+  pop.hidden = false;
+  btn.setAttribute("aria-expanded", "true");
+  if (matchMedia("(max-width: 780px)").matches) {
+    const r = btn.getBoundingClientRect();
+    pop.style.top = Math.round(r.bottom + 6) + "px";
+  } else {
+    pop.style.top = "";
+  }
+}
+function closePicker(refocusBtn) {
+  const pop = $("#g-picker-pop"), btn = $("#g-picker-btn");
+  if (!pop || pop.hidden) return;
+  pop.hidden = true;
+  btn.setAttribute("aria-expanded", "false");
+  if (refocusBtn) btn.focus();
+}
+
+let endingSession = false;
+let endCheckToken = 0;
+let endWtTouched = false;
+let endDiffFiles = [];
+
+function formatUnifiedDiff(text) {
+  return String(text || "").split("\n").map((line) => {
+    let cls = "ctx";
+    if (line.startsWith("@@")) cls = "hunk";
+    else if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff --git ") || line.startsWith("index ")) cls = "meta";
+    else if (line.startsWith("+")) cls = "add";
+    else if (line.startsWith("-")) cls = "del";
+    return `<span class="g-dl ${cls}">${esc(line)}</span>`;
+  }).join("");
+}
+function renderEndDiffFile(idx) {
+  const view = $("#g-end-diff-view");
+  const filesBox = $("#g-end-diff-files");
+  if (!view || !filesBox) return;
+  const f = endDiffFiles[idx];
+  if (!f) { view.innerHTML = ""; return; }
+  $$(".g-end-diff-file", filesBox).forEach((b, i) => {
+    b.classList.toggle("active", i === idx);
+    b.setAttribute("aria-selected", i === idx ? "true" : "false");
+  });
+  const stats = f.binary ? '<span class="muted">binary</span>'
+    : `${f.additions ? `<span class="g-stat-add">+${f.additions}</span>` : ""}${f.deletions ? `<span class="g-stat-del">−${f.deletions}</span>` : ""}`;
+  let body = "";
+  if (f.binary) {
+    body = '<p class="muted small g-diff-note">Binary file — text diff not shown.</p>';
+  } else if (f.diff) {
+    body = `<pre class="g-diff-pre">${formatUnifiedDiff(f.diff)}</pre>${f.truncated ? '<p class="muted small g-diff-note">Diff truncated for preview.</p>' : ""}`;
+  } else if (f.truncated) {
+    body = '<p class="muted small g-diff-note">Diff omitted (preview size limit reached).</p>';
+  } else {
+    body = '<p class="muted small g-diff-note">Empty file or mode-only change.</p>';
+  }
+  view.innerHTML = `<div class="g-diff-head"><span class="g-dst st-${esc(f.status === "?" ? "u" : (f.status || "m").toLowerCase())}">${esc(f.status || "M")}</span><code class="g-diff-path">${esc(f.path)}</code><span class="g-diff-stats">${stats}</span></div>${body}`;
+}
+function renderEndDiff(files) {
+  endDiffFiles = files || [];
+  const box = $("#g-end-diff");
+  const list = $("#g-end-diff-files");
+  const modal = $("#g-end-modal");
+  if (!box || !list) return;
+  list.innerHTML = "";
+  if (!endDiffFiles.length) {
+    box.hidden = true;
+    modal?.classList.remove("has-diff");
+    return;
+  }
+  endDiffFiles.forEach((f, i) => {
+    const stCls = f.status === "?" ? "u" : (f.status || "m").toLowerCase();
+    const counts = f.binary ? '<span class="muted">bin</span>'
+      : `${f.additions ? `<span class="g-stat-add">+${f.additions}</span>` : ""}${f.deletions ? `<span class="g-stat-del">−${f.deletions}</span>` : ""}`;
+    const btn = el("button", "g-end-diff-file", `<span class="g-dst st-${esc(stCls)}">${esc(f.status || "M")}</span><span class="g-df-path">${esc(f.path)}</span><span class="g-df-counts">${counts}</span>`);
+    btn.type = "button";
+    btn.setAttribute("role", "tab");
+    btn.setAttribute("aria-selected", i === 0 ? "true" : "false");
+    btn.addEventListener("click", () => renderEndDiffFile(i));
+    list.append(btn);
+  });
+  box.hidden = false;
+  modal?.classList.add("has-diff");
+  renderEndDiffFile(0);
+}
+function setEndWtStatus(state, text) {
+  const st = $("#g-end-wt-status");
+  if (!st) return;
+  st.dataset.state = state;
+  st.textContent = text;
+}
+async function loadWorktreeDiff(token) {
+  const chk = $("#g-end-delete-wt");
+  const box = $("#g-end-diff");
+  const modal = $("#g-end-modal");
+  if (box) box.hidden = true;
+  modal?.classList.remove("has-diff");
+  endDiffFiles = [];
+  if (chk) { chk.checked = false; chk.disabled = false; }
+
+  setEndWtStatus("checking", "Checking worktree for uncommitted changes…");
+  let req;
+  try {
+    req = await api("POST", `/api/grimm/sessions/${S.id}/worktree-diff`, {});
+  } catch (e) {
+    if (token !== endCheckToken) return;
+    setEndWtStatus("warn", `Could not inspect worktree: ${e.message}. You can still end the session.`);
+    return;
+  }
+  if (token !== endCheckToken) return;
+  if (req.noWorkspace || !req.commandId || !/^[0-9a-f-]{36}$/.test(req.commandId)) {
+    setEndWtStatus("none", "No git worktree has been created for this session yet.");
+    if (chk) chk.disabled = true;
+    return;
+  }
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    if (token !== endCheckToken) return;
+    try {
+      const rows = await sql(`SELECT status, result, error FROM commands WHERE id = '${req.commandId}'`);
+      if (token !== endCheckToken) return;
+      const [status, result, errMsg] = rows[0] || [];
+      if (status === "succeeded") {
+        const wt = (result && result.worktreeDiff) || {};
+        if (wt.error) {
+          setEndWtStatus("warn", `Could not inspect worktree: ${wt.error}. You can still end the session.`);
+          return;
+        }
+        if (wt.clean) {
+          setEndWtStatus("clean", "Worktree is clean (no uncommitted changes).");
+          if (chk && !endWtTouched) chk.checked = true;
+          return;
+        }
+        const files = Array.isArray(wt.files) ? wt.files : [];
+        const n = files.length;
+        setEndWtStatus("dirty", `Worktree has ${n} uncommitted ${n === 1 ? "file" : "files"}${wt.truncated ? " (preview truncated)" : ""}.`);
+        renderEndDiff(files);
+        return;
+      }
+      if (status === "failed" || status === "expired") {
+        setEndWtStatus("warn", `Could not inspect worktree (${errMsg || status}). You can still end the session.`);
+        return;
+      }
+    } catch (e) {
+      if (token !== endCheckToken) return;
+      setEndWtStatus("warn", `Could not read worktree status: ${e.message}. You can still end the session.`);
+      return;
+    }
+    await new Promise((ok) => setTimeout(ok, 350));
+  }
+  if (token !== endCheckToken) return;
+  setEndWtStatus("warn", "Worktree check timed out (host may be offline). You can still end the session.");
+}
+function openEndDialog() {
+  if (isArchived()) return;
+  const dlg = $("#g-end-dialog");
+  if (!dlg) return;
+  closePicker(false);
+  closeCapPopover(false);
+  const live = S.session.live_workers ?? 0;
+  const lead = $("#g-end-lead");
+  if (lead) {
+    lead.textContent = live === 0
+      ? "Stops Grimm's turn (0 live workers), archives its Paseo agent, and removes this session from the active picker."
+      : `Stops Grimm's turn and ${live} live ${live === 1 ? "worker" : "workers"}, archives their Paseo agents, and removes this session from the active picker.`;
+  }
+  const br = $("#g-end-branch");
+  if (br) br.textContent = S.session.branch || "grimm/…";
+  $("#g-end-error").textContent = "";
+  endWtTouched = false;
+  const token = ++endCheckToken;
+  dlg.hidden = false;
+  $("#g-end-cancel").focus();
+  loadWorktreeDiff(token);
+}
+function closeEndDialog(refocusBtn) {
+  if (endingSession) return;
+  const dlg = $("#g-end-dialog");
+  if (!dlg || dlg.hidden) return;
+  endCheckToken++;
+  dlg.hidden = true;
+  $("#g-end-error").textContent = "";
+  if (refocusBtn) $("#g-end-session").focus();
+}
+async function confirmEndSession() {
+  if (endingSession) return;
+  const err = $("#g-end-error"), confirmBtn = $("#g-end-confirm"), cancelBtn = $("#g-end-cancel"), chk = $("#g-end-delete-wt");
+  err.textContent = "";
+  endingSession = true;
+  endCheckToken++;
+  confirmBtn.disabled = true;
+  cancelBtn.disabled = true;
+  if (chk) chk.disabled = true;
+  confirmBtn.textContent = "Ending session…";
+  try {
+    const r = await api("POST", `/api/grimm/sessions/${S.id}/archive`, { deleteWorktree: !!(chk && chk.checked) });
+    location.href = (r && r.nextUrl) || "/";
+  } catch (e) {
+    err.textContent = e.message;
+    endingSession = false;
+    confirmBtn.disabled = false;
+    cancelBtn.disabled = false;
+    if (chk && S.session.workspace_id) chk.disabled = false;
+    confirmBtn.textContent = "End session";
+  }
 }
 
 let capSaving = false;
@@ -569,14 +805,18 @@ function renderQuota() {
 // ---------- directives, bus, activity ----------
 function renderDirectives() {
   const ol = $("#g-directives"); ol.innerHTML = "";
+  const archived = isArchived();
   for (const d of S.directives) {
     const li = el("li"); li.value = d.seq; li.textContent = d.text;
-    const b = el("button", "", "×"); b.type = "button"; b.title = `Remove directive ${d.seq}`; b.setAttribute("aria-label", `Remove directive ${d.seq}`);
-    b.addEventListener("click", async () => {
-      if (!confirm(`Remove directive ${d.seq}?\n\n${d.text}`)) return;
-      try { await api("DELETE", `/api/grimm/sessions/${S.id}/directives/${d.seq}`); } catch (e) { toast(e.message, true); }
-    });
-    li.append(b); ol.append(li);
+    if (!archived) {
+      const b = el("button", "", "×"); b.type = "button"; b.title = `Remove directive ${d.seq}`; b.setAttribute("aria-label", `Remove directive ${d.seq}`);
+      b.addEventListener("click", async () => {
+        if (!confirm(`Remove directive ${d.seq}?\n\n${d.text}`)) return;
+        try { await api("DELETE", `/api/grimm/sessions/${S.id}/directives/${d.seq}`); } catch (e) { toast(e.message, true); }
+      });
+      li.append(b);
+    }
+    ol.append(li);
   }
 }
 function busLi(m) {
@@ -636,12 +876,16 @@ function closeFocus() {
 function renderFocusHead() {
   const w = workerByName(S.focus);
   if (!w) return;
+  const archived = isArchived();
   $("#g-focus-name").textContent = w.name;
   $("#g-focus-sub").textContent = `${w.role} · ${PROVIDER[w.provider] || w.provider} ${w.model} · ${w.login}`;
   const pill = $("#g-focus-status"); pill.className = `g-status ${w.status}`; pill.textContent = w.status;
   $("#g-focus-id").textContent = w.agent_id ? "agent " + w.agent_id.slice(0, 8) : "";
-  $("#g-focus-archive").disabled = w.status === "archived";
-  $("#g-focus-stop").disabled = w.status !== "running";
+  $("#g-focus-form").hidden = archived;
+  $("#g-focus-stop").hidden = archived;
+  $("#g-focus-archive").hidden = archived;
+  $("#g-focus-archive").disabled = archived || w.status === "archived";
+  $("#g-focus-stop").disabled = archived || w.status !== "running";
 }
 function setFocusTab(tab) {
   S.focusTab = tab;
@@ -865,6 +1109,8 @@ function setSending(active) {
   sending = active;
   $("#g-send").disabled = active || checking > 0;
   $("#g-attach-btn").disabled = active;
+  const mic = $("#dictate");
+  if (mic) mic.disabled = active;
   $("#g-input").readOnly = active;
   $$(".g-draft-remove", $("#g-attach-drafts")).forEach((b) => { b.disabled = active; });
 }
@@ -1012,9 +1258,25 @@ function bindSession() {
     if (!$("#g-cap-wrap").contains(e.target)) saveCapPopover();
   });
 
+  // session picker popover
+  $("#g-picker-btn").addEventListener("click", () => {
+    if ($("#g-picker-pop").hidden) openPicker(); else closePicker(false);
+  });
+  document.addEventListener("mousedown", (e) => {
+    if (!$("#g-picker-pop").hidden && !$("#g-picker-wrap").contains(e.target)) closePicker(false);
+  });
+
+  // end session confirm dialog
+  $("#g-end-session").addEventListener("click", openEndDialog);
+  $("#g-end-cancel").addEventListener("click", () => closeEndDialog(true));
+  $("#g-end-confirm").addEventListener("click", confirmEndSession);
+  $("#g-end-delete-wt").addEventListener("change", () => { endWtTouched = true; });
+  $("#g-end-dialog").addEventListener("click", (e) => {
+    if (e.target === $("#g-end-dialog")) closeEndDialog(true);
+  });
+
   $("#g-older").addEventListener("click", loadOlder);
   $("#g-thread").addEventListener("scroll", () => { if ($("#g-thread").scrollTop < 80) loadOlder(); }, { passive: true });
-  $("#g-sessions").addEventListener("change", (e) => { location.href = "/grimm/" + e.target.value; });
   $("#g-directive-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const box = $("#g-directive-input"); const v = box.value.trim(); if (!v) return;
@@ -1042,19 +1304,101 @@ function bindSession() {
     try { await api("POST", `/api/grimm/sessions/${S.id}/workers/${encodeURIComponent(name)}/archive`, {}); toast(`Archived ${name}.`); } catch (e) { toast(e.message, true); }
   });
   $("#g-tabs").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) setTab(b.dataset.tab); });
+
+  // mobile header details toggle (+ New, Workers cap, Host resources)
+  const bar = $(".g-bar"), barToggle = $("#g-bar-toggle");
+  function setBarExpanded(open) {
+    if (!bar || !barToggle) return;
+    bar.classList.toggle("is-expanded", open);
+    barToggle.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+  if (barToggle) {
+    barToggle.addEventListener("click", () => setBarExpanded(!bar.classList.contains("is-expanded")));
+    document.addEventListener("click", (e) => {
+      if (!bar.classList.contains("is-expanded")) return;
+      if (bar.contains(e.target)) return;
+      if (e.target.closest("#g-cap-pop, .g-host-card")) return;
+      setBarExpanded(false);
+    });
+  }
+
+  // mobile visualViewport / virtual-keyboard handling: keep the composer above the keyboard,
+  // collapse top chrome while typing, and keep the thread pinned to the latest message
+  const mobileMQ = matchMedia("(max-width: 780px)");
+  let baselineHeight = window.innerHeight;
+  let lastWidth = window.innerWidth;
+  function syncMobileViewport() {
+    if (!mobileMQ.matches) {
+      document.body.style.removeProperty("--g-vh");
+      document.body.classList.remove("g-kbd");
+      setBarExpanded(false);
+      return;
+    }
+    const vv = window.visualViewport;
+    const h = vv ? Math.round(vv.height) : window.innerHeight;
+    if (window.innerWidth !== lastWidth) {
+      lastWidth = window.innerWidth;
+      baselineHeight = h;
+    } else if (h > baselineHeight) {
+      baselineHeight = h;
+    }
+    document.body.style.setProperty("--g-vh", h + "px");
+    const focused = document.activeElement === input;
+    const kbdOpen = focused && ((baselineHeight - h > 120) || (window.innerHeight - h > 120) || h <= 500);
+    const wasOpen = document.body.classList.contains("g-kbd");
+    document.body.classList.toggle("g-kbd", kbdOpen);
+    if (kbdOpen) {
+      setBarExpanded(false);
+      if (vv && vv.offsetTop > 0) window.scrollTo(0, 0);
+      if (!wasOpen) scrollBottom(true);
+    }
+  }
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", syncMobileViewport);
+    window.visualViewport.addEventListener("scroll", syncMobileViewport);
+  }
+  window.addEventListener("resize", syncMobileViewport);
+  input.addEventListener("focus", () => {
+    if (mobileMQ.matches) {
+      const stick = nearBottom();
+      setTimeout(() => { syncMobileViewport(); if (stick) scrollBottom(true); }, 80);
+    }
+  });
+  input.addEventListener("blur", () => {
+    if (mobileMQ.matches) setTimeout(syncMobileViewport, 120);
+  });
+  syncMobileViewport();
+
+  // dictation (AssemblyAI streaming via /api/dictation/token, when ASSEMBLYAI_API_KEY is configured)
+  const mic = $("#dictate");
+  if (composer.dataset.dictation && mic && window.dictation) {
+    window.dictation({
+      text: input,
+      tokenPath: composer.dataset.dictation,
+      mic,
+      row: $("#g-actions"),
+      label: () => "Send",
+      send: () => send(),
+      warn: (msg) => toast(msg, true),
+      active: () => !sending && $("#g-cap-pop").hidden && !S.focus && !$(".g-lightbox") && root.dataset.tab === "chat",
+    });
+  }
+
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       const lb = $(".g-lightbox");
       if (lb) { lb.remove(); return; }
+      if (!$("#g-end-dialog").hidden) { closeEndDialog(true); return; }
+      if (!$("#g-picker-pop").hidden) { closePicker(true); return; }
       if (!$("#g-cap-pop").hidden) { closeCapPopover(true); return; }
       if (S.focus && !e.target.closest(".g-box")) { closeFocus(); return; }
     }
-    if (e.key === "/" && (document.activeElement === document.body || !document.activeElement)) { e.preventDefault(); input.focus(); }
+    if (e.key === "/" && !isArchived() && (document.activeElement === document.body || !document.activeElement)) { e.preventDefault(); input.focus(); }
   });
   setInterval(() => { renderSession(); if (S.workers.some((w) => w.status === "running")) renderTeam(); }, 1000);
   if (matchMedia("(max-width: 780px)").matches) input.placeholder = "Tell Grimm what to do…";
   connect();
-  if (!matchMedia("(pointer: coarse)").matches) input.focus();
+  if (!matchMedia("(pointer: coarse)").matches && !isArchived()) input.focus();
 }
 
 function bindNew() {
