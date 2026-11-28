@@ -154,7 +154,7 @@ function makeEl(tag, id) {
     tagName: tag.toUpperCase(),
     id: id || "",
     dataset: id === "grimm" ? { session: "sess-1", capLimit: "100", olderSql: "" } : {},
-    style: {},
+    style: { setProperty() {}, removeProperty() {} },
     hidden: false,
     disabled: false,
     readOnly: false,

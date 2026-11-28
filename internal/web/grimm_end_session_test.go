@@ -17,29 +17,36 @@ func TestGrimmEndSessionAPIAndUIAndReadOnlySQL(t *testing.T) {
 	h, d := dbServer(t)
 	id1, stream := readySession(t, h)
 
-	// Start a manager in session 1 and store a transcript entry for it.
+	// readySession pre-started the manager (mgr-ready); the first message goes to it, and a
+	// transcript entry is stored for it.
 	if rec := call(t, h, "POST", "/api/grimm/sessions/"+id1+"/messages", `{"text":"Check the parser"}`, sameOriginFetch); rec.Code != 202 {
 		t.Fatalf("message: %d %s", rec.Code, rec.Body)
 	}
-	mgrCmd := stream.command()
-	succeed(t, stream, mgrCmd, `{"agentId":"mgr-1"}`)
+	if sendCmd := stream.command(); sendCmd.Kind != hostclient.SendMessageKind {
+		t.Fatalf("first message command = %+v, want send_message to the pre-started manager", sendCmd)
+	} else {
+		succeed(t, stream, sendCmd, `{}`)
+	}
 	rep := wfReport()
-	rep.Paseo.Providers = []hostclient.Provider{{Name: "antigravity", Available: true, Models: []hostclient.Model{{ID: "gemini-4-neon-medium"}}}}
+	rep.Paseo.Providers = []hostclient.Provider{
+		{Name: "claude", Available: true, Models: []hostclient.Model{{ID: "claude-opus-5-5"}}},
+		{Name: "antigravity", Available: true, Models: []hostclient.Model{{ID: "gemini-4-neon-medium"}}},
+	}
 	rep.Paseo.Agents = append(rep.Paseo.Agents,
-		hostclient.Agent{ID: "mgr-1", WorkspaceID: "w-app", Provider: "antigravity", Status: "running", CreatedAt: time.Now()},
+		hostclient.Agent{ID: "mgr-ready", WorkspaceID: "w-app", Provider: "claude", Status: "running", CreatedAt: time.Now()},
 		hostclient.Agent{ID: "w-1", WorkspaceID: "w-app", Provider: "antigravity", Status: "running", CreatedAt: time.Now()},
 	)
 	if ack := stream.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &rep}); ack.Error != "" {
 		t.Fatal(ack.Error)
 	}
-	batch := hostclient.TranscriptBatch{Host: "host-1", AgentID: "mgr-1", Epoch: "e1", Replace: true, Entries: []hostclient.TranscriptEntry{
+	batch := hostclient.TranscriptBatch{Host: "host-1", AgentID: "mgr-ready", Epoch: "e1", Replace: true, Entries: []hostclient.TranscriptEntry{
 		{SeqStart: 1, SeqEnd: 1, At: time.Now(), Item: json.RawMessage(`{"type":"assistant_message","text":"Parser looks solid."}`)},
 	}}
 	if ack := stream.call(hostclient.Frame{Type: hostclient.TranscriptFrame, Transcript: &batch}); ack.Error != "" {
 		t.Fatal(ack.Error)
 	}
 
-	// Wait until supervisor records mgr-1 as live.
+	// Wait until supervisor records mgr-ready as live.
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		var status string
@@ -128,7 +135,7 @@ func TestGrimmEndSessionAPIAndUIAndReadOnlySQL(t *testing.T) {
 		t.Errorf("archived worktree-diff: %d, want 409", rec.Code)
 	}
 
-	// Host reports mgr-1 and w-1 gone (archived in Paseo): transcripts MUST still stay readable via /api/sql.
+	// Host reports mgr-ready and w-1 gone (archived in Paseo): transcripts MUST still stay readable via /api/sql.
 	repGone := wfReport()
 	repGone.Paseo.Providers = rep.Paseo.Providers
 	if ack := stream.call(hostclient.Frame{Type: hostclient.ReportFrame, Report: &repGone}); ack.Error != "" {
