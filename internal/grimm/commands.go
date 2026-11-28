@@ -162,10 +162,10 @@ func (s *Service) slash(ctx context.Context, tx pgx.Tx, sess Session, text strin
 			if err != nil || n < 1 || n > MaxWorkersLimit {
 				return "", badRequest("usage: /cap <1-%d>", MaxWorkersLimit)
 			}
-			if _, err := tx.Exec(ctx, `UPDATE grimm_sessions SET max_workers = $2 WHERE id = $1`, sess.ID, n); err != nil {
+			if err := s.setMaxWorkers(ctx, tx, sess, n); err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("worker cap set to %d", n), event(ctx, tx, sess, "human", "cap", "info", fmt.Sprintf("Set the worker cap to %d", n), nil)
+			return fmt.Sprintf("worker cap set to %d", n), nil
 		})
 	case "/say":
 		if len(rest) < 2 {

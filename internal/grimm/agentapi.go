@@ -28,6 +28,9 @@ type Call struct {
 	Kind     string   `json:"kind"`     // bus post
 	Lines    int      `json:"lines"`    // peek, bus read
 	Timeout  int      `json:"timeout"`  // wait, in seconds
+	Workflow string   `json:"workflow"` // workflow request
+	Summary  string   `json:"summary"`  // workflow request
+	Host     string   `json:"host"`     // workflow request
 }
 
 // Caller is who an agent call is from.
@@ -62,6 +65,9 @@ var managerVerbs = map[string]bool{"hire": true, "say": true, "stop": true, "arc
 func (s *Service) AgentCall(ctx context.Context, changes *fleet.Changes, account int64, host, agent string, c Call) (string, error) {
 	if c.Verb == "wait" {
 		return s.wait(ctx, changes, account, host, agent, c)
+	}
+	if c.Verb == "workflow" && len(c.Args) > 0 && c.Args[0] == "request" {
+		return s.requestWorkflow(ctx, account, host, agent, c)
 	}
 	var out string
 	err := pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
@@ -161,6 +167,16 @@ func (s *Service) AgentCall(ctx context.Context, changes *fleet.Changes, account
 				out, err = "removed: "+removed, rerr
 			default:
 				return badRequest("directive list | add <rule> | remove <n>")
+			}
+			return err
+		case "workflow":
+			switch arg(0) {
+			case "", "list":
+				out, err = workflowListText(ctx, tx, sess.ID)
+			case "status":
+				out, err = workflowStatusText(ctx, tx, sess.ID, arg(1))
+			default:
+				return badRequest("workflow request --workflow <id|name> <input>|- | list | status <id>")
 			}
 			return err
 		case "bus-read":

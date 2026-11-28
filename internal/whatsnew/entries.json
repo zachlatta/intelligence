@@ -8,6 +8,30 @@
     "mediaAlt": "A workflow editor in a local demo, headed Email Task (GPT-6.2 Sol Ultrafast), with the note that it is a model variant of Email Task: its steps and prompt come from there, only its orchestrator model and trigger are its own, and a Detach button."
   },
   {
+    "id": "grimm-ux-polish",
+    "released": "2026-11-27",
+    "title": "Grimm UX polish and inline live-worker cap editor",
+    "summary": "Grimm now includes an inline worker-cap stepper popover in the header (replacing the browser prompt) that validates inline, updates all open tabs live, and notifies the running manager when the cap changes. The composer moves image and file drafts inside the box with a paperclip button, live upload progress, send locking and per-session draft persistence; the thread adds boxed tool icons, centered update pills, callout notices, pulsing status dots, kind-colored bus borders, a tablet Quota drawer and 390px phone refinements.",
+    "media": "grimm-ux-polish.gif",
+    "mediaAlt": "A local demo of the Grimm page showing the polished thread, an image draft inside the composer with live status, opening the inline Workers cap stepper popover, and saving a new cap with a live header update and green confirmation toast."
+  },
+  {
+    "id": "grimm-workflow-approval",
+    "released": "2026-11-27",
+    "title": "Approve and monitor workflow runs from Grimm",
+    "summary": "The Grimm manager can now propose starting a saved workflow (intelligence grimm ctl workflow request) without launching it on its own. Each request appears as a live card in the Grimm thread where you can edit the task input, approve and start the run, or reject it from your signed-in browser. Once started, the card streams live status, step progress, gate outcomes, waiting questions or sign-off prompts, and a link to the run page, while waking Grimm on run milestones.",
+    "media": "grimm-workflow-approval.png",
+    "mediaAlt": "A local demo of the Grimm thread showing two live workflow cards: an approved Ship Feature run waiting on owner sign-off with passed step and gate badges and a Review & sign off button, and a pending Nightly Audit request with Approve & start, Edit input, and Reject buttons."
+  },
+  {
+    "id": "grimm-host-resources",
+    "released": "2026-11-27",
+    "title": "Live host resources in the Grimm header",
+    "summary": "The Grimm page header now shows a live resource pill in the upper right for the session's host: CPU, memory, disk, and load or pressure with color thresholds. Hover on desktop (or tap on a phone) for a detail card with CPU average and peak, 1/5/15-minute load per CPU, memory and swap headroom, Paseo cgroup memory, disk I/O and busy time, PSI pressure, filesystems, OOM kills, the session's busiest agents, and the reading's age (stale readings are marked). Updates stream live via the session's SSE feed.",
+    "media": "grimm-host-resources.png",
+    "mediaAlt": "A local demo of the Grimm page showing the live host resource pill for dev-box in the upper right of the header with its hover detail card open, displaying CPU, load, memory and swap, Paseo cgroup memory, disk I/O, PSI pressure, filesystems, OOM kills, and busiest session agents."
+  },
+  {
     "id": "grimm-desk-default",
     "released": "2026-11-27",
     "title": "Grimm starts in desk",

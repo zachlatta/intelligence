@@ -36,7 +36,7 @@ let toastTimer;
 function toast(msg, bad) {
   let t = $("#g-toast");
   if (!t) { t = el("div", "g-toast"); t.id = "g-toast"; t.setAttribute("role", "status"); document.body.append(t); }
-  t.textContent = msg; t.className = "g-toast" + (bad ? " bad" : ""); t.hidden = false;
+  t.textContent = msg; t.className = "g-toast " + (bad ? "bad" : "ok"); t.hidden = false;
   clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 4200);
 }
 
@@ -207,6 +207,7 @@ function describeTool(item) {
           case "roster": labels.push("Checked the roster"); icon = "roster"; break;
           case "quota": labels.push("Checked plan headroom"); icon = "quota"; break;
           case "directive": labels.push({ add: "Added a standing directive", remove: "Removed a directive" }[args[0]] || "Read the directives"); icon = "directive"; break;
+          case "workflow": labels.push({ request: `Requested workflow ${flag(args, "--workflow") || ""}`.trim(), status: "Checked workflow status" }[args[0]] || "Listed workflow runs"); icon = "tool"; break;
           default: labels.push("grimm " + call.join(" ").slice(0, 80));
         }
       }
@@ -264,7 +265,11 @@ async function loadAttachment(id, holder) {
   const [name, type, data] = row;
   if (data) {
     const img = el("img"); img.alt = name; img.src = `data:${type};base64,${data}`; img.loading = "lazy";
-    img.addEventListener("click", () => { const box = el("div", "g-lightbox"); const big = el("img"); big.src = img.src; big.alt = name; box.append(big); box.onclick = () => box.remove(); document.body.append(box); });
+    img.addEventListener("click", () => {
+      const box = el("div", "g-lightbox"); box.setAttribute("role", "dialog"); box.setAttribute("aria-label", name);
+      const big = el("img"); big.src = img.src; big.alt = name;
+      box.append(big); box.onclick = () => box.remove(); document.body.append(box);
+    });
     holder.append(img);
   } else {
     const f = el("span", "g-file"); f.textContent = name; holder.append(f);
@@ -273,6 +278,7 @@ async function loadAttachment(id, holder) {
 function statusHTML(st) {
   if (st === "running") return '<span class="g-st running" aria-label="running"></span>';
   if (st === "failed" || st === "error") return '<span class="g-st error" aria-label="failed">✕</span>';
+  if (st === "unknown") return '<span class="g-st unknown" aria-label="unknown">·</span>';
   return '<span class="g-st done" aria-label="done">✓</span>';
 }
 function renderItem(it, isLast) {
@@ -298,6 +304,7 @@ function renderItem(it, isLast) {
       if (names.length) label = label.replace(new RegExp(`\\b(${names.map((n) => n.replace(/[-]/g, "\\-")).join("|")})\\b`, "g"), (m) => chipHTML(m));
       node = el("div", "g-tool", `<div class="g-tool-row"><span class="g-tool-ico">${ICONS[d.icon] || ICONS.tool}</span><span class="g-tool-label">${label}</span>${statusHTML(d.info.status)}</div>
         <div class="g-tool-detail">${d.info.command ? `<pre class="cmd">${esc(d.info.command)}</pre>` : `<pre class="cmd">${esc(JSON.stringify(d.info.input || d.info.detail || {}, null, 2))}</pre>`}${d.info.output ? `<pre>${esc(d.info.output)}</pre>` : ""}</div>`);
+      node.dataset.icon = d.icon || "tool";
       if (S.items.get(it.item_id)?._open) node.classList.add("open");
       $(".g-tool-row", node).addEventListener("click", (e) => {
         if (e.target.closest(".g-wchip")) return;
@@ -308,8 +315,10 @@ function renderItem(it, isLast) {
     }
     case "update": {
       const sums = (data.summaries || []).map(esc).join(" · ");
-      node = el("div", "", `<div class="g-update" role="button" tabindex="0">⚡ <b>Update</b> ${sums}</div><div class="g-update-detail" hidden><pre>${esc(it.body)}</pre></div>`);
-      $(".g-update", node).addEventListener("click", () => { const dd = $(".g-update-detail", node); dd.hidden = !dd.hidden; });
+      node = el("div", "", `<div class="g-update" role="button" tabindex="0"><span class="g-uline">⚡ <b>Update</b> ${sums}</span></div><div class="g-update-detail" hidden><pre>${esc(it.body)}</pre></div>`);
+      const toggle = () => { const dd = $(".g-update-detail", node); dd.hidden = !dd.hidden; };
+      $(".g-update", node).addEventListener("click", toggle);
+      $(".g-update", node).addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
       break;
     }
     case "command":
@@ -317,6 +326,9 @@ function renderItem(it, isLast) {
       break;
     case "divider":
       node = el("div", "g-divider", esc(it.body));
+      break;
+    case "workflow_request":
+      node = window.grimmRuns ? window.grimmRuns.renderCard(it) : el("div", "g-notice", esc(it.body));
       break;
     default:
       node = el("div", "g-notice" + (data.level === "error" ? " error" : ""), md(it.body));
@@ -335,6 +347,7 @@ function lastAssistantID() {
   return "";
 }
 function upsertItems(items, reset) {
+  items = items || [];
   const stick = reset || (nearBottom() && !loadingOlder);
   const box = $("#g-items");
   if (reset) {
@@ -403,7 +416,7 @@ async function loadOlder() {
   }
 }
 
-// ---------- header and manager ----------
+// ---------- header, worker cap popover, and manager ----------
 function renderSession() {
   const s = S.session;
   if (!s.id) return;
@@ -426,12 +439,72 @@ function renderSession() {
   if (s.pending_updates && !working) label += ` · ${s.pending_updates} update${s.pending_updates === 1 ? "" : "s"} queued`;
   if (s.host_online === false) label += ` · ${s.host} offline`;
   $("#g-pill-label").textContent = label;
-  pill.title = `Manager: ${s.manager_provider ? s.manager_provider + "/" + s.manager_model : "antigravity/gemini-4-neon-medium"}${s.manager_login ? " on " + s.manager_login : ""}${s.manager_error ? "\n" + s.manager_error : ""}`;
+  const mgrAgent = s.manager_agent_id ? " · agent " + String(s.manager_agent_id).slice(0, 8) : "";
+  const mgrTurns = s.manager_turns != null ? ` · ${s.manager_turns} turns` : "";
+  pill.title = `Manager: ${s.manager_provider ? s.manager_provider + "/" + s.manager_model : "antigravity/gemini-4-neon-medium"}${s.manager_login ? " on " + s.manager_login : ""}${mgrAgent}${mgrTurns}${s.manager_error ? "\n" + s.manager_error : ""}`;
   $("#g-typing").hidden = !working;
   $("#g-typing-label").textContent = st === "starting" ? "Starting Grimm…" : "Grimm is working" + (s.manager_turn_at ? " · " + since(s.manager_turn_at) : "");
   $("#g-stop").hidden = st !== "working";
   const cur = $(`#g-items [data-id="${CSS.escape(lastAssistantID())}"] .g-md`);
   if (cur) cur.classList.toggle("cursor", st === "working");
+}
+
+let capSaving = false;
+function capLimit() { return +root.dataset.capLimit || 100; }
+function openCapPopover() {
+  const pop = $("#g-cap-pop"), btn = $("#g-cap"), inp = $("#g-cap-input"), err = $("#g-cap-error");
+  if (!pop) return;
+  err.textContent = "";
+  inp.value = String(S.session.max_workers || 20);
+  pop.hidden = false;
+  btn.setAttribute("aria-expanded", "true");
+  if (matchMedia("(max-width: 780px)").matches) {
+    const r = btn.getBoundingClientRect();
+    pop.style.top = Math.round(r.bottom + 6) + "px";
+  } else {
+    pop.style.top = "";
+  }
+  inp.focus();
+  inp.select();
+}
+function closeCapPopover(refocusBtn) {
+  const pop = $("#g-cap-pop"), btn = $("#g-cap");
+  if (!pop || pop.hidden) return;
+  pop.hidden = true;
+  btn.setAttribute("aria-expanded", "false");
+  $("#g-cap-error").textContent = "";
+  if (refocusBtn) btn.focus();
+}
+async function saveCapPopover() {
+  if (capSaving) return;
+  const pop = $("#g-cap-pop"), inp = $("#g-cap-input"), err = $("#g-cap-error"), saveBtn = $("#g-cap-save");
+  if (!pop || pop.hidden) return;
+  const limit = capLimit();
+  const raw = inp.value.trim();
+  const n = Number(raw);
+  if (!raw || !Number.isInteger(n) || n < 1 || n > limit) {
+    err.textContent = `Enter a whole number from 1 to ${limit}.`;
+    return;
+  }
+  err.textContent = "";
+  if (n === Number(S.session.max_workers)) {
+    closeCapPopover(false);
+    return;
+  }
+  capSaving = true;
+  saveBtn.disabled = true;
+  try {
+    await api("PUT", `/api/grimm/sessions/${S.id}`, { maxWorkers: n });
+    S.session.max_workers = n;
+    renderSession();
+    closeCapPopover(false);
+    toast(`Worker cap set to ${n}.`);
+  } catch (e) {
+    err.textContent = e.message;
+  } finally {
+    capSaving = false;
+    saveBtn.disabled = false;
+  }
 }
 
 // ---------- team ----------
@@ -581,7 +654,7 @@ function logLine(e) {
     const d = describeTool(it);
     const what = d.info.command || d.info.detail.filePath || d.info.detail.query || "";
     const failed = d.info.status === "failed";
-    return `<span class="${failed ? "t-err" : "t-tool"}">[${esc(failed ? "Failed " + d.info.name : d.info.name)}]</span> ${esc(String(what).split("\n")[0].slice(0, 400))}${d.info.output && !failed ? "" : ""}`;
+    return `<span class="${failed ? "t-err" : "t-tool"}">[${esc(failed ? "Failed " + d.info.name : d.info.name)}]</span> ${esc(String(what).split("\n")[0].slice(0, 400))}`;
   }
   if (e.kind === "reasoning") return `<span class="t-think">[Thinking] ${esc(String(e.text || "").slice(0, 600))}</span>`;
   if (e.kind === "user_message") return `<span class="t-tool">[Message]</span> ${esc(String(e.text || "").slice(0, 600))}`;
@@ -618,8 +691,8 @@ function connect() {
   const es = new EventSource(`/api/grimm/sessions/${S.id}/stream`);
   S.es = es;
   const conn = $("#g-conn");
-  es.onopen = () => { conn.classList.add("on"); conn.setAttribute("aria-label", "Live"); };
-  es.onerror = () => { conn.classList.remove("on"); conn.setAttribute("aria-label", "Reconnecting"); };
+  es.onopen = () => { conn.classList.add("on"); conn.title = "Live connection"; conn.setAttribute("aria-label", "Live"); };
+  es.onerror = () => { conn.classList.remove("on"); conn.title = "Reconnecting…"; conn.setAttribute("aria-label", "Reconnecting"); };
   es.addEventListener("state", (e) => {
     const d = JSON.parse(e.data);
     const was = S.session.manager_state;
@@ -637,51 +710,253 @@ function connect() {
   });
   es.addEventListener("thread", (e) => {
     const d = JSON.parse(e.data);
-    upsertItems(d.items, d.reset);
+    upsertItems(d.items || [], d.reset);
     if (d.reset) { S.older = !!d.more; $("#g-older").hidden = !S.older; }
   });
-  es.addEventListener("bus", (e) => addBus(JSON.parse(e.data).items));
-  es.addEventListener("activity", (e) => addFeed(JSON.parse(e.data).items));
+  es.addEventListener("bus", (e) => addBus(JSON.parse(e.data).items || []));
+  es.addEventListener("activity", (e) => addFeed(JSON.parse(e.data).items || []));
+  es.addEventListener("workflow_runs", (e) => { if (window.grimmRuns) window.grimmRuns.update(JSON.parse(e.data).items || []); });
+  es.addEventListener("host_resources", (e) => document.dispatchEvent(new CustomEvent("grimm:host-resources", { detail: JSON.parse(e.data) })));
 }
 
-// ---------- composer ----------
+// ---------- composer & inline attachment drafts ----------
+const MAX_ATTACHMENTS = 8;
+const MAX_FILE_BYTES = 4 * 1024 * 1024;
+const MAX_TOTAL_BYTES = 8 * 1024 * 1024;
+const drafts = [];
+let checking = 0;
+let sending = false;
+
+function draftStorageKey() { return S.id ? `grimm:draft:${S.id}` : ""; }
+function saveTextDraft(val) {
+  try {
+    const k = draftStorageKey();
+    if (!k) return;
+    if (val) sessionStorage.setItem(k, val); else sessionStorage.removeItem(k);
+  } catch (_) { /* ignore storage quota/privacy errors */ }
+}
+function loadTextDraft() {
+  try {
+    const k = draftStorageKey();
+    return k ? (sessionStorage.getItem(k) || "") : "";
+  } catch (_) { return ""; }
+}
+
+function attachStatus(msg, isError) {
+  const s = $("#g-attach-status");
+  if (!s) return;
+  s.textContent = msg || "";
+  s.classList.toggle("is-error", !!isError);
+}
+function showAttachCount() {
+  const n = drafts.length;
+  if (!n) { attachStatus(""); return; }
+  const noun = drafts.every((d) => d.isImage) ? (n === 1 ? "image" : "images") : (n === 1 ? "file" : "files");
+  attachStatus(`${n} ${noun} ready · ${MAX_ATTACHMENTS} max per message`);
+}
+function fileBadge(name) {
+  const dot = name.lastIndexOf(".");
+  const ext = dot > 0 ? name.slice(dot + 1).replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 4) : "";
+  return ext || "FILE";
+}
+function fileLabel(file, detectedType) {
+  const raw = (file.name || "").trim();
+  if (raw) return raw;
+  const ext = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp" }[detectedType || file.type];
+  return ext ? `pasted-image.${ext}` : "pasted-file";
+}
+async function detectImageType(file) {
+  try {
+    const header = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+    const at = (off, ...bytes) => bytes.every((b, i) => header[off + i] === b);
+    if (at(0, 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) return "image/png";
+    if (at(0, 0xff, 0xd8, 0xff)) return "image/jpeg";
+    if (at(0, 0x47, 0x49, 0x46, 0x38) && (header[4] === 0x37 || header[4] === 0x39) && header[5] === 0x61) return "image/gif";
+    if (at(0, 0x52, 0x49, 0x46, 0x46) && at(8, 0x57, 0x45, 0x42, 0x50)) return "image/webp";
+  } catch (_) { /* unreadable */ }
+  return "";
+}
+function renderDrafts() {
+  const list = $("#g-attach-drafts");
+  if (!list) return;
+  list.hidden = !drafts.length;
+  list.replaceChildren();
+  drafts.forEach((d, i) => {
+    const li = el("li", "g-attach-draft"); li.title = d.name;
+    if (d.isImage && d.preview) {
+      const img = el("img"); img.src = d.preview; img.alt = d.name;
+      li.append(img);
+    } else {
+      const box = el("div", "g-attach-draft-file", `<b>${esc(fileBadge(d.name))}</b><span>${esc(d.name)}</span>`);
+      li.append(box);
+    }
+    const rm = el("button", "g-draft-remove", "×");
+    rm.type = "button"; rm.disabled = sending;
+    rm.setAttribute("aria-label", `Remove ${d.name}`);
+    rm.addEventListener("click", () => {
+      if (sending) return;
+      if (d.preview) URL.revokeObjectURL(d.preview);
+      drafts.splice(i, 1);
+      renderDrafts();
+      showAttachCount();
+      const buttons = $$(".g-draft-remove", list);
+      (buttons[Math.min(i, buttons.length - 1)] || $("#g-attach-btn")).focus();
+    });
+    li.append(rm);
+    list.append(li);
+  });
+}
+async function addFiles(fileList) {
+  const incoming = Array.from(fileList || []);
+  if (sending || !incoming.length) return;
+  checking++;
+  $("#g-send").disabled = true;
+  const errors = new Set();
+  try {
+    for (const file of incoming) {
+      if (drafts.length >= MAX_ATTACHMENTS) {
+        errors.add(`Attach at most ${MAX_ATTACHMENTS} files per message.`);
+        break;
+      }
+      if (!file.size || file.size > MAX_FILE_BYTES) {
+        errors.add("Files must be nonempty and 4 MiB or smaller.");
+        continue;
+      }
+      const total = drafts.reduce((sum, d) => sum + d.file.size, 0);
+      if (total + file.size > MAX_TOTAL_BYTES) {
+        errors.add("Total attachments must be 8 MiB or smaller.");
+        continue;
+      }
+      const imgType = await detectImageType(file);
+      const isImage = !!imgType;
+      const name = fileLabel(file, imgType);
+      const preview = isImage ? URL.createObjectURL(file.type === imgType ? file : file.slice(0, file.size, imgType)) : "";
+      drafts.push({ file, name, isImage, preview, reference: null });
+    }
+    renderDrafts();
+    if (errors.size) attachStatus(`${drafts.length} ready. ${[...errors].join(" ")}`, true);
+    else showAttachCount();
+  } finally {
+    $("#g-send").disabled = --checking > 0;
+  }
+}
+function readFileBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read file."));
+    reader.onload = () => resolve(String(reader.result || "").split(",")[1] || "");
+    reader.readAsDataURL(file);
+  });
+}
+async function uploadDrafts(rawText) {
+  for (let i = 0; i < drafts.length; i++) {
+    const d = drafts[i];
+    if (d.reference) continue;
+    attachStatus(`Uploading ${d.isImage ? "image" : "file"} ${i + 1} of ${drafts.length}…`);
+    const data = await readFileBase64(d.file);
+    const res = await api("POST", "/api/attachments", { name: d.name, data });
+    d.reference = res.reference;
+  }
+  if (!drafts.length) return rawText;
+  const heading = drafts.every((d) => d.isImage) ? "Attached images:" : "Attached files:";
+  return (rawText ? rawText + "\n\n" : "") + heading + "\n" + drafts.map((d) => d.reference).join("\n");
+}
+function setSending(active) {
+  sending = active;
+  $("#g-send").disabled = active || checking > 0;
+  $("#g-attach-btn").disabled = active;
+  $("#g-input").readOnly = active;
+  $$(".g-draft-remove", $("#g-attach-drafts")).forEach((b) => { b.disabled = active; });
+}
+
 function autosize() {
   const t = $("#g-input");
   t.style.height = "auto";
   t.style.height = Math.min(216, t.scrollHeight) + "px";
 }
-let picker = null, sending = false;
 async function send() {
   const input = $("#g-input");
   const raw = input.value.trim();
-  if (sending || (!raw && !(picker && picker.hasFiles()))) return;
-  sending = true; $("#g-send").disabled = true;
+  if (sending || checking || (!raw && !drafts.length)) return;
+  const refocus = document.activeElement === input || document.activeElement === $("#g-send");
+  setSending(true);
   try {
-    const text = picker ? await picker.prompt(raw) : raw;
+    const text = await uploadDrafts(raw);
+    if (drafts.length) attachStatus("Sending message…");
     await api("POST", `/api/grimm/sessions/${S.id}/messages`, { text });
-    input.value = ""; autosize();
-    if (picker) picker.clear();
+    for (const d of drafts) if (d.preview) URL.revokeObjectURL(d.preview);
+    drafts.length = 0;
+    input.value = "";
+    saveTextDraft("");
+    autosize();
+    renderDrafts();
+    attachStatus("");
     scrollBottom(true);
   } catch (e) {
-    toast(e.message, true);
+    if (drafts.length) attachStatus(e.message, true);
+    else toast(e.message, true);
   } finally {
-    sending = false; $("#g-send").disabled = false;
+    setSending(false);
+    if (refocus && (document.activeElement === document.body || document.activeElement === input)) input.focus();
   }
 }
 
 function bindSession() {
+  const composer = $("#g-composer");
   const input = $("#g-input");
-  if (typeof imageAttachments === "function") picker = imageAttachments(input, $("#g-box"), { panel: $("#g-attach"), action: $("#g-actions") });
-  // the picker's button goes first in the composer's actions
-  const actions = $("#g-actions"); const pick = actions.querySelector(".attachment-actions");
-  if (pick) actions.prepend(pick);
-  $("#g-composer").addEventListener("submit", (e) => { e.preventDefault(); send(); });
+  const picker = $("#g-attach-picker");
+
+  // restore any unsent text draft for this session
+  const saved = loadTextDraft();
+  if (saved) { input.value = saved; autosize(); }
+
+  composer.addEventListener("submit", (e) => { e.preventDefault(); send(); });
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !matchMedia("(pointer: coarse)").matches) { e.preventDefault(); send(); }
   });
-  input.addEventListener("input", autosize);
+  input.addEventListener("input", () => { autosize(); saveTextDraft(input.value); });
+
+  $("#g-attach-btn").addEventListener("click", () => { if (!sending) picker.click(); });
+  picker.addEventListener("change", () => { addFiles(picker.files); picker.value = ""; });
+  composer.addEventListener("paste", (e) => {
+    const cb = e.clipboardData;
+    if (!cb) return;
+    let files = Array.from(cb.items || []).filter((it) => it.kind === "file").map((it) => it.getAsFile()).filter(Boolean);
+    if (!files.length && cb.files && cb.files.length) files = Array.from(cb.files);
+    if (!files.length) return;
+    e.preventDefault();
+    addFiles(files);
+  });
+  let dragDepth = 0;
+  composer.addEventListener("dragenter", (e) => {
+    if (!e.dataTransfer?.types.includes("Files")) return;
+    e.preventDefault();
+    dragDepth++;
+    if (!sending) composer.classList.add("is-dragging");
+  });
+  composer.addEventListener("dragover", (e) => {
+    if (!e.dataTransfer?.types.includes("Files")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = sending ? "none" : "copy";
+  });
+  composer.addEventListener("dragleave", () => {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) composer.classList.remove("is-dragging");
+  });
+  composer.addEventListener("drop", (e) => {
+    if (!e.dataTransfer?.types.includes("Files")) return;
+    e.preventDefault();
+    dragDepth = 0;
+    composer.classList.remove("is-dragging");
+    addFiles(e.dataTransfer.files);
+  });
+  window.addEventListener("pagehide", () => { for (const d of drafts) if (d.preview) URL.revokeObjectURL(d.preview); });
+
   $("#g-stop").addEventListener("click", async () => { try { await api("POST", `/api/grimm/sessions/${S.id}/manager/interrupt`, {}); } catch (e) { toast(e.message, true); } });
-  $("#g-suggest").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) { input.value = b.textContent; autosize(); input.focus(); } });
+  $("#g-suggest").addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (b && !sending) { input.value = b.textContent; saveTextDraft(input.value); autosize(); input.focus(); }
+  });
   $("#g-quota-refresh").addEventListener("click", async () => {
     $("#g-quota-meta").textContent = "Refreshing…";
     try {
@@ -693,16 +968,50 @@ function bindSession() {
     const live = S.workers.filter((w) => w.status !== "archived");
     if (!live.length) return toast("No workers to archive.");
     if (!confirm(`Archive all ${live.length} worker(s)? Files in the worktree stay.`)) return;
+    toast("Archiving… (this takes ~20 s per agent, in parallel)");
     try { const r = await api("POST", `/api/grimm/sessions/${S.id}/archive-workers`, {}); toast(`Archived ${r.archived.length}: ${r.archived.join(", ") || "none"}`); } catch (e) { toast(e.message, true); }
   });
-  $("#g-cap").addEventListener("click", async () => {
-    const limit = +root.dataset.capLimit || 100;
-    const v = prompt(`Live-worker cap for this session (1–${limit}):`, S.session.max_workers || 20);
-    if (v === null) return;
-    const n = parseInt(v, 10);
-    if (!(n >= 1 && n <= limit)) return toast(`The cap is 1 to ${limit}.`, true);
-    try { await api("PUT", `/api/grimm/sessions/${S.id}`, { maxWorkers: n }); toast(`Worker cap set to ${n}.`); } catch (e) { toast(e.message, true); }
+
+  // inline worker cap popover/stepper
+  $("#g-cap").addEventListener("click", () => {
+    if ($("#g-cap-pop").hidden) openCapPopover(); else closeCapPopover(false);
   });
+  $("#g-cap-dec").addEventListener("click", () => {
+    const inp = $("#g-cap-input");
+    const cur = parseInt(inp.value, 10) || S.session.max_workers || 20;
+    inp.value = String(Math.max(1, cur - 1));
+    $("#g-cap-error").textContent = "";
+    inp.focus();
+  });
+  $("#g-cap-inc").addEventListener("click", () => {
+    const inp = $("#g-cap-input");
+    const cur = parseInt(inp.value, 10) || S.session.max_workers || 20;
+    inp.value = String(Math.min(capLimit(), cur + 1));
+    $("#g-cap-error").textContent = "";
+    inp.focus();
+  });
+  $("#g-cap-save").addEventListener("click", saveCapPopover);
+  $("#g-cap-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); saveCapPopover(); }
+    else if (e.key === "Escape") { e.preventDefault(); closeCapPopover(true); }
+  });
+  $("#g-cap-input").addEventListener("input", () => { $("#g-cap-error").textContent = ""; });
+  $("#g-cap-pop").addEventListener("focusout", (e) => {
+    if ($("#g-cap-pop").hidden) return;
+    const next = e.relatedTarget;
+    if (next && $("#g-cap-wrap").contains(next)) return;
+    // blur outside popover saves valid changes (or closes if unchanged)
+    setTimeout(() => {
+      if ($("#g-cap-pop").hidden) return;
+      if ($("#g-cap-wrap").contains(document.activeElement)) return;
+      saveCapPopover();
+    }, 0);
+  });
+  document.addEventListener("mousedown", (e) => {
+    if ($("#g-cap-pop").hidden) return;
+    if (!$("#g-cap-wrap").contains(e.target)) saveCapPopover();
+  });
+
   $("#g-older").addEventListener("click", loadOlder);
   $("#g-thread").addEventListener("scroll", () => { if ($("#g-thread").scrollTop < 80) loadOlder(); }, { passive: true });
   $("#g-sessions").addEventListener("change", (e) => { location.href = "/grimm/" + e.target.value; });
@@ -729,11 +1038,17 @@ function bindSession() {
   $("#g-focus-stop").addEventListener("click", async () => { try { const r = await api("POST", `/api/grimm/sessions/${S.id}/workers/${encodeURIComponent(S.focus)}/stop`, {}); toast(r.message); } catch (e) { toast(e.message, true); } });
   $("#g-focus-archive").addEventListener("click", async () => {
     const name = S.focus; if (!name || !confirm(`Archive ${name}? Its files stay.`)) return;
+    toast(`Archiving ${name}…`);
     try { await api("POST", `/api/grimm/sessions/${S.id}/workers/${encodeURIComponent(name)}/archive`, {}); toast(`Archived ${name}.`); } catch (e) { toast(e.message, true); }
   });
   $("#g-tabs").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) setTab(b.dataset.tab); });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && S.focus && !e.target.closest(".g-box")) closeFocus();
+    if (e.key === "Escape") {
+      const lb = $(".g-lightbox");
+      if (lb) { lb.remove(); return; }
+      if (!$("#g-cap-pop").hidden) { closeCapPopover(true); return; }
+      if (S.focus && !e.target.closest(".g-box")) { closeFocus(); return; }
+    }
     if (e.key === "/" && (document.activeElement === document.body || !document.activeElement)) { e.preventDefault(); input.focus(); }
   });
   setInterval(() => { renderSession(); if (S.workers.some((w) => w.status === "running")) renderTeam(); }, 1000);
@@ -772,5 +1087,5 @@ function bindNew() {
 
 if (root) bindSession(); else bindNew();
 // for tests and the console
-window.grimmLabels = { describeTool, grimmCalls, md };
+window.grimmLabels = { describeTool, grimmCalls, md, statusHTML };
 })();

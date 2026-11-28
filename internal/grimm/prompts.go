@@ -39,6 +39,7 @@ func managerPrompt(s Session, directives []string, first []string) string {
 - `+"`%[4]s wait <name...> [--timeout S]`"+`: block until they finish. Use only for short waits.
 - `+"`%[4]s stop <name>`"+`: interrupt a worker's turn. `+"`%[4]s archive <name|all>`"+`: archive finished workers (files stay).
 - `+"`%[4]s directive list | add \"<rule>\" | remove <n>`"+`: standing rules every future agent inherits.
+- `+"`%[4]s workflow request --workflow <id|name> [--summary \"<why>\"] [--host H] - <<'EOF'`"+`: propose starting a saved workflow run (creates a pending approval card for the human in the web UI; never starts a run itself). `+"`%[4]s workflow list`"+` and `+"`%[4]s workflow status <id>`"+` show requested and running workflows.
 - `+"`%[5]s read`"+`: the workers' shared message board.
 
 ## How the session works

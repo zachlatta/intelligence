@@ -35,15 +35,25 @@ var grimmJS []byte
 //go:embed grimm.css
 var grimmCSS []byte
 
+//go:embed grimm_host.js
+var grimmHostJS []byte
+
+//go:embed grimm_host.css
+var grimmHostCSS []byte
+
 var (
-	grimmTmpl   = template.Must(template.New("grimm").Funcs(localFuncs).Funcs(template.FuncMap{"short": short}).Parse(grimmHTML + layoutHTML))
-	grimmScript = asset("grimm.js", "text/javascript; charset=utf-8", grimmJS)
-	grimmStyle  = asset("grimm.css", "text/css; charset=utf-8", grimmCSS)
+	grimmTmpl       = template.Must(template.New("grimm").Funcs(localFuncs).Funcs(template.FuncMap{"short": short}).Parse(grimmHTML + layoutHTML))
+	grimmScript     = asset("grimm.js", "text/javascript; charset=utf-8", grimmJS)
+	grimmStyle      = asset("grimm.css", "text/css; charset=utf-8", grimmCSS)
+	grimmHostScript = asset("grimm_host.js", "text/javascript; charset=utf-8", grimmHostJS)
+	grimmHostStyle  = asset("grimm_host.css", "text/css; charset=utf-8", grimmHostCSS)
 )
 
 func (a *app) grimmRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /grimm.js", grimmScript)
 	mux.HandleFunc("GET /grimm.css", grimmStyle)
+	mux.HandleFunc("GET /grimm_host.js", grimmHostScript)
+	mux.HandleFunc("GET /grimm_host.css", grimmHostStyle)
 	mux.HandleFunc("GET /grimm/{id}", a.page(func(v viewer) http.HandlerFunc { return a.grimmPage(v) }))
 	mux.HandleFunc("POST /api/grimm/sessions", a.write(a.grimmCreate))
 	mux.HandleFunc("PUT /api/grimm/sessions/{id}", a.write(a.grimmUpdate))
@@ -63,6 +73,7 @@ func (a *app) grimmRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/grimm/sessions/{id}/stream", a.read(a.grimmStream))
 	mux.HandleFunc("GET /api/grimm/sessions/{id}/workers/{name}/stream", a.read(a.grimmWorkerStream))
 	mux.HandleFunc("POST "+grimm.AgentPath, a.hostWrite(a.grimmAgent))
+	a.grimmWorkflowRoutes(mux)
 }
 
 // grimmError answers err: a refusal with its status and message, anything else as 500.
@@ -485,10 +496,17 @@ func (a *app) grimmStream(v viewer) http.HandlerFunc {
 		}
 		agentsWake, stopAgents := a.changes.Subscribe(fleet.AgentsTopic(host))
 		defer stopAgents()
+		hostResWake, stopHostRes := a.changes.Subscribe(fleet.HostResourcesTopic(host))
+		defer stopHostRes()
 		transcripts := make(chan struct{}, 1)
+		wfRuns := make(chan struct{}, 1)
 		subs := map[string]func(){}
+		runSubs := map[string]func(){}
 		defer func() {
 			for _, s := range subs {
+				s()
+			}
+			for _, s := range runSubs {
 				s()
 			}
 		}()
@@ -510,7 +528,7 @@ func (a *app) grimmStream(v viewer) http.HandlerFunc {
 				go relay(ctx, done, ch, transcripts)
 				subs[agent] = func() { close(done); stop() }
 			}
-			return nil
+			return a.grimmFollowWorkflowRuns(ctx, v.pool, id, runSubs, wfRuns)
 		}
 		if err := follow(); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -521,7 +539,7 @@ func (a *app) grimmStream(v viewer) http.HandlerFunc {
 		w.Header().Set("X-Accel-Buffering", "no")
 		w.WriteHeader(http.StatusOK)
 
-		var lastState string
+		var lastState, lastWFRuns string
 		var quota []json.RawMessage
 		sendState := func(withQuota bool) error {
 			session, err := grimmJSON(ctx, v.pool, `SELECT to_jsonb(s) FROM grimm_session_status s WHERE id = $1`, id)
@@ -686,6 +704,9 @@ func (a *app) grimmStream(v viewer) http.HandlerFunc {
 			if err := sendRows("bus", busQ, &lastBus, 150); err != nil {
 				return err
 			}
+			if err := grimmSendWorkflowRuns(ctx, v.pool, w, flusher, id, &lastWFRuns); err != nil {
+				return err
+			}
 			return sendRows("activity", actQ, &lastEvent, 100)
 		}
 		if err := push(readAll, true); err != nil {
@@ -702,8 +723,18 @@ func (a *app) grimmStream(v viewer) http.HandlerFunc {
 				what = readAll
 			case <-agentsWake:
 				what = readState
+			case <-hostResWake:
+				if err := writeSSE(w, flusher, "host_resources", "", map[string]any{"host": host}); err != nil {
+					return
+				}
+				continue
 			case <-transcripts:
 				what = readThread
+			case <-wfRuns:
+				if err := grimmSendWorkflowRuns(ctx, v.pool, w, flusher, id, &lastWFRuns); err != nil {
+					return
+				}
+				continue
 			case <-keepalive.C:
 				if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
 					return

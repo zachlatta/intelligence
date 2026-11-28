@@ -64,6 +64,7 @@ func (a *app) decideProposal(action string) func(viewer) http.HandlerFunc {
 				workflowError(w, err)
 				return
 			}
+			a.notifyGrimmProposal(r.Context(), r.PathValue("id"))
 			writeJSON(w, map[string]string{"decision": action})
 		}
 	}

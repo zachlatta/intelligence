@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -395,5 +396,115 @@ func TestGrimmThreadLoadsOlderItems(t *testing.T) {
 	}
 	if seen != 450 {
 		t.Errorf("read %d items in all, want 450", seen)
+	}
+}
+
+func TestGrimmPageHasPolishAndInlineCap(t *testing.T) {
+	t.Parallel()
+	h, _ := dbServer(t)
+	stream := grimmRig(t, h)
+	rec := call(t, h, "POST", "/api/grimm/sessions", `{"host":"host-1","repo":"/w/app","maxWorkers":10}`, sameOriginFetch)
+	if rec.Code != 201 {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	var created struct{ ID, URL string }
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+	succeed(t, stream, stream.command(), `{"workspaceId":"w-app"}`)
+
+	page := get(t, h, created.URL, nil).Body.String()
+	for _, want := range []string{
+		`id="g-cap-pop"`,
+		`id="g-cap-dec"`,
+		`id="g-cap-input"`,
+		`id="g-cap-inc"`,
+		`id="g-cap-error"`,
+		`id="g-attach-drafts"`,
+		`id="g-attach-btn"`,
+		`id="g-attach-status"`,
+		`class="g-empty-mark"`,
+		`id="g-host"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("grimm page missing %s", want)
+		}
+	}
+	if strings.Contains(string(grimmJS), "prompt(") {
+		t.Error("grimm.js still uses window.prompt() for worker cap")
+	}
+
+	events, cancel := openSSE(t, h, "/api/grimm/sessions/"+created.ID+"/stream")
+	defer cancel()
+	for e := range events {
+		if e[0] == "state" && strings.Contains(e[1], `"max_workers":10`) {
+			break
+		}
+	}
+	if rec := call(t, h, "PUT", "/api/grimm/sessions/"+created.ID, `{"maxWorkers":6}`, sameOriginFetch); rec.Code != 204 {
+		t.Fatalf("update cap: %d %s", rec.Code, rec.Body)
+	}
+	for e := range events {
+		if e[0] == "state" && strings.Contains(e[1], `"max_workers":6`) {
+			return
+		}
+	}
+	t.Fatal("SSE stream did not push updated max_workers")
+}
+
+func TestGrimmEmptyThreadDoesNotThrow(t *testing.T) {
+	t.Parallel()
+	// Regression: a new session's first SSE thread event has items: null (or omitted).
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not available")
+	}
+	script := `
+const fs = require("fs");
+const vm = require("vm");
+const listeners = {};
+const elStub = (id) => ({
+  id, dataset: { session: "sess-1", capLimit: "100", olderSql: "" },
+  style: {}, classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+  setAttribute() {}, addEventListener() {}, focus() {}, select() {},
+  querySelector() { return null; }, querySelectorAll() { return []; },
+  append() {}, replaceChildren() {}, contains() { return false; },
+  scrollHeight: 0, scrollTop: 0, clientHeight: 100, hidden: false, innerHTML: "", textContent: "", value: "",
+});
+const byId = {};
+const doc = {
+  body: elStub("body"),
+  activeElement: null,
+  querySelector(sel) {
+    const m = sel.match(/^#([\w-]+)$/);
+    if (m) return (byId[m[1]] ||= elStub(m[1]));
+    return null;
+  },
+  querySelectorAll() { return []; },
+  addEventListener() {},
+  dispatchEvent() {},
+  createElement(tag) { return elStub(tag); },
+};
+function EventSource() {
+  return {
+    addEventListener(ev, fn) { (listeners[ev] ||= []).push(fn); },
+    close() {},
+  };
+}
+const ctx = {
+  document: doc, addEventListener() {}, location: { pathname: "/", href: "/" },
+  EventSource, CustomEvent: function(t, o) { return { type: t, detail: o && o.detail }; },
+  matchMedia: () => ({ matches: false }),
+  requestAnimationFrame: (fn) => fn(),
+  setInterval: () => 0, setTimeout: () => 0, clearTimeout: () => {},
+  CSS: { escape: (s) => s }, sessionStorage: { getItem: () => "", setItem() {}, removeItem() {} },
+  console,
+};
+ctx.window = ctx;
+vm.runInNewContext(fs.readFileSync("grimm.js", "utf8"), ctx);
+for (const payload of ['{"items":null,"reset":true,"more":false}', '{"reset":true,"more":false}']) {
+  for (const fn of listeners.thread || []) fn({ data: payload });
+}
+`
+	cmd := exec.Command("node", "-e", script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("grimm.js threw on empty thread event: %v\n%s", err, out)
 	}
 }

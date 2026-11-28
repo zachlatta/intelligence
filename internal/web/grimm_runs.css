@@ -1,0 +1,173 @@
+/* Live workflow approval & monitoring cards inside the Grimm thread */
+.gw-card {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--link);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: .65rem .8rem;
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+  min-width: 0;
+}
+.gw-card.gw-st-pending { border-left-color: var(--orange); }
+.gw-card.gw-st-running, .gw-card.gw-st-queued { border-left-color: var(--link); }
+.gw-card.gw-st-waiting, .gw-card.gw-st-warn { border-left-color: var(--orange); }
+.gw-card.gw-st-done { border-left-color: var(--green); }
+.gw-card.gw-st-error { border-left-color: var(--red); }
+.gw-card.gw-st-muted { border-left-color: var(--faint); opacity: .88; }
+
+.gw-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .5rem;
+  flex-wrap: wrap;
+}
+.gw-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.gw-ico { font-size: 13px; color: var(--orange); flex: none; }
+.gw-title { font-weight: 600; font-size: 13.5px; color: var(--fg); overflow-wrap: anywhere; }
+.gw-host { font-size: 11.5px; color: var(--muted); background: var(--bg-subtle); border: 1px solid var(--line); border-radius: 4px; padding: .05rem .35rem; }
+
+.gw-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: .1rem .55rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg-subtle);
+  color: var(--fg-2);
+  flex: none;
+}
+.gw-badge i { width: .45rem; height: .45rem; border-radius: 50%; background: var(--faint); }
+.gw-badge-pending, .gw-badge-waiting, .gw-badge-warn { color: var(--orange); border-color: var(--orange-line); background: var(--orange-bg); }
+.gw-badge-pending i, .gw-badge-waiting i, .gw-badge-warn i { background: var(--orange); }
+.gw-badge-running, .gw-badge-queued { color: var(--link); border-color: var(--line-strong); }
+.gw-badge-running i { background: var(--link); animation: g-pulse 1.2s ease-in-out infinite; }
+.gw-badge-done { color: var(--green); border-color: var(--green-line); background: var(--green-bg); }
+.gw-badge-done i { background: var(--green); }
+.gw-badge-error { color: var(--red); border-color: var(--red); }
+.gw-badge-error i { background: var(--red); }
+
+.gw-body { display: flex; flex-direction: column; gap: .45rem; min-width: 0; }
+.gw-summary { font-size: 13px; color: var(--fg); overflow-wrap: anywhere; }
+
+.gw-input-wrap { display: flex; flex-direction: column; gap: .25rem; }
+.gw-input {
+  margin: 0;
+  padding: .45rem .6rem;
+  border-radius: var(--control-radius);
+  border: 1px solid var(--line);
+  background: var(--bg-subtle);
+  color: var(--fg-2);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 14rem;
+  overflow-y: auto;
+}
+.gw-more {
+  align-self: flex-start;
+  border: 0;
+  background: transparent;
+  color: var(--link);
+  font: inherit;
+  font-size: 12px;
+  padding: 0;
+  cursor: pointer;
+}
+.gw-more:hover { text-decoration: underline; }
+
+.gw-edit { display: flex; flex-direction: column; gap: .4rem; }
+.gw-edit-label { font-size: 12px; font-weight: 600; color: var(--muted); }
+.gw-edit-area {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--control-radius);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 13px;
+  padding: .45rem .55rem;
+  resize: vertical;
+}
+
+.gw-progress {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .5rem;
+  font-size: 12.5px;
+  color: var(--fg-2);
+  flex-wrap: wrap;
+}
+.gw-time { font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+
+.gw-steps { display: flex; flex-wrap: wrap; gap: .3rem; }
+.gw-step {
+  display: inline-flex;
+  align-items: center;
+  gap: .25rem;
+  font-size: 11.5px;
+  padding: .1rem .45rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg-subtle);
+  color: var(--muted);
+  max-width: 100%;
+}
+.gw-step i { font-style: normal; font-size: 11px; }
+.gw-step small { font-size: 10px; text-transform: uppercase; letter-spacing: .03em; opacity: .75; margin-left: .15rem; }
+.gw-step-passed { color: var(--green); border-color: var(--green-line); background: var(--green-bg); }
+.gw-step-current { color: var(--link); border-color: var(--link); font-weight: 600; }
+.gw-step-waiting, .gw-step-stalled { color: var(--orange); border-color: var(--orange-line); background: var(--orange-bg); font-weight: 600; }
+.gw-step-failed { color: var(--red); border-color: var(--red); }
+
+.gw-callout {
+  border-radius: var(--control-radius);
+  padding: .5rem .6rem;
+  font-size: 12.5px;
+  display: flex;
+  flex-direction: column;
+  gap: .35rem;
+}
+.gw-callout-wait { border: 1px solid var(--orange-line); background: var(--orange-bg); color: var(--fg); }
+.gw-callout-err { border: 1px solid var(--red); background: var(--bg-subtle); color: var(--red); }
+.gw-callout-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; flex-wrap: wrap; }
+.gw-callout-note { margin: 0; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg-2); font-family: inherit; }
+
+.gw-actions { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+.gw-err { font-size: 12px; color: var(--red); }
+
+.gw-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .5rem;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--line);
+  padding-top: .4rem;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.gw-links { display: flex; align-items: center; gap: .65rem; flex-wrap: wrap; }
+.gw-link { color: var(--link); text-decoration: none; font-weight: 500; }
+.gw-link.muted { color: var(--muted); font-weight: 400; }
+.gw-link:hover { text-decoration: underline; }
+
+@media (max-width: 780px) {
+  .gw-card { padding: .55rem .65rem; }
+  .gw-actions { flex-direction: row; }
+  .gw-actions .btn { min-height: 36px; padding: .35rem .75rem; }
+  .gw-edit-area { font-size: 16px; }
+}
