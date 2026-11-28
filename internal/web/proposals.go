@@ -9,7 +9,7 @@ import (
 )
 
 func (a *app) proposalURL(r *http.Request, id string) string {
-	return a.baseURL(r) + "/workflow-proposals/" + id
+	return requestOrigin(a.cfg, r) + "/workflow-proposals/" + id
 }
 
 func (a *app) proposeWorkflow(acct accounts.Account, host string) http.HandlerFunc {

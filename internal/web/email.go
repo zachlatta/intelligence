@@ -26,25 +26,6 @@ var emailHTML string
 
 var emailTmpl = template.Must(template.New("email").Funcs(localFuncs).Funcs(template.FuncMap{"short": short, "ago": ago}).Parse(emailHTML + layoutHTML))
 
-// baseURL is the server's origin as the browser reaches it: PUBLIC_URL, else the request's.
-func (a *app) baseURL(r *http.Request) string {
-	if a.cfg.PublicURL != "" {
-		return strings.TrimRight(a.cfg.PublicURL, "/")
-	}
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	if p := r.Header.Get("X-Forwarded-Proto"); p == "https" || p == "http" {
-		scheme = p
-	}
-	host := r.Host
-	if h := r.Header.Get("X-Forwarded-Host"); h != "" {
-		host = h
-	}
-	return scheme + "://" + host
-}
-
 const emailOff = "Email triggers are off on this server: set GOOGLE_OAUTH_CLIENT_JSON (a Google OAuth client) and CONNECTIONS_KEY (openssl rand -base64 32)."
 
 func (a *app) emailOn(w http.ResponseWriter) bool {
@@ -71,7 +52,7 @@ func (a *app) gmailSignIn(v viewer) http.HandlerFunc {
 		if !a.emailOn(w) {
 			return
 		}
-		u, paste := a.mail.Start(v.acct.ID, a.baseURL(r))
+		u, paste := a.mail.Start(v.acct.ID, requestOrigin(a.cfg, r))
 		writeJSON(w, map[string]any{"url": u, "paste": paste})
 	}
 }
@@ -108,7 +89,7 @@ func (a *app) gmailConnect(v viewer) http.HandlerFunc {
 			http.Error(w, "no code and state: paste the whole address Google sent you to", http.StatusBadRequest)
 			return
 		}
-		addr, err := a.mail.Connect(r.Context(), v.acct.ID, req.Code, req.State, a.baseURL(r))
+		addr, err := a.mail.Connect(r.Context(), v.acct.ID, req.Code, req.State, requestOrigin(a.cfg, r))
 		if err != nil {
 			emailError(w, err)
 			return

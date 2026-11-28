@@ -8,6 +8,14 @@
     "mediaAlt": "A local demo of the Grimm thread showing two live Factory Task workflow cards: one waiting on a clarification question with an inline Send reply box and Grimm mid-run guidance log (Grimm input and Grimm reply), and a second waiting on browser-only human sign-off with passed step and gate badges and a Review & sign off button."
   },
   {
+    "id": "install-host-without-checkout",
+    "released": "2026-11-28",
+    "title": "Install a host without cloning the repository",
+    "summary": "Account → Add a host now gives a one-line curl -fsSL <server>/install-host | bash command to install the Intelligence host client on any Linux or macOS machine without cloning the repository or installing Go. The server serves deploy/install-host with HOST_SERVER pre-filled; the script downloads the matching prebuilt binary from /api/host/binary/{os}/{arch}, verifies its SHA-256 checksum, and installs the systemd or launchd service. Running deploy/install-host from a checkout still works too.",
+    "media": "install-host-without-checkout.png",
+    "mediaAlt": "The Account page in a local demo showing the Add a host card with the one-line command curl -fsSL https://intelligence.example/install-host | bash, the optional checkout command underneath, and the enrollment code input."
+  },
+  {
     "id": "grimm-dictation-mobile",
     "released": "2026-11-28",
     "title": "Dictate to Grimm and a roomier mobile chat",

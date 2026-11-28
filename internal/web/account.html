@@ -51,8 +51,9 @@ for (const [id, path] of [["login", "/api/session"], ["signup", "/api/accounts"]
 
 <h2 class="section-title" id="add">Add a host</h2>
 <form id="claim" class="card form">
-  <p class="meta">On the host, from a checkout of the repository, run:</p>
-  <pre>HOST_SERVER={{.Server}} deploy/install-host</pre>
+  <p class="meta">On the host (no repository checkout or Go needed), run:</p>
+  <pre>curl -fsSL {{.Server}}/install-host | bash</pre>
+  <p class="meta">Or from a checkout of the repository: <code>HOST_SERVER={{.Server}} deploy/install-host</code>.</p>
   <p class="meta">It prints a code (also in <code>journalctl --user -u intelligence-host</code>). Enter it here within the hour.</p>
   <label for="code">Code</label>
   <input id="code" name="code" placeholder="ABCD-1234" autocomplete="off" autocapitalize="characters" required>

@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 # Install the host client on this machine: on Linux as a systemd user service, on macOS as a launchd
 # user agent. After that it keeps itself on the server's version (self-update), so this is needed
-# once per host. Run from a checkout of this repo, as the user whose Paseo daemon it reports (it
-# needs Go to build the client):
+# once per host. Run as the user whose Paseo daemon it reports:
 #
-#   deploy/install-host
+#   curl -fsSL https://<server>/install-host | bash
+#
+# Or from a checkout of this repo (builds from source when Go is installed, otherwise downloads the
+# binary from the server):
+#
+#   HOST_SERVER=https://<server> deploy/install-host
 #
 # The first run writes ~/.config/intelligence/host.env (mode 600) from HOST_SERVER in the
-# environment; later runs keep that file and only rebuild and restart. A host with no key yet joins
+# environment; later runs keep that file and only update and restart. A host with no key yet joins
 # an account: this prints its code, to enter on the server's account page.
 #
 # Logs: Linux, journalctl --user -u intelligence-host; macOS, ~/Library/Logs/intelligence-host.log.
@@ -17,14 +21,26 @@
 # Portable to macOS's bash 3.2 and BSD tools: no timeout, journalctl or GNU-only flags there.
 set -euo pipefail
 
-repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
+repo=""
+if [ -n "${0:-}" ] && [ -f "$0" ]; then
+  candidate=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null || true)
+  if [ -n "$candidate" ] && [ -f "$candidate/cmd/intelligence/main.go" ]; then
+    repo="$candidate"
+  fi
+fi
 conf_dir="$HOME/.config/intelligence"
 env_file="$conf_dir/host.env"
 key_file="$conf_dir/host.key"
 bin="$HOME/.local/bin/intelligence"
 case "$(uname -s)" in
-  Darwin) system=macos ;;
-  *) system=linux ;;
+  Darwin) system=macos; goos=darwin ;;
+  Linux) system=linux; goos=linux ;;
+  *) echo "unsupported OS: $(uname -s)" >&2; exit 1 ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64) goarch=amd64 ;;
+  arm64|aarch64) goarch=arm64 ;;
+  *) goarch="" ;;
 esac
 
 # a host installed before dev boxes were called hosts: take over its env file, key and unit
@@ -43,12 +59,47 @@ if [ ! -f "$env_file" ]; then
   echo "wrote $env_file"
 fi
 
-rev=$(git -C "$repo" rev-parse HEAD)
 mkdir -p "$(dirname "$bin")"
-(cd "$repo" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.buildCommit=$rev" \
-  -o "$bin.new" ./cmd/intelligence)
-# a rename, not a copy over the old file: macOS kills a process whose binary changes in place
-mv "$bin.new" "$bin"
+if [ -n "$repo" ] && command -v go >/dev/null 2>&1; then
+  rev=$(git -C "$repo" rev-parse HEAD)
+  (cd "$repo" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.buildCommit=$rev" \
+    -o "$bin.new" ./cmd/intelligence)
+  # a rename, not a copy over the old file: macOS kills a process whose binary changes in place
+  mv "$bin.new" "$bin"
+else
+  [ -n "$goarch" ] || { echo "unsupported architecture: $(uname -m)" >&2; exit 1; }
+  command -v curl >/dev/null 2>&1 || { echo "curl is required to download the intelligence binary" >&2; exit 1; }
+  server=$(sed -n 's/^HOST_SERVER=//p' "$env_file" | tail -1)
+  server="${server:-${HOST_SERVER:-}}"
+  : "${server:?no HOST_SERVER in $env_file}"
+  url="${server%/}/api/host/binary/$goos/$goarch"
+  hdr="$bin.headers"
+  cleanup_download() { rm -f "$bin.new" "$hdr"; }
+  trap cleanup_download EXIT
+  echo "downloading $url..."
+  curl -fsSL -D "$hdr" -o "$bin.new" "$url"
+  want_sha=$(tr -d '\r' < "$hdr" | awk -F':' 'tolower($1)=="x-intelligence-sha256"{v=$2; gsub(/^[ \t]+|[ \t]+$/, "", v)} END{print v}' | tr 'A-Z' 'a-z')
+  if [ -z "$want_sha" ]; then
+    echo "download from $url did not include X-Intelligence-Sha256 header" >&2
+    exit 1
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    got_sha=$(sha256sum "$bin.new" | awk '{print $1}')
+  elif command -v shasum >/dev/null 2>&1; then
+    got_sha=$(shasum -a 256 "$bin.new" | awk '{print $1}')
+  else
+    got_sha=""
+  fi
+  if [ -n "$got_sha" ] && [ "$got_sha" != "$want_sha" ]; then
+    echo "downloaded binary sha256 ($got_sha) does not match server header ($want_sha)" >&2
+    exit 1
+  fi
+  chmod 755 "$bin.new"
+  "$bin.new" version >/dev/null
+  # a rename, not a copy over the old file: macOS kills a process whose binary changes in place
+  mv "$bin.new" "$bin"
+  rm -f "$hdr"
+fi
 
 # wait_for_code prints the host's code from the log lines its command prints, for up to 30s
 wait_for_code() {
@@ -71,7 +122,25 @@ if [ "$system" = linux ]; then
     rm -rf "$unit_dir/intelligence-devbox.service" "$unit_dir/intelligence-devbox.service.d"
   fi
   mkdir -p "$unit_dir"
-  install -m 644 "$repo/deploy/intelligence-host.service" "$unit_dir/intelligence-host.service"
+  unit_tmp="$unit_dir/intelligence-host.service.new"
+  cat > "$unit_tmp" <<'EOF'
+[Unit]
+Description=Intelligence host client: reports this host's Paseo daemon to the server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# HOST_SERVER (and optional HOST_KEY_FILE, HOST_NAME, HOST_INTERVAL, HOST_PASEO_HOME, HOST_AUTOUPDATE)
+EnvironmentFile=%h/.config/intelligence/host.env
+ExecStart=%h/.local/bin/intelligence host
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+EOF
+  chmod 644 "$unit_tmp"
+  mv "$unit_tmp" "$unit_dir/intelligence-host.service"
   # earlier installs set the version in a drop-in; the binary carries it now
   rm -f "$unit_dir/intelligence-host.service.d/version.conf"
   rmdir "$unit_dir/intelligence-host.service.d" 2>/dev/null || true
