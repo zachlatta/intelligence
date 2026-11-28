@@ -463,7 +463,7 @@ func TestGrimmHostWidgetRendersMetersDetailAndStaleState(t *testing.T) {
 		t.Errorf("old OOM pill should be lv-warn, not lv-crit:\n%s", oldOom)
 	}
 
-	// macOS hosts (no probe row -> probe_running: null, or probe_error: "unsupported") must not show "eBPF probe off",
+	// macOS hosts (Unsupported reports delete their host_probes row -> probe_running: null) must not show "eBPF probe off",
 	// whereas a Linux host with a failing probe (probe_running: false, probe_error: "dial ...") still shows it.
 	noProbeRow := `{
 		"session_id": "00000000-0000-4000-8000-000000000001",
@@ -490,12 +490,6 @@ func TestGrimmHostWidgetRendersMetersDetailAndStaleState(t *testing.T) {
 	}`
 	if out := run(noProbeRow); strings.Contains(out, "eBPF probe off") {
 		t.Errorf("null probe_running should not show eBPF probe off:\n%s", out)
-	}
-
-	unsupportedProbeRow := strings.Replace(noProbeRow, `"probe_running": null,`, `"probe_running": false,`, 1)
-	unsupportedProbeRow = strings.Replace(unsupportedProbeRow, `"probe_error": ""`, `"probe_error": "unsupported"`, 1)
-	if out := run(unsupportedProbeRow); strings.Contains(out, "eBPF probe off") {
-		t.Errorf("unsupported probe should not show eBPF probe off:\n%s", out)
 	}
 
 	brokenProbeRow := strings.Replace(noProbeRow, `"probe_running": null,`, `"probe_running": false,`, 1)
