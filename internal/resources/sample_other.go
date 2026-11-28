@@ -10,3 +10,6 @@ func (r *Reader) Sample(now time.Time) Sample {
 	s.DiskTotal, s.DiskAvailable = diskSpace(r.Home)
 	return s
 }
+
+// Walk reads /proc where available.
+func (w *AgentWalker) Walk() map[string]AgentProcs { return w.walkLinux() }

@@ -71,10 +71,14 @@ func (r *Registry) RecordHost(ctx context.Context, host string, rep resources.Re
 				host, o.At, o.PID, o.Comm, o.AgentID, int64(o.AnonRSS), int64(o.FileRSS), int64(o.ShmemRSS))
 		}
 		if p := rep.Probe; p != nil {
-			b.Queue(`INSERT INTO host_probes (host, running, version, error, tracked, received_at) VALUES ($1, $2, $3, $4, $5, $6)
-				ON CONFLICT (host) DO UPDATE SET running = EXCLUDED.running, version = EXCLUDED.version, error = EXCLUDED.error,
-				tracked = EXCLUDED.tracked, received_at = EXCLUDED.received_at`,
-				host, p.Running, p.Version, p.Error, p.Tracked, at)
+			if p.Unsupported {
+				b.Queue(`DELETE FROM host_probes WHERE host = $1`, host)
+			} else {
+				b.Queue(`INSERT INTO host_probes (host, running, version, error, tracked, received_at) VALUES ($1, $2, $3, $4, $5, $6)
+					ON CONFLICT (host) DO UPDATE SET running = EXCLUDED.running, version = EXCLUDED.version, error = EXCLUDED.error,
+					tracked = EXCLUDED.tracked, received_at = EXCLUDED.received_at`,
+					host, p.Running, p.Version, p.Error, p.Tracked, at)
+			}
 		}
 		if err := tx.SendBatch(ctx, b).Close(); err != nil {
 			return err

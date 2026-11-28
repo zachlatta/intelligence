@@ -1,12 +1,14 @@
 package resources
 
 import (
+	"encoding/binary"
 	"regexp"
 	"strconv"
 	"strings"
 )
 
-// Parsers for macOS's tools (sample_darwin.go). They build everywhere, so they are tested on Linux.
+// Parsers and process attribution helpers for macOS (sample_darwin.go, walk_darwin.go).
+// They build everywhere, so they are tested on Linux.
 
 func parseDarwinLoad(text string) ([3]float64, bool) {
 	var l [3]float64
@@ -77,4 +79,143 @@ func parseIostatCPU(text string) (float64, bool) {
 		return 0, false
 	}
 	return 100 - idle, true
+}
+
+// parseDarwinProcArgs2 extracts PASEO_AGENT_ID from a Darwin KERN_PROCARGS2 buffer.
+// Layout: int32 argc, exec_path\0, NUL padding, argc NUL-terminated argv strings,
+// followed by NUL-terminated envp KEY=VALUE strings.
+func parseDarwinProcArgs2(buf []byte) string {
+	if len(buf) < 4 {
+		return ""
+	}
+	argc := int(int32(binary.LittleEndian.Uint32(buf[:4])))
+	if argc < 0 {
+		return ""
+	}
+	i := 4
+	// Skip exec_path up to its terminating NUL.
+	for i < len(buf) && buf[i] != 0 {
+		i++
+	}
+	if i >= len(buf) {
+		return ""
+	}
+	// Skip NUL padding between exec_path and argv[0].
+	for i < len(buf) && buf[i] == 0 {
+		i++
+	}
+	// Skip argc argument strings.
+	for arg := 0; arg < argc && i < len(buf); arg++ {
+		for i < len(buf) && buf[i] != 0 {
+			i++
+		}
+		if i < len(buf) {
+			i++
+		}
+	}
+	if i >= len(buf) {
+		return ""
+	}
+	return agentOf(buf[i:])
+}
+
+// darwinProcArgsBufSize returns the single reusable buffer size for KERN_PROCARGS2:
+// kern.argmax (1 MiB on modern macOS) so XNU's sysctl_procargsx does not silently
+// tail-truncate large argv+env payloads.
+func darwinProcArgsBufSize(argMax uint32, ok bool) int {
+	if ok && argMax >= 4096 && argMax <= 4<<20 {
+		return int(argMax)
+	}
+	return 1 << 20
+}
+
+// darwinProcArgsSlice validates the byte count returned by KERN_PROCARGS2. When XNU's
+// sysctl_procargsx receives a buffer smaller than argslen, it copies only the tail and
+// returns success with n == len(buf); rejecting n >= len(buf) avoids parsing a shifted offset.
+func darwinProcArgsSlice(buf []byte, n int) ([]byte, bool) {
+	if n <= 0 || n >= len(buf) {
+		return nil, false
+	}
+	return buf[:n], true
+}
+
+// machToTicks converts Mach absolute time units to 1/100 s CPU ticks (matching Linux USER_HZ)
+// without overflowing uint64 for long-running processes.
+func machToTicks(machTime, tbFreq uint64) uint64 {
+	if tbFreq == 0 {
+		return 0
+	}
+	return (machTime/tbFreq)*100 + (machTime%tbFreq)*100/tbFreq
+}
+
+type darwinProc struct {
+	pid     int
+	ppid    int
+	start   uint64
+	agentID string
+	mem     uint64
+	ticks   uint64
+	hasTask bool
+}
+
+type darwinCachedAgent struct {
+	start   uint64
+	agentID string
+}
+
+// resolveDarwinAgents attributes processes without a direct PASEO_AGENT_ID to the nearest
+// ancestor in procs that has one, guarding against PPID cycles.
+func resolveDarwinAgents(procs []darwinProc) {
+	byPID := make(map[int]int, len(procs))
+	for i := range procs {
+		byPID[procs[i].pid] = i
+	}
+	// state: 0 = unresolved, 1 = visiting (cycle guard), 2 = resolved
+	state := make([]uint8, len(procs))
+	var resolve func(idx int) string
+	resolve = func(idx int) string {
+		if procs[idx].agentID != "" {
+			state[idx] = 2
+			return procs[idx].agentID
+		}
+		if state[idx] != 0 {
+			return procs[idx].agentID
+		}
+		state[idx] = 1
+		ppid := procs[idx].ppid
+		if ppid > 0 && ppid != procs[idx].pid {
+			if pidx, ok := byPID[ppid]; ok {
+				procs[idx].agentID = resolve(pidx)
+			}
+		}
+		state[idx] = 2
+		return procs[idx].agentID
+	}
+	for i := range procs {
+		if state[i] == 0 {
+			resolve(i)
+		}
+	}
+}
+
+func aggregateDarwinProcs(procs []darwinProc, prev map[int]procTicks) (map[string]AgentProcs, map[int]procTicks) {
+	out := map[string]AgentProcs{}
+	next := map[int]procTicks{}
+	for _, p := range procs {
+		if p.agentID == "" {
+			continue
+		}
+		a := out[p.agentID]
+		a.Processes++
+		a.Mem += p.mem
+		if p.hasTask {
+			t := procTicks{start: p.start, ticks: p.ticks}
+			next[p.pid] = t
+			if old, ok := prev[p.pid]; ok && old.start == t.start && t.ticks >= old.ticks {
+				a.CPUTicks += t.ticks - old.ticks
+			}
+		}
+		out[p.agentID] = a
+	}
+	return out, next
 }
