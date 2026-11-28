@@ -296,12 +296,22 @@ func (a *app) grimmAgent(acct accounts.Account, host string) http.HandlerFunc {
 	}
 }
 
+// grimmModelOption is one available manager model on a host, offered in the new-session form.
+type grimmModelOption struct {
+	Provider        string   `json:"provider"`
+	Model           string   `json:"model"`
+	Label           string   `json:"label"`
+	Thinking        []string `json:"thinking,omitempty"`
+	DefaultThinking string   `json:"defaultThinking,omitempty"`
+}
+
 // grimmHost is a host the new-session form offers.
 type grimmHost struct {
-	Name   string
-	Online bool
-	Repos  []string
-	Desk   string // its desk checkout, the form's repository by default; "" when it has none
+	Name       string
+	Online     bool
+	Repos      []string
+	Desk       string // its desk checkout, the form's repository by default; "" when it has none
+	ModelsJSON string // JSON-encoded []grimmModelOption available on this host
 }
 
 // grimmPage is the Grimm page: session id's, or with none (the home page) the newest active one,
@@ -385,6 +395,44 @@ func grimmHosts(ctx context.Context, p *pgxpool.Pool) ([]grimmHost, error) {
 		if hosts[i].Desk, err = grimm.DeskRepo(ctx, p, hosts[i].Name); err != nil {
 			return nil, err
 		}
+	}
+	mrows, err := p.Query(ctx, `SELECT host, provider, id, coalesce(nullif(label, ''), id), coalesce(thinking, '{}'), coalesce(default_thinking, '')
+		FROM provider_models
+		WHERE provider NOT IN ('gemini', 'muse', 'copilot', 'opencode', 'pi', 'omp')
+		ORDER BY host,
+		  CASE WHEN provider = 'claude' AND id = 'claude-opus-5-5' THEN 0
+		       WHEN provider = 'claude' THEN 1
+		       WHEN provider = 'antigravity' THEN 2
+		       WHEN provider = 'codex' THEN 3
+		       ELSE 4 END,
+		  position, id`)
+	if err != nil {
+		return nil, err
+	}
+	byHost := map[string][]grimmModelOption{}
+	for mrows.Next() {
+		var host string
+		var opt grimmModelOption
+		if err := mrows.Scan(&host, &opt.Provider, &opt.Model, &opt.Label, &opt.Thinking, &opt.DefaultThinking); err != nil {
+			mrows.Close()
+			return nil, err
+		}
+		if opt.Provider == "antigravity" {
+			opt.Thinking, opt.DefaultThinking = nil, ""
+		}
+		byHost[host] = append(byHost[host], opt)
+	}
+	mrows.Close()
+	if err := mrows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range hosts {
+		opts := byHost[hosts[i].Name]
+		if opts == nil {
+			opts = []grimmModelOption{}
+		}
+		b, _ := json.Marshal(opts)
+		hosts[i].ModelsJSON = string(b)
 	}
 	return hosts, nil
 }
@@ -470,12 +518,31 @@ const grimmThreadPage = 200
 const grimmOlderSQL = `SELECT to_jsonb(t) FROM grimm_thread t WHERE t.session_id = :session
 AND (t.at, t.item_id) < (:at::timestamptz, :item) ORDER BY t.at DESC, t.item_id DESC LIMIT 200`
 
+// grimmQuotaCacheTTL bounds how often grimmStream re-queries the costly grimm_quota view per session.
+const grimmQuotaCacheTTL = 8 * time.Second
+
+func formatGrimmCursor(msg int64, epoch, seq int, bus, event int64) string {
+	return fmt.Sprintf("m%d:t%d.%d:b%d:e%d", msg, epoch, seq, bus, event)
+}
+
+func parseGrimmCursor(s string) (msg int64, epoch, seq int, bus, event int64, ok bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, 0, 0, 0, 0, false
+	}
+	n, err := fmt.Sscanf(s, "m%d:t%d.%d:b%d:e%d", &msg, &epoch, &seq, &bus, &event)
+	if err != nil || n != 5 || msg < 0 || epoch < 0 || seq < 0 || bus < 0 || event < 0 {
+		return 0, 0, 0, 0, 0, false
+	}
+	return msg, epoch, seq, bus, event, true
+}
+
 // grimmStream is GET /api/grimm/sessions/{id}/stream: the session's rows as server-sent events,
-// pushed as they change. It starts with a snapshot (state, the last 200 thread items, the bus and
-// the activity feed), then sends what changes; a reconnect starts with a fresh snapshot.
+// pushed as they change. It starts with a snapshot (or resumes incrementally from Last-Event-ID
+// so mobile sleep/wake does not wipe and re-render 200 items), then sends what changes.
 //
 //	state     {"session": grimm_session_status, "workers": [grimm_worker_status], "directives": [grimm_directives], "quota": [grimm_quota]}
-//	thread    {"items": [grimm_thread]}       manager words and tool calls grow in place: upsert by item_id
+//	thread    {"items": [grimm_thread]}       manager words, reasoning and tool calls grow in place: upsert by item_id
 //	bus       {"items": [grimm_messages]}     channel bus
 //	activity  {"items": [grimm_events]}
 func (a *app) grimmStream(v viewer) http.HandlerFunc {
@@ -539,8 +606,23 @@ func (a *app) grimmStream(v viewer) http.HandlerFunc {
 		w.Header().Set("X-Accel-Buffering", "no")
 		w.WriteHeader(http.StatusOK)
 
+		lastMsg, lastBus, lastEvent := int64(0), int64(0), int64(0)
+		lastEpoch, lastSeq := 0, 0
+		resumeHeader := r.Header.Get("Last-Event-ID")
+		if resumeHeader == "" {
+			resumeHeader = r.URL.Query().Get("lastEventId")
+		}
+		resuming := false
+		if rm, re, rs, rb, rev, ok := parseGrimmCursor(resumeHeader); ok {
+			lastMsg, lastEpoch, lastSeq, lastBus, lastEvent, resuming = rm, re, rs, rb, rev, true
+		}
+		cursorID := func() string {
+			return formatGrimmCursor(lastMsg, lastEpoch, lastSeq, lastBus, lastEvent)
+		}
+
 		var lastState, lastWFRuns string
 		var quota []json.RawMessage
+		var quotaAt time.Time
 		sendState := func(withQuota bool) error {
 			session, err := grimmJSON(ctx, v.pool, `SELECT to_jsonb(s) FROM grimm_session_status s WHERE id = $1`, id)
 			if err != nil {
@@ -558,26 +640,24 @@ func (a *app) grimmStream(v viewer) http.HandlerFunc {
 			if err != nil {
 				return err
 			}
-			if withQuota || quota == nil { // the plans view is the costly read: on session changes and every 15 seconds
+			if quota == nil || (withQuota && time.Since(quotaAt) >= grimmQuotaCacheTTL) {
 				if quota, err = grimmJSON(ctx, v.pool, `SELECT to_jsonb(q) FROM grimm_quota q WHERE session_id = $1
 					ORDER BY eligible DESC, score DESC NULLS LAST, provider, model, login`, id); err != nil {
 					return err
 				}
+				quotaAt = time.Now()
 			}
 			if len(session) == 0 {
 				return errors.New("session gone")
 			}
-			b, _ := json.Marshal(map[string]any{"session": session[0], "workers": workers, "directives": directives, "quota": quota})
+			payload := map[string]any{"session": session[0], "workers": workers, "directives": directives, "quota": quota}
+			b, _ := json.Marshal(payload)
 			if string(b) == lastState {
 				return nil
 			}
 			lastState = string(b)
-			_, err = fmt.Fprintf(w, "event: state\ndata: %s\n\n", b)
-			flusher.Flush()
-			return err
+			return writeSSE(w, flusher, "state", cursorID(), payload)
 		}
-		lastMsg, lastBus, lastEvent := int64(0), int64(0), int64(0)
-		lastEpoch, lastSeq := 0, 0
 		sent := map[string]string{} // item_id -> what was sent, for items that can still grow
 		sendThread := func(first bool) error {
 			q := `SELECT to_jsonb(t), t.item_id, coalesce(t.message_id, 0), coalesce(t.epoch, 0), coalesce(t.seq, 0) FROM grimm_thread t
@@ -647,7 +727,7 @@ func (a *app) grimmStream(v viewer) http.HandlerFunc {
 			if len(items) == 0 && !first {
 				return nil
 			}
-			return writeSSE(w, flusher, "thread", "", map[string]any{"items": items, "reset": first, "more": more})
+			return writeSSE(w, flusher, "thread", cursorID(), map[string]any{"items": items, "reset": first, "more": more})
 		}
 		sendRows := func(event, q string, last *int64, limit int) error {
 			rows, err := v.pool.Query(ctx, `SELECT * FROM (SELECT to_jsonb(x), x.id FROM (`+q+`) x WHERE x.session_id = $1 AND x.id > $2
@@ -673,33 +753,35 @@ func (a *app) grimmStream(v viewer) http.HandlerFunc {
 			if len(items) == 0 {
 				return nil
 			}
-			return writeSSE(w, flusher, event, "", map[string]any{"items": items})
+			return writeSSE(w, flusher, event, cursorID(), map[string]any{"items": items})
 		}
 		busQ := `SELECT id, session_id, sender, recipient, kind, body, created_at FROM grimm_messages WHERE channel = 'bus'`
 		actQ := `SELECT id, session_id, at, actor, event, level, text FROM grimm_events`
-		// What a wake reads: a manager's transcript only the thread (so its words keep up), a host
-		// report the state too, a session change and the 15-second tick everything.
+		// What a wake reads:
+		// - transcripts: ONLY thread (highest priority, lowest latency)
+		// - agentsWake:  ONLY state (status/workers, without re-querying thread or quota)
+		// - wake / tick: thread FIRST, then state (with cached quota), then bus/workflow/activity
 		const (
 			readThread = 1 << iota
 			readState
 			readAll
 		)
 		push := func(what int, first bool) error {
-			if what >= readAll {
-				if err := follow(); err != nil {
-					return err
-				}
+			if what == readThread {
+				return sendThread(first)
 			}
-			if what >= readState {
-				if err := sendState(what >= readAll); err != nil {
-					return err
-				}
+			if what == readState {
+				return sendState(false)
 			}
+			if err := follow(); err != nil {
+				return err
+			}
+			// Prioritize thread ahead of state/quota so streamed words and new messages flush first.
 			if err := sendThread(first); err != nil {
 				return err
 			}
-			if what < readAll {
-				return nil
+			if err := sendState(true); err != nil {
+				return err
 			}
 			if err := sendRows("bus", busQ, &lastBus, 150); err != nil {
 				return err
@@ -709,7 +791,7 @@ func (a *app) grimmStream(v viewer) http.HandlerFunc {
 			}
 			return sendRows("activity", actQ, &lastEvent, 100)
 		}
-		if err := push(readAll, true); err != nil {
+		if err := push(readAll, !resuming); err != nil {
 			return
 		}
 		keepalive := time.NewTicker(15 * time.Second)

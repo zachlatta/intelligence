@@ -62,7 +62,7 @@ var opusOnly = Policy{Providers: []string{OpusProvider}, Pinned: map[string]stri
 	DenyVendors: []string{"google"}, Reason: "reviewers and checkers run on claude/claude-opus-5-5 only"}
 
 var policies = map[string]Policy{
-	"manager":  {Providers: []string{ManagerProvider}, Pinned: map[string]string{ManagerProvider: ManagerModel}, Preferred: ManagerProvider, Reason: "the manager runs on antigravity/gemini-4-neon-medium"},
+	"manager":  {Providers: []string{ManagerProvider}, Pinned: map[string]string{ManagerProvider: ManagerModel}, Preferred: ManagerProvider, Reason: "the manager defaults to claude/claude-opus-5-5"},
 	"reviewer": opusOnly, "checker": opusOnly, "audit": opusOnly, "auditor": opusOnly,
 	"verifier": {Providers: []string{OpusProvider, "codex"}, Pinned: map[string]string{OpusProvider: OpusModel}, Preferred: OpusProvider,
 		DenyVendors: []string{"google"}, DisjointFrom: []string{"builder"},
@@ -248,6 +248,80 @@ func anyEligible(cs []Candidate) bool {
 		}
 	}
 	return false
+}
+
+// pickManager chooses the plan for session s's manager. With no explicit manager override on the
+// session it uses the default "manager" role policy (Claude Opus 5.5). With a session-level
+// ManagerProvider/ManagerModel override it prefers an eligible grimm_quota entry for that model
+// (falling back to the host's reported provider_models catalog when the model is not in a model
+// group, so any available non-disabled model can be tried).
+func pickManager(ctx context.Context, tx pgx.Tx, s Session) (Candidate, error) {
+	prov := strings.ToLower(strings.TrimSpace(s.ManagerProvider))
+	model := strings.TrimSpace(s.ManagerModel)
+	thinking := strings.TrimSpace(s.ManagerThinking)
+	if prov == "" && model == "" {
+		c, err := pick(ctx, tx, s, "manager", "")
+		if err != nil {
+			return Candidate{}, err
+		}
+		if thinking != "" && c.Provider != "antigravity" {
+			c.Thinking = thinking
+		}
+		return c, nil
+	}
+	if slices.Contains(disabledProviders, prov) {
+		return Candidate{}, badRequest("provider %s is disabled", prov)
+	}
+	cands, err := quota(ctx, tx, s.ID)
+	if err != nil {
+		return Candidate{}, err
+	}
+	var matching []Candidate
+	for _, c := range cands {
+		if c.Provider == prov && c.Model == model {
+			matching = append(matching, c)
+		}
+	}
+	if len(matching) > 0 {
+		// Prefer an eligible entry matching the requested thinking level, then any eligible entry for provider/model.
+		if thinking != "" {
+			for _, c := range matching {
+				if c.Eligible && c.Thinking == thinking {
+					return c, nil
+				}
+			}
+		}
+		for _, c := range matching {
+			if c.Eligible {
+				if thinking != "" && c.Provider != "antigravity" {
+					c.Thinking = thinking
+				}
+				return c, nil
+			}
+		}
+		var reasons []string
+		for _, c := range matching {
+			reasons = append(reasons, c.Model+" on "+c.Login+": "+c.Reason)
+			if len(reasons) == 4 {
+				break
+			}
+		}
+		return Candidate{}, conflict("%s/%s is not eligible on %s (%s)", prov, model, s.Host, strings.Join(reasons, "; "))
+	}
+	// Not in a model group: allow if the host reports the model in its catalog.
+	var available bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM provider_models WHERE host = $1 AND provider = $2 AND id = $3
+	)`, s.Host, prov, model).Scan(&available); err != nil {
+		return Candidate{}, err
+	}
+	if !available {
+		return Candidate{}, conflict("%s/%s is not available on %s", prov, model, s.Host)
+	}
+	if prov == "antigravity" {
+		thinking = ""
+	}
+	return Candidate{Provider: prov, Model: model, Thinking: thinking, Eligible: true}, nil
 }
 
 // QuotaTable is the candidates as `grimm ctl quota` prints them.

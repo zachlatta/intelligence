@@ -21,11 +21,14 @@ const seedAuthor = "intelligence"
 
 // NewSession is what a session is made with.
 type NewSession struct {
-	Host       string `json:"host"`
-	Repo       string `json:"repo"`
-	Title      string `json:"title"`
-	Base       string `json:"base"`
-	MaxWorkers int    `json:"maxWorkers"`
+	Host            string `json:"host"`
+	Repo            string `json:"repo"`
+	Title           string `json:"title"`
+	Base            string `json:"base"`
+	MaxWorkers      int    `json:"maxWorkers"`
+	ManagerProvider string `json:"managerProvider"`
+	ManagerModel    string `json:"managerModel"`
+	ManagerThinking string `json:"managerThinking"`
 }
 
 var branchRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$`)
@@ -58,6 +61,25 @@ func DeskRepo(ctx context.Context, q interface {
 // first message. A session never works in a main checkout, desk's included.
 func (s *Service) CreateSession(ctx context.Context, account int64, n NewSession) (string, error) {
 	n.Host, n.Repo, n.Title, n.Base = strings.TrimSpace(n.Host), strings.TrimSpace(n.Repo), strings.TrimSpace(n.Title), strings.TrimSpace(n.Base)
+	n.ManagerProvider = strings.ToLower(strings.TrimSpace(n.ManagerProvider))
+	n.ManagerModel = strings.TrimSpace(n.ManagerModel)
+	n.ManagerThinking = strings.TrimSpace(n.ManagerThinking)
+	if (n.ManagerProvider == "") != (n.ManagerModel == "") {
+		return "", badRequest("managerProvider and managerModel must be set together")
+	}
+	if n.ManagerProvider != "" {
+		for _, p := range disabledProviders {
+			if n.ManagerProvider == p {
+				return "", badRequest("provider %s is disabled", n.ManagerProvider)
+			}
+		}
+		if len(n.ManagerProvider) > 64 || len(n.ManagerModel) > 128 || len(n.ManagerThinking) > 64 {
+			return "", badRequest("manager model selection is too long")
+		}
+	}
+	if n.ManagerProvider == "antigravity" {
+		n.ManagerThinking = ""
+	}
 	if n.MaxWorkers == 0 {
 		n.MaxWorkers = DefaultMaxWorkers
 	}
@@ -101,7 +123,8 @@ func (s *Service) CreateSession(ctx context.Context, account int64, n NewSession
 		if err := tx.QueryRow(ctx, `SELECT gen_random_uuid()::text`).Scan(&id); err != nil {
 			return err
 		}
-		sess := Session{ID: id, Account: account, Host: n.Host, Repo: n.Repo, Title: n.Title, Branch: "grimm/" + id[:8], MaxWorkers: n.MaxWorkers, Status: "active"}
+		sess := Session{ID: id, Account: account, Host: n.Host, Repo: n.Repo, Title: n.Title, Branch: "grimm/" + id[:8], MaxWorkers: n.MaxWorkers, Status: "active",
+			ManagerProvider: n.ManagerProvider, ManagerModel: n.ManagerModel, ManagerThinking: n.ManagerThinking}
 		if sess.Title == "" {
 			sess.Title = path.Base(n.Repo)
 		}
@@ -111,8 +134,10 @@ func (s *Service) CreateSession(ctx context.Context, account int64, n NewSession
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO grimm_sessions (id, account_id, host, repo, title, branch, base, max_workers, workspace_command_id, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`, id, account, n.Host, n.Repo, sess.Title, sess.Branch, n.Base, n.MaxWorkers, c.ID, s.now()); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO grimm_sessions (id, account_id, host, repo, title, branch, base, max_workers, workspace_command_id, created_at,
+			requested_manager_provider, requested_manager_model, requested_manager_thinking)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`, id, account, n.Host, n.Repo, sess.Title, sess.Branch, n.Base, n.MaxWorkers, c.ID, s.now(),
+			n.ManagerProvider, n.ManagerModel, n.ManagerThinking); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO grimm_directives (session_id, account_id, seq, text, added_by) VALUES ($1, $2, 1, $3, $4)`,

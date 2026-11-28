@@ -180,18 +180,18 @@ func (r *rig) ready() string {
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	r.succeed(r.take("create_workspace"), `{"workspaceId":"ws-1"}`)
-	r.reconcile(id)
 	if _, err := r.s.Post(ctx, r.acct, id, "Build the CSV tool"); err != nil {
 		r.t.Fatal(err)
 	}
+	r.succeed(r.take("create_workspace"), `{"workspaceId":"ws-1"}`)
+	r.reconcile(id)
 	r.succeed(r.take("create_agent"), `{"agentId":"mgr"}`)
 	r.reconcile(id)
 	r.setAgent("mgr", "running")
 	return id
 }
 
-func TestASessionMakesAWorktreeAndStartsNeonOnTheFirstMessage(t *testing.T) {
+func TestASessionMakesAWorktreeAndStartsOpusOnTheFirstMessage(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	ctx := t.Context()
@@ -217,7 +217,7 @@ func TestASessionMakesAWorktreeAndStartsNeonOnTheFirstMessage(t *testing.T) {
 	r.reconcile(id)
 	mgr := r.take("create_agent")
 	labels, _ := mgr.Args["labels"].(map[string]any)
-	if mgr.Args["provider"] != "antigravity" || mgr.Args["model"] != "gemini-4-neon-medium" || mgr.Args["mode"] != "full-access" ||
+	if mgr.Args["provider"] != "claude" || mgr.Args["model"] != "claude-opus-5-5" || mgr.Args["mode"] != "bypassPermissions" ||
 		mgr.Args["workspaceId"] != "ws-1" || labels[hostclient.LiveLabel] != hostclient.LiveFast || labels[SessionLabel] != id {
 		t.Fatalf("manager = %+v", mgr.Args)
 	}
@@ -225,8 +225,8 @@ func TestASessionMakesAWorktreeAndStartsNeonOnTheFirstMessage(t *testing.T) {
 	if !strings.Contains(prompt, "Build the CSV tool") || !strings.Contains(prompt, "at most 20 live workers") || !strings.Contains(prompt, "intelligence grimm ctl hire") {
 		t.Errorf("manager prompt lacks the message, the cap or the CLI:\n%s", prompt)
 	}
-	if got := r.one(`SELECT manager_state FROM grimm_session_status`); got != "starting" {
-		t.Errorf("state = %v, want starting", got)
+	if got := r.one(`SELECT manager_state FROM grimm_session_status`); got != "working" {
+		t.Errorf("state = %v, want working", got)
 	}
 	r.succeed(mgr, `{"agentId":"mgr"}`)
 	r.reconcile(id)

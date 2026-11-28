@@ -37,7 +37,8 @@
       </div>
     </div>
     <span class="g-spacer"></span>
-    <span class="g-pill" id="g-pill" data-state="offline"><i></i><span id="g-pill-label">Grimm starts on your first message</span></span>
+    <span class="g-model" id="g-model" title="Manager model"></span>
+    <span class="g-pill" id="g-pill" data-state="offline"><i></i><span id="g-pill-label">Starting Grimm…</span></span>
     <button type="button" class="btn sm ghost" id="g-archive-all" title="Archive every worker in this session (files stay)">Archive all</button>
     <div class="g-host" id="g-host" hidden></div>
     <span class="g-conn" id="g-conn" title="Live connection" role="status" aria-label="Connecting"></span>
@@ -154,18 +155,24 @@
   <div class="card">
     <div class="card-head"><h2>Start a Grimm session</h2></div>
     <div class="card-body">
-      <p class="muted">A session is a new git worktree of a repository on a host: desk unless you pick another. Grimm (Gemini 4 Neon Medium, on the plan Intelligence's
-        balancer picks) starts there on your first message and hires named workers on your plans.</p>
+      <p class="muted">A session is a new git worktree of a repository on a host: desk unless you pick another. Grimm (Claude Opus 5.5 by default, or any available model below)
+        warms up as soon as the worktree is ready and hires named workers on your plans.</p>
       <form id="g-new" class="g-new-form" autocomplete="off">
         <label>Host
           <select id="g-new-host" required>
             {{range .Hosts}}<option value="{{.Name}}" data-desk="{{.Desk}}" data-repos="{{range $i, $r := .Repos}}{{if $i}}
-{{end}}{{$r}}{{end}}"{{if eq .Name $.DefaultHost}} selected{{end}}{{if not .Online}} disabled{{end}}>{{.Name}}{{if not .Online}} (offline){{end}}</option>{{end}}
+{{end}}{{$r}}{{end}}" data-models="{{.ModelsJSON}}"{{if eq .Name $.DefaultHost}} selected{{end}}{{if not .Online}} disabled{{end}}>{{.Name}}{{if not .Online}} (offline){{end}}</option>{{end}}
           </select>
         </label>
         <label>Repository on the host
           <input id="g-new-repo" list="g-new-repos" placeholder="/path/to/repo" spellcheck="false">
           <datalist id="g-new-repos"></datalist>
+        </label>
+        <label>Manager model
+          <select id="g-new-model" aria-label="Manager model"></select>
+        </label>
+        <label id="g-new-thinking-wrap" hidden>Thinking / effort
+          <select id="g-new-thinking" aria-label="Manager thinking level"></select>
         </label>
         <label>Title <span class="muted">(optional)</span><input id="g-new-title" maxlength="200" placeholder="The repository's name"></label>
         <label>Base branch <span class="muted">(optional)</span><input id="g-new-base" placeholder="Paseo's default" spellcheck="false"></label>

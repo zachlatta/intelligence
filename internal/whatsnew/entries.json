@@ -1,5 +1,13 @@
 [
   {
+    "id": "grimm-instant-streaming-and-model-selector",
+    "released": "2026-11-28",
+    "title": "Instant Grimm streaming, live thinking, and manager model picker",
+    "summary": "Grimm now defaults its manager back to Claude Opus 5.5 and lets you choose any available manager model (such as Gemini 4 Neon Medium, Sonnet or Codex, with thinking level where supported) when starting a session, shown in the header. Managers warm up as soon as the worktree is ready, messages appear optimistically with immediate working status, live reasoning streams as a compact collapsible Thinking line, and SSE resumes incrementally after mobile sleep without wiping the thread.",
+    "media": "grimm-instant-streaming.png",
+    "mediaAlt": "A local demo of the Grimm page showing the active claude-opus-5-5 (medium) manager badge in the header, live working status, compact collapsible Thinking lines in the thread, and a live-streaming reply beside active builder and verifier workers."
+  },
+  {
     "id": "workflow-model-variants",
     "released": "2026-11-27",
     "title": "Model variants of a workflow",

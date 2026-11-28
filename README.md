@@ -1581,14 +1581,16 @@ redeploy or a restart loses nothing.
   (1 to 100, `PUT /api/grimm/sessions/{id}` or `/cap N`), shown in the page's header as Workers
   live/cap. A new session starts with the directive "Never push, deploy, publish, open pull
   requests or send external messages."
-- **The manager** starts on the first message, once the worktree is ready, with Grimm's
-  instructions and that message as its first prompt. It runs on the best eligible Antigravity
-  Gemini 4 Neon Medium (`antigravity/gemini-4-neon-medium`) entry of the account's model groups
-  on the host (the balancer, below), in `full-access`.
+- **The manager** pre-starts as soon as the worktree is ready, with Grimm's instructions (warm-up
+  or the human's first message if already sent). By default it runs on the best eligible Claude
+  Opus 5.5 (`claude/claude-opus-5-5`) entry of the account's model groups on the host (the
+  balancer, below), in `bypassPermissions`; the new-session form also lets you choose any
+  available non-disabled manager model on the host (such as Antigravity Gemini 4 Neon Medium,
+  Sonnet, Codex, etc., with thinking/effort level where applicable), shown in the session header.
   A message sent while it works joins the running turn (`send_message` steer); Stop cancels the
   turn; `/new` archives it, and the next message starts a fresh one (the thread keeps its
-  history). Its words and tool calls are its transcript, which `grimm_thread` merges with
-  the thread's own rows (Zach's messages, updates, command output, notices).
+  history). Its words, live reasoning and tool calls are its transcript, which `grimm_thread`
+  merges with the thread's own rows (Zach's messages, updates, command output, notices).
 - **Workers** are hired by the manager (`intelligence grimm ctl hire`) or by Zach (`/spawn`,
   `/fanout N`), each under the session's advisory lock: the cap is checked, the balancer picks the
   plan, and the `starting` row and its `create_agent` command are written in one transaction. A

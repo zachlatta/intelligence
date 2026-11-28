@@ -58,7 +58,8 @@ func TestGrimmHostResourcesViewAndAssets(t *testing.T) {
 	// Add a manager and a worker so session_agents has data to join against agent_minutes.
 	for _, stmt := range []string{
 		`INSERT INTO grimm_managers (session_id, account_id, epoch, host, agent_id, provider, model, status)
-		 SELECT id, account_id, 1, host, 'mgr-1', 'antigravity', 'gemini-4-neon-medium', 'live' FROM grimm_sessions WHERE id = $1`,
+		 SELECT id, account_id, 1, host, 'mgr-1', 'claude', 'claude-opus-5-5', 'live' FROM grimm_sessions WHERE id = $1
+		 ON CONFLICT (session_id, epoch) DO UPDATE SET agent_id = EXCLUDED.agent_id, status = EXCLUDED.status`,
 		`INSERT INTO grimm_workers (session_id, account_id, name, role, provider, model, host, agent_id, status)
 		 SELECT id, account_id, 'nova', 'builder', 'claude', 'claude-opus-5-5', host, 'wk-1', 'running' FROM grimm_sessions WHERE id = $1`,
 	} {

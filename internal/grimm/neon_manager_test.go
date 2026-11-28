@@ -37,23 +37,26 @@ func (r *rig) withNeon() {
 	}
 }
 
-func TestTheManagerDefaultsToNeonMedium(t *testing.T) {
+func TestTheManagerDefaultsToOpus55(t *testing.T) {
 	t.Parallel()
-	if ManagerProvider != "antigravity" || ManagerModel != "gemini-4-neon-medium" {
-		t.Errorf("manager = %s/%s, want antigravity/gemini-4-neon-medium", ManagerProvider, ManagerModel)
+	if ManagerProvider != "claude" || ManagerModel != "claude-opus-5-5" {
+		t.Errorf("manager = %s/%s, want claude/claude-opus-5-5", ManagerProvider, ManagerModel)
 	}
 	p := PolicyFor("manager")
-	if p.Preferred != "antigravity" || p.Pinned["antigravity"] != "gemini-4-neon-medium" {
-		t.Errorf("manager policy = %+v, want antigravity pinned to gemini-4-neon-medium", p)
+	if p.Preferred != "claude" || p.Pinned["claude"] != "claude-opus-5-5" {
+		t.Errorf("manager policy = %+v, want claude pinned to claude-opus-5-5", p)
 	}
 }
 
-func TestTheManagerStartsOnNeonMediumWithoutAThinkingLevel(t *testing.T) {
+func TestTheManagerCanBeSelectedAsNeonMediumWithoutAThinkingLevel(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	r.withNeon()
 	ctx := t.Context()
-	id, err := r.s.CreateSession(ctx, r.acct, NewSession{Host: "host-1", Repo: "/w/app"})
+	id, err := r.s.CreateSession(ctx, r.acct, NewSession{
+		Host: "host-1", Repo: "/w/app",
+		ManagerProvider: "antigravity", ManagerModel: "gemini-4-neon-medium", ManagerThinking: "medium",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,9 +65,6 @@ func TestTheManagerStartsOnNeonMediumWithoutAThinkingLevel(t *testing.T) {
 	if got := r.one(`SELECT count(*) FROM grimm_quota WHERE provider = 'antigravity' AND model = 'gemini-4-neon-medium' AND eligible`); got != int64(1) {
 		t.Fatalf("rig: Neon Medium is not an eligible plan (%v rows): %v", got,
 			r.one(`SELECT coalesce(string_agg(provider||'/'||model||' '||eligible||' '||coalesce(reason,''), '; '), '') FROM grimm_quota`))
-	}
-	if _, err := r.s.Post(ctx, r.acct, id, "Build the CSV tool"); err != nil {
-		t.Fatal(err)
 	}
 	mgr := r.take("create_agent")
 	if mgr.Args["provider"] != "antigravity" || mgr.Args["model"] != "gemini-4-neon-medium" {
@@ -82,7 +82,7 @@ func TestTheManagerStartsOnNeonMediumWithoutAThinkingLevel(t *testing.T) {
 	}
 }
 
-func TestTheManagerRefusesOpusOnceNeonIsItsModel(t *testing.T) {
+func TestTheDefaultManagerPolicyPinsOpus55(t *testing.T) {
 	t.Parallel()
 	cands := []Candidate{
 		{Provider: "claude", Model: "claude-opus-5-5", Eligible: true},
@@ -93,11 +93,11 @@ func TestTheManagerRefusesOpusOnceNeonIsItsModel(t *testing.T) {
 	for _, c := range Judge("manager", cands, nil) {
 		ok[c.Spec()] = c.Eligible
 	}
-	if !ok["antigravity/gemini-4-neon-medium"] {
-		t.Errorf("manager may not run on Neon Medium: %v", ok)
+	if !ok["claude/claude-opus-5-5"] {
+		t.Errorf("manager may not run on Opus 5.5: %v", ok)
 	}
-	if ok["claude/claude-opus-5-5"] || ok["antigravity/gemini-4-neon-xhigh"] {
-		t.Errorf("manager may run on something other than Neon Medium: %v", ok)
+	if ok["antigravity/gemini-4-neon-medium"] || ok["antigravity/gemini-4-neon-xhigh"] {
+		t.Errorf("default manager policy allowed non-Opus model: %v", ok)
 	}
 }
 

@@ -32,7 +32,7 @@ func managerPrompt(s Session, directives []string, first []string) string {
 ## Tools: the `+"`intelligence grimm`"+` CLI is on your PATH and already bound to this session
 - `+"`%[4]s quota`"+`: plan headroom, and where the next hire goes.
 - `+"`%[4]s roster`"+`: who is hired, their tasks, statuses and last replies.
-- `+"`%[4]s hire --role <role> [--name <name>] [--provider claude|codex|antigravity] - <<'EOF'`"+` (the task on stdin): hire one worker. For parallel work, issue several hires as separate Bash calls in the same message; the balancer spreads them across plans. Give each worker a self-contained task: the goal, the files it owns, how to check the work, and the names of its peers. Omit --provider unless the human asked for one.
+- `+"`%[4]s hire --role <role> [--name <name>] [--provider claude|codex|antigravity] - <<'EOF'`"+` (the task on stdin): hire one worker. For parallel work, issue several hires as separate Bash calls in the same message; the balancer spreads them across plans. Keep each hire task brief concise (~150 words): state the goal, point at the relevant file paths and symbols rather than pasting large file contents or long context, state how to check the work, and name its peers. Omit --provider unless the human asked for one.
 - `+"`%[4]s say <name> - <<'EOF'`"+`: a follow-up, correction or question to a worker. Use a quoted heredoc so `+"`$`"+` and backticks are never shell-expanded.
 - `+"`%[4]s peek <name> [--lines N]`"+`: the live tail of a worker's activity.
 - `+"`%[4]s result <name>`"+`: a worker's latest full reply.
@@ -51,7 +51,7 @@ func managerPrompt(s Session, directives []string, first []string) string {
 - Instructions apply once unless the human says to keep them ("from now on", "always"); then add a directive.
 - Limits: at most %[8]d live workers (enforced by Intelligence; archive finished workers to free slots). Never push, deploy, publish, open pull requests or send external messages. Never start agents with `+"`paseo run`"+`: hire through `+"`%[4]s hire`"+`, which applies the balancer and the role policy. Never select the gemini or muse providers (disabled). Reviewers and checkers run on Opus 5.5 only; verifiers prefer Opus 5.5, never run on Gemini, and never share the builder's vendor.
 - Images the human attaches arrive as file paths in their message: open them with your file-reading tool, and pass the paths to workers who need them.
-- Style: the human reads you in a chat pane, often on a phone. Be brief. Lead with the result, name each worker and its plan, use short lists, no preamble.
+- Style: the human reads you in a chat pane, often on a phone. Be brief. Before running a batch of tool calls, emit a brief 1-line status note so the human sees what you are doing right away. Lead with the result, name each worker and its plan, use short lists, no preamble.
 
 ## Standing directives (at session start; `+"`%[4]s directive list`"+` has the current ones)
 %[9]s
@@ -60,6 +60,8 @@ func managerPrompt(s Session, directives []string, first []string) string {
 		b.WriteString("\n## The human's first message\n\n")
 		b.WriteString(strings.Join(first, "\n\n"))
 		b.WriteString("\n")
+	} else {
+		b.WriteString("\n## Warm-up\n\nThe session worktree is ready. Finish your startup setup and reply with a single word `Ready.` so you are warm when the human writes. Do not hire workers or inspect the repository yet.\n")
 	}
 	return b.String()
 }

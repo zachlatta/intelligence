@@ -66,11 +66,11 @@ func (r *Registry) StoreTranscript(ctx context.Context, b hostclient.TranscriptB
 				return err
 			}
 			e.Item = item
-			if _, err := tx.Exec(ctx, `INSERT INTO transcript_entries (host, agent_id, seq_start, seq_end, turn_id, provider, at, item)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			if _, err := tx.Exec(ctx, `INSERT INTO transcript_entries (host, agent_id, seq_start, seq_end, turn_id, provider, at, item, received_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 				ON CONFLICT (host, agent_id, seq_start) DO UPDATE SET seq_end = EXCLUDED.seq_end, turn_id = EXCLUDED.turn_id,
-				provider = EXCLUDED.provider, at = EXCLUDED.at, item = EXCLUDED.item`,
-				b.Host, b.AgentID, e.SeqStart, e.SeqEnd, e.TurnID, e.Provider, nullTime(e.At), []byte(e.Item)); err != nil {
+				provider = EXCLUDED.provider, at = EXCLUDED.at, item = EXCLUDED.item, received_at = EXCLUDED.received_at`,
+				b.Host, b.AgentID, e.SeqStart, e.SeqEnd, e.TurnID, e.Provider, nullTime(e.At), []byte(e.Item), at); err != nil {
 				return err
 			}
 		}

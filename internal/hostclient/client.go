@@ -40,8 +40,9 @@ type Client struct {
 	FastGap      time.Duration
 	SteadyGap    time.Duration
 	SteadyBudget int
-	DiffEvery    time.Duration // re-read the diffs of workspaces an agent works in; default 5s
+	DiffEvery    time.Duration // fallback interval to re-read diffs while an agent works; default 30s
 	Settle       time.Duration // gather a burst of daemon updates into one report; default 1s
+	FastSettle   time.Duration // settle window for LiveFast agent status flips; default 25ms
 	Logf         func(format string, args ...any)
 
 	schedules       *ScheduleSync
@@ -71,10 +72,13 @@ func (b *Client) Run(ctx context.Context) error {
 		b.SteadyBudget = 8
 	}
 	if b.DiffEvery == 0 {
-		b.DiffEvery = 5 * time.Second
+		b.DiffEvery = 30 * time.Second
 	}
 	if b.Settle == 0 {
 		b.Settle = time.Second
+	}
+	if b.FastSettle == 0 {
+		b.FastSettle = 25 * time.Millisecond
 	}
 	if b.Logf == nil {
 		b.Logf = log.Printf
@@ -90,14 +94,15 @@ func (b *Client) Run(ctx context.Context) error {
 	}
 	reported := &latest{wake: make(chan struct{}, 1)}
 	diffed := &latest{wake: make(chan struct{}, 1)}
+	diffDirty := make(chan struct{}, 1)
 	b.schedules = &ScheduleSync{List: b.Watcher.Schedules, Inspect: b.Watcher.InspectSchedule, Send: b.Link.Schedules}
 	runs := []func(context.Context){
 		b.Watcher.Run,
 		b.Link.Run,
 		b.runCommands,
 		b.watchPermissions,
-		func(ctx context.Context) { b.syncTranscripts(ctx, reported) },
-		func(ctx context.Context) { b.syncDiffs(ctx, diffed) },
+		func(ctx context.Context) { b.syncTranscripts(ctx, reported, diffDirty) },
+		func(ctx context.Context) { b.syncDiffs(ctx, diffed, diffDirty) },
 		func(ctx context.Context) { b.update(ctx, versions) },
 	}
 	if b.Usage != nil {
@@ -142,10 +147,26 @@ func (b *Client) report(ctx context.Context, reported ...*latest) {
 			b.Logf("stream to %s: connected", b.Link.Server)
 			due, fresh = true, true
 			b.schedules.Reset() // the server may have missed changes
+		case <-b.Watcher.FastChanged():
+			if b.FastSettle > 0 {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(b.FastSettle):
+				}
+			}
+			// drain a coalesced normal Changed signal from the same event
+			select {
+			case <-b.Watcher.Changed():
+			default:
+			}
+			due = true
 		case <-b.Watcher.Changed():
 			select { // a burst of updates (an agent's turn starting, its workspace moving) goes in one report
 			case <-ctx.Done():
 				return
+			case <-b.Watcher.FastChanged():
+				// a LiveFast status flip arrived mid-settle: flush now
 			case <-time.After(b.Settle):
 			}
 			due = true
@@ -210,8 +231,18 @@ func (b *Client) syncSchedules(ctx context.Context) {
 // knows the agents) and, while one is running, every LiveEvery. A live agent's (LiveLabel) is
 // copied as the daemon pushes each change to its timeline, paced by livePace, so a page that
 // streams it sees its words as they come.
-func (b *Client) syncTranscripts(ctx context.Context, reported *latest) {
-	ts := &TranscriptSync{Host: b.Name, Timeline: b.Watcher.Timeline, Cursors: b.Link.TranscriptCursors, Send: b.Link.Transcript}
+func (b *Client) syncTranscripts(ctx context.Context, reported *latest, diffDirty chan<- struct{}) {
+	ts := &TranscriptSync{
+		Host: b.Name, Timeline: b.Watcher.Timeline, Cursors: b.Link.TranscriptCursors, Send: b.Link.Transcript,
+		OnFileEdit: func(string) {
+			if diffDirty != nil {
+				select {
+				case diffDirty <- struct{}{}:
+				default:
+				}
+			}
+		},
+	}
 	live := time.NewTicker(b.LiveEvery)
 	defer live.Stop()
 	pace := &livePace{fast: b.FastGap, steady: b.SteadyGap, budget: b.SteadyBudget, last: map[string]time.Time{}, dirty: map[string]bool{}}
@@ -220,6 +251,14 @@ func (b *Client) syncTranscripts(ctx context.Context, reported *latest) {
 	var snap PaseoStatus
 	stored := false // a report has been stored on this stream, so the server knows the agents
 	lastErr := ""
+	isFast := func(agentID string) bool {
+		for _, a := range snap.Agents {
+			if a.ID == agentID {
+				return a.Live == LiveFast
+			}
+		}
+		return false
+	}
 	for {
 		var agents []Agent
 		select {
@@ -239,8 +278,17 @@ func (b *Client) syncTranscripts(ctx context.Context, reported *latest) {
 			}
 			snap = b.Watcher.Snapshot()
 			agents = snap.Agents
-		case id := <-b.Watcher.TimelineUpdates():
-			pace.dirty[id] = true
+		case ev := <-b.Watcher.TimelineStreamEvents():
+			if stored && isFast(ev.AgentID) && len(ev.Item) > 0 {
+				pushCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				handled, err := ts.PushStreamEvent(pushCtx, ev)
+				cancel()
+				if handled && err == nil {
+					pace.last[ev.AgentID] = time.Now()
+					continue
+				}
+			}
+			pace.dirty[ev.AgentID] = true
 		case <-dueC:
 			dueC = nil
 		}
@@ -333,9 +381,9 @@ func (p *livePace) take(agents []Agent, now time.Time) ([]Agent, time.Duration) 
 	return ready, wait
 }
 
-// syncDiffs sends the git workspaces' diffs that changed after each stored report and, while an
-// agent works, every DiffEvery.
-func (b *Client) syncDiffs(ctx context.Context, reported *latest) {
+// syncDiffs sends the git workspaces' diffs that changed after each stored report, when a
+// transcript shows a file write/edit, and on a DiffEvery (default 30s) fallback while an agent works.
+func (b *Client) syncDiffs(ctx context.Context, reported *latest, diffDirty <-chan struct{}) {
 	ds := &DiffSync{Read: b.Watcher.CheckoutDiff, Send: b.Link.Diff}
 	tick := time.NewTicker(b.DiffEvery)
 	defer tick.Stop()
@@ -351,6 +399,8 @@ func (b *Client) syncDiffs(ctx context.Context, reported *latest) {
 			if fresh {
 				ds.Reset() // the server may have lost them while the stream was down
 			}
+		case <-diffDirty:
+			snap = b.Watcher.Snapshot()
 		case <-tick.C:
 			if snap = b.Watcher.Snapshot(); !anyRunning(snap.Agents) {
 				continue

@@ -24,20 +24,21 @@ type Watcher struct {
 	// only after it fails.
 	Tags func(workspaceID string) ([]string, error)
 
-	mu         sync.Mutex
-	client     *paseo.Client
-	err        string
-	info       paseo.ServerInfo
-	status     paseo.DaemonStatus
-	statusAt   time.Time
-	statusErr  string
-	catalog    map[string]paseo.ProviderEntry // each provider's last ready entry, kept across connections
-	projects   []paseo.Project
-	workspaces map[string]paseo.Workspace
-	agents     map[string]paseo.Agent
-	tags       map[string][]string // each workspace's, kept across connections: they do not change
-	changed    chan struct{}
-	once       sync.Once
+	mu          sync.Mutex
+	client      *paseo.Client
+	err         string
+	info        paseo.ServerInfo
+	status      paseo.DaemonStatus
+	statusAt    time.Time
+	statusErr   string
+	catalog     map[string]paseo.ProviderEntry // each provider's last ready entry, kept across connections
+	projects    []paseo.Project
+	workspaces  map[string]paseo.Workspace
+	agents      map[string]paseo.Agent
+	tags        map[string][]string // each workspace's, kept across connections: they do not change
+	changed     chan struct{}
+	fastChanged chan struct{}
+	once        sync.Once
 
 	// queued messages (queue.go): each agent's, in order; when a queued one was last sent, until
 	// word of its turn arrives; and a channel closed (and replaced) on every change to look again
@@ -46,17 +47,20 @@ type Watcher struct {
 	wake     chan struct{}
 
 	// pushed timelines: the daemon streams the timelines of live agents (LiveLabel) on this
-	// connection's subscription (subID, for the agents subSet names), and each push's agent id
-	// goes to updates
-	updates chan string
-	subID   string
-	subSet  string
+	// connection's subscription (subID, for the agents subSet names), and each push goes to
+	// updates / streamEvents.
+	updates      chan string
+	streamEvents chan paseo.TimelineStreamEvent
+	subID        string
+	subSet       string
 }
 
 func (w *Watcher) init() {
 	w.once.Do(func() {
 		w.changed = make(chan struct{}, 1)
+		w.fastChanged = make(chan struct{}, 1)
 		w.updates = make(chan string, 256)
+		w.streamEvents = make(chan paseo.TimelineStreamEvent, 256)
 		if w.RetryEvery == 0 {
 			w.RetryEvery = 5 * time.Second
 		}
@@ -70,6 +74,12 @@ func (w *Watcher) init() {
 func (w *Watcher) TimelineUpdates() <-chan string {
 	w.init()
 	return w.updates
+}
+
+// TimelineStreamEvents delivers decoded agent_stream timeline events from the daemon.
+func (w *Watcher) TimelineStreamEvents() <-chan paseo.TimelineStreamEvent {
+	w.init()
+	return w.streamEvents
 }
 
 // liveSet is the ids of the agents labelled LiveLabel, sorted and joined: whose timelines the
@@ -119,9 +129,23 @@ func (w *Watcher) Changed() <-chan struct{} {
 	return w.changed
 }
 
+// FastChanged receives immediately when a LiveFast agent changes status (e.g. idle <-> running),
+// so the host can flush the report without waiting for the normal Settle window.
+func (w *Watcher) FastChanged() <-chan struct{} {
+	w.init()
+	return w.fastChanged
+}
+
 func (w *Watcher) signal() {
 	select {
 	case w.changed <- struct{}{}:
+	default:
+	}
+}
+
+func (w *Watcher) signalFast() {
+	select {
+	case w.fastChanged <- struct{}{}:
 	default:
 	}
 }
@@ -211,9 +235,13 @@ func (w *Watcher) session(ctx context.Context) error {
 			if e.Agent != nil || e.AgentRemoved != "" {
 				w.subscribe(ctx, c)
 			}
-		case id := <-c.TimelineUpdates():
+		case ev := <-c.TimelineStreamEvents():
 			select {
-			case w.updates <- id:
+			case w.streamEvents <- ev:
+			default:
+			}
+			select {
+			case w.updates <- ev.AgentID:
 			default: // its reader is behind; it syncs the agent anyway
 			}
 		}
@@ -224,12 +252,20 @@ func (w *Watcher) apply(e paseo.Event) {
 	if e.Workspace != nil {
 		w.tag([]string{e.Workspace.ID})
 	}
+	fast := false
 	w.mu.Lock()
 	switch {
 	case e.Agent != nil:
+		old, had := w.agents[e.Agent.ID]
+		if e.Agent.Labels[LiveLabel] == LiveFast && (!had || old.Status != e.Agent.Status) {
+			fast = true
+		}
 		w.agents[e.Agent.ID] = *e.Agent
 		delete(w.settling, e.Agent.ID) // word of the turn a queued message started
 	case e.AgentRemoved != "":
+		if old, had := w.agents[e.AgentRemoved]; had && old.Labels[LiveLabel] == LiveFast {
+			fast = true
+		}
 		delete(w.agents, e.AgentRemoved)
 	case e.Workspace != nil:
 		w.workspaces[e.Workspace.ID] = *e.Workspace
@@ -239,6 +275,9 @@ func (w *Watcher) apply(e paseo.Event) {
 	}
 	w.wakeLocked()
 	w.mu.Unlock()
+	if fast {
+		w.signalFast()
+	}
 	w.signal()
 }
 

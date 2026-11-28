@@ -12,17 +12,18 @@ import (
 
 // manager is the newest grimm_managers row: an ended or failed one means the next message starts another.
 type manager struct {
-	Epoch   int
-	Host    string
-	AgentID string
-	Command *string
-	Status  string
+	Epoch    int
+	Host     string
+	AgentID  string
+	Command  *string
+	Provider string
+	Status   string
 }
 
 func currentManager(ctx context.Context, tx pgx.Tx, id string) (manager, bool, error) {
 	var m manager
-	err := tx.QueryRow(ctx, `SELECT epoch, host, agent_id, command_id::text, status FROM grimm_managers WHERE session_id = $1
-		ORDER BY epoch DESC LIMIT 1`, id).Scan(&m.Epoch, &m.Host, &m.AgentID, &m.Command, &m.Status)
+	err := tx.QueryRow(ctx, `SELECT epoch, host, agent_id, command_id::text, provider, status FROM grimm_managers WHERE session_id = $1
+		ORDER BY epoch DESC LIMIT 1`, id).Scan(&m.Epoch, &m.Host, &m.AgentID, &m.Command, &m.Provider, &m.Status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return m, false, nil
 	}
@@ -114,16 +115,17 @@ func (s *Service) undeliverable(ctx context.Context, tx pgx.Tx, sess Session, id
 	return err
 }
 
-// startManager starts the session's next manager with first as its first message, on the plan
-// the balancer picks. It returns the create_agent command, or "" when no plan could take it (the
-// thread says why, and the next message tries again).
+// startManager starts the session's next manager with first as its first message (or a silent
+// warm-up when first is empty), on the plan pickManager chooses. It returns the create_agent
+// command, or "" when no plan could take it (for a human message the thread says why, and the next
+// message tries again).
 func (s *Service) startManager(ctx context.Context, tx pgx.Tx, sess Session, first []string) (string, error) {
 	m, _, err := currentManager(ctx, tx, sess.ID)
 	if err != nil {
 		return "", err
 	}
 	epoch := m.Epoch + 1
-	c, err := pick(ctx, tx, sess, "manager", "")
+	c, err := pickManager(ctx, tx, sess)
 	if err != nil {
 		var e *Error
 		if !errors.As(err, &e) {
@@ -133,8 +135,10 @@ func (s *Service) startManager(ctx context.Context, tx pgx.Tx, sess Session, fir
 			VALUES ($1, $2, $3, $4, 'failed', $5, $6)`, sess.ID, sess.Account, epoch, sess.Host, e.Msg, s.now()); err != nil {
 			return "", err
 		}
-		if _, err := threadRow(ctx, tx, sess, "notice", "intelligence", "Could not start Grimm: "+e.Msg+". Your next message tries again.", map[string]string{"level": "error"}); err != nil {
-			return "", err
+		if len(first) > 0 {
+			if _, err := threadRow(ctx, tx, sess, "notice", "intelligence", "Could not start Grimm: "+e.Msg+". Your next message tries again.", map[string]string{"level": "error"}); err != nil {
+				return "", err
+			}
 		}
 		return "", event(ctx, tx, sess, "intelligence", "manager_failed", "warn", "Could not start the manager: "+e.Msg, nil)
 	}
@@ -159,8 +163,32 @@ func (s *Service) startManager(ctx context.Context, tx pgx.Tx, sess Session, fir
 		c.Provider, c.Model, c.Thinking, c.Login, c.LongWindow, c.Score, s.now()); err != nil {
 		return "", err
 	}
+	msg := "Starting Grimm on " + c.Spec()
+	if c.Login != "" {
+		msg += " (" + c.Login + ")"
+	}
+	if len(first) == 0 {
+		msg = "Warming up Grimm on " + c.Spec()
+		if c.Login != "" {
+			msg += " (" + c.Login + ")"
+		}
+	}
 	return cmd.ID, event(ctx, tx, sess, "intelligence", "manager_start", "info",
-		"Starting Grimm on "+c.Spec()+" ("+c.Login+")", map[string]any{"epoch": epoch, "candidate": c})
+		msg, map[string]any{"epoch": epoch, "candidate": c, "prestart": len(first) == 0})
+}
+
+// prestartManager starts the session's first manager as soon as the worktree is ready, so agent
+// spawn and turn-1 bootstrap complete before the human's first message.
+func (s *Service) prestartManager(ctx context.Context, tx pgx.Tx, sess Session) (bool, error) {
+	if sess.WorkspaceID == "" || sess.WorkspaceError != "" {
+		return false, nil
+	}
+	_, ok, err := currentManager(ctx, tx, sess.ID)
+	if err != nil || ok {
+		return false, err
+	}
+	cmdID, err := s.startManager(ctx, tx, sess, nil)
+	return cmdID != "" || err == nil, err
 }
 
 // Interrupt cancels the manager's running turn (cancel_agent); the agent and its conversation stay.

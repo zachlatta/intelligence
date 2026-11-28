@@ -158,16 +158,30 @@ type Event struct {
 	WorkspaceRemoved string     // id of a workspace gone from the daemon
 }
 
+// TimelineStreamEvent is one pushed agent_stream event from the daemon. When Item is non-empty
+// it carries the streamed timeline item directly so callers can forward it without re-fetching
+// the full timeline; otherwise it signals that the timeline changed and should be re-read.
+type TimelineStreamEvent struct {
+	AgentID   string
+	Epoch     string
+	Seq       int
+	Timestamp time.Time
+	TurnID    string
+	Provider  string
+	Item      json.RawMessage
+}
+
 // Client is one connection to a daemon. Requests may run concurrently. Pushed updates arrive on
 // Events; when the connection ends, Done closes and Err says why.
 type Client struct {
 	conn *websocket.Conn
 	// streams has the id of each agent whose subscribed timeline the daemon pushed something for
 	// (an agent_stream event); a full channel drops it, as its reader only needs "look again"
-	streams chan string
-	info    ServerInfo
-	events  chan Event
-	nextID  atomic.Uint64
+	streams      chan string
+	streamEvents chan TimelineStreamEvent
+	info         ServerInfo
+	events       chan Event
+	nextID       atomic.Uint64
 
 	mu      sync.Mutex
 	pending map[string]chan reply
@@ -198,7 +212,7 @@ func Dial(ctx context.Context, t Target) (*Client, error) {
 		conn.CloseNow()
 		return nil, fmt.Errorf("hello: %w", err)
 	}
-	c := &Client{conn: conn, events: make(chan Event, 256), streams: make(chan string, 256), pending: map[string]chan reply{}, done: make(chan struct{})}
+	c := &Client{conn: conn, events: make(chan Event, 256), streams: make(chan string, 256), streamEvents: make(chan TimelineStreamEvent, 256), pending: map[string]chan reply{}, done: make(chan struct{})}
 	for {
 		_, b, err := conn.Read(ctx)
 		if err != nil {
@@ -244,6 +258,9 @@ func (c *Client) Events() <-chan Event { return c.events }
 // TimelineUpdates has the id of an agent each time the daemon pushes a change to its timeline
 // (agent_stream), for the agents SubscribeTimelines named. It says "read it again", no more.
 func (c *Client) TimelineUpdates() <-chan string { return c.streams }
+
+// TimelineStreamEvents delivers decoded agent_stream payloads for subscribed agents.
+func (c *Client) TimelineStreamEvents() <-chan TimelineStreamEvent { return c.streamEvents }
 
 // SubscribeTimelines asks the daemon to push agent_stream events for agentIDs' timelines, and
 // returns the subscription (ReleaseSubscription ends it). With the client's selective timeline
@@ -452,9 +469,33 @@ func (c *Client) read() {
 			}
 		case "agent_stream":
 			var p struct {
-				AgentID string `json:"agentId"`
+				AgentID   string    `json:"agentId"`
+				Epoch     string    `json:"epoch"`
+				Seq       int       `json:"seq"`
+				Timestamp time.Time `json:"timestamp"`
+				Event     struct {
+					Type     string          `json:"type"`
+					Provider string          `json:"provider"`
+					TurnID   string          `json:"turnId"`
+					Item     json.RawMessage `json:"item"`
+				} `json:"event"`
 			}
 			if json.Unmarshal(m.Message.Payload, &p) == nil && p.AgentID != "" {
+				ev := TimelineStreamEvent{
+					AgentID:   p.AgentID,
+					Epoch:     p.Epoch,
+					Seq:       p.Seq,
+					Timestamp: p.Timestamp,
+					TurnID:    p.Event.TurnID,
+					Provider:  p.Event.Provider,
+				}
+				if p.Event.Type == "timeline" && len(p.Event.Item) > 0 && json.Valid(p.Event.Item) {
+					ev.Item = p.Event.Item
+				}
+				select {
+				case c.streamEvents <- ev:
+				default:
+				}
 				select {
 				case c.streams <- p.AgentID:
 				default: // the reader is behind: it rereads what it was told of anyway

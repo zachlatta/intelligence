@@ -40,14 +40,38 @@ func (s *Service) Run(ctx context.Context, changes *fleet.Changes) {
 	reports := make(chan struct{}, 1)
 	tick := time.NewTicker(RunEvery)
 	defer tick.Stop()
+	var wakeTimer *time.Timer
+	var wakeC <-chan time.Time
+	defer func() {
+		if wakeTimer != nil {
+			wakeTimer.Stop()
+		}
+	}()
 	lastErr := ""
 	for {
-		hosts, err := s.Pass(ctx)
+		hosts, nextWake, err := s.passWithNextWake(ctx)
 		if msg := fmt.Sprint(err); err != nil && msg != lastErr && ctx.Err() == nil {
 			log.Printf("grimm supervisor: %v", err)
 			lastErr = msg
 		} else if err == nil {
 			lastErr = ""
+		}
+		if wakeTimer != nil {
+			if !wakeTimer.Stop() {
+				select {
+				case <-wakeTimer.C:
+				default:
+				}
+			}
+			wakeC = nil
+		}
+		if nextWake > 0 && nextWake < RunEvery {
+			if wakeTimer == nil {
+				wakeTimer = time.NewTimer(nextWake)
+			} else {
+				wakeTimer.Reset(nextWake)
+			}
+			wakeC = wakeTimer.C
 		}
 		for _, h := range hosts {
 			if hostSubs[h] != nil {
@@ -106,6 +130,7 @@ func (s *Service) Run(ctx context.Context, changes *fleet.Changes) {
 			return
 		case <-grimm:
 		case <-reports:
+		case <-wakeC:
 		case <-tick.C:
 		}
 	}
@@ -113,9 +138,14 @@ func (s *Service) Run(ctx context.Context, changes *fleet.Changes) {
 
 // Pass reconciles every active session once, and returns their hosts.
 func (s *Service) Pass(ctx context.Context) ([]string, error) {
+	hosts, _, err := s.passWithNextWake(ctx)
+	return hosts, err
+}
+
+func (s *Service) passWithNextWake(ctx context.Context) ([]string, time.Duration, error) {
 	rows, err := s.DB.Query(ctx, `SELECT id::text, host FROM grimm_sessions WHERE status = 'active' ORDER BY created_at`)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	type sh struct{ id, host string }
 	list, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (sh, error) {
@@ -123,21 +153,26 @@ func (s *Service) Pass(ctx context.Context) ([]string, error) {
 		return x, r.Scan(&x.id, &x.host)
 	})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var hosts []string
 	seen := map[string]bool{}
 	var first error
+	var nextWake time.Duration
 	for _, x := range list {
 		if !seen[x.host] {
 			seen[x.host] = true
 			hosts = append(hosts, x.host)
 		}
-		if err := s.Reconcile(ctx, x.id); err != nil && first == nil {
+		nw, err := s.reconcileWithNextWake(ctx, x.id)
+		if err != nil && first == nil {
 			first = fmt.Errorf("session %s: %w", x.id, err)
 		}
+		if nw > 0 && (nextWake == 0 || nw < nextWake) {
+			nextWake = nw
+		}
 	}
-	return hosts, first
+	return hosts, nextWake, first
 }
 
 // cmdState is a command as the host last reported it; an expired one counts as failed.
@@ -169,7 +204,13 @@ func (c cmdState) failed() bool {
 
 // Reconcile moves one session along, in one transaction under its lock.
 func (s *Service) Reconcile(ctx context.Context, id string) error {
-	return pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
+	_, err := s.reconcileWithNextWake(ctx, id)
+	return err
+}
+
+func (s *Service) reconcileWithNextWake(ctx context.Context, id string) (time.Duration, error) {
+	var nextWake time.Duration
+	err := pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
 		sess, err := session(ctx, tx, 0, id)
 		if err != nil || sess.Status != "active" {
 			return err
@@ -194,14 +235,21 @@ func (s *Service) Reconcile(ctx context.Context, id string) error {
 		if err := s.deliverHuman(ctx, tx, sess); err != nil {
 			return err
 		}
-		if err := mark(s.flushUpdates(ctx, tx, sess)); err != nil {
+		if err := mark(s.prestartManager(ctx, tx, sess)); err != nil {
 			return err
 		}
+		flushed, nw, err := s.flushUpdates(ctx, tx, sess)
+		if err != nil {
+			return err
+		}
+		changed = changed || flushed
+		nextWake = nw
 		if changed {
 			return notify(ctx, tx, sess.ID)
 		}
 		return nil
 	})
+	return nextWake, err
 }
 
 func (s *Service) reconcileWorkspace(ctx context.Context, tx pgx.Tx, sess *Session) (bool, error) {
@@ -311,10 +359,11 @@ type liveWorker struct {
 	cmd                                                       *string
 	seenRunning, resultPosted, reported, connected            bool
 	turnAt                                                    time.Time
+	finishedAt                                                *time.Time
 }
 
 func (s *Service) reconcileWorkers(ctx context.Context, tx pgx.Tx, sess Session) (bool, error) {
-	rows, err := tx.Query(ctx, `SELECT w.name, w.role, w.provider, w.model, w.status, w.agent_id, w.command_id::text, w.seen_running, w.result_posted, w.turn_at,
+	rows, err := tx.Query(ctx, `SELECT w.name, w.role, w.provider, w.model, w.status, w.agent_id, w.command_id::text, w.seen_running, w.result_posted, w.turn_at, w.finished_at,
 		coalesce(a.status, ''), a.id IS NOT NULL, coalesce(h.connected, false)
 		FROM grimm_workers w LEFT JOIN agents a ON a.host = w.host AND a.id = w.agent_id AND w.agent_id <> ''
 		LEFT JOIN hosts h ON h.name = w.host
@@ -324,7 +373,7 @@ func (s *Service) reconcileWorkers(ctx context.Context, tx pgx.Tx, sess Session)
 	}
 	list, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (liveWorker, error) {
 		var x liveWorker
-		return x, r.Scan(&x.name, &x.role, &x.provider, &x.model, &x.status, &x.agentID, &x.cmd, &x.seenRunning, &x.resultPosted, &x.turnAt,
+		return x, r.Scan(&x.name, &x.role, &x.provider, &x.model, &x.status, &x.agentID, &x.cmd, &x.seenRunning, &x.resultPosted, &x.turnAt, &x.finishedAt,
 			&x.agentStatus, &x.reported, &x.connected)
 	})
 	if err != nil {
@@ -414,6 +463,23 @@ func (s *Service) reconcileWorker(ctx context.Context, tx pgx.Tx, sess Session, 
 			return false, err
 		}
 		return true, event(ctx, tx, sess, "intelligence", "worker_gone", "warn", w.name+"'s agent is gone from "+sess.Host+"; marked archived", map[string]string{"worker": w.name})
+	case w.status == "idle" && w.finishedAt != nil && IdleWorkerArchiveAfter > 0 && s.now().Sub(*w.finishedAt) >= IdleWorkerArchiveAfter:
+		var hasPending bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM grimm_wakeups WHERE session_id = $1 AND worker = $2 AND delivered_at IS NULL)`, sess.ID, w.name).Scan(&hasPending); err != nil {
+			return false, err
+		}
+		if hasPending {
+			return false, nil
+		}
+		if w.agentID != "" {
+			if _, err := enqueue(ctx, tx, sess.Host, hostclient.ArchiveAgentKind, hostclient.AgentArgs{AgentID: w.agentID}, commandTTL, s.now()); err != nil {
+				return false, err
+			}
+		}
+		if err := set(`status = 'archived', archived_at = $3`, s.now()); err != nil {
+			return false, err
+		}
+		return true, event(ctx, tx, sess, "intelligence", "worker_auto_archived", "info", "Auto-archived idle worker "+w.name, map[string]string{"worker": w.name})
 	}
 	return false, nil
 }
@@ -431,35 +497,40 @@ func lastReply(ctx context.Context, tx pgx.Tx, host, agent string) (string, erro
 }
 
 // flushUpdates wakes an idle manager with the session's pending news, once it has settled for
-// updateDebounce, in one "[Grimm update]" message.
-func (s *Service) flushUpdates(ctx context.Context, tx pgx.Tx, sess Session) (bool, error) {
+// updateDebounceFor(manager.Provider), in one "[Grimm update]" message. When news is still
+// settling it returns the remaining wait so Run can arm a timer instead of waiting for RunEvery.
+func (s *Service) flushUpdates(ctx context.Context, tx pgx.Tx, sess Session) (bool, time.Duration, error) {
 	var pending int
 	var newest *time.Time
 	if err := tx.QueryRow(ctx, `SELECT count(*), max(created_at) FROM grimm_wakeups WHERE session_id = $1 AND delivered_at IS NULL`, sess.ID).Scan(&pending, &newest); err != nil {
-		return false, err
+		return false, 0, err
 	}
-	if pending == 0 || newest == nil || s.now().Sub(*newest) < updateDebounce {
-		return false, nil
+	if pending == 0 || newest == nil {
+		return false, 0, nil
 	}
 	m, ok, err := currentManager(ctx, tx, sess.ID)
 	if err != nil || !ok || m.Status != "live" || m.AgentID == "" {
-		return false, err
+		return false, 0, err
+	}
+	debounce := updateDebounceFor(m.Provider)
+	if elapsed := s.now().Sub(*newest); elapsed < debounce {
+		return false, debounce - elapsed, nil
 	}
 	var agentStatus string
 	var busy bool
 	if err := tx.QueryRow(ctx, `SELECT coalesce((SELECT status FROM agents WHERE host = $1 AND id = $2), ''),
 		EXISTS (SELECT 1 FROM commands WHERE host = $1 AND kind = 'send_message' AND args->>'agentId' = $2 AND status IN ('queued', 'sent', 'running'))
 		OR EXISTS (SELECT 1 FROM grimm_messages WHERE session_id = $3 AND kind = 'human' AND delivered_at IS NULL)`, sess.Host, m.AgentID, sess.ID).Scan(&agentStatus, &busy); err != nil {
-		return false, err
+		return false, 0, err
 	}
 	if agentStatus != "idle" || busy {
-		return false, nil
+		return false, 0, nil
 	}
 	rows, err := tx.Query(ctx, `SELECT u.id, u.summary, u.detail, coalesce(w.status = 'archived', false)
 		FROM grimm_wakeups u LEFT JOIN grimm_workers w ON w.session_id = u.session_id AND w.name = u.worker
 		WHERE u.session_id = $1 AND u.delivered_at IS NULL ORDER BY u.id`, sess.ID)
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	type wk struct {
 		id              int64
@@ -471,7 +542,7 @@ func (s *Service) flushUpdates(ctx context.Context, tx pgx.Tx, sess Session) (bo
 		return x, r.Scan(&x.id, &x.summary, &x.detail, &x.archived)
 	})
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	var ids, dropped []int64
 	var summaries, details []string
@@ -486,23 +557,23 @@ func (s *Service) flushUpdates(ctx context.Context, tx pgx.Tx, sess Session) (bo
 	}
 	if len(dropped) > 0 {
 		if _, err := tx.Exec(ctx, `UPDATE grimm_wakeups SET dropped = true, delivered_at = $2 WHERE id = ANY($1)`, dropped, s.now()); err != nil {
-			return false, err
+			return false, 0, err
 		}
 	}
 	if len(ids) == 0 {
-		return true, nil
+		return true, 0, nil
 	}
 	text := updateText(details)
 	c, err := enqueue(ctx, tx, sess.Host, hostclient.SendMessageKind, hostclient.AgentArgs{AgentID: m.AgentID, Text: text, Behavior: hostclient.Steer}, commandTTL, s.now())
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	row, err := threadRow(ctx, tx, sess, "update", "intelligence", text, map[string]any{"summaries": summaries, "commandId": c.ID})
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE grimm_wakeups SET delivered_at = $2, message_id = $3 WHERE id = ANY($1)`, ids, s.now(), row); err != nil {
-		return false, err
+		return false, 0, err
 	}
-	return true, nil
+	return true, 0, nil
 }

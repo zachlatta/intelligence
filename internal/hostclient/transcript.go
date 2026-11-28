@@ -46,11 +46,94 @@ type TranscriptSync struct {
 	// Cursors reads where the server's copies end (Link.TranscriptCursors), once per Reset.
 	Cursors func(ctx context.Context) (map[string]TranscriptCursor, error)
 	// Send stores a batch on the server (Link.Transcript): ErrResend and ErrNotYet are answers, not failures.
-	Send     func(ctx context.Context, b TranscriptBatch) error
-	MaxBatch int // bytes per upload; default 4 MB
+	Send func(ctx context.Context, b TranscriptBatch) error
+	// OnFileEdit, when set, is called with the agentID whenever an uploaded entry indicates a file write/edit.
+	OnFileEdit func(agentID string)
+	MaxBatch   int // bytes per upload; default 4 MB
 
 	cursors map[string]TranscriptCursor // the server's copy, by agent
 	synced  map[string]time.Time        // each agent's UpdatedAt when it was last synced
+}
+
+// itemMayEditFiles reports whether a timeline item is a tool call that may have modified files
+// in the workspace (edit, write, shell/bash, patch). Read/search/reasoning/messages return false.
+func itemMayEditFiles(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var item struct {
+		Type   string `json:"type"`
+		Name   string `json:"name"`
+		Detail struct {
+			Type string `json:"type"`
+		} `json:"detail"`
+	}
+	if json.Unmarshal(raw, &item) != nil || item.Type != "tool_call" {
+		return false
+	}
+	switch item.Detail.Type {
+	case "edit", "write", "shell":
+		return true
+	case "read", "search":
+		return false
+	}
+	switch item.Name {
+	case "Edit", "Write", "MultiEdit", "NotebookEdit", "Bash", "edit", "write", "bash", "shell", "apply_patch", "write_file", "edit_file":
+		return true
+	}
+	return false
+}
+
+// PushStreamEvent forwards a contiguous agent_stream timeline event directly to the server
+// without re-fetching the agent's full timeline from Paseo. It returns handled=false when the
+// cursor is missing, the epoch differs, there is a seq gap, or the server asks for a resend,
+// so the caller can fall back to a normal Sync gap-resync.
+func (s *TranscriptSync) PushStreamEvent(ctx context.Context, ev paseo.TimelineStreamEvent) (bool, error) {
+	if s.cursors == nil || ev.Epoch == "" || ev.Seq <= 0 || len(ev.Item) == 0 || !json.Valid(ev.Item) {
+		return false, nil
+	}
+	cur, have := s.cursors[ev.AgentID]
+	if !have || cur.Epoch != ev.Epoch {
+		return false, nil
+	}
+	// Only direct-push contiguous next seq or in-place update of the current entry.
+	var seqStart int
+	switch {
+	case ev.Seq == cur.LastSeqEnd+1:
+		seqStart = ev.Seq
+	case ev.Seq == cur.LastSeqStart && cur.LastSeqStart > 0:
+		seqStart = cur.LastSeqStart
+	default:
+		return false, nil
+	}
+	entry := TranscriptEntry{
+		SeqStart: seqStart,
+		SeqEnd:   ev.Seq,
+		TurnID:   ev.TurnID,
+		Provider: ev.Provider,
+		At:       ev.Timestamp,
+		Item:     ev.Item,
+	}
+	err := s.Send(ctx, TranscriptBatch{
+		Host:    s.Host,
+		AgentID: ev.AgentID,
+		Epoch:   ev.Epoch,
+		Replace: false,
+		Entries: []TranscriptEntry{entry},
+	})
+	if errors.Is(err, ErrResend) || errors.Is(err, ErrNotYet) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	cur.LastSeqStart = seqStart
+	cur.LastSeqEnd = ev.Seq
+	s.cursors[ev.AgentID] = cur
+	if s.OnFileEdit != nil && itemMayEditFiles(ev.Item) {
+		s.OnFileEdit(ev.AgentID)
+	}
+	return true, nil
 }
 
 // Reset forgets what the server has, so the next Sync reads its cursors again (a new stream: the
@@ -134,8 +217,12 @@ func (s *TranscriptSync) upload(ctx context.Context, id string, tl paseo.Timelin
 		batch.Replace, batch.Entries, size = false, nil, 0
 		return nil
 	}
+	edited := false
 	for _, e := range tl.Entries {
 		te := TranscriptEntry{SeqStart: e.SeqStart, SeqEnd: e.SeqEnd, TurnID: e.TurnID, Provider: e.Provider, At: e.Timestamp, Item: e.Item}
+		if !edited && s.OnFileEdit != nil && itemMayEditFiles(e.Item) {
+			edited = true
+		}
 		n := len(e.Item) + 200
 		if len(batch.Entries) > 0 && size+n > max {
 			if err := flush(); err != nil {
@@ -148,6 +235,9 @@ func (s *TranscriptSync) upload(ctx context.Context, id string, tl paseo.Timelin
 		if err := flush(); err != nil {
 			return err
 		}
+	}
+	if edited && s.OnFileEdit != nil {
+		s.OnFileEdit(id)
 	}
 	cur := TranscriptCursor{Epoch: tl.Epoch}
 	if !whole {

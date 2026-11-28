@@ -250,9 +250,13 @@ func (r *Registry) UpdateCommand(ctx context.Context, host string, u hostclient.
 			return err
 		}
 		changed = true
-		// A finished cleanup may release a waiting email continuation.
+		// A finished cleanup may release a waiting email continuation, and Grimm's supervisor
+		// follows command completions (worktree, manager, workers) without waiting for its ticker.
 		if u.Status == hostclient.CommandSucceeded || u.Status == hostclient.CommandFailed {
 			if _, err := tx.Exec(ctx, notifySQL, CommandsTopic(host)); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, notifySQL, GrimmTopic("")); err != nil {
 				return err
 			}
 		}

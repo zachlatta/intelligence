@@ -1,9 +1,10 @@
-// Package grimm runs Grimm sessions: one manager agent (Gemini 4 Neon Medium) per session is the main
-// thread, and it hires named workers on the account's plans, which talk to each other and to it on
-// a shared bus. Every agent is a Paseo agent on the session's host, started and steered through the
-// host command queue (fleet.EnqueueTx), so nothing here holds a process or a login. All state is in
-// the grimm_* tables (readable with read-only SQL); the Supervisor moves sessions along as hosts
-// report, and survives a restart because it keeps nothing in memory.
+// Package grimm runs Grimm sessions: one manager agent (Claude Opus 5.5 by default, selectable
+// per session) is the main thread, and it hires named workers on the account's plans, which talk
+// to each other and to it on a shared bus. Every agent is a Paseo agent on the session's host,
+// started and steered through the host command queue (fleet.EnqueueTx), so nothing here holds a
+// process or a login. All state is in the grimm_* tables (readable with read-only SQL); the
+// Supervisor moves sessions along as hosts report, and survives a restart because it keeps nothing
+// in memory.
 package grimm
 
 import (
@@ -30,9 +31,9 @@ const (
 	DefaultMaxWorkers = 20
 	// MaxWorkersLimit is the highest cap a session can set.
 	MaxWorkersLimit = 100
-	// ManagerProvider and ManagerModel are what the manager runs on.
-	ManagerProvider = "antigravity"
-	ManagerModel    = "gemini-4-neon-medium"
+	// ManagerProvider and ManagerModel are what the manager runs on by default.
+	ManagerProvider = "claude"
+	ManagerModel    = "claude-opus-5-5"
 	// OpusProvider and OpusModel are what Opus-pinned roles (reviewers, checkers, auditors, verifiers) run on.
 	OpusProvider = "claude"
 	OpusModel    = "claude-opus-5-5"
@@ -40,11 +41,23 @@ const (
 	MaxText = 20000
 	// commandTTL is how long a Grimm command may wait for its host.
 	commandTTL = 10 * time.Minute
-	// updateDebounce gathers worker news for this long before waking the manager.
-	updateDebounce = 2 * time.Second
+	// updateDebounce gathers worker news for this long before waking a steering-capable manager.
+	updateDebounce = 750 * time.Millisecond
+	// antigravityUpdateDebounce keeps a wider batching window for non-steering Antigravity managers.
+	antigravityUpdateDebounce = 2 * time.Second
+	// IdleWorkerArchiveAfter auto-archives finished idle Grimm workers after this much idle time.
+	IdleWorkerArchiveAfter = 10 * time.Minute
 	// startGrace: an agent just asked to work that still reads idle after this has finished.
 	startGrace = 20 * time.Second
 )
+
+// updateDebounceFor returns how long worker news settles before waking a manager on provider.
+func updateDebounceFor(provider string) time.Duration {
+	if strings.EqualFold(strings.TrimSpace(provider), "antigravity") {
+		return antigravityUpdateDebounce
+	}
+	return updateDebounce
+}
 
 // Labels on every Grimm agent. LiveLabel asks the host to copy its transcript at once while it
 // runs, so the page streams it with little delay.
@@ -96,15 +109,19 @@ var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 
 // Session is a session row with what the code needs of it.
 type Session struct {
-	ID          string
-	Account     int64
-	Host        string
-	Repo        string
-	Title       string
-	Branch      string
-	WorkspaceID string
-	MaxWorkers  int
-	Status      string
+	ID              string
+	Account         int64
+	Host            string
+	Repo            string
+	Title           string
+	Branch          string
+	WorkspaceID     string
+	WorkspaceError  string
+	MaxWorkers      int
+	Status          string
+	ManagerProvider string
+	ManagerModel    string
+	ManagerThinking string
 }
 
 func lockSession(ctx context.Context, tx pgx.Tx, id string) error {
@@ -121,9 +138,11 @@ func session(ctx context.Context, tx pgx.Tx, account int64, id string) (Session,
 		return Session{}, err
 	}
 	var s Session
-	err := tx.QueryRow(ctx, `SELECT id::text, account_id, host, repo, title, branch, workspace_id, max_workers, status
+	err := tx.QueryRow(ctx, `SELECT id::text, account_id, host, repo, title, branch, workspace_id, workspace_error, max_workers, status,
+		requested_manager_provider, requested_manager_model, requested_manager_thinking
 		FROM grimm_sessions WHERE id = $1 AND ($2 = 0 OR account_id = $2)`, id, account).
-		Scan(&s.ID, &s.Account, &s.Host, &s.Repo, &s.Title, &s.Branch, &s.WorkspaceID, &s.MaxWorkers, &s.Status)
+		Scan(&s.ID, &s.Account, &s.Host, &s.Repo, &s.Title, &s.Branch, &s.WorkspaceID, &s.WorkspaceError, &s.MaxWorkers, &s.Status,
+			&s.ManagerProvider, &s.ManagerModel, &s.ManagerThinking)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return s, ErrNotFound
 	}

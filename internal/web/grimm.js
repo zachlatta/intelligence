@@ -236,17 +236,20 @@ const root = $("#grimm");
 const S = {
   id: root ? root.dataset.session : "",
   session: {}, workers: [], directives: [], quota: [],
-  items: new Map(), order: [], bus: [], feed: [],
+  items: new Map(), nodes: new Map(), order: [], bus: [], feed: [],
   focus: null, focusTab: "log", focusES: null, focusEntries: new Map(), focusWorker: null,
-  es: null, pending: [],
+  es: null, lastEventId: "", hiddenAt: 0,
+  optimistic: new Map(), optimisticWorking: false,
+  mdTimers: new Map(), mdParsedText: new Map(), mdLastAt: new Map(),
 };
+let nextClientId = 0;
 function workerByName(name) { return S.workers.find((w) => w.name === name); }
 function knownNames() { return S.workers.map((w) => w.name).filter((n) => n.length > 2); }
 function chipHTML(name) {
   const w = workerByName(name);
   return `<span class="g-wchip ${w ? provClass(w.provider) : "p-other"}" data-worker="${esc(name)}"><i></i>${esc(name)}</span>`;
 }
-function managerWorking() { return ["working", "starting"].includes(S.session.manager_state); }
+function managerWorking() { return S.optimisticWorking || ["working", "starting"].includes(S.session.manager_state); }
 
 // ---------- thread ----------
 const ATTACH = /\[attachment:([0-9a-f-]{36})\]/g;
@@ -297,7 +300,22 @@ function renderItem(it, isLast) {
     }
     case "assistant_message":
       node = el("div", "g-msg grimm", `<span class="g-avatar g">G</span><div class="g-msg-body"><div class="g-name">Grimm</div><div class="g-md${isLast && managerWorking() ? " cursor" : ""}">${md(it.body, names)}</div></div>`);
+      S.mdParsedText.set(it.item_id, it.body || "");
+      S.mdLastAt.set(it.item_id, Date.now());
       break;
+    case "reasoning": {
+      const full = String(it.body || "").trim();
+      const firstLine = full.split("\n")[0].slice(0, 140) || "…";
+      node = el("div", "g-think", `<div class="g-think-row" role="button" tabindex="0"><span class="g-think-label">Thinking: ${esc(firstLine)}</span></div><div class="g-think-body">${esc(full)}</div>`);
+      if (S.items.get(it.item_id)?._open) node.classList.add("open");
+      const toggle = () => {
+        node.classList.toggle("open");
+        const cur = S.items.get(it.item_id); if (cur) cur._open = node.classList.contains("open");
+      };
+      $(".g-think-row", node).addEventListener("click", toggle);
+      $(".g-think-row", node).addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
+      break;
+    }
     case "tool_call": {
       const d = describeTool(it.item || {});
       let label = esc(d.label);
@@ -346,22 +364,102 @@ function lastAssistantID() {
   }
   return "";
 }
+const MD_THROTTLE_MS = 300;
+function flushMarkdown(id) {
+  const timer = S.mdTimers.get(id);
+  if (timer) { clearTimeout(timer); S.mdTimers.delete(id); }
+  const it = S.items.get(id);
+  const node = S.nodes.get(id);
+  if (!it || !node || it.kind !== "assistant_message") return;
+  const m = $(".g-md", node);
+  if (!m) return;
+  m.innerHTML = md(it.body, knownNames());
+  m.classList.toggle("cursor", id === lastAssistantID() && managerWorking());
+  S.mdParsedText.set(id, it.body || "");
+  S.mdLastAt.set(id, Date.now());
+}
+function flushAllMarkdown() {
+  for (const id of [...S.mdTimers.keys()]) flushMarkdown(id);
+}
+function updateAssistantNode(node, it, isLast) {
+  const m = $(".g-md", node);
+  if (!m) return;
+  const body = it.body || "";
+  const parsed = S.mdParsedText.get(it.item_id) || "";
+  const working = managerWorking();
+  const sinceLast = Date.now() - (S.mdLastAt.get(it.item_id) || 0);
+  if (working && body.startsWith(parsed) && body.length > parsed.length && sinceLast < MD_THROTTLE_MS) {
+    let tail = $(".g-stream-tail", m);
+    if (!tail) { tail = el("span", "g-stream-tail"); m.append(tail); }
+    tail.textContent = body.slice(parsed.length);
+    m.classList.toggle("cursor", isLast && working);
+    if (!S.mdTimers.has(it.item_id)) {
+      S.mdTimers.set(it.item_id, setTimeout(() => flushMarkdown(it.item_id), MD_THROTTLE_MS - sinceLast));
+    }
+    return;
+  }
+  const timer = S.mdTimers.get(it.item_id);
+  if (timer) { clearTimeout(timer); S.mdTimers.delete(it.item_id); }
+  m.innerHTML = md(body, knownNames());
+  m.classList.toggle("cursor", isLast && working);
+  S.mdParsedText.set(it.item_id, body);
+  S.mdLastAt.set(it.item_id, Date.now());
+}
+function reconcileOptimistic(incoming) {
+  if (!S.optimistic.size || !incoming.length) return;
+  for (const it of incoming) {
+    if (it.kind !== "human" || S.optimistic.has(it.item_id)) continue;
+    for (const [cid, pending] of S.optimistic) {
+      if ((pending.messageId && it.item_id === "m" + pending.messageId) || (!pending.messageId && humanText(it.body) === humanText(pending.body))) {
+        S.optimistic.delete(cid);
+        S.items.delete(cid);
+        const idx = S.order.indexOf(cid);
+        if (idx >= 0) S.order.splice(idx, 1);
+        const oldNode = S.nodes.get(cid);
+        if (oldNode) { oldNode.remove(); S.nodes.delete(cid); }
+        break;
+      }
+    }
+  }
+}
+function markSupersededReasoning() {
+  let seenReply = false;
+  for (let i = S.order.length - 1; i >= 0; i--) {
+    const id = S.order[i];
+    const it = S.items.get(id);
+    if (!it) continue;
+    if (it.kind === "assistant_message" && (it.body || "").trim()) { seenReply = true; continue; }
+    if (it.kind === "human") { seenReply = false; continue; }
+    if (it.kind === "reasoning") {
+      const node = S.nodes.get(id);
+      if (node) {
+        node.classList.toggle("done", seenReply);
+        if (seenReply && !it._open) node.classList.remove("open");
+      }
+    }
+  }
+}
 function upsertItems(items, reset) {
   items = items || [];
   const stick = reset || (nearBottom() && !loadingOlder);
   const box = $("#g-items");
   if (reset) {
     const open = new Set([...S.items.values()].filter((x) => x._open).map((x) => x.item_id));
-    S.items = new Map(); S.order = []; box.innerHTML = "";
+    for (const t of S.mdTimers.values()) clearTimeout(t);
+    S.mdTimers.clear(); S.mdParsedText.clear(); S.mdLastAt.clear();
+    S.items = new Map(); S.nodes = new Map(); S.order = []; box.innerHTML = "";
+    // re-attach any still-in-flight optimistic bubbles
+    for (const [cid, p] of S.optimistic) { S.items.set(cid, p); S.order.push(cid); }
     items.forEach((it) => { if (open.has(it.item_id)) it._open = true; });
   }
+  reconcileOptimistic(items);
   for (const it of items) {
     const prev = S.items.get(it.item_id);
     if (prev && prev._open) it._open = true;
     if (!prev) S.order.push(it.item_id);
     S.items.set(it.item_id, it);
   }
-  if (!reset && items.length) {
+  if (items.length || reset) {
     S.order.sort((a, b) => {
       const x = S.items.get(a), y = S.items.get(b);
       return x.at < y.at ? -1 : x.at > y.at ? 1 : a < b ? -1 : a > b ? 1 : 0;
@@ -369,25 +467,40 @@ function upsertItems(items, reset) {
   }
   const last = lastAssistantID();
   const touched = new Set(items.map((i) => i.item_id));
+  if (reset) for (const cid of S.optimistic.keys()) touched.add(cid);
   for (const id of S.order) {
     const it = S.items.get(id);
-    let node = box.querySelector(`[data-id="${CSS.escape(id)}"]`);
-    if (node && !touched.has(id) && !(it.kind === "assistant_message")) continue;
-    if (node && it.kind === "assistant_message" && !touched.has(id)) { $(".g-md", node)?.classList.toggle("cursor", id === last && managerWorking()); continue; }
+    let node = S.nodes.get(id);
+    if (node && !touched.has(id) && it.kind !== "assistant_message") continue;
+    if (node && it.kind === "assistant_message" && !touched.has(id)) {
+      if (!managerWorking() && S.mdTimers.has(id)) flushMarkdown(id);
+      $(".g-md", node)?.classList.toggle("cursor", id === last && managerWorking());
+      continue;
+    }
     if (node && it.kind === "assistant_message") {
-      const m = $(".g-md", node); m.innerHTML = md(it.body, knownNames()); m.classList.toggle("cursor", id === last && managerWorking()); continue;
+      updateAssistantNode(node, it, id === last);
+      continue;
+    }
+    if (node && it.kind === "reasoning") {
+      const full = String(it.body || "").trim();
+      const firstLine = full.split("\n")[0].slice(0, 140) || "…";
+      const lbl = $(".g-think-label", node); if (lbl) lbl.textContent = "Thinking: " + firstLine;
+      const bdy = $(".g-think-body", node); if (bdy) bdy.textContent = full;
+      continue;
     }
     const fresh = renderItem(it, id === last);
     if (node) node.replaceWith(fresh); else box.append(fresh);
+    S.nodes.set(id, fresh);
   }
-  // keep DOM order equal to S.order
+  // keep DOM order equal to S.order using S.nodes (O(1) lookup, no querySelector scans)
   let prevNode = null;
   for (const id of S.order) {
-    const node = box.querySelector(`[data-id="${CSS.escape(id)}"]`);
+    const node = S.nodes.get(id);
     if (!node) continue;
     if (prevNode ? prevNode.nextSibling !== node : box.firstChild !== node) box.insertBefore(node, prevNode ? prevNode.nextSibling : box.firstChild);
     prevNode = node;
   }
+  markSupersededReasoning();
   $("#g-empty").hidden = S.items.size > 0;
   if (stick) scrollBottom(true);
 }
@@ -428,11 +541,21 @@ function renderSession() {
   $("#g-cap").classList.toggle("full", (s.live_workers || 0) >= s.max_workers);
   $("#g-cap").title = `${s.live_workers || 0} live workers of this session's cap of ${s.max_workers}. Click to change the cap.`;
   document.title = `Grimm · ${s.title || s.repo}`;
-  const st = s.manager_state || "offline";
+  const rawState = s.manager_state || "offline";
+  const st = S.optimisticWorking && rawState !== "working" ? "working" : rawState;
   const pill = $("#g-pill"); pill.dataset.state = st;
   const working = st === "working" || st === "starting";
-  let label = { idle: "Grimm is idle", working: "Grimm is working", starting: s.workspace_id ? "Starting Grimm…" : "Making the worktree…",
-    offline: s.manager_error ? "Grimm could not start" : "Grimm starts on your first message" }[st] || st;
+  const mgrProv = s.manager_provider || "claude";
+  const mgrModel = s.manager_model || "claude-opus-5-5";
+  const mgrThinking = s.manager_thinking ? ` (${s.manager_thinking})` : "";
+  const modelEl = $("#g-model");
+  if (modelEl) {
+    modelEl.className = `g-model ${provClass(mgrProv)}`;
+    modelEl.innerHTML = `<i></i><span>${esc(mgrModel)}${esc(mgrThinking)}</span>`;
+    modelEl.title = `Manager model: ${mgrProv}/${mgrModel}${mgrThinking}${s.manager_login ? " on " + s.manager_login : ""}`;
+  }
+  let label = { idle: "Grimm is idle", working: "Grimm is working", starting: s.workspace_id ? "Warming up Grimm…" : "Making the worktree…",
+    offline: s.manager_error ? "Grimm could not start" : "Grimm is ready" }[st] || st;
   if (st === "offline" && !s.workspace_id && !s.workspace_error) label = "Making the worktree…";
   if (s.workspace_error) label = "Worktree failed";
   if (st === "working" && s.manager_turn_at) label += " · " + since(s.manager_turn_at);
@@ -441,12 +564,15 @@ function renderSession() {
   $("#g-pill-label").textContent = label;
   const mgrAgent = s.manager_agent_id ? " · agent " + String(s.manager_agent_id).slice(0, 8) : "";
   const mgrTurns = s.manager_turns != null ? ` · ${s.manager_turns} turns` : "";
-  pill.title = `Manager: ${s.manager_provider ? s.manager_provider + "/" + s.manager_model : "antigravity/gemini-4-neon-medium"}${s.manager_login ? " on " + s.manager_login : ""}${mgrAgent}${mgrTurns}${s.manager_error ? "\n" + s.manager_error : ""}`;
+  pill.title = `Manager: ${mgrProv}/${mgrModel}${mgrThinking}${s.manager_login ? " on " + s.manager_login : ""}${mgrAgent}${mgrTurns}${s.manager_error ? "\n" + s.manager_error : ""}`;
   $("#g-typing").hidden = !working;
-  $("#g-typing-label").textContent = st === "starting" ? "Starting Grimm…" : "Grimm is working" + (s.manager_turn_at ? " · " + since(s.manager_turn_at) : "");
+  $("#g-typing-label").textContent = st === "starting" ? "Warming up Grimm…" : "Grimm is working" + (s.manager_turn_at ? " · " + since(s.manager_turn_at) : "");
   $("#g-stop").hidden = st !== "working";
-  const cur = $(`#g-items [data-id="${CSS.escape(lastAssistantID())}"] .g-md`);
+  const lastID = lastAssistantID();
+  const curNode = lastID ? S.nodes.get(lastID) : null;
+  const cur = curNode ? $(".g-md", curNode) : null;
   if (cur) cur.classList.toggle("cursor", st === "working");
+  if (!working) flushAllMarkdown();
 }
 
 let capSaving = false;
@@ -521,7 +647,7 @@ function workerCard(w) {
   const running = status === "running";
   const act = running ? activityLine(w) : "";
   const node = el("div", `g-card ${provClass(w.provider)}`, `<div class="g-card-top"><span class="g-card-name">${esc(w.name)}</span><span class="g-card-role">${esc(w.role)}</span><span class="g-status ${esc(status)}">${esc(status)}</span></div>
-    <div class="g-card-spec"><span class="g-dot ${provClass(w.provider)}"></span>${esc(PROVIDER[w.provider] || w.provider)} · ${esc(w.model)} · ${esc(String(w.login || "").split("@")[0])}${running ? " · " + since(w.turn_at) : ""}</div>
+    <div class="g-card-spec"><span class="g-dot ${provClass(w.provider)}"></span>${esc(PROVIDER[w.provider] || w.provider)} · ${esc(w.model)} · ${esc(String(w.login || "").split("@")[0])}${running && w.turn_at ? ` · <span class="g-since" data-since="${esc(w.turn_at)}">${since(w.turn_at)}</span>` : ""}</div>
     ${act ? `<div class="g-card-act">${esc(act)}</div>` : ""}${w.task ? `<div class="g-card-task">${esc(w.task.replace(/\s+/g, " ").slice(0, 220))}</div>` : ""}`);
   node.dataset.worker = w.name;
   node.tabIndex = 0;
@@ -686,37 +812,60 @@ function setTab(tab) {
   $$("#g-tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
 }
 
+// Update relative timestamps in place every 1s without rebuilding the #g-roster DOM.
+function tickTimes() {
+  renderSession();
+  const roster = $("#g-roster");
+  if (!roster) return;
+  for (const span of $$(".g-since[data-since]", roster)) {
+    const t = since(span.dataset.since);
+    if (span.textContent !== t) span.textContent = t;
+  }
+}
+
 // ---------- the stream ----------
-function connect() {
-  const es = new EventSource(`/api/grimm/sessions/${S.id}/stream`);
+function connect(resumeId) {
+  if (S.es) { S.es.close(); S.es = null; }
+  const qs = resumeId ? `?lastEventId=${encodeURIComponent(resumeId)}` : "";
+  const es = new EventSource(`/api/grimm/sessions/${S.id}/stream${qs}`);
   S.es = es;
   const conn = $("#g-conn");
+  const track = (e) => { if (e && e.lastEventId) S.lastEventId = e.lastEventId; };
   es.onopen = () => { conn.classList.add("on"); conn.title = "Live connection"; conn.setAttribute("aria-label", "Live"); };
   es.onerror = () => { conn.classList.remove("on"); conn.title = "Reconnecting…"; conn.setAttribute("aria-label", "Reconnecting"); };
   es.addEventListener("state", (e) => {
+    track(e);
     const d = JSON.parse(e.data);
     const was = S.session.manager_state;
     const before = knownNames().join(",");
     S.session = d.session; S.workers = d.workers; S.directives = d.directives; S.quota = d.quota;
+    if (S.optimisticWorking && (S.session.manager_state === "working" || S.session.manager_state === "starting")) {
+      S.optimisticWorking = false;
+    }
     if (knownNames().join(",") !== before) {
       for (const it of S.items.values()) {
         if (it.kind !== "assistant_message" && it.kind !== "tool_call") continue;
-        const node = $(`#g-items [data-id="${CSS.escape(it.item_id)}"]`);
-        if (node) node.replaceWith(renderItem(it, it.item_id === lastAssistantID()));
+        const node = S.nodes.get(it.item_id);
+        if (node) {
+          const fresh = renderItem(it, it.item_id === lastAssistantID());
+          node.replaceWith(fresh);
+          S.nodes.set(it.item_id, fresh);
+        }
       }
     }
     renderSession(); renderTeam(); renderQuota(); renderDirectives();
     if (was !== S.session.manager_state) upsertItems([], false);
   });
   es.addEventListener("thread", (e) => {
+    track(e);
     const d = JSON.parse(e.data);
     upsertItems(d.items || [], d.reset);
     if (d.reset) { S.older = !!d.more; $("#g-older").hidden = !S.older; }
   });
-  es.addEventListener("bus", (e) => addBus(JSON.parse(e.data).items || []));
-  es.addEventListener("activity", (e) => addFeed(JSON.parse(e.data).items || []));
-  es.addEventListener("workflow_runs", (e) => { if (window.grimmRuns) window.grimmRuns.update(JSON.parse(e.data).items || []); });
-  es.addEventListener("host_resources", (e) => document.dispatchEvent(new CustomEvent("grimm:host-resources", { detail: JSON.parse(e.data) })));
+  es.addEventListener("bus", (e) => { track(e); addBus(JSON.parse(e.data).items || []); });
+  es.addEventListener("activity", (e) => { track(e); addFeed(JSON.parse(e.data).items || []); });
+  es.addEventListener("workflow_runs", (e) => { track(e); if (window.grimmRuns) window.grimmRuns.update(JSON.parse(e.data).items || []); });
+  es.addEventListener("host_resources", (e) => { track(e); document.dispatchEvent(new CustomEvent("grimm:host-resources", { detail: JSON.parse(e.data) })); });
 }
 
 // ---------- composer & inline attachment drafts ----------
@@ -848,18 +997,19 @@ function readFileBase64(file) {
     reader.readAsDataURL(file);
   });
 }
-async function uploadDrafts(rawText) {
-  for (let i = 0; i < drafts.length; i++) {
-    const d = drafts[i];
-    if (d.reference) continue;
-    attachStatus(`Uploading ${d.isImage ? "image" : "file"} ${i + 1} of ${drafts.length}…`);
-    const data = await readFileBase64(d.file);
-    const res = await api("POST", "/api/attachments", { name: d.name, data });
-    d.reference = res.reference;
+async function uploadDrafts(rawText, list) {
+  if (!list.length) return rawText;
+  const todo = list.filter((d) => !d.reference);
+  if (todo.length) {
+    attachStatus(todo.length === 1 ? `Uploading ${todo[0].isImage ? "image" : "file"}…` : `Uploading ${todo.length} files…`);
+    await Promise.all(todo.map(async (d) => {
+      const data = await readFileBase64(d.file);
+      const res = await api("POST", "/api/attachments", { name: d.name, data });
+      d.reference = res.reference;
+    }));
   }
-  if (!drafts.length) return rawText;
-  const heading = drafts.every((d) => d.isImage) ? "Attached images:" : "Attached files:";
-  return (rawText ? rawText + "\n\n" : "") + heading + "\n" + drafts.map((d) => d.reference).join("\n");
+  const heading = list.every((d) => d.isImage) ? "Attached images:" : "Attached files:";
+  return (rawText ? rawText + "\n\n" : "") + heading + "\n" + list.map((d) => d.reference).join("\n");
 }
 function setSending(active) {
   sending = active;
@@ -874,26 +1024,50 @@ function autosize() {
   t.style.height = "auto";
   t.style.height = Math.min(216, t.scrollHeight) + "px";
 }
+function dropOptimistic(cid) {
+  if (!cid) return;
+  S.optimistic.delete(cid);
+  S.items.delete(cid);
+  const idx = S.order.indexOf(cid);
+  if (idx >= 0) S.order.splice(idx, 1);
+  const oldNode = S.nodes.get(cid);
+  if (oldNode) { oldNode.remove(); S.nodes.delete(cid); }
+  $("#g-empty").hidden = S.items.size > 0;
+}
 async function send() {
   const input = $("#g-input");
   const raw = input.value.trim();
   if (sending || checking || (!raw && !drafts.length)) return;
   const refocus = document.activeElement === input || document.activeElement === $("#g-send");
+  const sentDrafts = drafts.slice();
+  const isLocalCmd = !sentDrafts.length && (raw.startsWith("/") || raw.startsWith("@"));
+  let clientId = "";
+  input.value = ""; saveTextDraft(""); autosize();
+  if (!isLocalCmd) {
+    clientId = `pending-${++nextClientId}`;
+    const item = { item_id: clientId, at: new Date().toISOString(), kind: "human", sender: "human", body: raw, data: { clientId }, delivered_at: null };
+    S.optimistic.set(clientId, item);
+    S.optimisticWorking = true;
+    upsertItems([item], false);
+    renderSession();
+  }
+  if (sentDrafts.length) { drafts.length = 0; renderDrafts(); }
   setSending(true);
   try {
-    const text = await uploadDrafts(raw);
-    if (drafts.length) attachStatus("Sending message…");
-    await api("POST", `/api/grimm/sessions/${S.id}/messages`, { text });
-    for (const d of drafts) if (d.preview) URL.revokeObjectURL(d.preview);
-    drafts.length = 0;
-    input.value = "";
-    saveTextDraft("");
-    autosize();
-    renderDrafts();
-    attachStatus("");
-    scrollBottom(true);
+    const text = await uploadDrafts(raw, sentDrafts);
+    if (sentDrafts.length) attachStatus("Sending message…");
+    const res = await api("POST", `/api/grimm/sessions/${S.id}/messages`, { text });
+    if (clientId && S.optimistic.has(clientId) && res?.messageId) {
+      if (S.items.has("m" + res.messageId)) reconcileOptimistic([{ kind: "human", item_id: "m" + res.messageId, body: text }]);
+      else S.optimistic.get(clientId).messageId = res.messageId;
+    }
+    for (const d of sentDrafts) if (d.preview) URL.revokeObjectURL(d.preview);
+    attachStatus(""); scrollBottom(true);
   } catch (e) {
-    if (drafts.length) attachStatus(e.message, true);
+    dropOptimistic(clientId);
+    S.optimisticWorking = false; renderSession();
+    if (!input.value) { input.value = raw; saveTextDraft(raw); autosize(); }
+    if (sentDrafts.length) { drafts.push(...sentDrafts); renderDrafts(); attachStatus(e.message, true); }
     else toast(e.message, true);
   } finally {
     setSending(false);
@@ -1051,7 +1225,18 @@ function bindSession() {
     }
     if (e.key === "/" && (document.activeElement === document.body || !document.activeElement)) { e.preventDefault(); input.focus(); }
   });
-  setInterval(() => { renderSession(); if (S.workers.some((w) => w.status === "running")) renderTeam(); }, 1000);
+  setInterval(tickTimes, 1000);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      S.hiddenAt = Date.now();
+      return;
+    }
+    const stale = S.hiddenAt && Date.now() - S.hiddenAt > 10000;
+    S.hiddenAt = 0;
+    if (!S.es || S.es.readyState === 2 || stale) {
+      connect(S.lastEventId);
+    }
+  });
   if (matchMedia("(max-width: 780px)").matches) input.placeholder = "Tell Grimm what to do…";
   connect();
   if (!matchMedia("(pointer: coarse)").matches) input.focus();
@@ -1060,9 +1245,26 @@ function bindSession() {
 function bindNew() {
   const form = $("#g-new"); if (!form) return;
   const host = $("#g-new-host"), list = $("#g-new-repos"), repo = $("#g-new-repo");
+  const modelSel = $("#g-new-model"), thinkWrap = $("#g-new-thinking-wrap"), thinkSel = $("#g-new-thinking");
   // The repository is the host's desk checkout unless the user typed another; a host without desk
   // leaves it blank to fill in.
   let auto = "";
+  let currentModels = [];
+  const fillThinking = () => {
+    if (!modelSel || !thinkWrap || !thinkSel) return;
+    const val = modelSel.value;
+    const picked = currentModels.find((m) => `${m.provider}/${m.model}` === val);
+    const levels = picked && picked.provider !== "antigravity" && Array.isArray(picked.thinking) ? picked.thinking : [];
+    thinkSel.innerHTML = "";
+    if (!levels.length) { thinkWrap.hidden = true; return; }
+    for (const lv of levels) {
+      const o = document.createElement("option");
+      o.value = lv; o.textContent = lv;
+      if (lv === picked.defaultThinking) o.selected = true;
+      thinkSel.append(o);
+    }
+    thinkWrap.hidden = false;
+  };
   const fill = () => {
     const opt = host.selectedOptions[0];
     list.innerHTML = "";
@@ -1070,14 +1272,43 @@ function bindNew() {
     const desk = opt?.dataset.desk || "";
     if (repo.value === auto) { repo.value = desk; auto = desk; }
     repo.placeholder = desk ? desk : "/path/to/repo";
+    if (modelSel) {
+      try { currentModels = JSON.parse(opt?.dataset.models || "[]"); } catch (_) { currentModels = []; }
+      modelSel.innerHTML = "";
+      const def = document.createElement("option");
+      def.value = "";
+      def.textContent = "Default (Claude Opus 5.5)";
+      modelSel.append(def);
+      for (const m of currentModels) {
+        const o = document.createElement("option");
+        o.value = `${m.provider}/${m.model}`;
+        o.textContent = `${PROVIDER[m.provider] || m.provider} · ${m.label || m.model}`;
+        modelSel.append(o);
+      }
+      fillThinking();
+    }
   };
-  host.addEventListener("change", fill); fill();
+  host.addEventListener("change", fill);
+  if (modelSel) modelSel.addEventListener("change", fillThinking);
+  fill();
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     $("#g-new-error").textContent = ""; $("#g-new-start").disabled = true;
     try {
-      const r = await api("POST", "/api/grimm/sessions", { host: host.value, repo: repo.value.trim(), title: $("#g-new-title").value.trim(),
-        base: $("#g-new-base").value.trim(), maxWorkers: parseInt($("#g-new-cap").value, 10) || 0 });
+      let managerProvider = "", managerModel = "", managerThinking = "";
+      if (modelSel && modelSel.value) {
+        const slash = modelSel.value.indexOf("/");
+        if (slash > 0) {
+          managerProvider = modelSel.value.slice(0, slash);
+          managerModel = modelSel.value.slice(slash + 1);
+        }
+        if (thinkWrap && !thinkWrap.hidden && thinkSel) managerThinking = thinkSel.value;
+      }
+      const r = await api("POST", "/api/grimm/sessions", {
+        host: host.value, repo: repo.value.trim(), title: $("#g-new-title").value.trim(),
+        base: $("#g-new-base").value.trim(), maxWorkers: parseInt($("#g-new-cap").value, 10) || 0,
+        managerProvider, managerModel, managerThinking,
+      });
       location.href = r.url;
     } catch (err) {
       $("#g-new-error").textContent = err.message; $("#g-new-start").disabled = false;
