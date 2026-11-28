@@ -577,6 +577,13 @@ against its daemon and reports `running`, then `succeeded` with a result (`{"wor
   workspace it no longer listed), skipping one already gone. The result counts them
   (`archivedAgents`). A Paseo-made worktree is removed with it. Optional `waitForAgent` waits for
   that agent to end its turn first, up to the command expiry.
+- `worktree_diff`: `workspaceId`. The host reads the workspace directory's uncommitted changes with
+  `git status` and `git diff` against `HEAD` (staged, unstaged and untracked files), without
+  changing the checkout or index. The result is `{"workspaceId","worktreeDiff"}`, where
+  `worktreeDiff` is `{"clean","files","truncated","error"}` and each file is `{"path","status"
+  (M, A, D, R or ?),"binary","additions","deletions","diff","truncated"}`. It lists up to 200
+  files, with up to 32 KiB of diff each and 256 KiB in all; a binary file has no diff. A missing
+  directory or a git failure succeeds with `error` set. Grimm's End session dialog sends it.
 - `watch_agent`: `agentId`, `live` (`fast` or `steady`): sets the agent's `intelligence.live`
   label, how soon the host copies its transcript after the daemon pushes a change (Grimm, below).
 - `rename_agent`: `agentId`, `title`. `cancel_agent` (stops its current turn) and `archive_agent`:
