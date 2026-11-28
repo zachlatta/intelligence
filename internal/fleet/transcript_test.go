@@ -187,8 +187,9 @@ func TestTranscriptStoresTextWithNULCharacters(t *testing.T) {
 }
 
 // A Grimm session's agents keep their transcripts after Paseo archives them, so the session's
-// thread and a finished worker's log outlive the agent; once the session is archived they go.
-func TestGrimmAgentsTranscriptsOutliveTheirAgentWhileTheSessionIsActive(t *testing.T) {
+// Grimm sessions keep their agents' transcripts after Paseo archives the agents AND after the
+// session itself is archived/ended, so the thread and worker logs remain readable through /api/sql.
+func TestGrimmAgentsTranscriptsOutliveTheirAgentEvenAfterSessionEnds(t *testing.T) {
 	t.Parallel()
 	d := dbtest.New(t)
 	r := New(d.Owner)
@@ -210,13 +211,13 @@ func TestGrimmAgentsTranscriptsOutliveTheirAgentWhileTheSessionIsActive(t *testi
 	rep.Paseo.Agents = rep.Paseo.Agents[:2] // a3 was archived
 	record(t, r, rep, time.Now())
 	if cur, _ := r.TranscriptCursors(ctx, "host-1"); cur["a3"].LastSeqStart != 1 {
-		t.Fatalf("cursors = %v, want the Grimm worker's transcript kept", cur)
+		t.Fatalf("cursors = %v, want the Grimm worker's transcript kept while active", cur)
 	}
-	if _, err := d.Owner.Exec(ctx, `UPDATE grimm_sessions SET status = 'archived'`); err != nil {
+	if _, err := d.Owner.Exec(ctx, `UPDATE grimm_sessions SET status = 'archived', archived_at = now()`); err != nil {
 		t.Fatal(err)
 	}
 	record(t, r, rep, time.Now())
-	if cur, _ := r.TranscriptCursors(ctx, "host-1"); len(cur) != 0 && cur["a3"].LastSeqStart != 0 {
-		t.Fatalf("cursors = %v, want it gone with the archived session", cur)
+	if cur, _ := r.TranscriptCursors(ctx, "host-1"); cur["a3"].LastSeqStart != 1 {
+		t.Fatalf("cursors = %v, want the Grimm worker's transcript kept after session ends", cur)
 	}
 }
