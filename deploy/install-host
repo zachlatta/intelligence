@@ -24,7 +24,7 @@ set -euo pipefail
 repo=""
 if [ -n "${0:-}" ] && [ -f "$0" ]; then
   candidate=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null || true)
-  if [ -n "$candidate" ] && [ -f "$candidate/cmd/intelligence/main.go" ] && [ -f "$candidate/deploy/intelligence-host.service" ]; then
+  if [ -n "$candidate" ] && [ -f "$candidate/cmd/intelligence/main.go" ]; then
     repo="$candidate"
   fi
 fi

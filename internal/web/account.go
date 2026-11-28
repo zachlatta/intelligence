@@ -143,17 +143,17 @@ func accountPage(cfg Config, v viewer) http.HandlerFunc {
 	}
 }
 
+// requestOrigin is the server's origin as the browser reaches it: PUBLIC_URL, else the request's.
 func requestOrigin(cfg Config, r *http.Request) string {
 	if cfg.PublicURL != "" {
 		return strings.TrimRight(cfg.PublicURL, "/")
 	}
-	return serverURL(r)
-}
-
-func serverURL(r *http.Request) string {
 	scheme := "http"
-	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+	if r.TLS != nil {
 		scheme = "https"
+	}
+	if p := r.Header.Get("X-Forwarded-Proto"); p == "https" || p == "http" {
+		scheme = p
 	}
 	host := r.Host
 	if h := r.Header.Get("X-Forwarded-Host"); h != "" {

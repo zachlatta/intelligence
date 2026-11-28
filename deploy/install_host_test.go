@@ -204,13 +204,7 @@ func TestInstallHostLinuxKeepsSystemdUserService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unit not installed: %v", err)
 	}
-	wantUnit, err := os.ReadFile("intelligence-host.service")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(gotUnit) != string(wantUnit) {
-		t.Errorf("installed unit differs from deploy/intelligence-host.service:\ngot:\n%s\nwant:\n%s", gotUnit, wantUnit)
-	}
+	checkHostUnit(t, gotUnit)
 	for _, want := range []string{"systemctl --user daemon-reload", "systemctl --user enable intelligence-host.service",
 		"systemctl --user restart intelligence-host.service"} {
 		if !h.called(want) {
@@ -300,13 +294,7 @@ func TestInstallHostLinuxStandalonePipedFromServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unit not installed: %v", err)
 	}
-	wantUnit, err := os.ReadFile("intelligence-host.service")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(gotUnit) != string(wantUnit) {
-		t.Errorf("unit mismatch:\ngot:\n%s\nwant:\n%s", gotUnit, wantUnit)
-	}
+	checkHostUnit(t, gotUnit)
 	if !strings.Contains(out, "enter the code ABCD-1234") {
 		t.Errorf("output lacks code:\n%s", out)
 	}
@@ -377,5 +365,16 @@ func TestInstallHostStandaloneRejectsBadChecksum(t *testing.T) {
 	}
 	if _, err := os.Stat(binPath + ".new"); !os.IsNotExist(err) {
 		t.Errorf("temp file %s.new should be cleaned up", binPath)
+	}
+}
+
+// checkHostUnit checks the systemd unit install-host writes runs the installed client with host.env.
+func checkHostUnit(t *testing.T, unit []byte) {
+	t.Helper()
+	for _, want := range []string{"EnvironmentFile=%h/.config/intelligence/host.env",
+		"ExecStart=%h/.local/bin/intelligence host", "Restart=always", "WantedBy=default.target"} {
+		if !strings.Contains(string(unit), want+"\n") {
+			t.Errorf("unit lacks %q:\n%s", want, unit)
+		}
 	}
 }
