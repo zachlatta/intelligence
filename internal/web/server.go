@@ -254,6 +254,7 @@ func newHandler(cfg Config, workers bool) http.Handler {
 	mux.HandleFunc("DELETE /api/hosts/{host}", a.write(a.removeHost))
 	mux.HandleFunc("GET "+hostclient.StreamPath("{host}"), stream(a))
 	mux.Handle("GET /api/host/binary/{os}/{arch}", binaries(cfg.BinDir))
+	mux.HandleFunc("GET /install-host", installHostHandler(cfg))
 	// before dev boxes were called hosts: a client of then updates itself from here, and old
 	// links to its pages still land
 	mux.Handle("GET /api/devbox/binary/{os}/{arch}", binaries(cfg.BinDir))

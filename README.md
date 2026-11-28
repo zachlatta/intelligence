@@ -2156,6 +2156,7 @@ origin (another site's request is refused with 403), and those with a body must 
   read-only query, as the account's own role, so it reads only the account's rows. Returns `{"columns": [{"name", "type"}], "rows": [[...]], "rowCount",
   "truncated"}`, or 400 with `{"error"}`. At most 10000 rows; 5 seconds per query.
 - `GET /api/host/binary/{os}/{arch}`: the host binary at the server's version.
+- `GET /install-host`: the standalone host installer (`deploy/install-host`) with `HOST_SERVER` defaulted to this server's origin.
 - `GET /dictation.js`: the dictation engine shared by the chat box, the new agent and workspace forms,
   the new and edit schedule forms, the new task box, the workflow run dialog, the reply to a
   waiting run and workflow proposal questions.
@@ -2647,10 +2648,13 @@ Probe (in `/etc/intelligence/probe.env`, written by `deploy/install-probe`):
   every push to `main`. The app has no public domain: its port is bound to loopback on the machine it
   runs on, and `tailscale serve` publishes it over HTTPS to the tailnet only. That machine's details
   are kept outside this repo.
-- Host: once per host, from a checkout of `main`, run `deploy/install-host` (the first run needs
-  `HOST_SERVER` in the environment; it builds the client, so it needs Go). It prints the host's code:
-  enter it on the server's `/account` page. After that the host updates itself. Running it again
-  rebuilds and restarts the client and keeps `host.env` and the key.
+- Host: once per host, run `curl -fsSL <server>/install-host | bash` (no repository checkout or Go
+  needed: it downloads the host binary from `/api/host/binary/{os}/{arch}`, verifies its SHA-256
+  checksum, and installs the service). From a checkout of `main`, `HOST_SERVER=<server>
+  deploy/install-host` still works too (building from source when Go is installed, or downloading
+  from the server otherwise). It prints the host's code: enter it on the server's `/account` page.
+  After that the host updates itself. Running it again updates and restarts the client and keeps
+  `host.env` and the key.
   - Linux: a systemd user service, `intelligence-host`. Logs: `journalctl --user -u intelligence-host`.
   - macOS: a launchd user agent, `~/Library/LaunchAgents/intelligence-host.plist` (label
     `intelligence-host`), started at login and restarted when it exits. Logs:

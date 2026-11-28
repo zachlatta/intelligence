@@ -138,9 +138,16 @@ func accountPage(cfg Config, v viewer) http.HandlerFunc {
 			"Version": cfg.Version, "Username": v.acct.Username, "Hosts": hosts,
 			"MCPTokens": tokens, "MCPTokensSQL": accountMCPTokensSQL,
 			"PushSubs": pushSubs, "PushSubsSQL": accountPushSubsSQL, "VAPIDPublicKey": vapidPub,
-			"Now": cfg.Now(), "Server": serverURL(r),
+			"Now": cfg.Now(), "Server": requestOrigin(cfg, r),
 		})
 	}
+}
+
+func requestOrigin(cfg Config, r *http.Request) string {
+	if cfg.PublicURL != "" {
+		return strings.TrimRight(cfg.PublicURL, "/")
+	}
+	return serverURL(r)
 }
 
 func serverURL(r *http.Request) string {
